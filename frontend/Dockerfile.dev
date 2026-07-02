@@ -1,11 +1,10 @@
-# Node 14 (matches the verified local toolchain: Node 14.21.3 + Yarn classic).
-# pm2 is pinned to a Node-14-compatible release (unpinned pulls pidusage@4 which
-# requires Node >=18). Frontend app dependencies are unchanged.
-FROM node:14.21.3-alpine
+# Node 24 LTS (was node:14.21.3-alpine): Next 16 requires Node >= 20.9, and 24
+# matches the verified local toolchain. pm2 no longer needs the Node-14 pin.
+FROM node:24-alpine
 
 WORKDIR /usr/src/app
 
-RUN yarn global add pm2@5.4.3
+RUN yarn global add pm2
 
 # Installing dependencies
 COPY package*.json ./
