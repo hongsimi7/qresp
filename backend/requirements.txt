@@ -1,6 +1,19 @@
+# Qresp backend dependencies.
+#
+# Modernized where verifiable: WTForms 3.x, MongoEngine 0.29.x, PyMongo 4.x
+# (code updated in project/views.py and project/tests/test_paperDAO.py).
+#
+# Two caps REMAIN, and are hard blockers documented in
+# FULL_STACK_MODERNIZATION_REPORT.md (require a large migration, not done here):
+#   * Flask<2.3 / Werkzeug<2.3 -- Connexion 2.14 requires flask<2.3, and
+#     flask-mongoengine 1.0 breaks on Flask>=2.3 (removed flask.json APIs).
+#   * connexion[swagger-ui]<3.0 -- Connexion 3 is an ASGI rewrite; the app uses
+#     connexion.FlaskApp + `from connexion import jsonifier` (removed in 3.0).
+# Exact verified versions are captured in requirements.lock.txt.
 setuptools
 jsonschema
-Flask
+Flask<2.3
+Werkzeug<2.3
 Flask-API
 Flask-Cors
 Flask-HTTPAuth
@@ -18,18 +31,16 @@ pyasn1
 pymongo
 pyOpenSSL
 swagger-spec-validator
-swaggerpy
 urllib3
 validate-email
-Werkzeug
 WTForms
 schedule
 flask-sitemap
 requests_oauthlib
 mongomock
-connexion[swagger-ui]
+connexion[swagger-ui]<3.0
 coverage
 nose2
-python-coveralls
+coveralls
 lxml
 gunicorn

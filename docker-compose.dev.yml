@@ -1,16 +1,14 @@
-version: "3.8"
-
 services:
   db:
     image: "mongo:3.6.18-xenial"
-    env_file:
-      - ~/Repositories/MongoDB/.env
+    # Named volume instead of hard-coded host paths. The old config required
+    # ~/Repositories/MongoDB/{.env,init-mongo.js,QrespData}, which don't exist on
+    # a clean checkout. A fresh no-auth dev DB needs no env_file/init script.
     volumes:
-      - ~/Repositories/MongoDB/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js
-      - ~/Repositories/MongoDB/QrespData:/data/db
+      - qresp_mongo_dev_data:/data/db
     ports:
       - "27017:27017"
-    networks: 
+    networks:
       - backend
 
   backend:
@@ -22,13 +20,16 @@ services:
       dockerfile: Dockerfile.dev
     environment:
       - PYTHONUNBUFFERED=TRUE
+      - FLASK_APP=run.py
+      - FLASK_ENV=development
+      # Connect to the dev "db" service (read by project/config.py via QRESP_*).
+      - QRESP_MONGODB_HOST=db
+      - QRESP_MONGODB_PORT=27017
+      - QRESP_MONGODB_DB_NAME=explorer
     volumes:
       - /usr/src/app/backend/project/static
       - ./backend:/home/flask/app/web/
-    environment: 
-      - FLASK_APP=run.py 
-      - FLASK_ENV=development
-    networks: 
+    networks:
       - backend
     command: flask run --host 0.0.0.0
 
@@ -67,4 +68,7 @@ networks:
     driver: bridge
   backend:
     driver: bridge
+
+volumes:
+  qresp_mongo_dev_data:
       

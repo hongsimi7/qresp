@@ -11,11 +11,13 @@ setup(
     author='Sushant Bansal, Aditya Tanikanti, Marco Govoni',
     author_email='datadev@lists.uchicago.edu',
     description='Qresp "Curation and Exploration of Reproducible Scientific Papers" is a Python application that facilitates the organization, annotation and exploration of data presented in scientific papers. ',
-    python_requires='>=3.6',
+    python_requires='>=3.8',
     packages=find_packages(),
+    # WTForms/MongoEngine/PyMongo modernized (code updated). Only Flask<2.3 and
+    # connexion<3 caps remain -- see FULL_STACK_MODERNIZATION_REPORT.md.
     install_requires=[
         'flask_api',
-        'flask',
+        'flask<2.3',
         'flask_cors',
         'paramiko',
         'pymongo',
@@ -28,7 +30,7 @@ setup(
         'jinja2',
         'jsonschema',
         'pyOpenSSL',
-        'werkzeug',
+        'werkzeug<2.3',
         'itsdangerous',
         'python-dateutil',
         'expiringdict',
@@ -37,7 +39,7 @@ setup(
         'flask-sitemap',
         'requests_oauthlib',
         'mongomock',
-        'connexion[swagger-ui]',
+        'connexion[swagger-ui]<3.0',
         'coverage',
         'nose2',
         'lxml',

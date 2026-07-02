@@ -1,5 +1,7 @@
 import warnings
 import unittest
+import mongoengine
+import mongomock
 from project.paperdao import PaperDAO, MongoDBConnection, Paper
 import os
 import json
@@ -18,10 +20,11 @@ class TestPaperDAO(unittest.TestCase):
         """
         Sets up database to test
         """
-        MongoDBConnection.getDB(hostname='mongomock://localhost', port=int('27017'),
-                                username=None, password=None,
-                                dbname='mongoenginetest', collection='paper',
-                                isssl='No')
+        # MongoEngine >=0.27 removed the "mongomock://" URI; connect an in-memory
+        # mongomock directly via mongo_client_class (modern API).
+        mongoengine.disconnect_all()
+        mongoengine.connect('mongoenginetest',
+                            mongo_client_class=mongomock.MongoClient)
         __location__ = os.path.realpath(
             os.path.join(os.getcwd(), os.path.dirname(__file__)))
         with open(os.path.join(__location__, 'data.json')) as f:
@@ -31,10 +34,11 @@ class TestPaperDAO(unittest.TestCase):
 
     def tearDown(self):
         """
-        Sets up database to test
+        Tears down the test database
         """
         paper = Paper()
         paper.drop_collection()
+        mongoengine.disconnect_all()
 
     def test_getCollectionList(self):
         """

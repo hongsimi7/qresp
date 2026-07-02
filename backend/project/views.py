@@ -1,6 +1,6 @@
 from wtforms import Form, StringField, PasswordField, RadioField, HiddenField, FieldList, FormField, BooleanField, DateTimeField, TextAreaField, SelectField
 from wtforms import validators
-from wtforms.fields.html5 import EmailField,IntegerField
+from wtforms.fields import EmailField, IntegerField  # WTForms 3: html5 fields merged here
 from wtforms.validators import DataRequired, Optional
 
 class RequiredIf(DataRequired):

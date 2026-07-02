@@ -1,17 +1,35 @@
-version: "2"
-
 services:
   backend:
     restart: always
     build: ./backend
+    depends_on:
+      - mongodb
     environment:
       - PYTHONUNBUFFERED=TRUE
+      # Docker-only MongoDB connectivity, read by project/config.py via QRESP_*.
+      # mongodb is the compose service name below (resolved on the backend net).
+      - QRESP_MONGODB_HOST=mongodb
+      - QRESP_MONGODB_PORT=27017
+      - QRESP_MONGODB_DB_NAME=explorer
     volumes:
       - /usr/src/app/backend/project/static
       - ./backend:/home/flask/app/web/
     networks:
       - backend
     command: /usr/local/bin/gunicorn --enable-stdio-inheritance -w 4 -b :5000 project:app
+
+  mongodb:
+    # mongo:6.0 verified against this backend (PyMongo 4.17) on a FRESH volume,
+    # 2026-07-02 -- see FULL_STACK_MODERNIZATION_REPORT.md. Kept at 4.4 because
+    # the existing qresp_mongo_data volume holds 4.4-format data files: upgrading
+    # in place needs stepped 4.4 -> 5.0 -> 6.0 (FCV bumps) or mongodump/restore,
+    # and mongo >=5.0 requires an AVX-capable CPU.
+    image: mongo:4.4
+    restart: always
+    volumes:
+      - qresp_mongo_data:/data/db
+    networks:
+      - backend
 
   gui:
     restart: always
@@ -38,3 +56,6 @@ networks:
     driver: bridge
   backend:
     driver: bridge
+
+volumes:
+  qresp_mongo_data:
