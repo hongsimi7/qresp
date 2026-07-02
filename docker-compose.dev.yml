@@ -1,6 +1,9 @@
 services:
   db:
-    image: "mongo:3.6.18-xenial"
+    # mongo:4.4 matches the production compose default. The previous
+    # mongo:3.6.18-xenial is EOL AND unsupported by PyMongo 4.17 (requires
+    # MongoDB server >= 4.0), so the dev DB would no longer connect at all.
+    image: "mongo:4.4"
     # Named volume instead of hard-coded host paths. The old config required
     # ~/Repositories/MongoDB/{.env,init-mongo.js,QrespData}, which don't exist on
     # a clean checkout. A fresh no-auth dev DB needs no env_file/init script.

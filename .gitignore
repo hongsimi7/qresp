@@ -22,6 +22,9 @@ PUBLISH_*
 # Python
 __pycache__
 
+# Coverage data (every nose2 run rewrites it; was mistakenly tracked)
+.coverage
+
 # Pytest
 .pytest_cache
 

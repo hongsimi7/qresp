@@ -46,7 +46,7 @@ class TestPaperDAO(unittest.TestCase):
         """
         dao = PaperDAO()
         allcollectionlist = dao.getCollectionList()
-        self.assertEquals(1, len(list(allcollectionlist)))
+        self.assertEqual(1, len(list(allcollectionlist)))
 
     def test_getPublicationList(self):
         """
@@ -54,7 +54,7 @@ class TestPaperDAO(unittest.TestCase):
         """
         dao = PaperDAO()
         allpublicationlist = dao.getPublicationList()
-        self.assertEquals(1, len(list(allpublicationlist)))
+        self.assertEqual(1, len(list(allpublicationlist)))
 
     # def test_getAuthorList(self):
     #     """
@@ -62,7 +62,7 @@ class TestPaperDAO(unittest.TestCase):
     #     """
     #     dao = PaperDAO()
     #     allauthorslist = dao.getAuthorList()
-    #     self.assertEquals(0,len(list(allauthorslist)))
+    #     self.assertEqual(0,len(list(allauthorslist)))
 
     def test_getAllPapers(self):
         """
@@ -70,7 +70,7 @@ class TestPaperDAO(unittest.TestCase):
         """
         dao = PaperDAO()
         allpapers = dao.getAllPapers()
-        self.assertEquals(1, len(list(allpapers)))
+        self.assertEqual(1, len(list(allpapers)))
 
     def test_getAllFilteredSearchObjects(self):
         """
@@ -78,7 +78,7 @@ class TestPaperDAO(unittest.TestCase):
         """
         dao = PaperDAO()
         allSearchObjects = dao.getAllFilteredSearchObjects()
-        self.assertEquals(1, len(list(allSearchObjects)))
+        self.assertEqual(1, len(list(allSearchObjects)))
 
     def test_getFilteredPaperObjectsForSearchWord(self):
         """
@@ -86,7 +86,7 @@ class TestPaperDAO(unittest.TestCase):
         """
         dao = PaperDAO()
         allSearchObjects = dao.getAllFilteredSearchObjects(searchWord='photo')
-        self.assertEquals(1, len(list(allSearchObjects)))
+        self.assertEqual(1, len(list(allSearchObjects)))
 
     def test_getFilteredPaperObjectsForTitle(self):
         """
@@ -94,7 +94,7 @@ class TestPaperDAO(unittest.TestCase):
         """
         dao = PaperDAO()
         allSearchObjects = dao.getAllFilteredSearchObjects(paperTitle='photo')
-        self.assertEquals(1, len(list(allSearchObjects)))
+        self.assertEqual(1, len(list(allSearchObjects)))
 
     def test_getFilteredPaperObjectsForDOI(self):
         """
@@ -103,7 +103,7 @@ class TestPaperDAO(unittest.TestCase):
         dao = PaperDAO()
         allSearchObjects = dao.getAllFilteredSearchObjects(
             doi='10.1021/jacs.6b00225')
-        self.assertEquals(1, len(list(allSearchObjects)))
+        self.assertEqual(1, len(list(allSearchObjects)))
 
     def test_getFilteredPaperObjectsForTags(self):
         """
@@ -111,7 +111,7 @@ class TestPaperDAO(unittest.TestCase):
         """
         dao = PaperDAO()
         allSearchObjects = dao.getAllFilteredSearchObjects(tags=['DFT'])
-        self.assertEquals(1, len(list(allSearchObjects)))
+        self.assertEqual(1, len(list(allSearchObjects)))
 
     def test_getFilteredPaperObjectsForCollections(self):
         """
@@ -120,7 +120,7 @@ class TestPaperDAO(unittest.TestCase):
         dao = PaperDAO()
         allSearchObjects = dao.getAllFilteredSearchObjects(
             collectionList=['MICCOM'])
-        self.assertEquals(1, len(list(allSearchObjects)))
+        self.assertEqual(1, len(list(allSearchObjects)))
 
     def test_getFilteredPaperObjectsForAuthors(self):
         """
@@ -128,7 +128,7 @@ class TestPaperDAO(unittest.TestCase):
         """
         dao = PaperDAO()
         allSearchObjects = dao.getAllFilteredSearchObjects(authorsList=[])
-        self.assertEquals(1, len(list(allSearchObjects)))
+        self.assertEqual(1, len(list(allSearchObjects)))
 
     def test_getFilteredPaperObjectsForPublication(self):
         """
@@ -137,7 +137,7 @@ class TestPaperDAO(unittest.TestCase):
         dao = PaperDAO()
         allSearchObjects = dao.getAllFilteredSearchObjects(
             publicationList=['Journal of the American Chemical Society'])
-        self.assertEquals(1, len(list(allSearchObjects)))
+        self.assertEqual(1, len(list(allSearchObjects)))
 
     def test_getAllSearchObjects(self):
         """
@@ -145,7 +145,7 @@ class TestPaperDAO(unittest.TestCase):
         """
         dao = PaperDAO()
         allSearchObjects = dao.getAllSearchObjects()
-        self.assertEquals(1, len(list(allSearchObjects)))
+        self.assertEqual(1, len(list(allSearchObjects)))
 
     def test_insertIntoPapers(self):
         """
@@ -166,7 +166,7 @@ class TestPaperDAO(unittest.TestCase):
         dao = PaperDAO()
         allSearchObjects = dao.getAllFilteredSearchObjects(tags=['DFT'])
         paper = dao.insertDOI(allSearchObjects[0]['_Search__id'], '123')
-        self.assertEquals(1, paper)
+        self.assertEqual(1, paper)
 
     def test_getPaperDetails(self):
         """
@@ -175,7 +175,7 @@ class TestPaperDAO(unittest.TestCase):
         dao = PaperDAO()
         allSearchObjects = dao.getAllFilteredSearchObjects(tags=['DFT'])
         paperDetails = dao.getPaperDetails(allSearchObjects[0]['_Search__id'])
-        self.assertEquals(
+        self.assertEqual(
             allSearchObjects[0]['_Search__id'], paperDetails['id'])
 
     def test_getWorkflowDetails(self):
@@ -186,7 +186,7 @@ class TestPaperDAO(unittest.TestCase):
         allSearchObjects = dao.getAllFilteredSearchObjects(tags=['DFT'])
         workflowdetails = dao.getWorkflowDetails(
             allSearchObjects[0]['_Search__id'])
-        self.assertEquals(
+        self.assertEqual(
             workflowdetails['paperTitle'], allSearchObjects[0]['_Search__title'])
 
     def test_getWorkflowForChartDetails(self):
@@ -200,7 +200,7 @@ class TestPaperDAO(unittest.TestCase):
         chartid = paperDetails['charts'][0].id
         workflowchartdetails = dao.getWorkflowForChartDetails(
             paperDetails['id'], chartid)
-        self.assertEquals(
+        self.assertEqual(
             workflowchartdetails['paperTitle'], allSearchObjects[0]['_Search__title'])
 
 
