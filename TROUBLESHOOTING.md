@@ -80,8 +80,9 @@ recommended.)
 `localhost:27017` when running the live app (not the tests).
 **Cause** — the live app needs a real MongoDB; the test suite does not (it uses
 in-memory mongomock).
-**Fix** — start MongoDB (recommended: a local `mongo:6.0` container) before
-`flask run`. Check `backend/project/config.ini` for host/port/db settings.
+**Fix** — start MongoDB (e.g. a local `mongo:4.4` container) before serving
+(`python -m uvicorn project:connexionapp ...`). Check
+`backend/project/config.ini` for host/port/db settings.
 
 ## 7. Missing Node / npm / Yarn (frontend)
 

@@ -22,12 +22,12 @@ baseline**, not the newest framework versions.
 | --- | --- |
 | **Backend Python** | **Verified on CPython 3.11.5** (win_amd64). Use standard CPython **3.10–3.11**. |
 | **Backend deps** | **Pinned** (`backend/requirements.txt`) + **locked** (`backend/requirements.lock.txt`). Install / `pip check` / import / boot / tests all **verified green**. |
-| **Backend tests** | **17 tests pass** via `nose2` using **mongomock** — no real MongoDB needed. |
+| **Backend tests** | **29 tests pass** via `nose2` using **mongomock** — no real MongoDB needed. |
 | **MongoDB (tests)** | **Not required** (in-memory mongomock). |
-| **MongoDB (real runs)** | Required for the live app. Compose references EOL `mongo:3.6`; recommended **6.0**. |
+| **MongoDB (real runs)** | Required for the live app. Compose defaults to `mongo:4.4` (prod + dev); `mongo:6.0` verified on a fresh volume — see FULL_STACK_MODERNIZATION_REPORT.md. |
 | **Node / npm / Yarn** | **Not verified** — no Node toolchain was available. Current frontend is Next.js 9 (needs Node ~14); target Node 20 LTS only after the frontend upgrade. |
 | **Frontend** | **Unverified**; manifests left unchanged (upgrades are architectural). |
-| **Docker** | **Does NOT work out of the box** — see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) (EOL base image + dev compose hard-codes host paths). |
+| **Docker** | **Works** — `python:3.14-slim` images, verified build + DB-backed runtime 2026-07-02 (see FULL_STACK_MODERNIZATION_REPORT.md). |
 | **Curation assistant prototype** | **Verified green** (130 tests) on Python 3.11; standalone. |
 
 ### Exact commands that were verified (CPython 3.11.5, clean venv)
@@ -36,7 +36,7 @@ baseline**, not the newest framework versions.
 pip install -r backend/requirements.txt          # exit 0
 python -m pip check                                # "No broken requirements found."
 python -c "import project; print(project.app.test_client().get('/').status_code)"  # 200
-python -m nose2                                    # Ran 17 tests ... OK
+python -m nose2                                    # Ran 29 tests ... OK
 
 # prototype
 pip install -e "prototypes/curation_assistant[pdf,schema,test]"
@@ -72,14 +72,16 @@ python -m pip check
 python -c "import project; print(project.app.test_client().get('/').status_code)"   # -> 200
 
 # 5. run the test suite (uses in-memory mongomock; no MongoDB needed)
-python -m nose2 -v                   # -> Ran 17 tests ... OK
+python -m nose2 -v                   # -> Ran 29 tests ... OK
 ```
 
 **Running the live app** (needs a real MongoDB):
 ```bash
-# start MongoDB yourself (recommended: a local mongo:6.0 container), then:
-export FLASK_APP=run.py              # Windows: set FLASK_APP=run.py
-flask run --host 0.0.0.0            # or: gunicorn -w 4 -b :5000 project:app
+# start MongoDB yourself (e.g. a local mongo:4.4 container), then:
+python -m uvicorn project:connexionapp --host 0.0.0.0 --port 5000 --reload
+# production-style: gunicorn -k uvicorn_worker.UvicornWorker -w 4 -b :5000 project:connexionapp
+# (Connexion 3 is ASGI -- `flask run` / serving bare `project:app` would bypass
+#  the API validation & swagger-ui middleware.)
 ```
 Connection settings live in `backend/project/config.ini` / `config.py`.
 
