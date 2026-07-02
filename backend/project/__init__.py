@@ -1,9 +1,9 @@
 import connexion
+import mongoengine
 import os
 from flask_session import Session
 from flask_sitemap import Sitemap
 from project.config import Config
-from flask_mongoengine import MongoEngine
 from flask_cors import CORS
 
 Config.initialize()
@@ -29,12 +29,19 @@ CORS(app)
 
 #initialize db
 if Config.get_setting(app.config['env'],'MONGODB_HOST'):
-    db = MongoEngine()
-    app.config['MONGODB_HOST'] = Config.get_setting(app.config['env'],'MONGODB_HOST')
-    app.config['MONGODB_PORT'] = int(Config.get_setting(app.config['env'],'MONGODB_PORT'))
-    app.config['MONGODB_USERNAME'] = Config.get_setting(app.config['env'],'MONGODB_USERNAME')
-    app.config['MONGODB_PASSWORD'] = Config.get_setting(app.config['env'],'MONGODB_PASSWORD')
-    app.config['MONGODB_DB'] = Config.get_setting(app.config['env'],'MONGODB_DB_NAME')
-    db.init_app(app)
+    # flask-mongoengine is unmaintained and blocks Flask>=2.3; the models are
+    # plain mongoengine Documents, so connect mongoengine directly instead.
+    # Username/password are only passed when configured (empty ini values must
+    # not trigger authentication).
+    _mongo = dict(
+        db=Config.get_setting(app.config['env'],'MONGODB_DB_NAME'),
+        host=Config.get_setting(app.config['env'],'MONGODB_HOST'),
+        port=int(Config.get_setting(app.config['env'],'MONGODB_PORT')),
+    )
+    _username = Config.get_setting(app.config['env'],'MONGODB_USERNAME')
+    if _username:
+        _mongo.update(username=_username,
+                      password=Config.get_setting(app.config['env'],'MONGODB_PASSWORD'))
+    mongoengine.connect(**_mongo)
 
 from project import routes

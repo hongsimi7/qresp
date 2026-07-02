@@ -7,18 +7,20 @@
 # (itsdangerous, Jinja2, urllib3). Added `requests` explicitly (used by
 # project/util.py; was previously satisfied only transitively).
 #
-# Remaining caps, being lifted in staged phases (FULL_STACK_MODERNIZATION_REPORT.md):
-#   * Flask<2.3 / Werkzeug<2.3 -- Connexion 2.14 requires flask<2.3, and
-#     flask-mongoengine 1.0 breaks on Flask>=2.3 (removed flask.json APIs).
-#   * connexion[swagger-ui]<3.0 -- Connexion 3 is an ASGI rewrite (migration
-#     staged next).
+# flask-mongoengine removed 2026-07-02: unmaintained and blocked Flask>=2.3;
+# it was only a connection shim (models are plain mongoengine) -- replaced with
+# direct mongoengine.connect() in project/__init__.py and project/db.py.
+#
+# Remaining caps, lifted together with the Connexion 3 migration (staged next,
+# see FULL_STACK_MODERNIZATION_REPORT.md):
+#   * Flask<2.3 / Werkzeug<2.3 -- Connexion 2.14 requires flask<2.3.
+#   * connexion[swagger-ui]<3.0 -- Connexion 3 is an ASGI rewrite.
 # Exact verified versions are captured in requirements.lock.txt.
 setuptools
 jsonschema
 Flask<2.3
 Werkzeug<2.3
 Flask-Cors
-flask-mongoengine
 Flask-Session
 flask-sitemap
 mongoengine

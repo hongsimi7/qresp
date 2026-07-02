@@ -22,7 +22,6 @@ setup(
         'werkzeug<2.3',
         'connexion[swagger-ui]<3.0',
         'flask_cors',
-        'flask-mongoengine',
         'Flask-Session',
         'flask-sitemap',
         'mongoengine',
