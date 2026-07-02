@@ -1,4 +1,8 @@
-from connexion import request, jsonifier
+# Connexion 3 handlers run inside the wrapped Flask app's request context, so
+# the canonical Flask request proxy is used here (the old
+# `from connexion import request, jsonifier` import is gone in Connexion 3;
+# `jsonifier` was never used).
+from flask import request
 
 from project.paperdao import *
 from project.util import Dtree

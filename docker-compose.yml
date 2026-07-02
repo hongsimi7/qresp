@@ -16,7 +16,10 @@ services:
       - ./backend:/home/flask/app/web/
     networks:
       - backend
-    command: /usr/local/bin/gunicorn --enable-stdio-inheritance -w 4 -b :5000 project:app
+    # Connexion 3 is ASGI: serve `project:connexionapp` through uvicorn workers.
+    # Serving the bare Flask object (`project:app`) would bypass Connexion's
+    # request-validation / swagger-ui middleware.
+    command: /usr/local/bin/gunicorn --enable-stdio-inheritance -k uvicorn_worker.UvicornWorker -w 4 -b :5000 project:connexionapp
 
   mongodb:
     # mongo:6.0 verified against this backend (PyMongo 4.17) on a FRESH volume,

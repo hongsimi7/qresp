@@ -1,20 +1,30 @@
 import connexion
 import mongoengine
 import os
+from connexion.jsonifier import Jsonifier
 from flask_session import Session
 from flask_sitemap import Sitemap
 from project.config import Config
+from project.jsonutil import MongoJSONEncoder, MongoJSONProvider
 from flask_cors import CORS
 
 Config.initialize()
 
-# Create the application instance
-connexionapp = connexion.FlaskApp(__name__)
+# Create the application instance. Connexion 3: FlaskApp is an ASGI app that
+# wraps Flask (routing/validation/swagger-ui run as ASGI middleware). The
+# custom jsonifier restores mongoengine-document serialization, which
+# flask-mongoengine used to provide (see project/jsonutil.py).
+connexionapp = connexion.FlaskApp(__name__, jsonifier=Jsonifier(cls=MongoJSONEncoder))
 
-# Read the swagger.yml file to configure the endpoints
-swagger_file = (os.path.join(os.getcwd(), 'project/swagger.yml'))
+# Read the swagger.yml file to configure the endpoints. Resolved relative to
+# this file so imports work regardless of the process working directory.
+swagger_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'swagger.yml')
 connexionapp.add_api(swagger_file)
+# The underlying Flask app: the server-rendered routes in project/routes.py
+# attach here. Production must serve `project:connexionapp` (ASGI) -- serving
+# this Flask object directly would bypass Connexion's validation middleware.
 app = connexionapp.app
+app.json = MongoJSONProvider(app)
 
 # Create protection and session variables
 app.secret_key = Config.get_setting('SECRETS','FLASK_SECRET_KEY')

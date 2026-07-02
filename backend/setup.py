@@ -20,7 +20,8 @@ setup(
     install_requires=[
         'flask<2.3',
         'werkzeug<2.3',
-        'connexion[swagger-ui]<3.0',
+        'connexion[flask,swagger-ui,uvicorn]>=3.3',
+        'uvicorn-worker',
         'flask_cors',
         'Flask-Session',
         'flask-sitemap',

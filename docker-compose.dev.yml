@@ -20,8 +20,6 @@ services:
       dockerfile: Dockerfile.dev
     environment:
       - PYTHONUNBUFFERED=TRUE
-      - FLASK_APP=run.py
-      - FLASK_ENV=development
       # Connect to the dev "db" service (read by project/config.py via QRESP_*).
       - QRESP_MONGODB_HOST=db
       - QRESP_MONGODB_PORT=27017
@@ -31,7 +29,9 @@ services:
       - ./backend:/home/flask/app/web/
     networks:
       - backend
-    command: flask run --host 0.0.0.0
+    # Connexion 3 is ASGI: uvicorn --reload replaces the old `flask run` dev
+    # server (which would bypass Connexion's middleware).
+    command: python -m uvicorn project:connexionapp --host 0.0.0.0 --port 5000 --reload
 
   gui:
     restart: always
