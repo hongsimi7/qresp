@@ -1,16 +1,20 @@
 # Full-Stack Modernization Report
 
-Branch: `chore/continue-modernization` · **Wave 2 completed 2026-07-02** · Local-only (no push, no deploy)
+Branches: `chore/continue-modernization` (waves 1–2, backend) and
+`chore/frontend-modernization` (wave 3, frontend) · **Waves 2–3 completed
+2026-07-02** · Local-only (no push, no deploy)
 
 Wave-2 commits (each phase verified before commit):
 `59e874e` Phase A (prune) → `e626682` Phase B (flask-mongoengine out) →
 `9a136ce` Phase D (Connexion 3) → `93d4de6` Phase C (Flask 3) →
 `c35e380` Phase F (Docker/CI/lock). Pre-change audit: [DEPENDENCY_AUDIT.md](DEPENDENCY_AUDIT.md).
+Wave-3 commits: `043fab9` (frontend app migration) → `208db8c` (node:24 images).
 
 Wave 1 (same day, earlier, merged into baseline `698be1c`) had already delivered
 WTForms 2.3.3→3.2.2, the Flask-WTF pin lift, MongoEngine 0.26→0.29.3, PyMongo
-3.13→4.17, and the mongo:6.0-on-fresh-volume verification. Wave 2 removes every
-remaining cap: **the backend now runs entirely on latest stable dependencies.**
+3.13→4.17, and the mongo:6.0-on-fresh-volume verification. Wave 2 removed every
+remaining backend cap; wave 3 modernized the frontend: **the whole stack now
+runs on latest stable dependencies.**
 
 ## 1. Dependency upgrade table (before wave 2 → after)
 
@@ -140,17 +144,37 @@ swagger-ui.
 **CI:** backend-smoke now runs a {3.11, 3.14} matrix with the same
 lock+boot+nose2 steps (executes on next push — pushing is out of scope here).
 
-## 5. Frontend (Phase E) — audited, unchanged, still blocked
+## 5. Frontend (wave 3, 2026-07-02) — DONE
 
-Toolchain on this machine: **Node 14.21.3 / Yarn 1.22.22, no nvm installs**
-(re-checked today). Modern Next requires Node ≥18.17 (Next 15/16: ≥20), so any
-frontend major bump would be unverifiable here — per the ground rules, none was
-made. Targets when Node 20+ appears: Next 9.4.4→16.x, React 16.13→19.x, the
-mixed `@material-ui` v4/v5-alpha set → `@mui/material` 9.x, jest 26→30, axios
-0.19→1.x, and **enzyme → React Testing Library** (enzyme is dead; no adapter
-beyond React 16). The frontend Docker image stays `node:14.21.3-alpine`
-deliberately — Next 9 itself is not Node-20 compatible, so the image bump only
-makes sense together with the app upgrade.
+Toolchain: **Node 24.18.0 / npm 11.16 / Yarn 1.22.22** (Yarn 1 kept — minimal
+churn; the v1 lockfile regenerated cleanly). Verified locally: `yarn install`
+OK, **`yarn build` OK** (Next 16.2.10 on Turbopack; 4 static + 3 dynamic
+routes), **`yarn test` OK** (React Testing Library, 2 suites / 5 tests).
+
+| Package | Before | After |
+| --- | --- | --- |
+| next / react / react-dom | 9.4.4 / 16.13.1 | **16.2.10 / 19.2.7** |
+| @material-ui core v5-alpha + icons/lab v4 | mixed | **@mui/material 9.1.2** + icons 9.1.1 (+ material-nextjs, emotion; lab dropped — Alert/Autocomplete/Pagination live in core) |
+| react-hook-form / @hookform/resolvers / yup | 6.8 / 0.1 / 0.29 | **7.80 / 5.4 / 1.7** |
+| jest + enzyme (+adapter-16, to-json) | 26 / 3.11 | **jest 30 + next/jest + RTL 16** (enzyme removed) |
+| axios / ajv | 0.19 / 6 | **1.18 / 8** (ajv `strict:false`; draft-07 schema unchanged) |
+| simple-react-lightbox (dead) | 3.2 | **yet-another-react-lightbox 3.32** |
+| vis-network | 7 (+hammerjs/keycharm/emitter shims) | **10.1** standalone (shims dropped) |
+| fontawesome / react-checkbox-tree / react-transition-group | 5 / 1.6 / 4.4.1 | 7 / 2.0 / 4.4.5 |
+| Docker images | node:14.21.3-alpine | **node:24-alpine** (after local build/test passed) |
+
+Migration highlights (details in commit `043fab9`): JSS→emotion (12
+makeStyles/withStyles files → `styled()`/`sx`; `_app`/`_document` on the
+official `@mui/material-nextjs` pages-router adapter, replacing
+ServerStyleSheets); MUI v4 API sweep (justify→justifyContent, `Hidden`→
+responsive `sx`, TransitionProps→slotProps, PaperProps→slotProps); RHF v7
+(register-as-ref eliminated by registering inside the shared
+TextInput/NameInput/RadioInput wrappers, `Controller as`→`render`,
+`formState.errors`, dot-syntax field-array names); yup 1 `when()` function
+form; new-style `next/link` (no child `<a>`; MUI Buttons render
+`component={Link}`); React 19 `CSSTransition` nodeRef wrapper (findDOMNode is
+gone); Turbopack import-binding fix; `@mui/icons-material` 9 dropped the bare
+`*Outline` aliases → `*Outlined`.
 
 ## 6. MongoDB server
 
@@ -183,13 +207,20 @@ necessity (PyMongo 4.17 cannot talk to server 3.6 at all).
    old 3.6-era production image must be rebuilt, not upgraded in place.
 7. **Sessions**: Flask-Session 0.8 keeps the `filesystem` backend (deprecation
    warning only); session files are ephemeral and compatible.
-8. **Frontend untouched** — no coordinated frontend deploy needed.
+8. **Frontend (wave 3)**: the gui image must be rebuilt (node:24). `yarn
+   start`/pm2 serving and port are unchanged, so nginx needs no edits.
+   `NEXT_PUBLIC_API_URL` env still drives the API base (unchanged). Unit
+   coverage is thin (5 tests) — before switching traffic, click through the
+   curator forms (react-hook-form v7 rewiring), the chart lightbox
+   (replaced library), workflow graphs (vis-network 10), and visually compare
+   the styled()-converted components against production.
 9. Connexion's own import of Starlette's test client emits a deprecation
    warning (`httpx2`) — cosmetic, upstream, no action needed.
 
 ## 8. Remaining blockers / deliberately not done
 
-- **Frontend modernization** — blocked on a Node ≥20 toolchain (§5).
+- **Frontend e2e/browser QA** — the migration is build- and unit-test-green,
+  but there is no e2e suite; the §7.8 staging click-through is the gate.
 - **MongoDB 6.x in production** — requires the data migration in §6.
 - **`verify=False` TLS-verification skips in `util.py`** registry/schema
   fetches — pre-existing; left as-is (behavior-preserving), flagged as a
@@ -206,8 +237,9 @@ necessity (PyMongo 4.17 cannot talk to server 3.6 at all).
    browser CORS preflight, and one form page (`/qrespcurator`).
 3. Audit the server for out-of-repo `gunicorn ... project:app` invocations
    (risk #1) before switching traffic.
-4. Install Node 20 LTS → frontend phase (Next/React/MUI/RTL) on its own
-   branch, following §5.
+4. Frontend staging QA per §7.8 (forms, lightbox, workflow graph, visual
+   parity); consider adding an e2e smoke (Playwright) before the next feature
+   phase.
 5. Schedule the MongoDB 4.4→6.0 production migration (§6) as an ops task.
 6. Optional hardening: enable TLS verification in `util.py` fetches; Linux
    lock regeneration for uvloop; move Flask-Session config off the deprecated
