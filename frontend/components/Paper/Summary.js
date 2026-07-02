@@ -2,17 +2,16 @@ import { Fragment, useContext } from "react";
 import PropTypes from "prop-types";
 
 import Link from "next/link";
-import { Typography, Grid, Box, Paper, withStyles } from "@material-ui/core";
+import { Typography, Grid, Box, Paper } from "@mui/material";
+import { styled } from "@mui/material/styles";
 
 import Tag from "../tag";
 
 import { TableSearchContext } from "../Table/TableSearch";
 
-const StyledPaper = withStyles({
-  root: {
-    backgroundColor: "inherit",
-  },
-})(Paper);
+const StyledPaper = styled(Paper)({
+  backgroundColor: "inherit",
+});
 
 const Summary = ({ rowdata }) => {
   const {
@@ -30,22 +29,23 @@ const Summary = ({ rowdata }) => {
   return (
     <Fragment>
       <StyledPaper elevation={0}>
-        <Grid container justify="flex-start" alignItems="center">
+        <Grid container justifyContent="flex-start" alignItems="center">
           <Grid item xs={12} container>
             <Grid item xs={12}>
-              <Link
-                href="/paperdetails/[id]"
-                as={{
-                  pathname: "/paperdetails/" + _Search__id,
-                  query: { server: _Search__server },
-                }}
-              >
-                <a>
+              {/* Next 13+ <Link> renders the anchor itself (no child <a>);
+                  the resolved pathname+query go straight into href. */}
+              <span className="title-link">
+                <Link
+                  href={{
+                    pathname: "/paperdetails/" + _Search__id,
+                    query: { server: _Search__server },
+                  }}
+                >
                   <Typography variant="h6" component="div" gutterBottom>
                     <Box fontWeight="bold">{_Search__title}</Box>
                   </Typography>
-                </a>
-              </Link>
+                </Link>
+              </span>
             </Grid>
             <Grid item xs={12}>
               <Typography
@@ -93,6 +93,13 @@ const Summary = ({ rowdata }) => {
           color: #007bff;
         }
         a:hover {
+          color: #777777;
+        }
+        .title-link :global(a) {
+          color: #007bff;
+          text-decoration: none;
+        }
+        .title-link :global(a:hover) {
           color: #777777;
         }
         img {

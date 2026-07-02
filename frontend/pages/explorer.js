@@ -6,14 +6,17 @@ import SEO from "../components/seo";
 
 import apiEndpoint from "../Context/axios";
 
-import { Box, Typography, Container, TextField } from "@material-ui/core";
-import Autocomplete from "@material-ui/lab/Autocomplete";
+import { Box, Typography, Container, TextField } from "@mui/material";
+import Autocomplete from "@mui/material/Autocomplete";
 
 import AlertContext from "../Context/Alert/alertContext";
 
-import servers from "../data/qresp_servers";
+import allServers from "../data/qresp_servers";
 
 const explorer = ({ error }) => {
+  // Turbopack forbids reassigning an imported binding (the old code did
+  // `servers = []` on error), so derive a local list instead.
+  const servers = error ? [] : allServers;
   const { setAlert, unsetAlert } = useContext(AlertContext);
 
   const explorerDescription =
@@ -67,10 +70,6 @@ const explorer = ({ error }) => {
       If problems persist please contact the administrator
     </Fragment>
   );
-
-  if (error) {
-    servers = [];
-  }
 
   useEffect(() => {
     if (error) {

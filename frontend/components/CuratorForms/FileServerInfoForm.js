@@ -1,7 +1,7 @@
 import PropTypes from "prop-types";
 
 import { useContext } from "react";
-import { Grid } from "@material-ui/core";
+import { Grid } from "@mui/material";
 
 import Drawer from "../drawer";
 import RadioInput from "../Form/RadioInput";
@@ -9,7 +9,7 @@ import { SelectInputField, TextInputField } from "../Form/InputFields";
 import { SubmitAndReset } from "../Form/Util";
 
 import { useForm } from "react-hook-form";
-import { yupResolver } from "@hookform/resolvers";
+import { yupResolver } from "@hookform/resolvers/yup";
 
 import { getList } from "../../Utils/Scraper";
 
@@ -29,7 +29,7 @@ const FileServerInfoForm = ({ editor }) => {
       .url("Please enter a valid url"),
   });
 
-  const { register, handleSubmit, errors, watch, control } = useForm({
+  const { register, handleSubmit, formState: { errors }, watch, control } = useForm({
     resolver: yupResolver(schema),
     defaultValues: { connectionType: "http" },
   });
@@ -119,7 +119,7 @@ const FileServerInfoForm = ({ editor }) => {
                 label="Zenodo"
                 required={true}
                 error={errors.dataServer}
-                inputRef={register}
+                register={register}
               />
             )}
           </Grid>

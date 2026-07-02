@@ -1,6 +1,6 @@
 import Header from "../components/header";
 import Footer from "../components/footer";
-import { Box } from "@material-ui/core";
+import { Box } from "@mui/material";
 import PropTypes from "prop-types";
 import AlertDialog from "./alert";
 import Loader from "./loader";

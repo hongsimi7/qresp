@@ -1,4 +1,4 @@
-import { Container, Box } from "@material-ui/core";
+import { Container, Box } from "@mui/material";
 
 import CuratorState from "../Context/Curator/CuratorState";
 import CuratorHelperState from "../Context/CuratorHelpers/curatorHelperState";

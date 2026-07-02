@@ -2,10 +2,10 @@ import { useContext } from "react";
 import PropTypes from "prop-types";
 
 import { useForm } from "react-hook-form";
-import { yupResolver } from "@hookform/resolvers";
+import { yupResolver } from "@hookform/resolvers/yup";
 import * as Yup from "yup";
 
-import { Grid } from "@material-ui/core";
+import { Grid } from "@mui/material";
 
 import { TextInputField, NameInputField } from "../Form/InputFields";
 import { SubmitAndReset } from "../Form/Util";
@@ -30,7 +30,7 @@ const CuratorInfoForm = ({ editor }) => {
     affiliation: Yup.string(),
   });
 
-  const { register, handleSubmit, errors, setValue } = useForm({
+  const { register, handleSubmit, formState: { errors }, setValue } = useForm({
     resolver: yupResolver(schema),
   });
 
@@ -64,7 +64,7 @@ const CuratorInfoForm = ({ editor }) => {
               label="Email"
               required={true}
               error={errors["emailId"]}
-              inputRef={register}
+              register={register}
               defaultValue={curatorInfo.emailId}
             />
           </Grid>
@@ -75,7 +75,7 @@ const CuratorInfoForm = ({ editor }) => {
               name="affiliation"
               helperText="eg. Dept. of Physics, University of XYZ"
               label="Affiliation"
-              inputRef={register}
+              register={register}
               errore={errors["affiliation"]}
               defaultValue={curatorInfo.affiliation}
             />

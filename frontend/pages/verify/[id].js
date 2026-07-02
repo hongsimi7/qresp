@@ -1,5 +1,5 @@
 import { Fragment } from "react";
-import { Typography, Box, Container } from "@material-ui/core";
+import { Typography, Box, Container } from "@mui/material";
 
 import Link from "next/link";
 import axios from "axios";
@@ -29,14 +29,14 @@ const Verify = ({ id, server, error }) => {
                 Success ! <br /> Your paper has been added to the qresp database
                 on {new URL(server).host}.
               </Typography>
-              <Link
+              <StyledButton
+                component={Link}
                 href={`/paperdetails/${encodeURIComponent(
                   id
                 )}?server=${server}`}
-                passHref
               >
-                <StyledButton>Go to Paper</StyledButton>
-              </Link>
+                Go to Paper
+              </StyledButton>
             </Fragment>
           ) : (
             <Fragment>

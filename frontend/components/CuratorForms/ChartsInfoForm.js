@@ -8,15 +8,15 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
-} from "@material-ui/core";
-import { AddCircleOutline, DescriptionOutlined } from "@material-ui/icons";
+} from "@mui/material";
+import { AddCircleOutlined, DescriptionOutlined } from "@mui/icons-material";
 
 import { TextInputField } from "../Form/InputFields";
 import ExtraFieldInput from "../Form/ExtraFieldInput";
 import { RegularStyledButton } from "../button";
 
 import { useForm } from "react-hook-form";
-import { yupResolver } from "@hookform/resolvers";
+import { yupResolver } from "@hookform/resolvers/yup";
 import * as Yup from "yup";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
@@ -51,7 +51,7 @@ const ChartsInfoForm = () => {
     ),
   });
 
-  const { register, handleSubmit, errors, control, setValue } = useForm({
+  const { register, handleSubmit, formState: { errors }, control, setValue } = useForm({
     resolver: yupResolver(schema),
   });
 
@@ -91,7 +91,7 @@ const ChartsInfoForm = () => {
       >
         <RegularStyledButton
           fullWidth
-          endIcon={<AddCircleOutline />}
+          endIcon={<AddCircleOutlined />}
           onClick={() => {
             setDefault("chart", null);
             openForm("chart");
@@ -136,7 +136,7 @@ const ChartsInfoForm = () => {
                   helperText="Enter chart caption"
                   label="Caption"
                   error={errors.caption}
-                  inputRef={register}
+                  register={register}
                   defaultValue={def && def.caption}
                   required
                 />
@@ -149,7 +149,7 @@ const ChartsInfoForm = () => {
                   helperText="Enter chart number"
                   label="Number"
                   error={errors.number}
-                  inputRef={register}
+                  register={register}
                   defaultValue={(def && def.number) || charts.length}
                   required
                 />
@@ -162,7 +162,7 @@ const ChartsInfoForm = () => {
                   helperText="Enter file name(s) containing the data displayed in the chart (e.g. a file in CSV format). Use the file picker button to pick files"
                   label="Files"
                   error={errors.files}
-                  inputRef={register}
+                  register={register}
                   action={
                     <IconButton
                       size="small"
@@ -182,7 +182,7 @@ const ChartsInfoForm = () => {
                   helperText="Enter file name containing the snapshot of the chart. Use the file picker button to pick files. Formats Allowed: jpeg, jpg, png, gif"
                   label="Image File"
                   error={errors.imageFile}
-                  inputRef={register}
+                  register={register}
                   action={
                     <IconButton
                       size="small"
@@ -211,7 +211,7 @@ const ChartsInfoForm = () => {
                       <DescriptionOutlined color="primary" />
                     </IconButton>
                   }
-                  inputRef={register}
+                  register={register}
                   defaultValue={def && def.notebookFile}
                 />
               </Grid>
@@ -223,7 +223,7 @@ const ChartsInfoForm = () => {
                   helperText="Enter keyword(s) for the content displayed in the chart. e.g. potential energy surface, band gap. (Comma separated values)"
                   label="Keywords"
                   error={errors.properties}
-                  inputRef={register}
+                  register={register}
                   defaultValue={
                     def && def.properties && def.properties.join(", ")
                   }

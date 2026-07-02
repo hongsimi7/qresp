@@ -1,19 +1,21 @@
 import PropTypes from "prop-types";
 
-import { Typography, withStyles, Grid } from "@material-ui/core";
+import { Typography, Grid } from "@mui/material";
+import { styled } from "@mui/material/styles";
 
-const BigTypography = withStyles({
-  body1: {
+// withStyles' per-variant class keys map onto the variant classes.
+const BigTypography = styled(Typography)({
+  "&.MuiTypography-body1": {
     fontSize: "1.15rem",
     color: "#777777",
     textAlign: "justify",
   },
-  body2: {
+  "&.MuiTypography-body2": {
     fontSize: "0.95rem",
     color: "#777777",
     textAlign: "justify",
   },
-})(Typography);
+});
 
 const SimpleLabelValue = ({ label, value, direction }) => {
   return (
@@ -22,7 +24,7 @@ const SimpleLabelValue = ({ label, value, direction }) => {
         container
         direction={direction}
         alignItems="center"
-        justify="flex-start"
+        justifyContent="flex-start"
       >
         <Grid item>
           <Typography variant="body2" color="secondary" component="span">
@@ -67,7 +69,7 @@ const LabelValue = ({ label, value, link, image, textVariant, direction }) => {
         container
         direction={direction}
         alignItems="center"
-        justify="flex-start"
+        justifyContent="flex-start"
       >
         {label && (
           <Grid item>

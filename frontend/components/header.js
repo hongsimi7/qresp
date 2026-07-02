@@ -5,12 +5,11 @@ import {
   Box,
   Container,
   Button,
-  Hidden,
   Drawer,
-} from "@material-ui/core";
-import { withStyles } from "@material-ui/core/styles";
+} from "@mui/material";
+import { styled } from "@mui/material/styles";
 
-import { Menu } from "@material-ui/icons";
+import { Menu } from "@mui/icons-material";
 
 import StyledButton, {
   InternalStyledButton,
@@ -21,6 +20,14 @@ import Picture from "./picture";
 
 import Link from "next/link";
 
+// Defined at module scope (not per-render) with the paper slot styled via its
+// global class, since withStyles' classes map is gone in MUI v5+.
+const StyledDrawer = styled(Drawer)({
+  "& .MuiDrawer-paper": {
+    backgroundColor: "#800000",
+  },
+});
+
 const Header = () => {
   const [drawer, setDrawer] = useState(false);
 
@@ -28,7 +35,7 @@ const Header = () => {
     setDrawer(true);
   };
 
-  const toggleDrawer = () => {
+  const toggleDrawer = (event) => {
     if (
       event &&
       event.type === "keydown" &&
@@ -38,12 +45,6 @@ const Header = () => {
     }
     setDrawer(!drawer);
   };
-
-  const StyledDrawer = withStyles({
-    paper: {
-      backgroundColor: "#800000",
-    },
-  })(Drawer);
 
   const links = (
     <Fragment>
@@ -75,23 +76,22 @@ const Header = () => {
             m={1}
           >
             <Box display="flex" alignItems="center" flexGrow={1}>
-              <Link href="/">
-                <Button>
-                  <Picture
-                    imgSrc="/images/qrespLogo"
-                    imgAlt="Qresp Logo"
-                    height="64px"
-                  />
-                </Button>
-              </Link>
+              <Button component={Link} href="/">
+                <Picture
+                  imgSrc="/images/qrespLogo"
+                  imgAlt="Qresp Logo"
+                  height="64px"
+                />
+              </Button>
             </Box>
             <Box display="flex">
-              <Hidden smDown>{links}</Hidden>
-              <Hidden mdUp>
+              {/* MUI v6+ removed <Hidden>; use responsive display instead. */}
+              <Box sx={{ display: { xs: "none", md: "flex" } }}>{links}</Box>
+              <Box sx={{ display: { xs: "flex", md: "none" } }}>
                 <StyledButton onClick={handleOpen}>
                   <Menu />
                 </StyledButton>
-              </Hidden>
+              </Box>
             </Box>
           </Box>
         </Container>

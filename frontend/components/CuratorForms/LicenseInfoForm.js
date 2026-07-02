@@ -2,10 +2,10 @@ import { useContext } from "react";
 import PropTypes from "prop-types";
 
 import { useForm } from "react-hook-form";
-import { yupResolver } from "@hookform/resolvers";
+import { yupResolver } from "@hookform/resolvers/yup";
 import * as Yup from "yup";
 
-import { Grid, Box } from "@material-ui/core";
+import { Grid, Box } from "@mui/material";
 
 import { SelectInputField } from "../Form/InputFields";
 import { SubmitAndReset } from "../Form/Util";
@@ -23,7 +23,7 @@ const LicenseInfoForm = ({ editor }) => {
     license: Yup.string().required("Required"),
   });
 
-  const { control, handleSubmit, errors } = useForm({
+  const { control, handleSubmit, formState: { errors } } = useForm({
     resolver: yupResolver(schema),
   });
 

@@ -10,7 +10,7 @@ import {
   Box,
   Grid,
   LinearProgress,
-} from "@material-ui/core";
+} from "@mui/material";
 
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 
@@ -68,7 +68,7 @@ const FileTree = () => {
   return (
     <Dialog open={showSelector} onClose={closeSelector} maxWidth="md" fullWidth>
       <DialogTitle onClose={closeSelector} disableTypography>
-        <Grid container direction="column" spacing={1} justify="center">
+        <Grid container direction="column" spacing={1} justifyContent="center">
           <Grid item container spacing={1}>
             <Grid item xs={12} sm={9}>
               <Typography variant="h6">

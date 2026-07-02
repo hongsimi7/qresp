@@ -1,10 +1,18 @@
 import { Fragment, useState } from "react";
 import PropTypes from "prop-types";
 
-import { TextField, Typography, Tooltip } from "@material-ui/core";
+import { TextField, Typography, Tooltip } from "@mui/material";
 
 const TextInput = (props) => {
-  const { helperText, id, label, error, ...rest } = props;
+  const { helperText, id, label, error, register, registerOptions, ...rest } =
+    props;
+
+  // react-hook-form v7: register(name, options) returns
+  // { name, ref, onChange, onBlur }. MUI's TextField forwards `ref` to its
+  // root element, so the field ref goes to `inputRef` (the real <input>), and
+  // onBlur is chained into this component's own InputProps.onBlur below.
+  // Callers pass `register={register}` (v6 passed `inputRef={register}`).
+  const field = register ? register(props.name, registerOptions) : null;
 
   // const [field, meta] = useField(props);
   const [focused, setFocused] = useState(false);
@@ -24,13 +32,19 @@ const TextInput = (props) => {
     >
       <TextField
         {...rest}
+        {...(field
+          ? { name: field.name, onChange: field.onChange, inputRef: field.ref }
+          : {})}
         fullWidth
         variant="outlined"
         error={error && !focused}
         helperText={error && !focused ? error.message : ""}
         InputProps={{
           onFocus: () => setFocused(true),
-          onBlur: (e) => setFocused(false),
+          onBlur: (e) => {
+            setFocused(false);
+            if (field) field.onBlur(e);
+          },
           onMouseEnter: () => setHovering(true),
           onMouseLeave: () => setHovering(false),
           id: id,

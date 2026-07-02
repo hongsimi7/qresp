@@ -1,7 +1,7 @@
 import { Fragment, useState } from "react";
 import PropTypes from "prop-types";
 
-import { Typography, Tooltip, TextField, MenuItem } from "@material-ui/core";
+import { Typography, Tooltip, TextField, MenuItem } from "@mui/material";
 import { Controller } from "react-hook-form";
 
 const SelectInput = (props) => {
@@ -28,19 +28,23 @@ const SelectInput = (props) => {
             control={control}
             name={name}
             defaultValue=""
-            as={
+            render={({ field }) => (
+              // react-hook-form v7: the `as` prop is gone; render receives the
+              // controlled field ({ value, onChange, onBlur, ref, name }).
               <TextField
                 id={id}
                 select
                 variant="outlined"
-                name={name}
-                // onFocus={() => setFocused(true)}
-                // onBlur={() => setFocused(false)}
-                // onMouseEnter={() => setHovering(true)}
-                // onMouseLeave={() => setHovering(false)}
+                name={field.name}
+                value={field.value}
+                onChange={field.onChange}
+                inputRef={field.ref}
                 InputProps={{
                   onFocus: () => setFocused(true),
-                  onBlur: (e) => setFocused(false),
+                  onBlur: (e) => {
+                    setFocused(false);
+                    field.onBlur(e);
+                  },
                   onMouseEnter: () => setHovering(true),
                   onMouseLeave: () => setHovering(false),
                 }}
@@ -60,7 +64,7 @@ const SelectInput = (props) => {
                   </MenuItem>
                 ))}
               </TextField>
-            }
+            )}
           />
         </div>
       </Tooltip>

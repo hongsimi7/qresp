@@ -2,10 +2,10 @@ import { useContext } from "react";
 import PropTypes from "prop-types";
 
 import { useForm } from "react-hook-form";
-import { yupResolver } from "@hookform/resolvers";
+import { yupResolver } from "@hookform/resolvers/yup";
 import * as Yup from "yup";
 
-import { Grid } from "@material-ui/core";
+import { Grid } from "@mui/material";
 
 import { TextInputField } from "../Form/InputFields";
 import { SubmitAndReset } from "../Form/Util";
@@ -20,7 +20,7 @@ const DocumentationInfoForm = ({ editor }) => {
     documentation: Yup.string(),
   });
 
-  const { register, handleSubmit, errors, setValue } = useForm({
+  const { register, handleSubmit, formState: { errors }, setValue } = useForm({
     resolver: yupResolver(schema),
   });
 
@@ -40,7 +40,7 @@ const DocumentationInfoForm = ({ editor }) => {
               name="documentation"
               helperText="Enter additional documentation for the paper"
               label="Readme"
-              inputRef={register}
+              register={register}
               errore={errors.documentation}
               defaultValue={documentation}
               multiline

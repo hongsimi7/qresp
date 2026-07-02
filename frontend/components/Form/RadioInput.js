@@ -10,12 +10,16 @@ import {
   Tooltip,
   Typography,
   Box,
-} from "@material-ui/core";
+} from "@mui/material";
 
 const RadioInput = (props) => {
   const { id, name, helperText, options, row, register, error, defVal } = props;
   const [hovering, setHovering] = useState(false);
   const [focused, setFocused] = useState(false);
+
+  // react-hook-form v7: register once and attach the field to every <Radio>;
+  // MUI chains a Radio's own onChange with the surrounding RadioGroup's.
+  const field = register ? register(name) : null;
 
   return (
     <Tooltip
@@ -41,8 +45,15 @@ const RadioInput = (props) => {
             <FormControlLabel
               key={option.value}
               value={option.value}
-              control={<Radio color="primary" />}
-              inputRef={register}
+              control={
+                <Radio
+                  color="primary"
+                  name={field ? field.name : name}
+                  inputRef={field ? field.ref : undefined}
+                  onChange={field ? field.onChange : undefined}
+                  onBlur={field ? field.onBlur : undefined}
+                />
+              }
               label={
                 <Typography color="secondary">
                   <Box fontWeight="bold" component="span">

@@ -1,8 +1,8 @@
 import { useEffect, useContext } from "react";
 import PropTypes from "prop-types";
 
-import { Grid, Tooltip, Typography, IconButton } from "@material-ui/core";
-import { AddCircleOutline, RemoveCircleOutline } from "@material-ui/icons";
+import { Grid, Tooltip, Typography, IconButton } from "@mui/material";
+import { AddCircleOutlined, RemoveCircleOutlined } from "@mui/icons-material";
 
 import { RegularStyledButton } from "../button";
 import { TextInputField, RadioInputField } from "../Form/InputFields";
@@ -13,7 +13,7 @@ import NameInput from "../Form//NameInput";
 import Drawer from "../drawer";
 
 import { useForm, useFieldArray } from "react-hook-form";
-import { yupResolver } from "@hookform/resolvers";
+import { yupResolver } from "@hookform/resolvers/yup";
 import * as Yup from "yup";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
@@ -63,7 +63,6 @@ const ReferenceInfoForm = ({ editor }) => {
   const {
     register,
     handleSubmit,
-    errors,
     control,
     getValues,
     setValue,
@@ -74,6 +73,8 @@ const ReferenceInfoForm = ({ editor }) => {
       ...defaults,
     },
   });
+  // react-hook-form v7: errors moved onto formState.
+  const { errors } = formState;
 
   const { fields, append, remove } = useFieldArray({
     control,
@@ -122,9 +123,9 @@ const ReferenceInfoForm = ({ editor }) => {
   const nameid = {
     get: (index) => {
       return {
-        firstName: `authors[${index}].firstName`,
-        middleName: `authors[${index}].middleName`,
-        lastName: `authors[${index}].lastName`,
+        firstName: `authors.${index}.firstName`,
+        middleName: `authors.${index}.middleName`,
+        lastName: `authors.${index}.lastName`,
       };
     },
   };
@@ -137,7 +138,7 @@ const ReferenceInfoForm = ({ editor }) => {
 
   useEffect(() => {
     const newNames = namesUtil.get(referenceInfo.authors);
-    if (!("author" in formState.dirtyFields || "author" in formState.touched))
+    if (!("author" in formState.dirtyFields || "author" in formState.touchedFields))
       setValue("authors", newNames);
   }, [referenceInfo.authors]);
 
@@ -186,14 +187,14 @@ const ReferenceInfoForm = ({ editor }) => {
                   </RegularStyledButton>
                 </Tooltip>
               }
-              inputRef={register}
+              register={register}
               error={errors.doi}
             />
           </Grid>
           <Grid item>
             <Grid
               container
-              justify="flex-start"
+              justifyContent="flex-start"
               alignItems="center"
               spacing={1}
             >
@@ -218,7 +219,7 @@ const ReferenceInfoForm = ({ editor }) => {
                     }
                     style={{ padding: 0 }}
                   >
-                    <AddCircleOutline color="primary" />
+                    <AddCircleOutlined color="primary" />
                   </IconButton>
                 </Tooltip>
               </Grid>
@@ -255,7 +256,7 @@ const ReferenceInfoForm = ({ editor }) => {
                           }}
                           style={{ padding: 0 }}
                         >
-                          <RemoveCircleOutline
+                          <RemoveCircleOutlined
                             color={fields.length == 1 ? "disabled" : "primary"}
                           />
                         </IconButton>
@@ -274,7 +275,7 @@ const ReferenceInfoForm = ({ editor }) => {
               helperText="Enter title of the paper"
               label="Title"
               required
-              inputRef={register}
+              register={register}
               error={errors.title}
               defaultValue={referenceInfo.title}
             />
@@ -286,7 +287,7 @@ const ReferenceInfoForm = ({ editor }) => {
               name="journal"
               helperText="Enter full journal name"
               label="Journal Name"
-              inputRef={register}
+              register={register}
               error={errors.journal}
               defaultValue={defaults.journal}
               required
@@ -299,7 +300,7 @@ const ReferenceInfoForm = ({ editor }) => {
               name="page"
               helperText="Enter page number of the journal"
               label="Page"
-              inputRef={register}
+              register={register}
               error={errors.page}
               defaultValue={defaults.page}
               required
@@ -312,7 +313,7 @@ const ReferenceInfoForm = ({ editor }) => {
               name="abstract"
               helperText="Enter abstract"
               label="Abstract"
-              inputRef={register}
+              register={register}
               error={errors.abstract}
               multiline
               rows={4}
@@ -327,7 +328,7 @@ const ReferenceInfoForm = ({ editor }) => {
               name="volume"
               helperText="Enter volume of the journal"
               label="Volume"
-              inputRef={register}
+              register={register}
               error={errors.volume}
               defaultValue={defaults.volume}
               required
@@ -340,7 +341,7 @@ const ReferenceInfoForm = ({ editor }) => {
               name="year"
               helperText="Enter year of publication"
               label="Year"
-              inputRef={register}
+              register={register}
               error={errors.year}
               defaultValue={defaults.year}
               required
@@ -353,7 +354,7 @@ const ReferenceInfoForm = ({ editor }) => {
               name="url"
               helperText="Enter paper url"
               label="URL"
-              inputRef={register}
+              register={register}
               error={errors.url}
               defaultValue={referenceInfo.url}
             />

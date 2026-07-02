@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 import PropTypes from "prop-types";
 import { FormInputLabel } from "./Util";
-import { Grid } from "@material-ui/core";
+import { Grid } from "@mui/material";
 
 import TextInput from "./TextInput";
 

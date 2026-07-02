@@ -1,6 +1,6 @@
 import PropTypes from "prop-types";
 
-import { TextField, MenuItem, Typography, Box } from "@material-ui/core";
+import { TextField, MenuItem, Typography, Box } from "@mui/material";
 
 const RowsPerPageSelector = (props) => {
   const { count, rowsPerPage, onChangeRowsPerPage } = props;

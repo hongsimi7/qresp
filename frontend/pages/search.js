@@ -2,7 +2,7 @@ import { useEffect, useContext, Fragment, useState } from "react";
 
 import { useRouter } from "next/router";
 
-import { Container, Typography, Box, Divider } from "@material-ui/core";
+import { Container, Typography, Box, Divider } from "@mui/material";
 
 import SEO from "../components/seo";
 

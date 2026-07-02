@@ -8,9 +8,9 @@ import {
   DialogContent,
   Grid,
   useTheme,
-} from "@material-ui/core";
+} from "@mui/material";
 
-import useMediaQuery from "@material-ui/core/useMediaQuery";
+import useMediaQuery from "@mui/material/useMediaQuery";
 
 import Graph from "../Workflow/Graph";
 import Legend from "../Workflow/Legend";

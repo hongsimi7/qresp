@@ -1,7 +1,7 @@
 import { useState } from "react";
 
-import { Grid, IconButton, useTheme } from "@material-ui/core";
-import { KeyboardArrowRightRounded } from "@material-ui/icons";
+import { Grid, IconButton, useTheme } from "@mui/material";
+import { KeyboardArrowRightRounded } from "@mui/icons-material";
 
 const Slider = ({ children }) => {
   const [checked, setChecked] = useState(false);
@@ -17,7 +17,7 @@ const Slider = ({ children }) => {
   const theme = useTheme();
 
   return (
-    <Grid container direction="row" alignItems="center" justify="flex-start">
+    <Grid container direction="row" alignItems="center" justifyContent="flex-start">
       <Grid item xs={2}>
         <IconButton
           onClick={handleChange}
@@ -47,7 +47,7 @@ const Slider = ({ children }) => {
         xs={9}
         container
         direction="row"
-        justify="space-between"
+        justifyContent="space-between"
         alignItems="center"
         spacing={1}
       >

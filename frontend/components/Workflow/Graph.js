@@ -4,7 +4,7 @@ import PropTypes from "prop-types";
 import {
   Network,
   DataSet,
-} from "vis-network/standalone/umd/vis-network.min.js";
+} from "vis-network/standalone";
 
 import createNode from "./Nodes";
 import createEdge from "./Edges";

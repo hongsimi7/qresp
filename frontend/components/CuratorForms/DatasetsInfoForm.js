@@ -8,15 +8,15 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
-} from "@material-ui/core";
-import { AddCircleOutline, DescriptionOutlined } from "@material-ui/icons";
+} from "@mui/material";
+import { AddCircleOutlined, DescriptionOutlined } from "@mui/icons-material";
 
 import { TextInputField } from "../Form/InputFields";
 import ExtraFieldInput from "../Form/ExtraFieldInput";
 import { RegularStyledButton } from "../button";
 
 import { useForm } from "react-hook-form";
-import { yupResolver } from "@hookform/resolvers";
+import { yupResolver } from "@hookform/resolvers/yup";
 import * as Yup from "yup";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
@@ -48,7 +48,7 @@ const DatasetsInfoForm = () => {
     ),
   });
 
-  const { register, handleSubmit, errors, control, setValue } = useForm({
+  const { register, handleSubmit, formState: { errors }, control, setValue } = useForm({
     resolver: yupResolver(schema),
   });
 
@@ -80,7 +80,7 @@ const DatasetsInfoForm = () => {
       >
         <RegularStyledButton
           fullWidth
-          endIcon={<AddCircleOutline />}
+          endIcon={<AddCircleOutlined />}
           onClick={() => {
             setDefault("dataset", null);
             openForm("dataset");
@@ -125,7 +125,7 @@ const DatasetsInfoForm = () => {
                   helperText="Enter file name(s) to identify the dataset. Use the file picker (the file icon above). If you choose a dataset, all contents of the folder will be considered a part of the dataset"
                   label="Files"
                   error={errors.files}
-                  inputRef={register}
+                  register={register}
                   action={
                     <IconButton size="small" onClick={openFileSelector}>
                       <DescriptionOutlined color="primary" />
@@ -143,7 +143,7 @@ const DatasetsInfoForm = () => {
                   helperText="Enter a summary about the context of the dataset"
                   label="Description"
                   error={errors.readme}
-                  inputRef={register}
+                  register={register}
                   defaultValue={def && def.readme}
                   required
                 />
@@ -156,7 +156,7 @@ const DatasetsInfoForm = () => {
                   helperText="Enter link(s)/URLs of the dataset, if available. (Comma seperated)"
                   label="Keywords"
                   error={errors.URLs}
-                  inputRef={register}
+                  register={register}
                   defaultValue={def && def.URLs && def.URLs.join(", ")}
                 />
               </Grid>

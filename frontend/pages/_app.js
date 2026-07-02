@@ -1,7 +1,8 @@
-import { useEffect } from "react";
-
-import CssBaseline from "@material-ui/core/CssBaseline";
-import { ThemeProvider } from "@material-ui/core/styles";
+import CssBaseline from "@mui/material/CssBaseline";
+import { ThemeProvider } from "@mui/material/styles";
+// MUI v5+ styles with emotion; the official Next.js pages-router adapter
+// replaces the old JSS ServerStyleSheets/jss-server-side dance.
+import { AppCacheProvider } from "@mui/material-nextjs/v16-pagesRouter";
 
 import Theme from "../theme/theme";
 import Layout from "../components/layout";
@@ -17,27 +18,23 @@ import AlertState from "../Context/Alert/AlertState";
 import LoadingState from "../Context/Loading/LoadingState";
 import ServerState from "../Context/Servers/ServerState";
 
-export default function App({ Component, pageProps }) {
-  useEffect(() => {
-    // Remove the server-side injected CSS.
-    const jssStyles = document.querySelector("#jss-server-side");
-    if (jssStyles) {
-      jssStyles.parentElement.removeChild(jssStyles);
-    }
-  }, []);
+export default function App(props) {
+  const { Component, pageProps } = props;
 
   return (
-    <ThemeProvider theme={Theme}>
-      <CssBaseline />
-      <LoadingState>
-        <AlertState>
-          <ServerState>
-            <Layout>
-              <Component {...pageProps} />
-            </Layout>
-          </ServerState>
-        </AlertState>
-      </LoadingState>
-    </ThemeProvider>
+    <AppCacheProvider {...props}>
+      <ThemeProvider theme={Theme}>
+        <CssBaseline />
+        <LoadingState>
+          <AlertState>
+            <ServerState>
+              <Layout>
+                <Component {...pageProps} />
+              </Layout>
+            </ServerState>
+          </AlertState>
+        </LoadingState>
+      </ThemeProvider>
+    </AppCacheProvider>
   );
 }

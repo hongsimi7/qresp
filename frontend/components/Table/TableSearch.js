@@ -1,8 +1,8 @@
 import { useState, createContext, useContext, useEffect } from "react";
 import PropTypes from "prop-types";
 
-import { TextField, InputAdornment, IconButton, Box } from "@material-ui/core";
-import { Search, Close } from "@material-ui/icons";
+import { TextField, InputAdornment, IconButton, Box } from "@mui/material";
+import { Search, Close } from "@mui/icons-material";
 
 const TableSearchContext = createContext();
 

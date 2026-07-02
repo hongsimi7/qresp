@@ -1,6 +1,6 @@
 import PropTypes from "prop-types";
 
-import { Grid, Hidden } from "@material-ui/core";
+import { Grid } from "@mui/material";
 
 import TablePaginationActions from "./TablePagination";
 import RowsDisplayedLabel from "./RowsDisplayedLabel";
@@ -27,23 +27,44 @@ const EnhancedTableFooter = (props) => {
   );
 
   return (
+    // MUI v6+ removed <Hidden>; responsive display lives on the items.
     <Grid container direction="row">
-      <Hidden xsDown>
-        <Grid item sm={6} container justify="flex-start">
-          {displayLabel}
-        </Grid>
-        <Grid item sm={6} container justify="flex-end">
-          {paginator}
-        </Grid>
-      </Hidden>
-      <Hidden smUp>
-        <Grid item sm={12} container justify="center">
-          {displayLabel}
-        </Grid>
-        <Grid item sm={12} container justify="center">
-          {paginator}
-        </Grid>
-      </Hidden>
+      <Grid
+        item
+        sm={6}
+        container
+        justifyContent="flex-start"
+        sx={{ display: { xs: "none", sm: "flex" } }}
+      >
+        {displayLabel}
+      </Grid>
+      <Grid
+        item
+        sm={6}
+        container
+        justifyContent="flex-end"
+        sx={{ display: { xs: "none", sm: "flex" } }}
+      >
+        {paginator}
+      </Grid>
+      <Grid
+        item
+        xs={12}
+        container
+        justifyContent="center"
+        sx={{ display: { xs: "flex", sm: "none" } }}
+      >
+        {displayLabel}
+      </Grid>
+      <Grid
+        item
+        xs={12}
+        container
+        justifyContent="center"
+        sx={{ display: { xs: "flex", sm: "none" } }}
+      >
+        {paginator}
+      </Grid>
     </Grid>
   );
 };

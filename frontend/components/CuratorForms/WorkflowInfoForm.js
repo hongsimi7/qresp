@@ -10,7 +10,7 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-} from "@material-ui/core";
+} from "@mui/material";
 
 import { useForm } from "react-hook-form";
 
@@ -126,7 +126,7 @@ const WorkflowInfoForm = () => {
 
   const data = formatData(charts, tools, heads, datasets, scripts);
 
-  const { register, handleSubmit, errors } = useForm();
+  const { register, handleSubmit, formState: { errors } } = useForm();
 
   const onSubmit = (values) => {
     values["id"] = `h${heads.length}`;
@@ -224,7 +224,7 @@ const WorkflowInfoForm = () => {
               <Grid item>
                 <TextInputField
                   id="headDescription"
-                  inputRef={register({ required: "Required" })}
+                  register={register} registerOptions={{ required: "Required" }}
                   error={errors && errors.description}
                   label="Description"
                   name="readme"
@@ -236,7 +236,7 @@ const WorkflowInfoForm = () => {
               <Grid item>
                 <TextInputField
                   id="headURLs"
-                  inputRef={register}
+                  register={register}
                   error={errors && errors.URLs}
                   label="URLs"
                   name="URLs"

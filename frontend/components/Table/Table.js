@@ -7,9 +7,9 @@ import {
   TableCell,
   TableContainer,
   TableRow,
-  withStyles,
   Grid,
-} from "@material-ui/core";
+} from "@mui/material";
+import { styled } from "@mui/material/styles";
 
 import { CSSTransition, TransitionGroup } from "react-transition-group";
 
@@ -19,18 +19,29 @@ import EnhancedTableFooter from "./TableFooter";
 import TableSearch, { TableSearchState } from "./TableSearch";
 import { getComparator, stableSort } from "./TableSort";
 
-const StyledTableCell = withStyles({
-  root: {
-    padding: "8px",
-  },
-})(TableCell);
+const StyledTableCell = styled(TableCell)({
+  padding: "8px",
+});
 
-const StyledLastTableCell = withStyles({
-  root: {
-    padding: "8px",
-    borderBottomColor: "#000",
-  },
-})(TableCell);
+const StyledLastTableCell = styled(TableCell)({
+  padding: "8px",
+  borderBottomColor: "#000",
+});
+
+// React 19 removed findDOMNode, which CSSTransition falls back to when no
+// nodeRef is supplied; each animated row therefore owns its ref here.
+const FadeTableRow = ({ children, ...transitionProps }) => {
+  const nodeRef = useRef(null);
+  return (
+    <CSSTransition {...transitionProps} nodeRef={nodeRef}>
+      <TableRow ref={nodeRef}>{children}</TableRow>
+    </CSSTransition>
+  );
+};
+
+FadeTableRow.propTypes = {
+  children: PropTypes.node,
+};
 
 const RecordTable = (props) => {
   const { rows, columns } = props;
@@ -119,28 +130,23 @@ const RecordTable = (props) => {
             <TransitionGroup component={null}>
               {paginatedData.map((row, index) => {
                 return (
-                  <CSSTransition timeout={100} key={index} classNames="fade">
-                    <TableRow key={index}>
-                      {columns.map((col, i) => {
-                        const element = col.view
-                          ? createElement(col.view, { rowdata: row[col.name] })
-                          : row[col.name];
+                  <FadeTableRow timeout={100} key={index} classNames="fade">
+                    {columns.map((col, i) => {
+                      const element = col.view
+                        ? createElement(col.view, { rowdata: row[col.name] })
+                        : row[col.name];
 
-                        return index == paginatedData.length - 1 ? (
-                          <StyledLastTableCell
-                            key={i}
-                            align={col.options.align}
-                          >
-                            {element}
-                          </StyledLastTableCell>
-                        ) : (
-                          <StyledTableCell key={i} align={col.options.align}>
-                            {element}
-                          </StyledTableCell>
-                        );
-                      })}
-                    </TableRow>
-                  </CSSTransition>
+                      return index == paginatedData.length - 1 ? (
+                        <StyledLastTableCell key={i} align={col.options.align}>
+                          {element}
+                        </StyledLastTableCell>
+                      ) : (
+                        <StyledTableCell key={i} align={col.options.align}>
+                          {element}
+                        </StyledTableCell>
+                      );
+                    })}
+                  </FadeTableRow>
                 );
               })}
             </TransitionGroup>

@@ -1,13 +1,13 @@
 import PropTypes from "prop-types";
 
-import { Grid } from "@material-ui/core";
+import { Grid } from "@mui/material";
 import TextInput from "./TextInput";
 
 const NameInput = ({ ids, names, remove, id, register, errors, defaults }) => {
   const width = 4;
 
   return (
-    <Grid container direction="row" spacing={2} justify="space-around" id={id} style={{marginTop:remove?0:"0.1rem"}}>
+    <Grid container direction="row" spacing={2} justifyContent="space-around" id={id} style={{marginTop:remove?0:"0.1rem"}}>
       <Grid item xs={12} sm={width}>
         <TextInput
           id={ids.firstName}
@@ -15,9 +15,8 @@ const NameInput = ({ ids, names, remove, id, register, errors, defaults }) => {
           placeholder="Enter first name"
           name={names.firstName}
           helperText="eg. Jane"
-          inputRef={register({
-            required: true,
-          })}
+          register={register}
+          registerOptions={{ required: true }}
           error={errors?.firstName || errors?.[names.firstName]}
           defaultValue={defaults?.firstName || ""}
           InputLabelProps={{shrink:true}}
@@ -30,7 +29,7 @@ const NameInput = ({ ids, names, remove, id, register, errors, defaults }) => {
           placeholder="Enter middle name"
           name={names.middleName}
           helperText="eg. L."
-          inputRef={register()}
+          register={register}
           error={errors?.middleName || errors?.[names.middleName]}
           defaultValue={defaults?.middleName || ""}
           InputLabelProps={{shrink:true}}
@@ -43,9 +42,8 @@ const NameInput = ({ ids, names, remove, id, register, errors, defaults }) => {
           placeholder="Enter last name"
           name={names.lastName}
           helperText="eg. Doe"
-          inputRef={register({
-            required: true,
-          })}
+          register={register}
+          registerOptions={{ required: true }}
           error={errors?.lastName || errors?.[names.lastName]}
           defaultValue={defaults?.lastName || ""}
           InputLabelProps={{shrink:true}}

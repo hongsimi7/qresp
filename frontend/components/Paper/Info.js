@@ -3,7 +3,7 @@ import PropTypes from "prop-types";
 import Drawer from "../drawer";
 import LabelValue from "../labelvalue";
 
-import { Box } from "@material-ui/core";
+import { Box } from "@mui/material";
 
 const PaperInfo = ({ paperInfo, editor, defaultOpen }) => {
   const { PIs, collections, tags, notebookFile } = paperInfo;

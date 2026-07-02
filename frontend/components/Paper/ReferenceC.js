@@ -3,7 +3,7 @@ import PropTypes from "prop-types";
 import Drawer from "../drawer";
 import LabelValue from "../labelvalue";
 
-import { Box } from "@material-ui/core";
+import { Box } from "@mui/material";
 
 const ReferenceC = ({ referenceInfo, editor, defaultOpen }) => {
   const { authors, title, publication, abstract, url } = referenceInfo;

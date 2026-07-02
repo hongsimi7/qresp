@@ -1,13 +1,13 @@
 import PropTypes from "prop-types";
 
-import useMediaQuery from "@material-ui/core/useMediaQuery";
+import useMediaQuery from "@mui/material/useMediaQuery";
 
 import Drawer from "../drawer";
 import Graph from "../Workflow/Graph";
 import Legend from "../Workflow/Legend";
 import { formatData, formatWorkflow } from "../Workflow/util";
 
-import { Box, Grid, useTheme } from "@material-ui/core";
+import { Box, Grid, useTheme } from "@mui/material";
 
 const Workflow = ({ workflow, charts, tools, scripts, datasets, external }) => {
   const theme = useTheme();

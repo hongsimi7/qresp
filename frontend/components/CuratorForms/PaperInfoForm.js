@@ -1,12 +1,12 @@
 import { useContext } from "react";
 import PropTypes from "prop-types";
 
-import { Grid, Tooltip, Typography, IconButton } from "@material-ui/core";
+import { Grid, Tooltip, Typography, IconButton } from "@mui/material";
 import {
-  AddCircleOutline,
-  RemoveCircleOutline,
+  AddCircleOutlined,
+  RemoveCircleOutlined,
   DescriptionOutlined,
-} from "@material-ui/icons";
+} from "@mui/icons-material";
 
 import { namesUtil } from "../../Utils/utils";
 
@@ -16,7 +16,7 @@ import NameInput from "../Form//NameInput";
 import Drawer from "../drawer";
 
 import { useForm, useFieldArray } from "react-hook-form";
-import { yupResolver } from "@hookform/resolvers";
+import { yupResolver } from "@hookform/resolvers/yup";
 import * as Yup from "yup";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
@@ -50,7 +50,7 @@ const PaperInfoForm = ({ editor }) => {
   });
 
   const formattedNames = namesUtil.get(paperInfo.PIs);
-  const { register, handleSubmit, errors, watch, control, setValue } = useForm({
+  const { register, handleSubmit, formState: { errors }, watch, control, setValue } = useForm({
     resolver: yupResolver(schema),
     defaultValues: {
       ...paperInfo,
@@ -83,9 +83,9 @@ const PaperInfoForm = ({ editor }) => {
   const pId = {
     get: (index) => {
       return {
-        firstName: `PIs[${index}].firstName`,
-        middleName: `PIs[${index}].middleName`,
-        lastName: `PIs[${index}].lastName`,
+        firstName: `PIs.${index}.firstName`,
+        middleName: `PIs.${index}.middleName`,
+        lastName: `PIs.${index}.lastName`,
       };
     },
   };
@@ -97,7 +97,7 @@ const PaperInfoForm = ({ editor }) => {
           <Grid item>
             <Grid
               container
-              justify="flex-start"
+              justifyContent="flex-start"
               alignItems="center"
               spacing={1}
             >
@@ -124,7 +124,7 @@ const PaperInfoForm = ({ editor }) => {
                     }
                     style={{ padding: 0 }}
                   >
-                    <AddCircleOutline color="primary" />
+                    <AddCircleOutlined color="primary" />
                   </IconButton>
                 </Tooltip>
               </Grid>
@@ -161,7 +161,7 @@ const PaperInfoForm = ({ editor }) => {
                           }}
                           style={{ padding: 0 }}
                         >
-                          <RemoveCircleOutline
+                          <RemoveCircleOutlined
                             color={fields.length == 1 ? "disabled" : "primary"}
                           />
                         </IconButton>
@@ -180,7 +180,7 @@ const PaperInfoForm = ({ editor }) => {
               helperText="Enter names(s) defining group of papers (eg. according to the source of fundings)"
               label="PaperStack"
               required
-              inputRef={register}
+              register={register}
               error={errors.collections}
             />
           </Grid>
@@ -192,7 +192,7 @@ const PaperInfoForm = ({ editor }) => {
               helperText="Enter keywords(s) (e.g. DFT, oragnic materials, charge transfer)"
               label="Keywords"
               required
-              inputRef={register}
+              register={register}
               error={errors.tags}
             />
           </Grid>
@@ -208,7 +208,7 @@ const PaperInfoForm = ({ editor }) => {
                   <DescriptionOutlined color="primary" />
                 </IconButton>
               }
-              inputRef={register}
+              register={register}
               error={errors.notebookFile}
             />
           </Grid>

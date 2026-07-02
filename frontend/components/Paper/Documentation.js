@@ -2,7 +2,7 @@ import PropTypes from "prop-types";
 
 import Drawer from "../drawer";
 
-import { Typography, Box } from "@material-ui/core";
+import { Typography, Box } from "@mui/material";
 
 const Documentation = ({ documentation, editor, defaultOpen }) => {
   return (

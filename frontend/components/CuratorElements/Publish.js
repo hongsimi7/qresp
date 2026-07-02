@@ -1,7 +1,7 @@
 import { useContext, Fragment } from "react";
 import { useRouter } from "next/router";
 import axios from "axios";
-import { Box, Grid } from "@material-ui/core";
+import { Box, Grid } from "@mui/material";
 
 import Ajv from "ajv";
 
@@ -80,7 +80,9 @@ const validate = (editing, metadata) => {
   }
   if (errors.length > 0) return { valid: false, errors: errors };
 
-  const ajv = new Ajv();
+  // Ajv 8: strict mode is on by default and rejects schemas Ajv 6 accepted;
+  // keep the previous tolerant behavior for the draft-07 Qresp schema.
+  const ajv = new Ajv({ strict: false });
   const validate = ajv.compile(Schema);
   const valid = validate(metadata);
 

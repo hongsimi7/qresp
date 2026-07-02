@@ -2,15 +2,15 @@ import { useState, useContext, Fragment } from "react";
 
 import {
   Grid,
-  Hidden,
+
   Dialog,
   DialogActions,
   DialogTitle,
   DialogContent,
   TextField,
-} from "@material-ui/core";
+} from "@mui/material";
 
-import { GetApp, Visibility } from "@material-ui/icons";
+import { GetApp, Visibility } from "@mui/icons-material";
 
 import axios from "axios";
 
@@ -164,33 +164,35 @@ const TopActions = () => {
   return (
     <Fragment>
       <Grid container direction="row" spacing={1}>
+        {/* MUI v6+ removed <Hidden>; responsive display lives on each item so
+            the Grid container keeps its direct Grid children. */}
         <Grid container direction="row" item xs={12} sm={6} spacing={1}>
-          <Hidden xsDown>
-            <Grid item>{buttons.resume()}</Grid>
-            <Grid item>{buttons.scratch()}</Grid>
-          </Hidden>
-          <Hidden smUp>
-            <Grid item xs={4}>
-              {buttons.resume(true)}
-            </Grid>
-            <Grid item xs={8}>
-              {buttons.scratch(true)}
-            </Grid>
-          </Hidden>
+          <Grid item sx={{ display: { xs: "none", sm: "block" } }}>
+            {buttons.resume()}
+          </Grid>
+          <Grid item sx={{ display: { xs: "none", sm: "block" } }}>
+            {buttons.scratch()}
+          </Grid>
+          <Grid item xs={4} sx={{ display: { xs: "block", sm: "none" } }}>
+            {buttons.resume(true)}
+          </Grid>
+          <Grid item xs={8} sx={{ display: { xs: "block", sm: "none" } }}>
+            {buttons.scratch(true)}
+          </Grid>
         </Grid>
         <Grid container direction="row-reverse" item xs={12} sm={6} spacing={1}>
-          <Hidden xsDown>
-            <Grid item>{buttons.preview()}</Grid>
-            <Grid item>{buttons.download()}</Grid>
-          </Hidden>
-          <Hidden smUp>
-            <Grid item xs={6}>
-              {buttons.preview(true)}
-            </Grid>
-            <Grid item xs={6}>
-              {buttons.download(true)}
-            </Grid>
-          </Hidden>
+          <Grid item sx={{ display: { xs: "none", sm: "block" } }}>
+            {buttons.preview()}
+          </Grid>
+          <Grid item sx={{ display: { xs: "none", sm: "block" } }}>
+            {buttons.download()}
+          </Grid>
+          <Grid item xs={6} sx={{ display: { xs: "block", sm: "none" } }}>
+            {buttons.preview(true)}
+          </Grid>
+          <Grid item xs={6} sx={{ display: { xs: "block", sm: "none" } }}>
+            {buttons.download(true)}
+          </Grid>
         </Grid>
       </Grid>
       <Dialog

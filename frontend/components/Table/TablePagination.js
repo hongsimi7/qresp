@@ -1,7 +1,7 @@
 import PropTypes from "prop-types";
 
-import { Box } from "@material-ui/core";
-import { Pagination } from "@material-ui/lab";
+import { Box } from "@mui/material";
+import { Pagination } from "@mui/material";
 
 const TablePaginationActions = (props) => {
   const { count, page, rowsPerPage, onChangePage } = props;

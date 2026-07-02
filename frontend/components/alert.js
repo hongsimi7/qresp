@@ -8,20 +8,18 @@ import {
   DialogContent,
   DialogTitle,
   Typography,
-} from "@material-ui/core";
+} from "@mui/material";
 
-import { withStyles } from "@material-ui/core/styles";
+import { styled } from "@mui/material/styles";
 
 import AlertContext from "../Context/Alert/alertContext";
 
-const Content = withStyles({
-  root: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    margin: "2px",
-  },
-})(DialogContent);
+const Content = styled(DialogContent)({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  margin: "2px",
+});
 
 const AlertDialog = () => {
   const { open, title, msg, buttons, unsetAlert } = useContext(AlertContext);

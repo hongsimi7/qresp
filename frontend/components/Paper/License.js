@@ -1,5 +1,5 @@
 import PropTypes from "prop-types";
-import { Grid, Typography } from "@material-ui/core";
+import { Grid, Typography } from "@mui/material";
 
 import Drawer from "../drawer";
 
@@ -27,7 +27,7 @@ const LicenseInfo = ({ type, editor, defaultOpen }) => {
               container
               direction="row"
               alignItems="center"
-              justify="center"
+              justifyContent="center"
               spacing={2}
             >
               {licenses[type].infographics.map((image) => {

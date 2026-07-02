@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 import PropTypes from "prop-types";
 
-import { Typography, Box } from "@material-ui/core";
+import { Typography, Box } from "@mui/material";
 
 import LabelValue from "../labelvalue";
 import Tag from "../tag";

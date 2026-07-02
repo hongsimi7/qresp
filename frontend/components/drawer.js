@@ -5,29 +5,25 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
-  withStyles,
   Typography,
   Box,
   IconButton,
   Tooltip,
-} from "@material-ui/core";
-import { ExpandMore, Edit } from "@material-ui/icons";
+} from "@mui/material";
+import { styled } from "@mui/material/styles";
+import { ExpandMore, Edit } from "@mui/icons-material";
 
-const StyledAccordion = withStyles({
-  root: {
-    borderRadius: "0.5em",
-    margin: "8px 0 !important",
-    "&::before": {
-      backgroundColor: "rgba(0,0,0,0.03)",
-    },
+const StyledAccordion = styled(Accordion)({
+  borderRadius: "0.5em",
+  margin: "8px 0 !important",
+  "&::before": {
+    backgroundColor: "rgba(0,0,0,0.03)",
   },
-})(Accordion);
+});
 
-const StyledAccordionSummary = withStyles({
-  root: {
-    backgroundColor: "rgba(0,0,0,.03)",
-  },
-})(AccordionSummary);
+const StyledAccordionSummary = styled(AccordionSummary)({
+  backgroundColor: "rgba(0,0,0,.03)",
+});
 
 const Drawer = (props) => {
   const { heading, children, defaultOpen, editor } = props;
@@ -38,7 +34,7 @@ const Drawer = (props) => {
     <StyledAccordion
       elevation={4}
       square={true}
-      TransitionProps={{ timeout: 200 }}
+      slotProps={{ transition: { timeout: 200 } }}
       id={heading.toLowerCase()}
       expanded={open}
       onChange={(event, expanded) => {

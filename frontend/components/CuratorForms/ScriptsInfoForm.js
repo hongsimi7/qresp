@@ -8,15 +8,15 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
-} from "@material-ui/core";
-import { AddCircleOutline, DescriptionOutlined } from "@material-ui/icons";
+} from "@mui/material";
+import { AddCircleOutlined, DescriptionOutlined } from "@mui/icons-material";
 
 import { TextInputField } from "../Form/InputFields";
 import ExtraFieldInput from "../Form/ExtraFieldInput";
 import { RegularStyledButton } from "../button";
 
 import { useForm } from "react-hook-form";
-import { yupResolver } from "@hookform/resolvers";
+import { yupResolver } from "@hookform/resolvers/yup";
 import * as Yup from "yup";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
@@ -48,7 +48,7 @@ const ScriptsInfoForm = () => {
     ),
   });
 
-  const { register, handleSubmit, errors, control, setValue } = useForm({
+  const { register, handleSubmit, formState: { errors }, control, setValue } = useForm({
     resolver: yupResolver(schema),
   });
 
@@ -82,7 +82,7 @@ const ScriptsInfoForm = () => {
       >
         <RegularStyledButton
           fullWidth
-          endIcon={<AddCircleOutline />}
+          endIcon={<AddCircleOutlined />}
           onClick={() => {
             setDefault("script", null);
             openForm("script");
@@ -127,7 +127,7 @@ const ScriptsInfoForm = () => {
                   helperText="Enter file name(s) to identify the script. Use the file picker (the file icon above). If you choose a folder, all contents of the folder will be considered a part of the script"
                   label="Files"
                   error={errors.files}
-                  inputRef={register}
+                  register={register}
                   action={
                     <IconButton size="small" onClick={openFileSelector}>
                       <DescriptionOutlined color="primary" />
@@ -145,7 +145,7 @@ const ScriptsInfoForm = () => {
                   helperText="Enter a summary about the context of the script"
                   label="Description"
                   error={errors.readme}
-                  inputRef={register}
+                  register={register}
                   defaultValue={def && def.readme}
                   required
                 />
@@ -158,7 +158,7 @@ const ScriptsInfoForm = () => {
                   helperText="Enter link(s)/URLs of the script, if available. (Comma seperated)"
                   label="Keywords"
                   error={errors.URLs}
-                  inputRef={register}
+                  register={register}
                   defaultValue={def && def.URLs && def.URLs.join(", ")}
                 />
               </Grid>

@@ -7,7 +7,7 @@ import { EditAndRemove } from "../Form/Util";
 import CuratorContext from "../../Context/Curator/curatorContext";
 import Drawer from "../drawer";
 
-import { Typography } from "@material-ui/core";
+import { Typography } from "@mui/material";
 
 const ScriptsInfoElement = () => {
   const { scripts, fileServerPath } = useContext(CuratorContext);

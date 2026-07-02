@@ -1,9 +1,14 @@
 import { Fragment, useState, useContext } from "react";
 import PropTypes from "prop-types";
 
-import { SRLWrapper, useLightbox } from "simple-react-lightbox";
+// simple-react-lightbox is dead (no React >=17 support); replaced with
+// yet-another-react-lightbox driven by plain open/index state.
+import Lightbox from "yet-another-react-lightbox";
+import Captions from "yet-another-react-lightbox/plugins/captions";
+import "yet-another-react-lightbox/styles.css";
+import "yet-another-react-lightbox/plugins/captions.css";
 
-import { Typography, Button } from "@material-ui/core";
+import { Typography, Button } from "@mui/material";
 
 import RecordTable from "../Table/Table";
 import Drawer from "../drawer";
@@ -77,8 +82,8 @@ const ChartInfo = ({
   inDrawer,
   editColumn,
 }) => {
-  // Light Box Controls
-  const { openLightbox } = useLightbox();
+  // Light Box Controls: the open slide index (-1 = closed).
+  const [lightboxIndex, setLightboxIndex] = useState(-1);
 
   // Chart Workflow Controls
   const [chartWorkflow, setChartWorkflow] = useState({});
@@ -124,7 +129,7 @@ const ChartInfo = ({
     return (
       <Fragment>
         <StyledTooltip title={rowdata.caption} placement="left" arrow>
-          <Button focusRipple onClick={() => openLightbox(rowdata.index)}>
+          <Button focusRipple onClick={() => setLightboxIndex(rowdata.index)}>
             <img
               src={rowdata["server"] + "/" + rowdata["imageFile"]}
               style={{ maxWidth: "30vw" }}
@@ -227,17 +232,6 @@ const ChartInfo = ({
   ];
 
   const Gallery = [];
-  const options = {
-    settings: {
-      lightboxTransitionSpeed: 0.3,
-    },
-    caption: {
-      captionContainerPadding: "32px",
-    },
-    thumbnails: {
-      showThumbnails: false,
-    },
-  };
 
   const rows = charts.map((row, index) => {
     row["index"] = index;
@@ -246,7 +240,7 @@ const ChartInfo = ({
 
     Gallery.push({
       src: row["server"] + "/" + row["imageFile"],
-      caption: row["caption"],
+      description: row["caption"],
     });
     return {
       figure: row,
@@ -263,7 +257,14 @@ const ChartInfo = ({
 
   return (
     <Fragment>
-      <SRLWrapper images={Gallery} options={options} />
+      <Lightbox
+        open={lightboxIndex >= 0}
+        index={lightboxIndex >= 0 ? lightboxIndex : 0}
+        close={() => setLightboxIndex(-1)}
+        slides={Gallery}
+        plugins={[Captions]}
+        animation={{ fade: 300 }}
+      />
       {inDrawer ? (
         <Drawer heading="Charts">
           <RecordTable rows={rows} columns={columns} />

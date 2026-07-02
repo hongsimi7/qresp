@@ -2,7 +2,7 @@ import { Fragment } from "react";
 import { InternalStyledButton } from "../components/button";
 import SEO from "../components/seo";
 import Picture from "../components/picture";
-import { Box, Typography, Container } from "@material-ui/core";
+import { Box, Typography, Container } from "@mui/material";
 
 export default function Home() {
   const qrespDescription =

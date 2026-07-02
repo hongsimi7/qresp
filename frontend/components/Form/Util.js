@@ -1,6 +1,6 @@
 import { useContext } from "react";
 import PropTypes from "prop-types";
-import { Grid, Typography, Box, InputLabel } from "@material-ui/core";
+import { Grid, Typography, Box, InputLabel } from "@mui/material";
 import { RegularStyledButton } from "../button";
 
 import CuratorContext from "../../Context/Curator/curatorContext";

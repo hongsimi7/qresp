@@ -8,7 +8,7 @@ import {
   DialogTitle,
   DialogContent,
   Typography,
-} from "@material-ui/core";
+} from "@mui/material";
 
 import LabelValue from "../labelvalue";
 import { IdTypeMap } from "./Types";

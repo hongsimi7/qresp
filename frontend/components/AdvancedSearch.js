@@ -8,9 +8,9 @@ import {
   Typography,
   TextField,
   Box,
-} from "@material-ui/core";
-import { Search, ExpandMore, Clear } from "@material-ui/icons";
-import Autocomplete from "@material-ui/lab/Autocomplete";
+} from "@mui/material";
+import { Search, ExpandMore, Clear } from "@mui/icons-material";
+import Autocomplete from "@mui/material/Autocomplete";
 
 import LoadingContext from "../Context/Loading/loadingContext";
 import AlertContext from "../Context/Alert/alertContext";
@@ -21,7 +21,7 @@ import axios from "axios";
 
 const TextSearchField = ({ title, placeholder, value, onChange, name }) => {
   return (
-    <Grid container direction="column" alignItems="stretch" justify="center">
+    <Grid container direction="column" alignItems="stretch" justifyContent="center">
       <Grid item xs={12}>
         <Typography variant="h6" color="secondary" align="center">
           <Box fontWeight="bold">{title}</Box>
@@ -50,7 +50,7 @@ const ChipSearchField = ({
   value,
 }) => {
   return (
-    <Grid container direction="column" alignItems="stretch" justify="center">
+    <Grid container direction="column" alignItems="stretch" justifyContent="center">
       <Grid item xs={12}>
         <Typography variant="h6" color="secondary" align="center">
           <Box fontWeight="bold">{title}</Box>
@@ -198,7 +198,7 @@ const AdvancedSearch = ({
                 container
                 direction="row"
                 spacing={1}
-                justify="center"
+                justifyContent="center"
                 alignItems="stretch"
                 xs={12}
               >
@@ -261,7 +261,7 @@ const AdvancedSearch = ({
                   />
                 </Grid>
               </Grid>
-              <Grid item container spacing={1} justify="center">
+              <Grid item container spacing={1} justifyContent="center">
                 <Grid item>
                   <Button
                     variant="contained"

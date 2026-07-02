@@ -1,6 +1,6 @@
 import PropTypes from "prop-types";
 
-import { Typography, Box } from "@material-ui/core";
+import { Typography, Box } from "@mui/material";
 
 const DisplayedRowsLabel = (props) => {
   const { rows, page, rowsPerPage, filtered } = props;

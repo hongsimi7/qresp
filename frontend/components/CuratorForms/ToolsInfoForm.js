@@ -6,8 +6,8 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
-} from "@material-ui/core";
-import { AddCircleOutline, DescriptionOutlined } from "@material-ui/icons";
+} from "@mui/material";
+import { AddCircleOutlined, DescriptionOutlined } from "@mui/icons-material";
 
 import { TextInputField, RadioInputField } from "../Form/InputFields";
 import ExtraFieldInput from "../Form/ExtraFieldInput";
@@ -15,7 +15,7 @@ import { RegularStyledButton } from "../button";
 import StyledTooltip from "../tooltip";
 
 import { useForm } from "react-hook-form";
-import { yupResolver } from "@hookform/resolvers";
+import { yupResolver } from "@hookform/resolvers/yup";
 import * as Yup from "yup";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
@@ -25,11 +25,11 @@ import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperCont
 const Software = ({ errors, register, unregister, def, openFileSelector }) => {
   useEffect(() => {
     return () => {
-      unregister({ name: "packageName" });
-      unregister({ name: "version" });
-      unregister({ name: "executableName" });
-      unregister({ name: "patches" });
-      unregister({ name: "description" });
+      unregister("packageName");
+      unregister("version");
+      unregister("executableName");
+      unregister("patches");
+      unregister("description");
     };
   }, [def]);
 
@@ -43,7 +43,7 @@ const Software = ({ errors, register, unregister, def, openFileSelector }) => {
           helperText="Enter name of the package (e.g. WEST)"
           label="Package Name"
           error={errors.packageName}
-          inputRef={register}
+          register={register}
           defaultValue={def && def.packageName}
           required
         />
@@ -56,7 +56,7 @@ const Software = ({ errors, register, unregister, def, openFileSelector }) => {
           helperText="Enter version number (e.g. 3.1.6) of the package"
           label="Version"
           error={errors.version}
-          inputRef={register}
+          register={register}
           defaultValue={def && def.version}
           required
         />
@@ -69,7 +69,7 @@ const Software = ({ errors, register, unregister, def, openFileSelector }) => {
           helperText="e.g. wstat.x"
           label="Executable Name"
           error={errors.executableName}
-          inputRef={register}
+          register={register}
           defaultValue={def && def.executableName}
         />
       </Grid>
@@ -81,7 +81,7 @@ const Software = ({ errors, register, unregister, def, openFileSelector }) => {
           helperText="Enter the file name(s) containing the patches of publicly available or versioned software, customized by the authors to generate some of the resources for the paper. Use the file picker to select files"
           label="Patches"
           error={errors.patches}
-          inputRef={register}
+          register={register}
           defaultValue={def && def.patches && def.patches.join(", ")}
           action={
             <IconButton size="small" onClick={openFileSelector}>
@@ -98,7 +98,7 @@ const Software = ({ errors, register, unregister, def, openFileSelector }) => {
           helperText="Enter summary of the modifications made to the software package (if any)"
           label="Description"
           error={errors.description}
-          inputRef={register}
+          register={register}
           defaultValue={def && def.description}
         />
       </Grid>
@@ -109,8 +109,8 @@ const Software = ({ errors, register, unregister, def, openFileSelector }) => {
 const Experiment = ({ errors, register, unregister, def }) => {
   useEffect(() => {
     return () => {
-      unregister({ name: "facilityName" });
-      unregister({ name: "mesurement" });
+      unregister("facilityName");
+      unregister("mesurement");
     };
   }, [def]);
 
@@ -124,7 +124,7 @@ const Experiment = ({ errors, register, unregister, def }) => {
           helperText="Enter name of the facility where the experiment was conducted (e.g. Argonne National Lab)"
           label="Facility Name"
           error={errors.facilityName}
-          inputRef={register}
+          register={register}
           defaultValue={def && def.facilityName}
           required
         />
@@ -137,7 +137,7 @@ const Experiment = ({ errors, register, unregister, def }) => {
           helperText="Enter type of measurement (e.g. soft X-ray photoemission)"
           label="Measurement"
           error={errors.measurement}
-          inputRef={register}
+          register={register}
           defaultValue={def && def.measurement}
           required
         />
@@ -163,31 +163,31 @@ const ToolsInfoForm = () => {
     kind: Yup.string().required("Required"),
     facilityName: Yup.string().when("kind", {
       is: "experiment",
-      then: Yup.string().required("Required"),
+      then: (schema) => schema.required("Required"),
     }),
     measurement: Yup.string().when("kind", {
       is: "experiment",
-      then: Yup.string().required("Required"),
+      then: (schema) => schema.required("Required"),
     }),
     packageName: Yup.string().when("kind", {
       is: "software",
-      then: Yup.string().required("Required"),
+      then: (schema) => schema.required("Required"),
     }),
     version: Yup.string().when("kind", {
       is: "software",
-      then: Yup.string().required("Required"),
+      then: (schema) => schema.required("Required"),
     }),
     executableName: Yup.string().when("kind", {
       is: "software",
-      then: Yup.string(),
+      then: (schema) => schema,
     }),
     patches: Yup.string().when("kind", {
       is: "software",
-      then: Yup.string(),
+      then: (schema) => schema,
     }),
     description: Yup.string().when("kind", {
       is: "software",
-      then: Yup.string(),
+      then: (schema) => schema,
     }),
     urls: Yup.string(),
     patches: Yup.string(),
@@ -203,7 +203,7 @@ const ToolsInfoForm = () => {
     register,
     unregister,
     handleSubmit,
-    errors,
+    formState: { errors },
     control,
     watch,
     setValue,
@@ -242,7 +242,7 @@ const ToolsInfoForm = () => {
       <StyledTooltip title="Add a new tool" arrow>
         <RegularStyledButton
           fullWidth
-          endIcon={<AddCircleOutline />}
+          endIcon={<AddCircleOutlined />}
           onClick={() => {
             setDefault("tool", null);
             openForm("tool");
@@ -338,7 +338,7 @@ const ToolsInfoForm = () => {
                   helperText="Enter link(s) to package's official websites (e.g. https://www.west-code.org) or facility (e.g. https://aps.anl.gov)[comma seperated]"
                   label="URLs"
                   error={errors.urls}
-                  inputRef={register}
+                  register={register}
                   defaultValue={def && def.urls}
                 />
               </Grid>

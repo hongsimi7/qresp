@@ -7,8 +7,7 @@ import { EditAndRemove } from "../Form/Util";
 import CuratorContext from "../../Context/Curator/curatorContext";
 import Drawer from "../drawer";
 
-import { Typography } from "@material-ui/core";
-import SimpleReactLightbox from "simple-react-lightbox";
+import { Typography } from "@mui/material";
 
 const ChartsInfoElement = () => {
   const { charts, fileServerPath } = useContext(CuratorContext);
@@ -17,27 +16,26 @@ const ChartsInfoElement = () => {
     <Drawer heading="Add Charts from your paper" defaultOpen={true}>
       <ChartsInfoForm />
       {charts.length > 0 ? (
-        <SimpleReactLightbox>
-          <ChartsInfo
-            charts={charts}
-            fileserverpath={fileServerPath}
-            showSlider={false}
-            inDrawer={false}
-            editColumn={[
-              {
-                label: "Edit/Remove",
-                name: "figure",
-                view: EditAndRemove,
-                options: {
-                  align: "center",
-                  sort: false,
-                  searchable: false,
-                  value: null,
-                },
+        // yet-another-react-lightbox needs no provider wrapper.
+        <ChartsInfo
+          charts={charts}
+          fileserverpath={fileServerPath}
+          showSlider={false}
+          inDrawer={false}
+          editColumn={[
+            {
+              label: "Edit/Remove",
+              name: "figure",
+              view: EditAndRemove,
+              options: {
+                align: "center",
+                sort: false,
+                searchable: false,
+                value: null,
               },
-            ]}
-          />
-        </SimpleReactLightbox>
+            },
+          ]}
+        />
       ) : (
         <Typography
           align="center"

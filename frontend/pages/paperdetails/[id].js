@@ -2,7 +2,7 @@ import { Fragment, useContext, useEffect } from "react";
 import PropTypes from "prop-types";
 
 import { useRouter } from "next/router";
-import { Container, Box, Typography } from "@material-ui/core";
+import { Container, Box, Typography } from "@mui/material";
 
 import SEO from "../../components/seo";
 import AlertContext from "../../Context/Alert/alertContext";
@@ -17,8 +17,6 @@ import CuratorInfo from "../../components/Paper/Curator";
 import FileServerInfo from "../../components/Paper/FileServer";
 import Workflow from "../../components/Paper/Workflow";
 import LicenseInfo from "../../components/Paper/License";
-
-import SimpleReactLightbox from "simple-react-lightbox";
 
 import axios from "axios";
 
@@ -109,21 +107,20 @@ const PaperDetails = ({ paper, error, preview, query }) => {
         </Box>
         <Box mb={7} mt={1}>
           <ReferenceInfo referenceData={referenceData} />
-          <SimpleReactLightbox>
-            <CuratorHelperState>
-              <ChartInfo
-                charts={charts}
-                fileserverpath={fileServerPath}
-                downloadPath={downloadPath}
-                datasets={datasets}
-                tools={tools}
-                scripts={scripts}
-                external={heads}
-                showWorkflows={showWorkflows}
-                server={query.server}
-              />
-            </CuratorHelperState>
-          </SimpleReactLightbox>
+          {/* yet-another-react-lightbox needs no provider wrapper. */}
+          <CuratorHelperState>
+            <ChartInfo
+              charts={charts}
+              fileserverpath={fileServerPath}
+              downloadPath={downloadPath}
+              datasets={datasets}
+              tools={tools}
+              scripts={scripts}
+              external={heads}
+              showWorkflows={showWorkflows}
+              server={query.server}
+            />
+          </CuratorHelperState>
           <DatasetInfo datasets={datasets} fileserverpath={fileServerPath} />
           <ToolsInfo tools={tools} />
           <ScriptsInfo scripts={scripts} fileserverpath={fileServerPath} />

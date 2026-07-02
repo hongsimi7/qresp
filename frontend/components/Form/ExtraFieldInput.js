@@ -1,8 +1,8 @@
 import { Fragment, useEffect } from "react";
 import PropTypes from "prop-types";
 
-import { Grid, IconButton } from "@material-ui/core";
-import { AddCircleOutline, RemoveCircleOutline } from "@material-ui/icons";
+import { Grid, IconButton } from "@mui/material";
+import { AddCircleOutlined, RemoveCircleOutlined } from "@mui/icons-material";
 
 import { useFieldArray } from "react-hook-form";
 
@@ -26,7 +26,7 @@ const ExtraFieldInput = ({ control, register, errors, defaults }) => {
 
   return (
     <Fragment>
-      <Grid container justify="flex-start" alignItems="center" spacing={2}>
+      <Grid container justifyContent="flex-start" alignItems="center" spacing={2}>
         <Grid item>
           <FormInputLabel label="Extra Fields" forId="pis" />
         </Grid>
@@ -41,7 +41,7 @@ const ExtraFieldInput = ({ control, register, errors, defaults }) => {
               }
               style={{ padding: 0 }}
             >
-              <AddCircleOutline color="primary" />
+              <AddCircleOutlined color="primary" />
             </IconButton>
           </StyledTooltip>
         </Grid>
@@ -53,11 +53,11 @@ const ExtraFieldInput = ({ control, register, errors, defaults }) => {
               InputLabelProps={{ shrink: true }}
               id={`customLabel${index}`}
               placeholder="Enter custom label"
-              name={`extraFields[${index}].label`}
+              name={`extraFields.${index}.label`}
               label="Field Label"
               helperText="Enter a custom label for a field"
               error={errors && errors[index] && errors[index].label}
-              inputRef={register()}
+              register={register}
               defaultValue={
                 (defaults && defaults[index] && defaults[index].label) || ""
               }
@@ -68,11 +68,11 @@ const ExtraFieldInput = ({ control, register, errors, defaults }) => {
               InputLabelProps={{ shrink: true }}
               id={`customValue${index}`}
               placeholder="Enter value"
-              name={`extraFields[${index}].value`}
+              name={`extraFields.${index}.value`}
               label="Field value"
               helperText="Enter a value for the custom field label"
               error={errors && errors[index] && errors[index].label}
-              inputRef={register()}
+              register={register}
               defaultValue={
                 (defaults && defaults[index] && defaults[index].value) || ""
               }
@@ -92,7 +92,7 @@ const ExtraFieldInput = ({ control, register, errors, defaults }) => {
                   }
                 }}
               >
-                <RemoveCircleOutline color="primary" />
+                <RemoveCircleOutlined color="primary" />
               </IconButton>
             </StyledTooltip>
           </Grid>
