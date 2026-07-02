@@ -48,20 +48,30 @@ class Servers():
         Fetches list of servers
         :return object data: Json object of data from server
         """
-        url = requests.get(
-            self.__urlString, headers=self.__headers, verify=False)
-        data = json.loads(url.text)
-        return data
+        # An outage (or non-JSON reply) of the federated-servers registry must
+        # not 500 the curator/explorer pages; degrade to an empty list.
+        try:
+            url = requests.get(
+                self.__urlString, headers=self.__headers, verify=False,
+                timeout=10)
+            return json.loads(url.text)
+        except (requests.RequestException, json.JSONDecodeError) as e:
+            print("Could not fetch federated servers list: %s" % e)
+            return []
 
     def getHttpServersList(self):
         """
         Fetches list of http servers
         :return object data: Json object of http data
         """
-        url = requests.get(self.__httpUrlString,
-                           headers=self.__headers, verify=False)
-        data = json.loads(url.text)
-        return data
+        try:
+            url = requests.get(self.__httpUrlString,
+                               headers=self.__headers, verify=False,
+                               timeout=10)
+            return json.loads(url.text)
+        except (requests.RequestException, json.JSONDecodeError) as e:
+            print("Could not fetch http servers list: %s" % e)
+            return []
 
     def validateSchema(self, coll_data):
         """

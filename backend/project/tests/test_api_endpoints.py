@@ -2,6 +2,7 @@ import json
 import os
 import unittest
 import warnings
+from unittest import mock
 
 import mongoengine
 import mongomock
@@ -100,6 +101,39 @@ class TestApiEndpoints(unittest.TestCase):
     def test_swagger_ui_is_served(self):
         response = self.client.get('/api/ui/')
         self.assertEqual(200, response.status_code)
+
+
+class TestFlaskPages(unittest.TestCase):
+    """Server-rendered Flask pages that exercise the WTForms forms, the
+    flask-sitemap extension, and Jinja templates -- the surfaces most exposed
+    to Flask/Werkzeug/WTForms major upgrades (e.g. /qrespcurator binds the
+    custom RequiredIf validator, which WTForms 3 broke until its field_flags
+    became a dict)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = connexionapp.test_client()
+
+    def setUp(self):
+        mongoengine.disconnect_all()
+        mongoengine.connect('mongoenginetest',
+                            mongo_client_class=mongomock.MongoClient)
+
+    def tearDown(self):
+        mongoengine.disconnect_all()
+
+    def test_curator_page_renders(self):
+        # The page fetches the federated-servers registry at render time;
+        # keep the test hermetic (no external network).
+        with mock.patch('project.util.Servers.getServersList', return_value=[]), \
+             mock.patch('project.util.Servers.getHttpServersList', return_value=[]):
+            self.assertEqual(200, self.client.get('/qrespcurator').status_code)
+
+    def test_admin_page_renders(self):
+        self.assertEqual(200, self.client.get('/admin').status_code)
+
+    def test_sitemap_renders(self):
+        self.assertEqual(200, self.client.get('/sitemap.xml').status_code)
 
 
 if __name__ == '__main__':

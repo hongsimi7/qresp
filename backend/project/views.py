@@ -11,11 +11,12 @@ class RequiredIf(DataRequired):
         - http://stackoverflow.com/questions/8463209/how-to-make-a-field-conditionally-optional-in-wtforms
         - https://gist.github.com/devxoul/7638142#file-wtf_required_if-py
     """
-    field_flags = ('requiredif',)
+    # WTForms 3: validator field_flags must be a dict (tuples were WTForms 2
+    # and crash field binding with "'tuple' object has no attribute 'items'").
+    field_flags = {"requiredif": True}
 
     def __init__(self, message=None, *args, **kwargs):
-        super(RequiredIf).__init__()
-        self.message = message
+        super().__init__(message)
         self.conditions = kwargs
 
     # field is requiring that name field in the form is data value in the form

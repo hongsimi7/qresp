@@ -11,16 +11,15 @@
 # it was only a connection shim (models are plain mongoengine) -- replaced with
 # direct mongoengine.connect() in project/__init__.py and project/db.py.
 #
-# Connexion migrated to 3.x on 2026-07-02 (ASGI). The app object to serve is
-# `project:connexionapp` via an ASGI server -- production uses gunicorn with
-# uvicorn workers (see docker-compose.yml); `run.py` / `python -m project`
-# serve through uvicorn. The Flask<2.3 / Werkzeug<2.3 caps (imposed by
-# Connexion 2) are lifted in the Flask 3 phase, staged next.
-# Exact verified versions are captured in requirements.lock.txt.
+# Connexion migrated to 3.x and Flask/Werkzeug caps lifted on 2026-07-02 --
+# every backend dependency now floats to latest stable (exact verified set in
+# requirements.lock.txt). The app object to serve is `project:connexionapp`
+# via an ASGI server: production uses gunicorn with uvicorn workers (see
+# docker-compose.yml); `run.py` / `python -m project` serve through uvicorn.
 setuptools
 jsonschema
-Flask<2.3
-Werkzeug<2.3
+Flask
+Werkzeug
 Flask-Cors
 Flask-Session
 flask-sitemap

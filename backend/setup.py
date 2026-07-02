@@ -15,11 +15,11 @@ setup(
     packages=find_packages(),
     # Synced with requirements.txt on 2026-07-02 (DEPENDENCY_AUDIT.md): only
     # packages the code actually imports, plus the WSGI/ASGI servers. Test
-    # tooling moved to the `test` extra. Flask<2.3 and connexion<3 caps are
-    # being lifted in staged phases -- see FULL_STACK_MODERNIZATION_REPORT.md.
+    # tooling lives in the `test` extra. All version caps lifted (Flask 3 /
+    # Connexion 3) -- see FULL_STACK_MODERNIZATION_REPORT.md.
     install_requires=[
-        'flask<2.3',
-        'werkzeug<2.3',
+        'flask>=3',
+        'werkzeug>=3',
         'connexion[flask,swagger-ui,uvicorn]>=3.3',
         'uvicorn-worker',
         'flask_cors',
