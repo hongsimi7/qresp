@@ -319,6 +319,43 @@ paths:
           description: Permission decision returned
         404:
           description: Paper with this id does not exist
+  /auth/google:
+    get:
+      operationId: "project.auth.google_login"
+      tags:
+        - "Authentication"
+      summary: "Starts the Google OAuth identity flow (openid/email/profile only)"
+      responses:
+        302:
+          description: Redirect to Google's consent screen
+        503:
+          description: Google login is not configured on this server
+  /auth/google/callback:
+    get:
+      operationId: "project.auth.google_callback"
+      tags:
+        - "Authentication"
+      summary: "Completes Google sign-in and stores the session user"
+      parameters:
+        - in: query
+          name: state
+          type: string
+          required: false
+        - in: query
+          name: code
+          type: string
+          required: false
+        - in: query
+          name: error
+          type: string
+          required: false
+      responses:
+        302:
+          description: Signed in; redirect back to the app
+        400:
+          description: Invalid state, missing code, or Google error
+        503:
+          description: Google login is not configured on this server
   /auth/me:
     get:
       operationId: "project.auth.me"

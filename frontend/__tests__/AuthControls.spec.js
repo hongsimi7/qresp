@@ -27,6 +27,17 @@ describe("AuthControls", () => {
     ).toBeInTheDocument();
   });
 
+  it("offers Google sign-in pointing at the backend flow when anonymous", async () => {
+    axios.get.mockResolvedValue({
+      data: { authenticated: false, user: null },
+    });
+    renderControls();
+    const googleLink = await screen.findByRole("link", {
+      name: /sign in with google/i,
+    });
+    expect(googleLink).toHaveAttribute("href", "/api/auth/google");
+  });
+
   it("shows the user and a sign-out button when authenticated", async () => {
     axios.get.mockResolvedValue({
       data: {

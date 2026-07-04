@@ -62,6 +62,16 @@ const AuthControls = () => {
 
   return (
     <Fragment>
+      {/* Full-page navigation: the backend redirects to Google and back;
+          on return the app remounts and AuthState refetches /api/auth/me. */}
+      <Button
+        color="inherit"
+        sx={{ color: "#FFF" }}
+        component="a"
+        href="/api/auth/google"
+      >
+        Sign in with Google
+      </Button>
       <Button
         color="inherit"
         sx={{ color: "#FFF" }}

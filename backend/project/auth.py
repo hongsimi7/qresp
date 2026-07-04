@@ -10,11 +10,22 @@ Google OAuth will later replace dev-login as the identity provider; /me and
 permissions are NOT implemented here (separate phase). No secrets are stored
 in the session — only the identity claims below.
 """
-from flask import session
+from flask import redirect, session
+from requests_oauthlib import OAuth2Session
 
 from project.config import Config
 
 AUTH_SESSION_KEY = "auth_user"
+OAUTH_STATE_KEY = "oauth_state"
+
+# Google OAuth endpoints; [GOOGLE_API] config.ini entries override the
+# defaults if present (case-insensitive keys), env QRESP_* overrides both.
+GOOGLE_AUTH_URI_DEFAULT = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URI_DEFAULT = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URI_DEFAULT = "https://openidconnect.googleapis.com/v1/userinfo"
+# Identity ONLY. Deliberately hardcoded (not read from config) so no broader
+# Google API scope (Drive/Gmail/...) can ever be requested by this flow.
+GOOGLE_SCOPES = ["openid", "email", "profile"]
 
 
 def _dev_login_enabled():
@@ -83,6 +94,92 @@ def stamp_owner(paper):
     if user and user.get("email"):
         paper["owner_email"] = user["email"]
     return paper
+
+
+def _google_config():
+    """Google OAuth client settings. Sources, in order: QRESP_GOOGLE_* env
+    (via the standard config override), then [GOOGLE_API] entries in
+    config.ini. Returns None values when not configured — the app must boot
+    and dev-login must keep working without them."""
+    cfg = {}
+    for key in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
+                "GOOGLE_REDIRECT_URI"):
+        value = Config.get_setting("GOOGLE_API", key)
+        cfg[key] = value.strip() if value else None
+    cfg["AUTH_URI"] = (Config.get_setting("GOOGLE_API", "AUTH_URI")
+                       or GOOGLE_AUTH_URI_DEFAULT)
+    cfg["TOKEN_URI"] = (Config.get_setting("GOOGLE_API", "TOKEN_URI")
+                        or GOOGLE_TOKEN_URI_DEFAULT)
+    cfg["USER_INFO"] = (Config.get_setting("GOOGLE_API", "USER_INFO")
+                        or GOOGLE_USERINFO_URI_DEFAULT)
+    return cfg
+
+
+def _google_ready(cfg):
+    return bool(cfg["GOOGLE_CLIENT_ID"] and cfg["GOOGLE_CLIENT_SECRET"]
+                and cfg["GOOGLE_REDIRECT_URI"])
+
+
+def google_login():
+    """GET /api/auth/google — start the Google OAuth identity flow."""
+    cfg = _google_config()
+    if not _google_ready(cfg):
+        return {"error": "Google login is not configured on this server."}, 503
+
+    oauth = OAuth2Session(cfg["GOOGLE_CLIENT_ID"],
+                          redirect_uri=cfg["GOOGLE_REDIRECT_URI"],
+                          scope=GOOGLE_SCOPES)
+    authorization_url, state = oauth.authorization_url(cfg["AUTH_URI"])
+    session[OAUTH_STATE_KEY] = state
+    return redirect(authorization_url, code=302)
+
+
+def google_callback(state=None, code=None, error=None):
+    """GET /api/auth/google/callback — finish the flow and create the session.
+
+    Tokens are used server-side for the single userinfo fetch and then
+    discarded; nothing token-like is stored in the session or sent to the
+    frontend.
+    """
+    cfg = _google_config()
+    if not _google_ready(cfg):
+        return {"error": "Google login is not configured on this server."}, 503
+
+    if error:
+        return {"error": "Google sign-in was cancelled or failed: %s" % error}, 400
+
+    expected_state = session.pop(OAUTH_STATE_KEY, None)
+    if not expected_state or not state or state != expected_state:
+        return {"error": "Invalid OAuth state, please retry signing in."}, 400
+    if not code:
+        return {"error": "Missing authorization code."}, 400
+
+    try:
+        oauth = OAuth2Session(cfg["GOOGLE_CLIENT_ID"],
+                              redirect_uri=cfg["GOOGLE_REDIRECT_URI"],
+                              state=expected_state)
+        oauth.fetch_token(cfg["TOKEN_URI"],
+                          client_secret=cfg["GOOGLE_CLIENT_SECRET"],
+                          code=code)
+        info = oauth.get(cfg["USER_INFO"]).json()
+    except Exception as e:
+        print("Google sign-in failed: %s" % e)
+        return {"error": "Google sign-in failed, please try again."}, 400
+
+    email = (info.get("email") or "").strip().lower()
+    if not email:
+        return {"error": "Google account did not provide an email address."}, 400
+
+    session[AUTH_SESSION_KEY] = {
+        "email": email,
+        "name": (info.get("name") or "").strip() or email,
+        # Google is trusted for identity only; admin comes exclusively from
+        # the local allowlist, never from the provider.
+        "is_admin": email in _admin_emails(),
+        "provider": "google",
+        "google_sub": info.get("sub"),
+    }
+    return redirect("/", code=302)
 
 
 def me():
