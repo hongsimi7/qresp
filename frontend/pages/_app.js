@@ -15,6 +15,7 @@ import "vis-network/styles/vis-network.css";
 import "react-checkbox-tree/lib/react-checkbox-tree.css";
 
 import AlertState from "../Context/Alert/AlertState";
+import AuthState from "../Context/Auth/AuthState";
 import LoadingState from "../Context/Loading/LoadingState";
 import ServerState from "../Context/Servers/ServerState";
 
@@ -25,15 +26,17 @@ export default function App(props) {
     <AppCacheProvider {...props}>
       <ThemeProvider theme={Theme}>
         <CssBaseline />
-        <LoadingState>
-          <AlertState>
-            <ServerState>
-              <Layout>
-                <Component {...pageProps} />
-              </Layout>
-            </ServerState>
-          </AlertState>
-        </LoadingState>
+        <AuthState>
+          <LoadingState>
+            <AlertState>
+              <ServerState>
+                <Layout>
+                  <Component {...pageProps} />
+                </Layout>
+              </ServerState>
+            </AlertState>
+          </LoadingState>
+        </AuthState>
       </ThemeProvider>
     </AppCacheProvider>
   );

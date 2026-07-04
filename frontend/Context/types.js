@@ -2,6 +2,11 @@
 export const GET_SERVERS = "GET_SERVERS";
 export const ERROR_SERVERS = "ERROR_SERVERS";
 
+// Auth Actions
+export const AUTH_LOADING = "AUTH_LOADING";
+export const SET_AUTH = "SET_AUTH";
+export const AUTH_ERROR = "AUTH_ERROR";
+
 // Alert Actions
 export const SET_ALERT = "SET_ALERT";
 export const UNSET_ALERT = "UNSET_ALERT";

@@ -17,6 +17,7 @@ import CuratorInfo from "../../components/Paper/Curator";
 import FileServerInfo from "../../components/Paper/FileServer";
 import Workflow from "../../components/Paper/Workflow";
 import LicenseInfo from "../../components/Paper/License";
+import PermissionNotice from "../../components/Paper/PermissionNotice";
 
 import axios from "axios";
 
@@ -106,6 +107,7 @@ const PaperDetails = ({ paper, error, preview, query }) => {
           ) : null}
         </Box>
         <Box sx={{ mb: 7, mt: 1 }}>
+          {preview ? null : <PermissionNotice paperId={query.id} />}
           <ReferenceInfo referenceData={referenceData} />
           {/* yet-another-react-lightbox needs no provider wrapper. */}
           <CuratorHelperState>

@@ -16,6 +16,8 @@ import StyledButton, {
   ExternalStyledButton,
 } from "./button";
 
+import AuthControls from "./AuthControls";
+
 import Picture from "./picture";
 
 import Link from "next/link";
@@ -60,7 +62,8 @@ const Header = () => {
         url="mailto:datadev@lists.uchicago.edu?subject=Qresp"
         external={true}
       />
-      {/* <InternalStyledButton text="LogIn" url="/login" /> */}
+      {/* Dev/staging session auth; Google sign-in replaces this later. */}
+      <AuthControls />
     </Fragment>
   );
 
