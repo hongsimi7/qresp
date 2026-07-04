@@ -150,6 +150,36 @@ paths:
       responses:
         200:
           description: "Successful read paper details "
+    put:
+      operationId: "project.api.update_paper"
+      tags:
+        - "Paper details"
+      summary: "Updates a record's metadata (record owner or admin only)"
+      parameters:
+        - in: path
+          name: id
+          type: string
+          required: true
+          description: Paper Id
+        - in: body
+          name: paper
+          description: Partial or full paper metadata; top-level fields are
+            merged into the stored record. Server-owned fields (id,
+            owner_email, version bookkeeping) are ignored if present.
+          required: true
+          schema:
+            type: object
+      responses:
+        200:
+          description: Record updated
+        400:
+          description: Payload failed model validation
+        401:
+          description: Authentication required
+        403:
+          description: Only the record owner or an admin can edit
+        404:
+          description: Paper with this id does not exist
   /workflow/{id}:
     get:
       operationId: "project.api.workflow"

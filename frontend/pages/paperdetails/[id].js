@@ -107,7 +107,7 @@ const PaperDetails = ({ paper, error, preview, query }) => {
           ) : null}
         </Box>
         <Box sx={{ mb: 7, mt: 1 }}>
-          {preview ? null : <PermissionNotice paperId={query.id} />}
+          {preview ? null : <PermissionNotice paperId={query.id} tags={tags} />}
           <ReferenceInfo referenceData={referenceData} />
           {/* yet-another-react-lightbox needs no provider wrapper. */}
           <CuratorHelperState>

@@ -248,6 +248,50 @@ def verify(id):
     return {"id": '', "error": result['msg']}, result['code']
 
 
+def update_paper(id, paper):
+    """
+    Update an existing record's metadata
+    Handler for PUT: /api/paper/{id}
+
+    Owner/admin only (auth.can_edit_paper). Top-level payload fields are
+    merged into the stored document and re-validated by the Paper model;
+    server-owned fields can never be changed through the payload.
+    """
+    user = get_current_user()
+    try:
+        existing = Paper.objects.get(id=str(id))
+    except Exception as e:
+        msg = "Exception in update paper api " + str(e)
+        print(msg)
+        return {"error": "Paper not found"}, 404
+
+    allowed, reason = can_edit_paper(existing, user)
+    if not allowed:
+        return {"error": reason}, 401 if user is None else 403
+
+    # Server-owned / immutable fields are never taken from the payload.
+    for blocked in ("id", "_id", "owner_email", "version", "versions"):
+        paper.pop(blocked, None)
+
+    try:
+        data = existing.to_mongo().to_dict()
+        data.pop("_id", None)
+        data.update(paper)
+        # Keep only defined model fields (constructor coercion + validation),
+        # and force the verified owner from the stored record.
+        data = {k: v for k, v in data.items() if k in Paper._fields}
+        data["owner_email"] = existing.owner_email
+        updated = Paper(**data)
+        updated.id = existing.id
+        updated.save()
+    except Exception as e:
+        msg = "Exception in update paper api " + str(e)
+        print(msg)
+        return {"error": "Invalid paper payload: " + str(e)}, 400
+
+    return {"id": str(existing.id), "success": True}, 200
+
+
 def paper_permissions(id):
     """
     Report whether the current session may edit the given record
