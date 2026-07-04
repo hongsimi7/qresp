@@ -86,9 +86,9 @@ const explorer = ({ error }) => {
       <SEO title="Qresp | Explorer" description={explorerDescription} />
       <Container>
         <div>
-          <Box display="flex" alignItems="center" justifyContent="center" m={2}>
+          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", m: 2 }}>
             <Typography variant="h3">
-              <Box fontWeight="bold">Select Qresp node to search</Box>
+              <Box sx={{ fontWeight: "bold" }}>Select Qresp node to search</Box>
             </Typography>
           </Box>
           <Autocomplete
@@ -107,21 +107,21 @@ const explorer = ({ error }) => {
             ChipProps={{ color: "primary", variant: "outlined" }}
             onChange={handleChange}
           />
-          <Box display="flex" flexDirection="row" justifyContent="center" m={4}>
-            <Box m={1}>
+          <Box sx={{ display: "flex", flexDirection: "row", justifyContent: "center", m: 4 }}>
+            <Box sx={{ m: 1 }}>
               <StyledButton onClick={searchSelected} disabled={error}>
                 Search Selected
               </StyledButton>
             </Box>
-            <Box m={1}>
+            <Box sx={{ m: 1 }}>
               <StyledButton onClick={searchAll} disabled={error}>
                 Search All
               </StyledButton>
             </Box>
           </Box>
-          <Box display="flex" alignItems="center" justifyContent="center" m={4}>
+          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", m: 4 }}>
             <Typography variant="h5" align="center">
-              <Box fontWeight="bolder">
+              <Box sx={{ fontWeight: "bolder" }}>
                 Qresp | Explorer allows you to search for paper contents and to
                 view and download the data organized in the paper.
               </Box>

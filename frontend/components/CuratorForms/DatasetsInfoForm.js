@@ -99,10 +99,10 @@ const DatasetsInfoForm = () => {
       >
         <DialogTitle>
           <Grid container direction="row" spacing={1} alignItems="center">
-            <Grid item xs={11}>
+            <Grid size={11}>
               Add a new dataset
             </Grid>
-            <Grid item xs={1}>
+            <Grid size={1}>
               <RegularStyledButton
                 onClick={() => {
                   closeForm("dataset");
@@ -117,7 +117,7 @@ const DatasetsInfoForm = () => {
         <DialogContent dividers>
           <form onSubmit={handleSubmit(onSubmit)}>
             <Grid container direction="column" spacing={1}>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="datasetFiles"
                   placeholder="Enter files for the dataset"
@@ -135,7 +135,7 @@ const DatasetsInfoForm = () => {
                   required
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="datasetDescription"
                   placeholder="Enter descriptions for dataset"
@@ -148,7 +148,7 @@ const DatasetsInfoForm = () => {
                   required
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="datasetUrls"
                   placeholder="Enter URLs for the dataset"
@@ -160,7 +160,7 @@ const DatasetsInfoForm = () => {
                   defaultValue={def && def.URLs && def.URLs.join(", ")}
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <ExtraFieldInput
                   control={control}
                   register={register}
@@ -168,7 +168,7 @@ const DatasetsInfoForm = () => {
                   defaults={def && def.extraFields}
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <RegularStyledButton fullWidth type="submit">
                   {def && datasets.find((el) => el.id == def.id) != undefined
                     ? "Update"

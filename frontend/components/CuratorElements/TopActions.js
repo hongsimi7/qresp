@@ -166,31 +166,31 @@ const TopActions = () => {
       <Grid container direction="row" spacing={1}>
         {/* MUI v6+ removed <Hidden>; responsive display lives on each item so
             the Grid container keeps its direct Grid children. */}
-        <Grid container direction="row" item xs={12} sm={6} spacing={1}>
-          <Grid item sx={{ display: { xs: "none", sm: "block" } }}>
+        <Grid container direction="row" spacing={1} size={{ xs: 12, sm: 6 }}>
+          <Grid sx={{ display: { xs: "none", sm: "block" } }}>
             {buttons.resume()}
           </Grid>
-          <Grid item sx={{ display: { xs: "none", sm: "block" } }}>
+          <Grid sx={{ display: { xs: "none", sm: "block" } }}>
             {buttons.scratch()}
           </Grid>
-          <Grid item xs={4} sx={{ display: { xs: "block", sm: "none" } }}>
+          <Grid sx={{ display: { xs: "block", sm: "none" } }} size={4}>
             {buttons.resume(true)}
           </Grid>
-          <Grid item xs={8} sx={{ display: { xs: "block", sm: "none" } }}>
+          <Grid sx={{ display: { xs: "block", sm: "none" } }} size={8}>
             {buttons.scratch(true)}
           </Grid>
         </Grid>
-        <Grid container direction="row-reverse" item xs={12} sm={6} spacing={1}>
-          <Grid item sx={{ display: { xs: "none", sm: "block" } }}>
+        <Grid container direction="row-reverse" spacing={1} size={{ xs: 12, sm: 6 }}>
+          <Grid sx={{ display: { xs: "none", sm: "block" } }}>
             {buttons.preview()}
           </Grid>
-          <Grid item sx={{ display: { xs: "none", sm: "block" } }}>
+          <Grid sx={{ display: { xs: "none", sm: "block" } }}>
             {buttons.download()}
           </Grid>
-          <Grid item xs={6} sx={{ display: { xs: "block", sm: "none" } }}>
+          <Grid sx={{ display: { xs: "block", sm: "none" } }} size={6}>
             {buttons.preview(true)}
           </Grid>
-          <Grid item xs={6} sx={{ display: { xs: "block", sm: "none" } }}>
+          <Grid sx={{ display: { xs: "block", sm: "none" } }} size={6}>
             {buttons.download(true)}
           </Grid>
         </Grid>

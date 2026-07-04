@@ -30,8 +30,8 @@ const Summary = ({ rowdata }) => {
     <Fragment>
       <StyledPaper elevation={0}>
         <Grid container justifyContent="flex-start" alignItems="center">
-          <Grid item xs={12} container>
-            <Grid item xs={12}>
+          <Grid container size={12}>
+            <Grid size={12}>
               {/* Next 13+ <Link> renders the anchor itself (no child <a>);
                   the resolved pathname+query go straight into href. */}
               <span className="title-link">
@@ -42,12 +42,12 @@ const Summary = ({ rowdata }) => {
                   }}
                 >
                   <Typography variant="h6" component="div" gutterBottom>
-                    <Box fontWeight="bold">{_Search__title}</Box>
+                    <Box sx={{ fontWeight: "bold" }}>{_Search__title}</Box>
                   </Typography>
                 </Link>
               </span>
             </Grid>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <Typography
                 variant="subtitle1"
                 component="div"
@@ -58,7 +58,7 @@ const Summary = ({ rowdata }) => {
                 {_Search__authors}
               </Typography>
             </Grid>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <a
                 href={"https://doi.org/" + _Search__doi}
                 target="_blank"
@@ -69,7 +69,7 @@ const Summary = ({ rowdata }) => {
                 </Typography>
               </a>
             </Grid>
-            <Grid item xs={12}>
+            <Grid size={12}>
               {_Search__tags.map((tag) => (
                 <Tag
                   label={tag

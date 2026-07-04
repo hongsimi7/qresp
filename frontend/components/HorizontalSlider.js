@@ -18,7 +18,7 @@ const Slider = ({ children }) => {
 
   return (
     <Grid container direction="row" alignItems="center" justifyContent="flex-start">
-      <Grid item xs={2}>
+      <Grid size={2}>
         <IconButton
           onClick={handleChange}
           size="small"
@@ -42,26 +42,18 @@ const Slider = ({ children }) => {
         `}
         </style>
       </Grid>
-      <Grid
-        item
-        xs={9}
-        container
-        direction="row"
-        justifyContent="space-between"
-        alignItems="center"
-        spacing={1}
-      >
+      <Grid container direction="row" justifyContent="space-between" alignItems="center" spacing={1} size={9}>
         <div className="expand">
           {Array.isArray(children) ? (
             children.map((child, index) => {
               return (
-                <Grid item key={index}>
+                <Grid key={index}>
                   {child}
                 </Grid>
               );
             })
           ) : (
-            <Grid item key={index}>
+            <Grid key={index}>
               {children}
             </Grid>
           )}

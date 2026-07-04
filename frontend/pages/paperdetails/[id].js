@@ -97,15 +97,15 @@ const PaperDetails = ({ paper, error, preview, query }) => {
     <Fragment>
       <SEO title={"Qresp | " + title} description={abstract} author={authors} />
       <Container>
-        <Box mt={5}>
+        <Box sx={{ mt: 5 }}>
           {" "}
           {preview ? (
             <Typography variant="subtitle2" color="error" gutterBottom>
-              <Box fontWeight="bold">* This is unpublished content !</Box>
+              <Box sx={{ fontWeight: "bold" }}>* This is unpublished content !</Box>
             </Typography>
           ) : null}
         </Box>
-        <Box mb={7} mt={1}>
+        <Box sx={{ mb: 7, mt: 1 }}>
           <ReferenceInfo referenceData={referenceData} />
           {/* yet-another-react-lightbox needs no provider wrapper. */}
           <CuratorHelperState>
@@ -152,12 +152,7 @@ const PaperDetails = ({ paper, error, preview, query }) => {
         description="Error in getting the paper details"
         author="Qresp Team"
       />
-      <Box
-        display="flex"
-        flexGrow={1}
-        alignItems="center"
-        justifyContent="center"
-      >
+      <Box sx={{ display: "flex", flexGrow: 1, alignItems: "center", justifyContent: "center" }}>
         <Container>
           <Typography variant="h2">Error !</Typography>
           <Typography variant="h4" gutterBottom>

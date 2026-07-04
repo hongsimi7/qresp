@@ -43,7 +43,7 @@ const Drawer = (props) => {
     >
       <StyledAccordionSummary expandIcon={<ExpandMore />}>
         <Typography variant="h4" style={{ color: "#333333" }}>
-          <Box fontWeight="bold">
+          <Box sx={{ fontWeight: "bold" }}>
             {heading}
             {editor ? (
               <Tooltip
@@ -60,7 +60,7 @@ const Drawer = (props) => {
         </Typography>
       </StyledAccordionSummary>
       <AccordionDetails>
-        <Box display="flex" flexDirection="column" style={{ width: "100%" }}>
+        <Box style={{ width: "100%" }} sx={{ display: "flex", flexDirection: "column" }}>
           {children}
         </Box>
       </AccordionDetails>

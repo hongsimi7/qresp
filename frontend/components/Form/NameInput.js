@@ -8,7 +8,7 @@ const NameInput = ({ ids, names, remove, id, register, errors, defaults }) => {
 
   return (
     <Grid container direction="row" spacing={2} justifyContent="space-around" id={id} style={{marginTop:remove?0:"0.1rem"}}>
-      <Grid item xs={12} sm={width}>
+      <Grid size={{ xs: 12, sm: width }}>
         <TextInput
           id={ids.firstName}
           label="First Name"
@@ -22,7 +22,7 @@ const NameInput = ({ ids, names, remove, id, register, errors, defaults }) => {
           InputLabelProps={{shrink:true}}
         />
       </Grid>
-      <Grid item xs={12} sm={remove ? width - 1 : width}>
+      <Grid size={{ xs: 12, sm: remove ? width - 1 : width }}>
         <TextInput
           id={ids.middleName}
           label="Middle Name"
@@ -35,7 +35,7 @@ const NameInput = ({ ids, names, remove, id, register, errors, defaults }) => {
           InputLabelProps={{shrink:true}}
         />
       </Grid>
-      <Grid item xs={12} sm={width}>
+      <Grid size={{ xs: 12, sm: width }}>
         <TextInput
           id={ids.lastName}
           label="Last Name"
@@ -50,7 +50,7 @@ const NameInput = ({ ids, names, remove, id, register, errors, defaults }) => {
         />
       </Grid>
       {remove ? (
-        <Grid item item xs={12} sm={1} style={{ margin: "auto" }}>
+        <Grid style={{ margin: "auto" }} size={{ xs: 12, sm: 1 }}>
           {remove}
         </Grid>
       ) : null}

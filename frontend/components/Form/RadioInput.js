@@ -56,7 +56,7 @@ const RadioInput = (props) => {
               }
               label={
                 <Typography color="secondary">
-                  <Box fontWeight="bold" component="span">
+                  <Box component="span" sx={{ fontWeight: "bold" }}>
                     {option.label}
                   </Box>
                 </Typography>

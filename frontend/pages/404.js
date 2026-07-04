@@ -12,15 +12,10 @@ export default () => {
         description="The page you're looking for does not exist"
         authors="Qresp Team"
       />
-      <Box
-        display="flex"
-        flexGrow={1}
-        alignItems="center"
-        justifyContent="center"
-      >
+      <Box sx={{ display: "flex", flexGrow: 1, alignItems: "center", justifyContent: "center" }}>
         <Container>
           <Typography variant="h2" align="center" gutterBottom>
-            <Box fontWeight="bold">
+            <Box sx={{ fontWeight: "bold" }}>
               {" "}
               Oops! <br /> The page you're looking for does not exist.
             </Box>
@@ -32,11 +27,11 @@ export default () => {
             </span>{" "}
             us!
           </Typography>
-          <Box display="flex" flexDirection="row" m={4} justifyContent="center">
-            <Box m={1}>
+          <Box sx={{ display: "flex", flexDirection: "row", m: 4, justifyContent: "center" }}>
+            <Box sx={{ m: 1 }}>
               <InternalStyledButton text="Go to Explorer" url="/explorer" />
             </Box>
-            <Box m={1}>
+            <Box sx={{ m: 1 }}>
               <InternalStyledButton text="Go to Curator" url="/curator" />
             </Box>
           </Box>

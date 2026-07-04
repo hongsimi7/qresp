@@ -7,11 +7,11 @@ import Loader from "./loader";
 
 function Layout({ children }) {
   return (
-    <Box display="flex" flexDirection="column" flexGrow={1}>
+    <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1 }}>
       <Loader />
       <Header />
       <AlertDialog />
-      <Box display="flex" flexGrow={1}>
+      <Box sx={{ display: "flex", flexGrow: 1 }}>
         {children}
       </Box>
       <Footer />

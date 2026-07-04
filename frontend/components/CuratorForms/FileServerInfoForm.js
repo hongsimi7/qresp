@@ -85,7 +85,7 @@ const FileServerInfoForm = ({ editor }) => {
     <Drawer heading="Where is the paper" defaultOpen={true}>
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid direction="column" container spacing={1}>
-          <Grid item>
+          <Grid>
             <RadioInput
               name="connectionType"
               helperText="Select location type of the data source"
@@ -97,7 +97,7 @@ const FileServerInfoForm = ({ editor }) => {
               id="connectionTypeRadio"
             />
           </Grid>
-          <Grid item>
+          <Grid>
             {watchConnectionType == "http" ? (
               <SelectInputField
                 id="dataServer"
@@ -123,7 +123,7 @@ const FileServerInfoForm = ({ editor }) => {
               />
             )}
           </Grid>
-          <Grid item>
+          <Grid>
             <SubmitAndReset submitText="Search" />
           </Grid>
         </Grid>

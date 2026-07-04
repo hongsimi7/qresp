@@ -40,7 +40,7 @@ const LicenseInfoForm = ({ editor }) => {
     <Drawer heading="Choose a License" defaultOpen={true}>
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container spacing={1} direction="column">
-          <Grid item>
+          <Grid>
             <SelectInputField
               id="license"
               placeholder="Select the license under which the data will be published"
@@ -53,13 +53,13 @@ const LicenseInfoForm = ({ editor }) => {
               required
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <Grid container direction="row" spacing={1} alignItems="center">
-              <Grid item>
+              <Grid>
                 <SubmitAndReset submitText="Save" />
               </Grid>
-              <Grid item>
-                <Box mt={1}>
+              <Grid>
+                <Box sx={{ mt: 1 }}>
                   <RegularStyledButton
                     onClick={() =>
                       window.open("https://creativecommons.org/choose/")

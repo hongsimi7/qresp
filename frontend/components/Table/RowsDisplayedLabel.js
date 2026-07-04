@@ -7,7 +7,7 @@ const DisplayedRowsLabel = (props) => {
   const start = rowsPerPage * page;
   const end = Math.min(start + rowsPerPage, filtered);
   return (
-    <Box m={1}>
+    <Box sx={{ m: 1 }}>
       <Typography variant="overline">
         Showing {filtered == 0 ? 0 : start + 1} to {end} of {filtered}{" "}
         {filtered != rows ? "filtered" : null} records{" "}

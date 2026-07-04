@@ -68,14 +68,8 @@ const Header = () => {
     <AppBar position="sticky" color="primary" elevation={0}>
       <Toolbar>
         <Container>
-          <Box
-            display="flex"
-            flexDirection="row"
-            flexGrow={1}
-            alignItems="center"
-            m={1}
-          >
-            <Box display="flex" alignItems="center" flexGrow={1}>
+          <Box sx={{ display: "flex", flexDirection: "row", flexGrow: 1, alignItems: "center", m: 1 }}>
+            <Box sx={{ display: "flex", alignItems: "center", flexGrow: 1 }}>
               <Button component={Link} href="/">
                 <Picture
                   imgSrc="/images/qrespLogo"
@@ -84,7 +78,7 @@ const Header = () => {
                 />
               </Button>
             </Box>
-            <Box display="flex">
+            <Box sx={{ display: "flex" }}>
               {/* MUI v6+ removed <Hidden>; use responsive display instead. */}
               <Box sx={{ display: { xs: "none", md: "flex" } }}>{links}</Box>
               <Box sx={{ display: { xs: "flex", md: "none" } }}>
@@ -97,7 +91,7 @@ const Header = () => {
         </Container>
       </Toolbar>
       <StyledDrawer anchor="top" open={drawer} onClose={toggleDrawer}>
-        <Box display="flex" flexDirection="column" onClick={toggleDrawer}>
+        <Box onClick={toggleDrawer} sx={{ display: "flex", flexDirection: "column" }}>
           {links}
         </Box>
       </StyledDrawer>

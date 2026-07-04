@@ -16,7 +16,7 @@ export default function Home() {
         description={qrespDescription}
         author={qrespAuthor}
       ></SEO>
-      <Box display="flex" flexDirection="column" flexGrow={1}>
+      <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1 }}>
         <div
           style={{
             position: "relative",
@@ -36,26 +36,21 @@ export default function Home() {
             className="poster"
           />
         </div>
-        <Box display="flex" m={3} alignItems="center" justifyContent="center">
+        <Box sx={{ display: "flex", m: 3, alignItems: "center", justifyContent: "center" }}>
           <Container>
             <Typography variant="h5" align="center" gutterBottom>
-              <Box fontWeight="fontWeightBold">
+              <Box sx={{ fontWeight: "fontWeightBold" }}>
                 The open source software Qresp "Curation and Exploration of
                 Reproducible Scientific Papers" <br /> facilitates the
                 organization, annotation and exploration of data presented in
                 scientific papers.
               </Box>
             </Typography>
-            <Box
-              display="flex"
-              flexDirection="row"
-              justifyContent="center"
-              p={1}
-            >
-              <Box m={1}>
+            <Box sx={{ display: "flex", flexDirection: "row", justifyContent: "center", p: 1 }}>
+              <Box sx={{ m: 1 }}>
                 <InternalStyledButton text="Explorer" url="/explorer" />
               </Box>
-              <Box m={1}>
+              <Box sx={{ m: 1 }}>
                 <InternalStyledButton text="Curator" url="/curator" />
               </Box>
             </Box>

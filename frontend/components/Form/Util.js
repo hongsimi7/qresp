@@ -15,7 +15,7 @@ const FormInputLabel = ({ label, required, forId }) => {
         component="div"
         gutterBottom
       >
-        <Box fontWeight="bold">
+        <Box sx={{ fontWeight: "bold" }}>
           {label}
           {required ? <span style={{ color: "red" }}> *</span> : null}
         </Box>
@@ -32,15 +32,15 @@ FormInputLabel.propTypes = {
 
 const SubmitAndReset = ({ submitText, reset }) => {
   return (
-    <Box mt={1}>
+    <Box sx={{ mt: 1 }}>
       <Grid container direction="row" spacing={1}>
-        <Grid item xs={6} sm={2} md={1}>
+        <Grid size={{ xs: 6, sm: 2, md: 1 }}>
           <RegularStyledButton type="save" fullWidth>
             {submitText}
           </RegularStyledButton>
         </Grid>
         {reset ? (
-          <Grid item xs={6} sm={2} md={1}>
+          <Grid size={{ xs: 6, sm: 2, md: 1 }}>
             <RegularStyledButton type="reset" fullWidth>
               Reset
             </RegularStyledButton>
@@ -98,12 +98,12 @@ const EditAndRemove = ({ rowdata }) => {
 
   return (
     <Grid container spacing={1} direction="column">
-      <Grid item>
+      <Grid>
         <RegularStyledButton onClick={methods.edit} fullWidth>
           Edit
         </RegularStyledButton>
       </Grid>
-      <Grid item>
+      <Grid>
         <RegularStyledButton onClick={methods.delete} fullWidth>
           Remove
         </RegularStyledButton>

@@ -101,10 +101,10 @@ const ScriptsInfoForm = () => {
       >
         <DialogTitle>
           <Grid container direction="row" spacing={1} alignItems="center">
-            <Grid item xs={11}>
+            <Grid size={11}>
               {!updating ? "Add a new script" : "Update the script"}
             </Grid>
-            <Grid item xs={1}>
+            <Grid size={1}>
               <RegularStyledButton
                 onClick={() => {
                   closeForm("script");
@@ -119,7 +119,7 @@ const ScriptsInfoForm = () => {
         <DialogContent dividers>
           <form onSubmit={handleSubmit(onSubmit)}>
             <Grid container direction="column" spacing={1}>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="scriptFiles"
                   placeholder="Enter files for the scripts"
@@ -137,7 +137,7 @@ const ScriptsInfoForm = () => {
                   required
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="scriptDescription"
                   placeholder="Enter descriptions for script"
@@ -150,7 +150,7 @@ const ScriptsInfoForm = () => {
                   required
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="scriptUrls"
                   placeholder="Enter URLs for the scripts"
@@ -162,7 +162,7 @@ const ScriptsInfoForm = () => {
                   defaultValue={def && def.URLs && def.URLs.join(", ")}
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <ExtraFieldInput
                   control={control}
                   register={register}
@@ -170,7 +170,7 @@ const ScriptsInfoForm = () => {
                   defaults={def && def.extraFields}
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <RegularStyledButton fullWidth type="submit">
                   {updating ? "Update" : "Save"}
                 </RegularStyledButton>

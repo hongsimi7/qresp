@@ -10,7 +10,7 @@ const LicenseInfo = ({ type, editor, defaultOpen }) => {
     type && (
       <Drawer heading="License" editor={editor} defaultOpen={defaultOpen}>
         <Grid container direction="row" alignItems="center">
-          <Grid item xs={12} md={7}>
+          <Grid size={{ xs: 12, md: 7 }}>
             <Typography color="secondary">
               The work presented here is licensed under a {"  "}
               <a
@@ -22,7 +22,7 @@ const LicenseInfo = ({ type, editor, defaultOpen }) => {
               </a>
             </Typography>
           </Grid>
-          <Grid item xs={12} md={5}>
+          <Grid size={{ xs: 12, md: 5 }}>
             <Grid
               container
               direction="row"
@@ -32,7 +32,7 @@ const LicenseInfo = ({ type, editor, defaultOpen }) => {
             >
               {licenses[type].infographics.map((image) => {
                 return (
-                  <Grid item key={image}>
+                  <Grid key={image}>
                     <img src={"/images/" + image} />
                   </Grid>
                 );

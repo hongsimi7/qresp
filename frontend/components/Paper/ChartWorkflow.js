@@ -42,10 +42,10 @@ const ChartWorkflow = ({
       {/* <DialogTitle>{title}</DialogTitle> */}
       <DialogContent dividers>
         <Grid container direction="row">
-          <Grid item xs={12} md={10}>
+          <Grid size={{ xs: 12, md: 10 }}>
             <Graph workflow={formatWorkflow(workflow)} data={data} />
           </Grid>
-          <Grid item xs={12} md={2}>
+          <Grid size={{ xs: 12, md: 2 }}>
             <Legend direction={direction} />
           </Grid>
         </Grid>

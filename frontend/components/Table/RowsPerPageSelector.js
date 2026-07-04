@@ -13,8 +13,8 @@ const RowsPerPageSelector = (props) => {
   ];
 
   return (
-    <Box m={1} mt={2} display="flex" alignItems="center">
-      <Box mr={1}>
+    <Box sx={{ m: 1, mt: 2, display: "flex", alignItems: "center" }}>
+      <Box sx={{ mr: 1 }}>
         <Typography variant="subtitle2">Show</Typography>
       </Box>
       <TextField
@@ -32,7 +32,7 @@ const RowsPerPageSelector = (props) => {
           );
         })}
       </TextField>
-      <Box ml={1}>
+      <Box sx={{ ml: 1 }}>
         <Typography variant="subtitle2">Records</Typography>
       </Box>
     </Box>

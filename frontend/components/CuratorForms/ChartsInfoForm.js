@@ -110,10 +110,10 @@ const ChartsInfoForm = () => {
       >
         <DialogTitle>
           <Grid container direction="row" spacing={1} alignItems="center">
-            <Grid item xs={11}>
+            <Grid size={11}>
               Add a new chart
             </Grid>
-            <Grid item xs={1}>
+            <Grid size={1}>
               <RegularStyledButton
                 onClick={() => {
                   closeForm("chart");
@@ -128,7 +128,7 @@ const ChartsInfoForm = () => {
         <DialogContent dividers>
           <form onSubmit={handleSubmit(onSubmit)}>
             <Grid container direction="column" spacing={1}>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="caption"
                   placeholder="Enter chart caption"
@@ -141,7 +141,7 @@ const ChartsInfoForm = () => {
                   required
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="number"
                   placeholder="Enter chart number"
@@ -154,7 +154,7 @@ const ChartsInfoForm = () => {
                   required
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="files"
                   placeholder="Enter file names used to contruct the chart"
@@ -174,7 +174,7 @@ const ChartsInfoForm = () => {
                   defaultValue={def && def.files && def.files.join(", ")}
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="imageFile"
                   placeholder="Enter chart image file name"
@@ -195,7 +195,7 @@ const ChartsInfoForm = () => {
                   required
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="notebookFile"
                   placeholder="Enter notebook file"
@@ -215,7 +215,7 @@ const ChartsInfoForm = () => {
                   defaultValue={def && def.notebookFile}
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="chartproperties"
                   placeholder="Enter properties"
@@ -230,7 +230,7 @@ const ChartsInfoForm = () => {
                   required
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <ExtraFieldInput
                   control={control}
                   register={register}
@@ -238,7 +238,7 @@ const ChartsInfoForm = () => {
                   defaults={def && def.extraFields}
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <RegularStyledButton fullWidth type="submit">
                   {def && charts.find((el) => el.id == def.id) != undefined
                     ? "Update"

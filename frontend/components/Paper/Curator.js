@@ -13,7 +13,7 @@ const CuratorInfo = ({ curator, editor, defaultOpen }) => {
       editor={editor}
       defaultOpen={defaultOpen}
     >
-      <Box my={1}>
+      <Box sx={{ my: 1 }}>
         <LabelValue
           label="Name"
           value={

@@ -168,7 +168,7 @@ const WorkflowInfoForm = () => {
     <Fragment>
       <Drawer heading="Build your workflow" defaultOpen={true}>
         <Grid container direction="row" spacing={1}>
-          <Grid item xs={12} sm={4}>
+          <Grid size={{ xs: 12, sm: 4 }}>
             <RegularStyledButton
               onClick={() => setExternalNodeFormOpen(true)}
               fullWidth
@@ -176,7 +176,7 @@ const WorkflowInfoForm = () => {
               Add an External Node
             </RegularStyledButton>
           </Grid>
-          <Grid item xs={6} sm={4}>
+          <Grid size={{ xs: 6, sm: 4 }}>
             <RegularStyledButton
               fullWidth
               onClick={() => {
@@ -186,7 +186,7 @@ const WorkflowInfoForm = () => {
               Rearrange
             </RegularStyledButton>{" "}
           </Grid>
-          <Grid item xs={12} sm={4}>
+          <Grid size={{ xs: 12, sm: 4 }}>
             <RegularStyledButton
               fullWidth
               onClick={() => setShowLabels(!showLabels)}
@@ -196,17 +196,17 @@ const WorkflowInfoForm = () => {
           </Grid>
         </Grid>
 
-        <Box mt={1}>
+        <Box sx={{ mt: 1 }}>
           <Grid container direction="row">
-            <Grid item xs={12} md={10}>
+            <Grid size={{ xs: 12, md: 10 }}>
               <Graph workflow={workflow} data={data} manipulate={manipulate} />
             </Grid>
-            <Grid item xs={12} md={2}>
+            <Grid size={{ xs: 12, md: 2 }}>
               <Legend direction={direction} />
             </Grid>
           </Grid>
         </Box>
-        <Box my={1}>
+        <Box sx={{ my: 1 }}>
           <RegularStyledButton onClick={onSave} fullWidth>
             Save
           </RegularStyledButton>
@@ -221,7 +221,7 @@ const WorkflowInfoForm = () => {
           </DialogTitle>
           <DialogContent dividers>
             <Grid container direction="column" spacing={1}>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="headDescription"
                   register={register} registerOptions={{ required: "Required" }}
@@ -233,7 +233,7 @@ const WorkflowInfoForm = () => {
                   rows={3}
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="headURLs"
                   register={register}

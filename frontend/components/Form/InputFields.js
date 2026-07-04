@@ -9,21 +9,13 @@ const TextInputField = (props) => {
   const { id, label, required, action, ...rest } = props;
   return (
       <Grid container spacing={0}>
-        <Grid
-          item
-          xs={12}
-          container
-          direction="row"
-          spacing={1}
-          alignItems="center"
-          alignContent="center"
-        >
-          <Grid item>
+        <Grid container direction="row" spacing={1} alignItems="center" alignContent="center" size={12}>
+          <Grid>
             <FormInputLabel forId={id} label={label} required={required} />
           </Grid>
-          <Grid item>{action}</Grid>
+          <Grid>{action}</Grid>
         </Grid>
-        <Grid item xs={12}>
+        <Grid size={12}>
           <TextInput id={id} {...rest} />
         </Grid>
       </Grid>

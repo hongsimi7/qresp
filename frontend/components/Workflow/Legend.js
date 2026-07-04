@@ -35,7 +35,7 @@ const Legend = ({ direction }) => {
       alignItems="center"
       style={styles}
     >
-      <Grid item>
+      <Grid>
         <Typography
           variant="h4"
           style={{ color: "#357EBD", ...individualStyle }}
@@ -43,31 +43,31 @@ const Legend = ({ direction }) => {
           Nodes
         </Typography>
       </Grid>
-      <Grid item style={individualStyle}>
+      <Grid style={individualStyle}>
         <StyledTooltip title={tooltipInfo.external} arrow>
           <div className="external"></div>
         </StyledTooltip>
         <Typography align="center">External</Typography>
       </Grid>
-      <Grid item style={individualStyle}>
+      <Grid style={individualStyle}>
         <StyledTooltip title={tooltipInfo.dataset} arrow>
           <div className="dataset"></div>
         </StyledTooltip>
         <Typography align="center">Dataset</Typography>
       </Grid>
-      <Grid item style={individualStyle}>
+      <Grid style={individualStyle}>
         <StyledTooltip title={tooltipInfo.script} arrow>
           <div className="script"></div>
         </StyledTooltip>
         <Typography align="center">Script</Typography>
       </Grid>
-      <Grid item style={individualStyle}>
+      <Grid style={individualStyle}>
         <StyledTooltip title={tooltipInfo.tool} arrow>
           <div className="tool"></div>
         </StyledTooltip>
         <Typography align="center">Tool</Typography>
       </Grid>
-      <Grid item style={individualStyle}>
+      <Grid style={individualStyle}>
         <StyledTooltip title={tooltipInfo.chart} arrow>
           <div className="chart"></div>
         </StyledTooltip>

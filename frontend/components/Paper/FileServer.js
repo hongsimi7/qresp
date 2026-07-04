@@ -12,7 +12,7 @@ const FileServerInfo = ({ fileserverpath, defaultOpen, editor }) => {
       defaultOpen={defaultOpen}
       editor={editor}
     >
-      <Box my={1}>
+      <Box sx={{ my: 1 }}>
         <LabelValue
           label="File Server Path"
           value={fileserverpath}

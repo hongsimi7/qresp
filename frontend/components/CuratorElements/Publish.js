@@ -156,12 +156,12 @@ const Publish = () => {
     setAlert(
       "Warning",
       <Grid container direction="column" spacing={1}>
-        <Grid item>
+        <Grid>
           Once published, you will not be able to alter the contents of the
           published metadata. Please make sure the data you entered is correct.
         </Grid>
-        <Grid item container direction="row" spacing={1}>
-          <Grid item sm={6}>
+        <Grid container direction="row" spacing={1}>
+          <Grid size={{ sm: 6 }}>
             <RegularStyledButton
               href={`data:text/json;charset=utf-8,${encodeURIComponent(
                 JSON.stringify(metadata, null, 2)
@@ -172,7 +172,7 @@ const Publish = () => {
               Download Metadata
             </RegularStyledButton>
           </Grid>
-          <Grid item sm={6}>
+          <Grid size={{ sm: 6 }}>
             <RegularStyledButton
               fullWidth
               onClick={(e) => {
@@ -185,7 +185,7 @@ const Publish = () => {
             </RegularStyledButton>
           </Grid>
         </Grid>
-        <Grid item>
+        <Grid>
           <StyledButton
             fullWidth
             onClick={() =>
@@ -202,7 +202,7 @@ const Publish = () => {
 
   return (
     <Fragment>
-      <Box my={3}>
+      <Box sx={{ my: 3 }}>
         <StyledButton fullWidth onClick={onClick}>
           Publish
         </StyledButton>

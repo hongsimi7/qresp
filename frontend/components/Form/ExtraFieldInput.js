@@ -27,10 +27,10 @@ const ExtraFieldInput = ({ control, register, errors, defaults }) => {
   return (
     <Fragment>
       <Grid container justifyContent="flex-start" alignItems="center" spacing={2}>
-        <Grid item>
+        <Grid>
           <FormInputLabel label="Extra Fields" forId="pis" />
         </Grid>
-        <Grid item>
+        <Grid>
           <StyledTooltip title="Add a new custom field" placement="right" arrow>
             <IconButton
               onClick={() =>
@@ -48,7 +48,7 @@ const ExtraFieldInput = ({ control, register, errors, defaults }) => {
       </Grid>
       {fields.map((field, index) => (
         <Grid container spacing={4} key={field.id} alignItems="center">
-          <Grid item xs={12} sm={5}>
+          <Grid size={{ xs: 12, sm: 5 }}>
             <TextInput
               InputLabelProps={{ shrink: true }}
               id={`customLabel${index}`}
@@ -63,7 +63,7 @@ const ExtraFieldInput = ({ control, register, errors, defaults }) => {
               }
             />
           </Grid>
-          <Grid item xs={11} sm={6}>
+          <Grid size={{ xs: 11, sm: 6 }}>
             <TextInput
               InputLabelProps={{ shrink: true }}
               id={`customValue${index}`}
@@ -78,7 +78,7 @@ const ExtraFieldInput = ({ control, register, errors, defaults }) => {
               }
             />
           </Grid>
-          <Grid item xs={1}>
+          <Grid size={1}>
             <StyledTooltip
               title="Remove the custom field"
               placement="top"

@@ -35,7 +35,7 @@ const Software = ({ errors, register, unregister, def, openFileSelector }) => {
 
   return (
     <Fragment>
-      <Grid item>
+      <Grid>
         <TextInputField
           id="packageName"
           placeholder="Enter name of the software package"
@@ -48,7 +48,7 @@ const Software = ({ errors, register, unregister, def, openFileSelector }) => {
           required
         />
       </Grid>
-      <Grid item>
+      <Grid>
         <TextInputField
           id="version"
           placeholder="Enter version of the software package"
@@ -61,7 +61,7 @@ const Software = ({ errors, register, unregister, def, openFileSelector }) => {
           required
         />
       </Grid>
-      <Grid item>
+      <Grid>
         <TextInputField
           id="executableName"
           placeholder="Enter the name of the executable for the software package"
@@ -73,7 +73,7 @@ const Software = ({ errors, register, unregister, def, openFileSelector }) => {
           defaultValue={def && def.executableName}
         />
       </Grid>
-      <Grid item>
+      <Grid>
         <TextInputField
           id="patches"
           placeholder="Select patch files using the picker"
@@ -90,7 +90,7 @@ const Software = ({ errors, register, unregister, def, openFileSelector }) => {
           }
         />
       </Grid>
-      <Grid item>
+      <Grid>
         <TextInputField
           id="description"
           placeholder="Enter summary of the modifications made to the software package (if any)"
@@ -116,7 +116,7 @@ const Experiment = ({ errors, register, unregister, def }) => {
 
   return (
     <Fragment>
-      <Grid item>
+      <Grid>
         <TextInputField
           id="facilityName"
           placeholder="Enter name of the facility where the experiment was conducted (e.g. Argonne National Lab)"
@@ -129,7 +129,7 @@ const Experiment = ({ errors, register, unregister, def }) => {
           required
         />
       </Grid>
-      <Grid item>
+      <Grid>
         <TextInputField
           id="measurement"
           placeholder="Enter type of measurement (e.g. soft X-ray photoemission)"
@@ -264,10 +264,10 @@ const ToolsInfoForm = () => {
       >
         <DialogTitle>
           <Grid container direction="row" spacing={1} alignItems="center">
-            <Grid item xs={11}>
+            <Grid size={11}>
               Add a new tool
             </Grid>
-            <Grid item xs={1}>
+            <Grid size={1}>
               <RegularStyledButton
                 onClick={() => {
                   setDefault("tool", null);
@@ -283,7 +283,7 @@ const ToolsInfoForm = () => {
         <DialogContent dividers>
           <form onSubmit={handleSubmit(onSubmit)}>
             <Grid container direction="column" spacing={1}>
-              <Grid item>
+              <Grid>
                 <RadioInputField
                   id="kind"
                   name="kind"
@@ -330,7 +330,7 @@ const ToolsInfoForm = () => {
                   def={def}
                 />
               )}
-              <Grid item>
+              <Grid>
                 <TextInputField
                   id="urls"
                   placeholder="Enter URLs for the tools"
@@ -342,7 +342,7 @@ const ToolsInfoForm = () => {
                   defaultValue={def && def.urls}
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <ExtraFieldInput
                   control={control}
                   register={register}
@@ -350,7 +350,7 @@ const ToolsInfoForm = () => {
                   defaults={def && def.extraFields}
                 />
               </Grid>
-              <Grid item>
+              <Grid>
                 <RegularStyledButton fullWidth type="submit">
                   {def && tools.find((el) => el.id == def.id) != undefined
                     ? "Update"

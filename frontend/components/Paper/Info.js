@@ -14,7 +14,7 @@ const PaperInfo = ({ paperInfo, editor, defaultOpen }) => {
       editor={editor}
       defaultOpen={defaultOpen}
     >
-      <Box my={1}>
+      <Box sx={{ my: 1 }}>
         <LabelValue label="Principal Investigators: " value={PIs} />
         <LabelValue label="Collections" value={collections.join(", ")} />
         <LabelValue label="Tags" value={tags.join(", ")} />

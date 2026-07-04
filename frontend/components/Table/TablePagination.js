@@ -11,7 +11,7 @@ const TablePaginationActions = (props) => {
   };
 
   return (
-    <Box display="flex" alignItems="center">
+    <Box sx={{ display: "flex", alignItems: "center" }}>
       <Pagination
         page={page + 1}
         count={Math.ceil(count / rowsPerPage)}

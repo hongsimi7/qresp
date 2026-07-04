@@ -29,40 +29,16 @@ const EnhancedTableFooter = (props) => {
   return (
     // MUI v6+ removed <Hidden>; responsive display lives on the items.
     <Grid container direction="row">
-      <Grid
-        item
-        sm={6}
-        container
-        justifyContent="flex-start"
-        sx={{ display: { xs: "none", sm: "flex" } }}
-      >
+      <Grid container justifyContent="flex-start" sx={{ display: { xs: "none", sm: "flex" } }} size={{ sm: 6 }}>
         {displayLabel}
       </Grid>
-      <Grid
-        item
-        sm={6}
-        container
-        justifyContent="flex-end"
-        sx={{ display: { xs: "none", sm: "flex" } }}
-      >
+      <Grid container justifyContent="flex-end" sx={{ display: { xs: "none", sm: "flex" } }} size={{ sm: 6 }}>
         {paginator}
       </Grid>
-      <Grid
-        item
-        xs={12}
-        container
-        justifyContent="center"
-        sx={{ display: { xs: "flex", sm: "none" } }}
-      >
+      <Grid container justifyContent="center" sx={{ display: { xs: "flex", sm: "none" } }} size={12}>
         {displayLabel}
       </Grid>
-      <Grid
-        item
-        xs={12}
-        container
-        justifyContent="center"
-        sx={{ display: { xs: "flex", sm: "none" } }}
-      >
+      <Grid container justifyContent="center" sx={{ display: { xs: "flex", sm: "none" } }} size={12}>
         {paginator}
       </Grid>
     </Grid>

@@ -103,14 +103,14 @@ const RecordTable = (props) => {
   return (
     <TableSearchState>
       <Grid container direction="row" alignItems="center" ref={tableRef}>
-        <Grid item xs={12} sm={6}>
+        <Grid size={{ xs: 12, sm: 6 }}>
           <RowsPerPageSelector
             count={rows.length}
             rowsPerPage={rowsPerPage}
             onChangeRowsPerPage={handleChangeRowsPerPage}
           />
         </Grid>
-        <Grid item xs={12} sm={6}>
+        <Grid size={{ xs: 12, sm: 6 }}>
           <TableSearch
             columns={columns}
             setFiltered={setFiltered}

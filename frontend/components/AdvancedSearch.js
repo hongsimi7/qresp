@@ -22,12 +22,12 @@ import axios from "axios";
 const TextSearchField = ({ title, placeholder, value, onChange, name }) => {
   return (
     <Grid container direction="column" alignItems="stretch" justifyContent="center">
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Typography variant="h6" color="secondary" align="center">
-          <Box fontWeight="bold">{title}</Box>
+          <Box sx={{ fontWeight: "bold" }}>{title}</Box>
         </Typography>
       </Grid>
-      <Grid item xs={12}>
+      <Grid size={12}>
         <TextField
           variant="outlined"
           value={value}
@@ -51,12 +51,12 @@ const ChipSearchField = ({
 }) => {
   return (
     <Grid container direction="column" alignItems="stretch" justifyContent="center">
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Typography variant="h6" color="secondary" align="center">
-          <Box fontWeight="bold">{title}</Box>
+          <Box sx={{ fontWeight: "bold" }}>{title}</Box>
         </Typography>
       </Grid>
-      <Grid item xs={12}>
+      <Grid size={12}>
         <Autocomplete
           value={value}
           multiple
@@ -190,19 +190,11 @@ const AdvancedSearch = ({
         `}
       </style>
       <Collapse in={show}>
-        <Box m={2}>
+        <Box sx={{ m: 2 }}>
           <form onSubmit={onSubmit}>
             <Grid container direction="column" spacing={1} alignItems="center">
-              <Grid
-                item
-                container
-                direction="row"
-                spacing={1}
-                justifyContent="center"
-                alignItems="stretch"
-                xs={12}
-              >
-                <Grid item xs={12} sm={6} md={4}>
+              <Grid container direction="row" spacing={1} justifyContent="center" alignItems="stretch" size={12}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                   <TextSearchField
                     title="Title"
                     placeholder="Enter a title"
@@ -211,7 +203,7 @@ const AdvancedSearch = ({
                     name="paperTitle"
                   />
                 </Grid>
-                <Grid item xs={12} sm={6} md={4}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                   <TextSearchField
                     title="DOI"
                     placeholder="Enter a DOI"
@@ -220,7 +212,7 @@ const AdvancedSearch = ({
                     name="doi"
                   />
                 </Grid>
-                <Grid item xs={12} sm={6} md={4}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                   <ChipSearchField
                     title="Tags"
                     options={tags}
@@ -230,7 +222,7 @@ const AdvancedSearch = ({
                     value={search.tags}
                   />
                 </Grid>
-                <Grid item xs={12} sm={6} md={4}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                   <ChipSearchField
                     title="Collections"
                     options={collections}
@@ -240,7 +232,7 @@ const AdvancedSearch = ({
                     value={search.collectionList}
                   />
                 </Grid>
-                <Grid item xs={12} sm={6} md={4}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                   <ChipSearchField
                     title="Paper Authors"
                     options={authors}
@@ -250,7 +242,7 @@ const AdvancedSearch = ({
                     value={search.authorsList}
                   />
                 </Grid>
-                <Grid item xs={12} sm={6} md={4}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                   <ChipSearchField
                     title="Publication"
                     options={publications}
@@ -261,8 +253,8 @@ const AdvancedSearch = ({
                   />
                 </Grid>
               </Grid>
-              <Grid item container spacing={1} justifyContent="center">
-                <Grid item>
+              <Grid container spacing={1} justifyContent="center">
+                <Grid>
                   <Button
                     variant="contained"
                     endIcon={<Search />}
@@ -271,7 +263,7 @@ const AdvancedSearch = ({
                     Search
                   </Button>
                 </Grid>
-                <Grid item>
+                <Grid>
                   <Button
                     variant="contained"
                     endIcon={<Clear />}

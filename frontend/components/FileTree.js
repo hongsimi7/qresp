@@ -69,8 +69,8 @@ const FileTree = () => {
     <Dialog open={showSelector} onClose={closeSelector} maxWidth="md" fullWidth>
       <DialogTitle onClose={closeSelector} disableTypography>
         <Grid container direction="column" spacing={1} justifyContent="center">
-          <Grid item container spacing={1}>
-            <Grid item xs={12} sm={9}>
+          <Grid container spacing={1}>
+            <Grid size={{ xs: 12, sm: 9 }}>
               <Typography variant="h6">
                 {multiple
                   ? title
@@ -79,8 +79,8 @@ const FileTree = () => {
                   : "Current Selection:"}
               </Typography>
             </Grid>
-            <Grid item xs={12} sm={3} container spacing={1}>
-              <Grid item xs={6}>
+            <Grid container spacing={1} size={{ xs: 12, sm: 3 }}>
+              <Grid size={6}>
                 <RegularStyledButton
                   fullWidth
                   onClick={() => {
@@ -96,7 +96,7 @@ const FileTree = () => {
                   Save
                 </RegularStyledButton>
               </Grid>
-              <Grid item xs={6}>
+              <Grid size={6}>
                 <RegularStyledButton onClick={closeSelector} fullWidth>
                   Cancel
                 </RegularStyledButton>
@@ -104,7 +104,7 @@ const FileTree = () => {
             </Grid>
           </Grid>
           {!multiple ? (
-            <Grid item xs={12}>
+            <Grid size={12}>
               <Typography variant="body1" component="div">
                 <Box
                   style={{

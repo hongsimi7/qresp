@@ -33,7 +33,7 @@ const DocumentationInfoForm = ({ editor }) => {
     <Drawer heading="Add additional documentation" defaultOpen={true}>
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container direction="column" spacing={1}>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="documentation"
               placeholder="Enter additional documentation for the paper"
@@ -47,7 +47,7 @@ const DocumentationInfoForm = ({ editor }) => {
               rows={10}
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <SubmitAndReset submitText="Save" />
           </Grid>
         </Grid>

@@ -16,12 +16,7 @@ const Verify = ({ id, server, error }) => {
         description="Publish Verification Page"
         author="Qresp Team"
       />
-      <Box
-        display="flex"
-        flexGrow={1}
-        alignItems="center"
-        justifyContent="center"
-      >
+      <Box sx={{ display: "flex", flexGrow: 1, alignItems: "center", justifyContent: "center" }}>
         <Container>
           {error.length == 0 ? (
             <Fragment>

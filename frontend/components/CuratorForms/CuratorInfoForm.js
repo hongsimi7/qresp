@@ -43,7 +43,7 @@ const CuratorInfoForm = ({ editor }) => {
     <Drawer heading="Who is Curating the paper" defaultOpen={true}>
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container direction="column" spacing={1}>
-          <Grid item>
+          <Grid>
             <NameInputField
               ids={nameFields}
               label="Name"
@@ -55,7 +55,7 @@ const CuratorInfoForm = ({ editor }) => {
               defaults={{ ...curatorInfo }}
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="curatorEmail"
               placeholder="Enter an email address"
@@ -68,7 +68,7 @@ const CuratorInfoForm = ({ editor }) => {
               defaultValue={curatorInfo.emailId}
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="curatorAffiliation"
               placeholder="Enter your university/organization"
@@ -80,7 +80,7 @@ const CuratorInfoForm = ({ editor }) => {
               defaultValue={curatorInfo.affiliation}
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <SubmitAndReset submitText="Save" />
           </Grid>
         </Grid>

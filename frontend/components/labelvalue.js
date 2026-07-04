@@ -26,12 +26,12 @@ const SimpleLabelValue = ({ label, value, direction }) => {
         alignItems="center"
         justifyContent="flex-start"
       >
-        <Grid item>
+        <Grid>
           <Typography variant="body2" color="secondary" component="span">
             <span>{label}:&nbsp;&nbsp;</span>
           </Typography>
         </Grid>
-        <Grid item>
+        <Grid>
           <Typography variant="body2" color="secondary" component="div">
             {value}
           </Typography>
@@ -72,7 +72,7 @@ const LabelValue = ({ label, value, link, image, textVariant, direction }) => {
         justifyContent="flex-start"
       >
         {label && (
-          <Grid item>
+          <Grid>
             <BigTypography variant="body1" color="secondary" component="div">
               <span>
                 {label}
@@ -82,7 +82,7 @@ const LabelValue = ({ label, value, link, image, textVariant, direction }) => {
           </Grid>
         )}
         {value && (
-          <Grid item>
+          <Grid>
             <BigTypography
               variant={textVariant}
               color="secondary"

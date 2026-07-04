@@ -70,7 +70,7 @@ const TableSearch = ({ rows, setFiltered, columns }) => {
   }, [query]);
 
   return (
-    <Box m={1} mt={2}>
+    <Box sx={{ m: 1, mt: 2 }}>
       <form noValidate onSubmit={onSubmit}>
         <TextField
           value={query}

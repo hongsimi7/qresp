@@ -31,7 +31,7 @@ const curator = () => {
           <SEO title={"Qresp | Curator"} description={curatorDescription} />
           <FileTree />
           <Container>
-            <Box mt={4} mb={4}>
+            <Box sx={{ mt: 4, mb: 4 }}>
               <TopActions />
             </Box>
             <CuratorElement />

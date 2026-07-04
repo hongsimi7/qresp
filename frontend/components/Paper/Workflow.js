@@ -19,12 +19,12 @@ const Workflow = ({ workflow, charts, tools, scripts, datasets, external }) => {
 
   return (
     <Drawer heading="Workflow">
-      <Box mt={1}>
+      <Box sx={{ mt: 1 }}>
         <Grid container direction="row">
-          <Grid item xs={12} md={10}>
+          <Grid size={{ xs: 12, md: 10 }}>
             <Graph workflow={workflow} data={data} />
           </Grid>
-          <Grid item xs={12} md={2}>
+          <Grid size={{ xs: 12, md: 2 }}>
             <Legend direction={direction} />
           </Grid>
         </Grid>

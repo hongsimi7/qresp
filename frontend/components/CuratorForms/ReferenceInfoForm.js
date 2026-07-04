@@ -146,7 +146,7 @@ const ReferenceInfoForm = ({ editor }) => {
     <Drawer heading="Add Reference to your paper" defaultOpen={true}>
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container direction="column" spacing={1}>
-          <Grid item>
+          <Grid>
             <RadioInputField
               id="kind"
               name="kind"
@@ -160,7 +160,7 @@ const ReferenceInfoForm = ({ editor }) => {
               defVal={referenceInfo.kind}
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="doi"
               placeholder="Enter doi of the paper"
@@ -191,17 +191,17 @@ const ReferenceInfoForm = ({ editor }) => {
               error={errors.doi}
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <Grid
               container
               justifyContent="flex-start"
               alignItems="center"
               spacing={1}
             >
-              <Grid item>
+              <Grid>
                 <FormInputLabel label="Authors" forId="authors" />
               </Grid>
-              <Grid item>
+              <Grid>
                 <Tooltip
                   title={
                     <Typography variant="subtitle2">Add an author</Typography>
@@ -226,7 +226,7 @@ const ReferenceInfoForm = ({ editor }) => {
             </Grid>
             {fields.map((el, index) => {
               return (
-                <Grid item key={el.id}>
+                <Grid key={el.id}>
                   <NameInput
                     ids={nameid.get(index)}
                     names={nameid.get(index)}
@@ -267,7 +267,7 @@ const ReferenceInfoForm = ({ editor }) => {
               );
             })}
           </Grid>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="title"
               placeholder="Enter title"
@@ -280,7 +280,7 @@ const ReferenceInfoForm = ({ editor }) => {
               defaultValue={referenceInfo.title}
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="journal"
               placeholder="Enter full journal name"
@@ -293,7 +293,7 @@ const ReferenceInfoForm = ({ editor }) => {
               required
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="page"
               placeholder="Enter page number"
@@ -306,7 +306,7 @@ const ReferenceInfoForm = ({ editor }) => {
               required
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="abstract"
               placeholder="Enter abstract"
@@ -321,7 +321,7 @@ const ReferenceInfoForm = ({ editor }) => {
               required
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="volume"
               placeholder="Enter volume number"
@@ -334,7 +334,7 @@ const ReferenceInfoForm = ({ editor }) => {
               required
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="year"
               placeholder="Enter year of publication"
@@ -347,7 +347,7 @@ const ReferenceInfoForm = ({ editor }) => {
               required
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="url"
               placeholder="Enter url"
@@ -359,7 +359,7 @@ const ReferenceInfoForm = ({ editor }) => {
               defaultValue={referenceInfo.url}
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <SubmitAndReset submitText="Save" />
           </Grid>
         </Grid>

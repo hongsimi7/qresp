@@ -36,9 +36,9 @@ const ReferenceInfo = ({ referenceData }) => {
 
   return (
     <Fragment>
-      <Box my={1}>
+      <Box sx={{ my: 1 }}>
         <Typography variant="h4" gutterBottom style={{ color: "#333333" }}>
-          <Box fontWeight="bold">
+          <Box sx={{ fontWeight: "bold" }}>
             {title} <SocialShare />
           </Box>
         </Typography>
@@ -51,7 +51,7 @@ const ReferenceInfo = ({ referenceData }) => {
           <Tag label={tag} key={tag} size="small" />
         ))}
       </Box>
-      <Box my={2}>
+      <Box sx={{ my: 2 }}>
         <LabelValue label="Collection(s)" value={collections} />
         <LabelValue label="Principal Investigators" value={PIs} />
         <LabelValue

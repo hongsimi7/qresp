@@ -94,17 +94,17 @@ const PaperInfoForm = ({ editor }) => {
     <Drawer heading="Add info about your paper" defaultOpen={true}>
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container direction="column" spacing={1}>
-          <Grid item>
+          <Grid>
             <Grid
               container
               justifyContent="flex-start"
               alignItems="center"
               spacing={1}
             >
-              <Grid item>
+              <Grid>
                 <FormInputLabel label="Principal Investigators" forId="pis" />
               </Grid>
-              <Grid item>
+              <Grid>
                 <Tooltip
                   title={
                     <Typography variant="subtitle2">
@@ -131,7 +131,7 @@ const PaperInfoForm = ({ editor }) => {
             </Grid>
             {fields.map((pi, index) => {
               return (
-                <Grid item key={index}>
+                <Grid key={index}>
                   <NameInput
                     ids={pId.get(index)}
                     names={pId.get(index)}
@@ -172,7 +172,7 @@ const PaperInfoForm = ({ editor }) => {
               );
             })}
           </Grid>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="paperstack"
               placeholder="Enter collection to which project belongs to"
@@ -184,7 +184,7 @@ const PaperInfoForm = ({ editor }) => {
               error={errors.collections}
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="tags"
               placeholder="Ener tags for the project"
@@ -196,7 +196,7 @@ const PaperInfoForm = ({ editor }) => {
               error={errors.tags}
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <TextInputField
               id="mainNotebookFile"
               placeholder="Enter main notebook filename"
@@ -212,7 +212,7 @@ const PaperInfoForm = ({ editor }) => {
               error={errors.notebookFile}
             />
           </Grid>
-          <Grid item>
+          <Grid>
             <SubmitAndReset submitText="Save" />
           </Grid>
         </Grid>
