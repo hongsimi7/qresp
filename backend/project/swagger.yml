@@ -272,6 +272,52 @@ paths:
           description: Incorrect paper object
         500:
           description: Internal server error
+  /auth/me:
+    get:
+      operationId: "project.auth.me"
+      tags:
+        - "Authentication"
+      summary: "Returns the current session's authentication state"
+      responses:
+        200:
+          description: Authentication state returned
+  /auth/logout:
+    post:
+      operationId: "project.auth.logout"
+      tags:
+        - "Authentication"
+      summary: "Clears the authenticated user from the session"
+      responses:
+        200:
+          description: Logged out
+  /auth/dev-login:
+    post:
+      operationId: "project.auth.dev_login"
+      tags:
+        - "Authentication"
+      summary: "Development-only session login (off unless QRESP_ENABLE_DEV_LOGIN is set)"
+      parameters:
+        - in: body
+          name: credentials
+          description: Development user identity
+          schema:
+            type: object
+            required:
+              - email
+            properties:
+              email:
+                type: string
+              name:
+                type: string
+              is_admin:
+                type: boolean
+      responses:
+        200:
+          description: Logged in
+        400:
+          description: Invalid credentials payload
+        404:
+          description: Dev login is disabled
   /verify/{id}:
     get:
       operationId: "project.api.verify"
