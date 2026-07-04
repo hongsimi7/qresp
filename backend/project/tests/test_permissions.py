@@ -51,6 +51,8 @@ class PermissionTestBase(unittest.TestCase):
             "/api/auth/dev-login", json={"email": email, "is_admin": is_admin}
         )
         assert response.status_code == 200, response.text
+        # Session-authenticated mutations require the CSRF token from /me.
+        self.csrf = self.client.get("/api/auth/me").json()["csrf_token"]
 
     def permissions(self, paper_id):
         response = self.client.get(f"/api/paper/{paper_id}/permissions")

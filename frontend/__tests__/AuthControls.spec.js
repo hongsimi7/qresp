@@ -4,6 +4,10 @@ import userEvent from "@testing-library/user-event";
 jest.mock("axios");
 import axios from "axios";
 
+jest.mock("next/router", () => ({
+  useRouter: () => ({ asPath: "/explorer" }),
+}));
+
 import AuthState from "../Context/Auth/AuthState";
 import AuthControls from "../components/AuthControls";
 
@@ -35,7 +39,11 @@ describe("AuthControls", () => {
     const googleLink = await screen.findByRole("link", {
       name: /sign in with google/i,
     });
-    expect(googleLink).toHaveAttribute("href", "/api/auth/google");
+    // carries the current page as a same-origin return path
+    expect(googleLink).toHaveAttribute(
+      "href",
+      "/api/auth/google?next=%2Fexplorer"
+    );
   });
 
   it("shows the user and a sign-out button when authenticated", async () => {

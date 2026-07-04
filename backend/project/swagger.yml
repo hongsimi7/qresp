@@ -325,6 +325,12 @@ paths:
       tags:
         - "Authentication"
       summary: "Starts the Google OAuth identity flow (openid/email/profile only)"
+      parameters:
+        - in: query
+          name: next
+          type: string
+          required: false
+          description: Same-origin path to return to after sign-in
       responses:
         302:
           description: Redirect to Google's consent screen

@@ -10,13 +10,18 @@ Google OAuth will later replace dev-login as the identity provider; /me and
 permissions are NOT implemented here (separate phase). No secrets are stored
 in the session — only the identity claims below.
 """
-from flask import redirect, session
+import functools
+import secrets
+
+from flask import redirect, request, session
 from requests_oauthlib import OAuth2Session
 
 from project.config import Config
 
 AUTH_SESSION_KEY = "auth_user"
 OAUTH_STATE_KEY = "oauth_state"
+AUTH_NEXT_KEY = "auth_next"
+CSRF_SESSION_KEY = "csrf_token"
 
 # Google OAuth endpoints; [GOOGLE_API] config.ini entries override the
 # defaults if present (case-insensitive keys), env QRESP_* overrides both.
@@ -44,6 +49,47 @@ def _dev_login_enabled():
 def get_current_user():
     """The auth user dict stored in the session, or None when anonymous."""
     return session.get(AUTH_SESSION_KEY)
+
+
+def issue_csrf_token():
+    """Session-bound CSRF token. The frontend reads it from /api/auth/me and
+    replays it in the X-CSRF-Token header on mutating same-origin requests."""
+    token = session.get(CSRF_SESSION_KEY)
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session[CSRF_SESSION_KEY] = token
+    return token
+
+
+def csrf_protect(handler):
+    """Require X-CSRF-Token on a mutating route WHEN the request carries an
+    authenticated session — cookie-authenticated users are the CSRF target,
+    while anonymous API/CLI usage (e.g. anonymous publish) keeps working
+    unchanged. dev-login is deliberately not wrapped: it only establishes a
+    session (login-CSRF is out of scope for the MVP, and the Google flow is
+    already protected by the OAuth state parameter)."""
+
+    @functools.wraps(handler)
+    def wrapper(*args, **kwargs):
+        if session.get(AUTH_SESSION_KEY):
+            expected = session.get(CSRF_SESSION_KEY) or ""
+            provided = request.headers.get("X-CSRF-Token") or ""
+            if not expected or not secrets.compare_digest(expected, provided):
+                return {"error": "CSRF token missing or invalid."}, 403
+        return handler(*args, **kwargs)
+
+    return wrapper
+
+
+def _safe_next_path(value):
+    """Validate a post-login redirect target: same-origin path-only strings
+    (no scheme/host, no protocol-relative //, no backslash tricks). Returns
+    None for anything else, preventing open redirects."""
+    if not value or not isinstance(value, str):
+        return None
+    if not value.startswith("/") or value.startswith("//") or "\\" in value:
+        return None
+    return value
 
 
 def _admin_emails():
@@ -120,11 +166,22 @@ def _google_ready(cfg):
                 and cfg["GOOGLE_REDIRECT_URI"])
 
 
-def google_login():
-    """GET /api/auth/google — start the Google OAuth identity flow."""
+def google_login(next=None):
+    """GET /api/auth/google — start the Google OAuth identity flow.
+
+    An optional ``next`` query parameter (validated to a same-origin path)
+    is remembered in the session so the callback can return the user to the
+    page they signed in from.
+    """
     cfg = _google_config()
     if not _google_ready(cfg):
         return {"error": "Google login is not configured on this server."}, 503
+
+    next_path = _safe_next_path(next)
+    if next_path:
+        session[AUTH_NEXT_KEY] = next_path
+    else:
+        session.pop(AUTH_NEXT_KEY, None)
 
     oauth = OAuth2Session(cfg["GOOGLE_CLIENT_ID"],
                           redirect_uri=cfg["GOOGLE_REDIRECT_URI"],
@@ -179,17 +236,23 @@ def google_callback(state=None, code=None, error=None):
         "provider": "google",
         "google_sub": info.get("sub"),
     }
-    return redirect("/", code=302)
+    # Return to the page the user signed in from (re-validated: session data
+    # still must not produce an off-origin redirect).
+    target = _safe_next_path(session.pop(AUTH_NEXT_KEY, None)) or "/"
+    return redirect(target, code=302)
 
 
 def me():
-    """GET /api/auth/me — report the current authentication state."""
+    """GET /api/auth/me — report the current authentication state. Also
+    issues the session's CSRF token for the frontend to replay on mutations."""
     user = session.get(AUTH_SESSION_KEY)
+    token = issue_csrf_token()
     if not user:
-        return {"authenticated": False, "user": None}, 200
-    return {"authenticated": True, "user": user}, 200
+        return {"authenticated": False, "user": None, "csrf_token": token}, 200
+    return {"authenticated": True, "user": user, "csrf_token": token}, 200
 
 
+@csrf_protect
 def logout():
     """POST /api/auth/logout — clear only auth-related session data."""
     session.pop(AUTH_SESSION_KEY, None)

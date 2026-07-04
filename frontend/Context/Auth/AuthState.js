@@ -10,7 +10,32 @@ import { AUTH_LOADING, SET_AUTH, AUTH_ERROR } from "../types";
 // only). All calls use relative /api paths, so the browser attaches the
 // Flask session cookie itself; nothing is stored in localStorage. dev-login
 // is a development/staging facility (backend keeps it off unless
-// QRESP_ENABLE_DEV_LOGIN is set) and will be replaced by Google sign-in.
+// QRESP_ENABLE_DEV_LOGIN is set); Google sign-in is the real provider.
+
+// CSRF wiring: /api/auth/me issues a session-bound token which must be
+// replayed in X-CSRF-Token on mutating requests. The interceptor attaches it
+// ONLY to same-origin calls (relative paths or the page origin, which is what
+// getServer() returns) — never to external hosts such as the DOI scraper.
+// The guard also keeps jest's axios automock (no interceptors object) happy.
+let csrfToken = null;
+
+if (axios.interceptors && axios.interceptors.request) {
+  axios.interceptors.request.use((config) => {
+    const method = (config.method || "get").toLowerCase();
+    const mutating = ["post", "put", "patch", "delete"].includes(method);
+    const url = config.url || "";
+    const sameOrigin =
+      url.startsWith("/") ||
+      (typeof window !== "undefined" &&
+        url.startsWith(window.location.origin));
+    if (mutating && sameOrigin && csrfToken) {
+      config.headers = config.headers || {};
+      config.headers["X-CSRF-Token"] = csrfToken;
+    }
+    return config;
+  });
+}
+
 const AuthState = (props) => {
   const initialState = {
     loading: true,
@@ -25,6 +50,9 @@ const AuthState = (props) => {
     dispatch({ type: AUTH_LOADING });
     try {
       const res = await axios.get("/api/auth/me");
+      if (res.data && res.data.csrf_token) {
+        csrfToken = res.data.csrf_token;
+      }
       dispatch({ type: SET_AUTH, payload: res.data });
     } catch (err) {
       console.error(err);

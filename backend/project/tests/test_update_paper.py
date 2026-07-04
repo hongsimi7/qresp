@@ -12,8 +12,20 @@ from project.tests.test_permissions import (
 class TestUpdatePaper(PermissionTestBase):
     """PUT /api/paper/{id} — owner-gated update through the real middleware."""
 
-    def update(self, paper_id, payload):
-        return self.client.put(f"/api/paper/{paper_id}", json=payload)
+    def update(self, paper_id, payload, csrf=True):
+        headers = {}
+        if csrf and getattr(self, "csrf", None):
+            headers["X-CSRF-Token"] = self.csrf
+        return self.client.put(
+            f"/api/paper/{paper_id}", json=payload, headers=headers
+        )
+
+    def test_update_without_csrf_token_denied(self):
+        self.login(OWNER)
+        response = self.update(self.owned_id, {"tags": ["hacked"]}, csrf=False)
+        self.assertEqual(403, response.status_code)
+        self.assertIn("CSRF", response.json()["error"])
+        self.assertNotIn("hacked", Paper.objects.get(id=self.owned_id).tags)
 
     def test_anonymous_update_denied_401(self):
         response = self.update(self.owned_id, {"tags": ["hacked"]})

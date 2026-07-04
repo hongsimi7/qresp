@@ -4,7 +4,8 @@
 # `jsonifier` was never used).
 from flask import request
 
-from project.auth import can_edit_paper, get_current_user, is_admin, stamp_owner
+from project.auth import (can_edit_paper, csrf_protect, get_current_user,
+                          is_admin, stamp_owner)
 from project.paperdao import *
 from project.util import Dtree
 
@@ -213,6 +214,7 @@ def getPreview(id):
     return result, 200
 
 
+@csrf_protect
 def publish(paper):
     """
     Validate the paper json and send an email to the user with the link to publish
@@ -248,6 +250,7 @@ def verify(id):
     return {"id": '', "error": result['msg']}, result['code']
 
 
+@csrf_protect
 def update_paper(id, paper):
     """
     Update an existing record's metadata

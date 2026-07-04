@@ -26,13 +26,16 @@ class GoogleAuthTestBase(unittest.TestCase):
             os.environ.pop(key, None)
         os.environ.pop("QRESP_ADMIN_EMAILS", None)
 
-    def start_login(self):
-        response = self.client.get("/api/auth/google", follow_redirects=False)
+    def start_login(self, next_path=None):
+        params = {"next": next_path} if next_path else None
+        response = self.client.get(
+            "/api/auth/google", params=params, follow_redirects=False
+        )
         assert response.status_code == 302, response.text
         return response.headers["location"]
 
-    def finish_login(self, userinfo, state=None):
-        location = self.start_login()
+    def finish_login(self, userinfo, state=None, next_path=None):
+        location = self.start_login(next_path=next_path)
         real_state = parse_qs(urlparse(location).query)["state"][0]
         with mock.patch("project.auth.OAuth2Session") as session_cls:
             oauth = session_cls.return_value
@@ -113,6 +116,28 @@ class TestGoogleLogin(GoogleAuthTestBase):
         self.assertEqual(302, response.status_code, response.text)
         me = self.client.get("/api/auth/me").json()
         self.assertTrue(me["user"]["is_admin"])
+
+    def test_callback_returns_to_safe_next_path(self):
+        response = self.finish_login(
+            {"email": "a@b.co", "name": "A", "sub": "1"},
+            next_path="/paperdetails/abc123?server=https%3A%2F%2Fx",
+        )
+        self.assertEqual(302, response.status_code, response.text)
+        self.assertEqual(
+            "/paperdetails/abc123?server=https%3A%2F%2Fx",
+            response.headers["location"],
+        )
+
+    def test_callback_ignores_unsafe_next_paths(self):
+        for evil in ("https://evil.example.com/", "//evil.example.com", "\\evil"):
+            response = self.finish_login(
+                {"email": "a@b.co", "name": "A", "sub": "1"}, next_path=evil
+            )
+            self.assertEqual(302, response.status_code, response.text)
+            self.assertEqual("/", response.headers["location"])
+            # log out between iterations to keep sessions comparable
+            csrf = self.client.get("/api/auth/me").json()["csrf_token"]
+            self.client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
 
     def test_callback_reports_provider_error(self):
         response = self.client.get(

@@ -12,6 +12,8 @@ import {
   Typography,
 } from "@mui/material";
 
+import { useRouter } from "next/router";
+
 import AuthContext from "../Context/Auth/authContext";
 
 // Minimal header auth widget. The sign-in here is the DEVELOPMENT/staging
@@ -26,6 +28,8 @@ const AuthControls = () => {
   const [name, setName] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
   const [message, setMessage] = useState("");
+
+  const router = useRouter();
 
   if (loading) return null;
 
@@ -62,13 +66,16 @@ const AuthControls = () => {
 
   return (
     <Fragment>
-      {/* Full-page navigation: the backend redirects to Google and back;
-          on return the app remounts and AuthState refetches /api/auth/me. */}
+      {/* Full-page navigation: the backend redirects to Google and back to
+          the current page (validated same-origin `next`); on return the app
+          remounts and AuthState refetches /api/auth/me. */}
       <Button
         color="inherit"
         sx={{ color: "#FFF" }}
         component="a"
-        href="/api/auth/google"
+        href={`/api/auth/google?next=${encodeURIComponent(
+          (router && router.asPath) || "/"
+        )}`}
       >
         Sign in with Google
       </Button>

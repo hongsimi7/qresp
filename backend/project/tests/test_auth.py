@@ -22,7 +22,10 @@ class TestAuthSkeleton(unittest.TestCase):
     def test_me_is_anonymous_without_login(self):
         response = self.client.get("/api/auth/me")
         self.assertEqual(200, response.status_code)
-        self.assertEqual({"authenticated": False, "user": None}, response.json())
+        body = response.json()
+        self.assertFalse(body["authenticated"])
+        self.assertIsNone(body["user"])
+        self.assertTrue(body["csrf_token"])  # issued even for anonymous sessions
 
     def test_dev_login_me_logout_roundtrip(self):
         response = self.client.post(
@@ -42,16 +45,38 @@ class TestAuthSkeleton(unittest.TestCase):
 
         response = self.client.get("/api/auth/me")
         self.assertEqual(200, response.status_code)
-        self.assertEqual(
-            {"authenticated": True, "user": expected_user}, response.json()
-        )
+        body = response.json()
+        self.assertTrue(body["authenticated"])
+        self.assertEqual(expected_user, body["user"])
+        csrf = body["csrf_token"]
 
-        response = self.client.post("/api/auth/logout")
+        response = self.client.post(
+            "/api/auth/logout", headers={"X-CSRF-Token": csrf}
+        )
         self.assertEqual(200, response.status_code)
         self.assertEqual({"success": True}, response.json())
 
-        response = self.client.get("/api/auth/me")
-        self.assertEqual({"authenticated": False, "user": None}, response.json())
+        body = self.client.get("/api/auth/me").json()
+        self.assertFalse(body["authenticated"])
+        self.assertIsNone(body["user"])
+
+    def test_logout_requires_csrf_when_authenticated(self):
+        self.client.post("/api/auth/dev-login", json={"email": "o@e.com"})
+        # missing token
+        response = self.client.post("/api/auth/logout")
+        self.assertEqual(403, response.status_code)
+        self.assertIn("CSRF", response.json()["error"])
+        # wrong token
+        response = self.client.post(
+            "/api/auth/logout", headers={"X-CSRF-Token": "not-the-token"}
+        )
+        self.assertEqual(403, response.status_code)
+        # still logged in, then a correct token works
+        csrf = self.client.get("/api/auth/me").json()["csrf_token"]
+        response = self.client.post(
+            "/api/auth/logout", headers={"X-CSRF-Token": csrf}
+        )
+        self.assertEqual(200, response.status_code)
 
     def test_dev_login_name_defaults_to_email(self):
         response = self.client.post(
@@ -86,8 +111,9 @@ class TestAuthSkeleton(unittest.TestCase):
         )
         self.assertEqual(404, response.status_code)
         # And the session stays anonymous.
-        response = self.client.get("/api/auth/me")
-        self.assertEqual({"authenticated": False, "user": None}, response.json())
+        body = self.client.get("/api/auth/me").json()
+        self.assertFalse(body["authenticated"])
+        self.assertIsNone(body["user"])
 
 
 if __name__ == "__main__":

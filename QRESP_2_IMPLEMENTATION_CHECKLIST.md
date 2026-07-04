@@ -68,5 +68,20 @@ Direction change 2026-07-03: curation-assistant/AI-workflow-automation work is *
   `fix/ui-regressions` → `feat/google-auth` → `feat/record-ownership` → `feat/literature-explorer`.
 - Small commits per concern; every commit keeps `nose2` + `yarn build` + `yarn test` green; no secrets/keys ever committed (config.ini values or `QRESP_*` env only); no push until review.
 
+## Pre-production blockers (auth/edit MVP — status 2026-07-04)
+- [x] `OAUTHLIB_INSECURE_TRANSPORT` no longer hardcoded on — explicit
+  `QRESP_OAUTHLIB_INSECURE_TRANSPORT` opt-in only (commit `chore(auth)` hardening).
+- [x] CSRF: session-authenticated mutations (logout, publish, PUT paper) require
+  the `X-CSRF-Token` issued by `/api/auth/me`; frontend attaches it to
+  same-origin requests only. dev-login exempt (establishes the session; Google
+  flow protected by OAuth state).
+- [x] Google post-login open-redirect prevented (`next` restricted to same-origin paths).
+- [ ] Google id_token signature/nonce verification (currently server-side userinfo fetch over HTTPS).
+- [ ] Session cookie flags (Secure/HttpOnly/SameSite) verified through nginx on staging.
+- [ ] Rate limiting/lockout on auth + publish endpoints.
+- [ ] Ensure `QRESP_ENABLE_DEV_LOGIN` is unset in production config.
+- [ ] `verify=False` TLS skips in `util.py` registry/schema fetches (pre-existing).
+- [ ] Staging QA pass per `STAGING_QA_CHECKLIST.md`.
+
 ## Smallest end-to-end demo of the new direction
 Login with Google → publish (or open an owned record) → an **Edit** button appears only for the owner → edit a field, save, see it live → open the record's **Related** panel showing 2–3 external papers + 1 internal record with one-line explanations. (Runs on local docker compose; no Drive/Gmail scopes anywhere.)

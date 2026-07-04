@@ -31,7 +31,14 @@ app.secret_key = Config.get_setting('SECRETS','FLASK_SECRET_KEY')
 SESSION_TYPE = 'filesystem'
 app.config.from_object(__name__)
 app.config['env'] = 'DEV'
-os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+# oauthlib refuses OAuth over plain HTTP by default. That safety check is
+# only relaxed when EXPLICITLY requested for local/dev/staging tunnels via
+# QRESP_OAUTHLIB_INSECURE_TRANSPORT (env, or [AUTH] ini) -- it was previously
+# hardcoded on, which silently weakened production. HTTPS deployments (the
+# nginx stack, the staging tunnel) do not need it.
+if (Config.get_setting('AUTH', 'OAUTHLIB_INSECURE_TRANSPORT') or '') \
+        .strip().lower() in ('1', 'true', 'yes', 'on'):
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 Session(app)
 ext = Sitemap(app)
 CORS(app)
