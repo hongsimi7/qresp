@@ -4,6 +4,7 @@
 # `jsonifier` was never used).
 from flask import request
 
+from project.auth import can_edit_paper, get_current_user, is_admin, stamp_owner
 from project.paperdao import *
 from project.util import Dtree
 
@@ -219,6 +220,10 @@ def publish(paper):
 
     :return: Metadata object using the id provided for the metadata
     """
+    # Record the verified session identity (if any) as the record owner; the
+    # stamped payload is what gets stored and later inserted on /verify.
+    # Anonymous publishing remains allowed (record is then ownerless).
+    stamp_owner(paper)
     result = Publish().publish(paper, request.headers.get('origin'))
 
     if isinstance(result, int):
@@ -232,8 +237,8 @@ def verify(id):
     Add the paper specified by the ID provided from the wait list to the database
     Handler for GET: /api/verify
 
-    :return: Object containing ID for the paper added in it  
-     Otherwise error, 
+    :return: Object containing ID for the paper added in it
+     Otherwise error,
     """
     result = Publish().verify(id)
 
@@ -241,3 +246,29 @@ def verify(id):
         return {"id": result, "error": ""}, 200
 
     return {"id": '', "error": result['msg']}, result['code']
+
+
+def paper_permissions(id):
+    """
+    Report whether the current session may edit the given record
+    Handler for GET: /api/paper/{id}/permissions
+
+    :return: permission decision for the frontend to show/hide edit controls;
+     the same can_edit_paper rule will guard the future update/deactivate APIs
+    """
+    user = get_current_user()
+    try:
+        paper = Paper.objects.get(id=str(id))
+    except Exception as e:
+        msg = "Exception in paper permissions api " + str(e)
+        print(msg)
+        return {"error": "Paper not found"}, 404
+
+    allowed, reason = can_edit_paper(paper, user)
+    return {
+        "can_edit": allowed,
+        "reason": reason,
+        "owner_email": paper.owner_email,
+        "authenticated": user is not None,
+        "is_admin": is_admin(user),
+    }, 200

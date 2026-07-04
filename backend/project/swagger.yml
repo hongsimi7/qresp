@@ -272,6 +272,23 @@ paths:
           description: Incorrect paper object
         500:
           description: Internal server error
+  /paper/{id}/permissions:
+    get:
+      operationId: "project.api.paper_permissions"
+      tags:
+        - "Paper permissions"
+      summary: "Reports whether the current session may edit the record"
+      parameters:
+        - in: path
+          name: id
+          type: string
+          required: true
+          description: Paper Id
+      responses:
+        200:
+          description: Permission decision returned
+        404:
+          description: Paper with this id does not exist
   /auth/me:
     get:
       operationId: "project.auth.me"

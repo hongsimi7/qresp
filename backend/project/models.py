@@ -184,6 +184,12 @@ class Paper(Document):
     tags = ListField(required=True)
     versions = ListField()
     license = StringField(required=True)
+    # Verified identity (session email) of the account that published this
+    # record; stamped at publish time (project/auth.py stamp_owner). Absent on
+    # legacy records => "ownerless": readable by all, editable only by admins.
+    # Distinct from info.insertedBy.emailId, which is curator-DECLARED, not
+    # verified.
+    owner_email = StringField(max_length=254)
     meta = {'strict': False,
             'queryset_class': FilterQuerySet
             }

@@ -30,6 +30,61 @@ def _dev_login_enabled():
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
+def get_current_user():
+    """The auth user dict stored in the session, or None when anonymous."""
+    return session.get(AUTH_SESSION_KEY)
+
+
+def _admin_emails():
+    """Admin allowlist: QRESP_ADMIN_EMAILS env (comma-separated) via the
+    standard config override, or an optional [AUTH] ADMIN_EMAILS ini entry."""
+    raw = Config.get_setting("AUTH", "ADMIN_EMAILS") or ""
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+
+def is_admin(user):
+    """Admin = allowlisted email, or the session's is_admin claim (dev-login
+    only sets it while the endpoint is enabled; Google login will derive it
+    from the allowlist at login time)."""
+    if not user:
+        return False
+    if user.get("is_admin"):
+        return True
+    return (user.get("email") or "").lower() in _admin_emails()
+
+
+def can_edit_paper(paper, user):
+    """Permission rule for modifying a record. Returns (allowed, reason).
+
+    anonymous -> no; admin -> yes; owner -> yes; ownerless record (legacy,
+    no owner_email) -> admin only; anyone else -> no.
+    """
+    if not user:
+        return False, "authentication required"
+    if is_admin(user):
+        return True, "admin"
+    owner = (getattr(paper, "owner_email", None) or "").strip().lower()
+    if not owner:
+        return False, "record has no owner; only an admin can edit it"
+    if owner == (user.get("email") or "").lower():
+        return True, "owner"
+    return False, "only the record owner or an admin can edit this record"
+
+
+def stamp_owner(paper):
+    """Attach the verified session identity to a record being published.
+
+    Called on the /api/publish payload before it is validated/stored, so the
+    owner survives the email-verification round trip into MongoDB. Anonymous
+    publishing stays allowed: without a session the record simply has no
+    owner_email (=> admin-only edit later).
+    """
+    user = get_current_user()
+    if user and user.get("email"):
+        paper["owner_email"] = user["email"]
+    return paper
+
+
 def me():
     """GET /api/auth/me — report the current authentication state."""
     user = session.get(AUTH_SESSION_KEY)
