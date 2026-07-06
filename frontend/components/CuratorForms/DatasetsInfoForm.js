@@ -12,7 +12,10 @@ import {
 import { AddCircleOutlined, DescriptionOutlined } from "@mui/icons-material";
 
 import { TextInputField } from "../Form/InputFields";
-import ExtraFieldInput from "../Form/ExtraFieldInput";
+import ExtraFieldInput, {
+  cleanExtraFields,
+  extraFieldsSchema,
+} from "../Form/ExtraFieldInput";
 import { RegularStyledButton } from "../button";
 
 import { useForm } from "react-hook-form";
@@ -40,12 +43,7 @@ const DatasetsInfoForm = () => {
     files: Yup.string().required("Required"),
     readme: Yup.string().required("Required"),
     URLs: Yup.string(),
-    extraFields: Yup.array().of(
-      Yup.object().shape({
-        label: Yup.string().required("Required"),
-        value: Yup.string().required("Required"),
-      })
-    ),
+    extraFields: extraFieldsSchema,
   });
 
   const { register, handleSubmit, formState: { errors }, control, setValue } = useForm({
@@ -55,7 +53,8 @@ const DatasetsInfoForm = () => {
   const onSubmit = (values) => {
     values.files = values.files.split(",").map((el) => el.trim());
     values.URLs = values.URLs.split(",").map((el) => el.trim());
-    const extraFields = values.extraFields ? values.extraFields : [];
+    const extraFields = cleanExtraFields(values.extraFields);
+    values.extraFields = extraFields;
     if (def && datasets.find((el) => el.id == def.id)) {
       edit("dataset", { ...def, ...values, extraFields: extraFields });
     } else {

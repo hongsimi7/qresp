@@ -5,12 +5,42 @@ import { Grid, IconButton } from "@mui/material";
 import { AddCircleOutlined, RemoveCircleOutlined } from "@mui/icons-material";
 
 import { useFieldArray } from "react-hook-form";
+import * as Yup from "yup";
 
 import StyledTooltip from "../tooltip";
 
 import TextInput from "./TextInput";
 
 import { FormInputLabel } from "./Util";
+
+// Stored records routinely carry placeholder extra-field rows — legacy
+// curators saved `[{extrakey: "", extravalue: ""}]` (note: not even the
+// label/value keys this form uses). Drop every row without a usable
+// label AND value, both when seeding the form from an existing item and
+// before the values go into the update payload. Rows the user filled only
+// half-way survive so validation can point at them.
+const cleanExtraFields = (list) =>
+  (list || []).filter((field) => {
+    if (!field) return false;
+    const label = (field.label || "").trim();
+    const value = (field.value || "").trim();
+    return label.length > 0 || value.length > 0;
+  });
+
+// Shared yup schema for the extraFields array: an untouched empty row is
+// allowed (it is filtered out on submit); a half-filled row is an error.
+const extraFieldsSchema = Yup.array().of(
+  Yup.object().test(
+    "complete-extra-field",
+    "Both label and value are required for a custom field",
+    (field) => {
+      const label = ((field && field.label) || "").trim();
+      const value = ((field && field.value) || "").trim();
+      if (!label && !value) return true;
+      return label.length > 0 && value.length > 0;
+    }
+  )
+);
 
 const ExtraFieldInput = ({ control, register, errors, defaults }) => {
   const { fields, append, remove } = useFieldArray({
@@ -19,9 +49,12 @@ const ExtraFieldInput = ({ control, register, errors, defaults }) => {
   });
 
   useEffect(() => {
-    if (defaults && defaults.length > 0 && defaults.length > fields.length) {
-      append(defaults);
+    // Seed only REAL saved extra fields; no phantom empty row on edit.
+    const seeded = cleanExtraFields(defaults);
+    if (seeded.length > 0 && seeded.length > fields.length) {
+      append(seeded);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -58,9 +91,7 @@ const ExtraFieldInput = ({ control, register, errors, defaults }) => {
               helperText="Enter a custom label for a field"
               error={errors && errors[index] && errors[index].label}
               register={register}
-              defaultValue={
-                (defaults && defaults[index] && defaults[index].label) || ""
-              }
+              defaultValue={field.label || ""}
             />
           </Grid>
           <Grid size={{ xs: 11, sm: 6 }}>
@@ -71,11 +102,9 @@ const ExtraFieldInput = ({ control, register, errors, defaults }) => {
               name={`extraFields.${index}.value`}
               label="Field value"
               helperText="Enter a value for the custom field label"
-              error={errors && errors[index] && errors[index].label}
+              error={errors && errors[index] && errors[index].value}
               register={register}
-              defaultValue={
-                (defaults && defaults[index] && defaults[index].value) || ""
-              }
+              defaultValue={field.value || ""}
             />
           </Grid>
           <Grid size={1}>
@@ -110,3 +139,4 @@ ExtraFieldInput.propTypes = {
 };
 
 export default ExtraFieldInput;
+export { cleanExtraFields, extraFieldsSchema };

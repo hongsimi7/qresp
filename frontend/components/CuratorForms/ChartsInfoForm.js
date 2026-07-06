@@ -12,7 +12,10 @@ import {
 import { AddCircleOutlined, DescriptionOutlined } from "@mui/icons-material";
 
 import { TextInputField } from "../Form/InputFields";
-import ExtraFieldInput from "../Form/ExtraFieldInput";
+import ExtraFieldInput, {
+  cleanExtraFields,
+  extraFieldsSchema,
+} from "../Form/ExtraFieldInput";
 import { RegularStyledButton } from "../button";
 
 import { useForm } from "react-hook-form";
@@ -43,12 +46,7 @@ const ChartsInfoForm = () => {
     imageFile: Yup.string().required("Required"),
     notebookFile: Yup.string(),
     properties: Yup.string().required("Required"),
-    extraFields: Yup.array().of(
-      Yup.object().shape({
-        label: Yup.string().required("Required"),
-        value: Yup.string().required("Required"),
-      })
-    ),
+    extraFields: extraFieldsSchema,
   });
 
   const { register, handleSubmit, formState: { errors }, control, setValue } = useForm({
@@ -58,7 +56,8 @@ const ChartsInfoForm = () => {
   const onSubmit = (values) => {
     values.properties = values.properties.split(",").map((el) => el.trim());
     values.files = values.files.split(",").map((el) => el.trim());
-    const extraFields = values.extraFields ? values.extraFields : [];
+    const extraFields = cleanExtraFields(values.extraFields);
+    values.extraFields = extraFields;
     if (def && charts.find((el) => el.id == def.id)) {
       edit("chart", { ...def, ...values, extraFields: extraFields });
     } else {

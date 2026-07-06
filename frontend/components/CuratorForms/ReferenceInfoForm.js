@@ -224,7 +224,10 @@ const ReferenceInfoForm = ({ editor }) => {
                 </Tooltip>
               </Grid>
             </Grid>
-            {fields.map((el, index) => {
+            {/* Column container restores vertical gutters between author
+                rows (MUI v9 grids no longer pad plain nested items). */}
+            <Grid container direction="column" spacing={2} sx={{ mt: 0.5 }}>
+              {fields.map((el, index) => {
               return (
                 <Grid key={el.id}>
                   <NameInput
@@ -266,6 +269,7 @@ const ReferenceInfoForm = ({ editor }) => {
                 </Grid>
               );
             })}
+            </Grid>
           </Grid>
           <Grid>
             <TextInputField

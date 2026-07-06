@@ -52,6 +52,15 @@ describe("PaperInfoForm with array-backed state (edit mode)", () => {
     );
   });
 
+  it("renders one clean row per principal investigator", () => {
+    renderForm({ PIs: "Alpha Beta, Gamma Delta" });
+    const firstNames = screen.getAllByPlaceholderText("Enter first name");
+    expect(firstNames).toHaveLength(2);
+    expect(firstNames[0]).toHaveValue("Alpha");
+    expect(firstNames[1]).toHaveValue("Gamma");
+    expect(screen.getAllByPlaceholderText("Enter last name")).toHaveLength(2);
+  });
+
   it("saves a loaded record without type errors and round-trips arrays", async () => {
     const { setPaperInfo } = renderForm();
     const user = userEvent.setup();

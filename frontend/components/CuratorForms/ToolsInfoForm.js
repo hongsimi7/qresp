@@ -10,7 +10,10 @@ import {
 import { AddCircleOutlined, DescriptionOutlined } from "@mui/icons-material";
 
 import { TextInputField, RadioInputField } from "../Form/InputFields";
-import ExtraFieldInput from "../Form/ExtraFieldInput";
+import ExtraFieldInput, {
+  cleanExtraFields,
+  extraFieldsSchema,
+} from "../Form/ExtraFieldInput";
 import { RegularStyledButton } from "../button";
 import StyledTooltip from "../tooltip";
 
@@ -191,12 +194,7 @@ const ToolsInfoForm = () => {
     }),
     urls: Yup.string(),
     patches: Yup.string(),
-    extraFields: Yup.array().of(
-      Yup.object().shape({
-        label: Yup.string().required("Required"),
-        value: Yup.string().required("Required"),
-      })
-    ),
+    extraFields: extraFieldsSchema,
   });
 
   const {
@@ -214,7 +212,8 @@ const ToolsInfoForm = () => {
   const kindWatcher = watch("kind", def == null ? "software" : def.kind);
 
   const onSubmit = (values) => {
-    const extraFields = values.extraFields ? values.extraFields : [];
+    const extraFields = cleanExtraFields(values.extraFields);
+    values.extraFields = extraFields;
     if (values.kind == "software")
       values.patches = values.patches.split(",").map((el) => el.trim());
     if (def && tools.find((el) => el.id == def.id)) {

@@ -134,7 +134,11 @@ const PaperInfoForm = ({ editor }) => {
                 </Tooltip>
               </Grid>
             </Grid>
-            {fields.map((pi, index) => {
+            {/* Column container restores vertical gutters between PI
+                rows (MUI v9 grids no longer pad plain nested items),
+                keeping shrunk labels clear of the row above. */}
+            <Grid container direction="column" spacing={2} sx={{ mt: 0.5 }}>
+              {fields.map((pi, index) => {
               return (
                 <Grid key={index}>
                   <NameInput
@@ -176,6 +180,7 @@ const PaperInfoForm = ({ editor }) => {
                 </Grid>
               );
             })}
+            </Grid>
           </Grid>
           <Grid>
             <TextInputField
