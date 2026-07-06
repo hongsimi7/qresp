@@ -1,4 +1,6 @@
+import { Fragment } from "react";
 import { Container, Box } from "@mui/material";
+import { useRouter } from "next/router";
 
 import CuratorState from "../Context/Curator/CuratorState";
 import CuratorHelperState from "../Context/CuratorHelpers/curatorHelperState";
@@ -19,10 +21,22 @@ import WorkflowInfoElement from "../components/CuratorElements/WorkflowElement";
 import LicenseInfoElement from "../components/CuratorElements/LicenseElement";
 import FileTree from "../components/FileTree";
 import Publish from "../components/CuratorElements/Publish";
+import EditModeController from "../components/CuratorElements/EditMode";
 
 const curator = () => {
   const curatorDescription =
     "The curator guides the user in creating metadata from the data associated to a scientific paper. The metadata after being published becomes availabe in a ";
+
+  // Edit mode (?edit=<paperId>&server=<origin>): same forms and state, but
+  // the record is loaded from the backend and saved back with PUT instead of
+  // the publish/email flow. Create mode is completely unchanged.
+  const router = useRouter();
+  const editId =
+    typeof router.query.edit === "string" && router.query.edit.length > 0
+      ? router.query.edit
+      : null;
+  const returnServer =
+    typeof router.query.server === "string" ? router.query.server : "";
 
   return (
     <CuratorState>
@@ -31,21 +45,29 @@ const curator = () => {
           <SEO title={"Qresp | Curator"} description={curatorDescription} />
           <FileTree />
           <Container>
-            <Box sx={{ mt: 4, mb: 4 }}>
-              <TopActions />
-            </Box>
-            <CuratorElement />
-            <FileServerElement />
-            <PaperInfoElement />
-            <ReferenceInfoElement />
-            <ChartsInfoElement />
-            <ToolsInfoElement />
-            <DatasetsInfoElement />
-            <ScriptsInfoElement />
-            <DocumentationInfoElement />
-            <WorkflowInfoElement />
-            <LicenseInfoElement />
-            <Publish />
+            <EditModeController editId={editId} server={returnServer}>
+              {(editMode) => (
+                <Fragment>
+                  {!editMode && (
+                    <Box sx={{ mt: 4, mb: 4 }}>
+                      <TopActions />
+                    </Box>
+                  )}
+                  <CuratorElement />
+                  <FileServerElement />
+                  <PaperInfoElement />
+                  <ReferenceInfoElement />
+                  <ChartsInfoElement />
+                  <ToolsInfoElement />
+                  <DatasetsInfoElement />
+                  <ScriptsInfoElement />
+                  <DocumentationInfoElement />
+                  <WorkflowInfoElement />
+                  <LicenseInfoElement />
+                  {!editMode && <Publish />}
+                </Fragment>
+              )}
+            </EditModeController>
           </Container>
         </SourceTreeState>
       </CuratorHelperState>

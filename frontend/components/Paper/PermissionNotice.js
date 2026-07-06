@@ -1,37 +1,22 @@
-import { Fragment, useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import PropTypes from "prop-types";
 
 import axios from "axios";
-import {
-  Box,
-  Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  TextField,
-  Typography,
-} from "@mui/material";
-import { useRouter } from "next/router";
+import { Box, Button, Typography } from "@mui/material";
+import Link from "next/link";
 
 import AuthContext from "../../Context/Auth/authContext";
 
-// Backend-driven edit-permission indicator + minimal owner/admin edit flow.
-// The decision comes from GET /api/paper/{id}/permissions (never
-// frontend-only logic); the MVP editor covers a single harmless field (tags)
-// through PUT /api/paper/{id} — the curator-integrated editor comes later.
-const PermissionNotice = ({ paperId, tags }) => {
+// Backend-driven edit-permission indicator. The decision comes from
+// GET /api/paper/{id}/permissions (never frontend-only logic). Editing goes
+// through the curator in edit mode — one single edit path; the backend gates
+// /raw and PUT the same way, so this link grants nothing by itself.
+const PermissionNotice = ({ paperId, server }) => {
   const { authenticated, loading } = useContext(AuthContext);
   const [permissions, setPermissions] = useState(null);
-  const [open, setOpen] = useState(false);
-  const [tagsText, setTagsText] = useState((tags || []).join(", "));
-  const [message, setMessage] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const router = useRouter();
 
   useEffect(() => {
-    if (!paperId || loading) return;
+    if (!paperId || loading) return undefined;
     let cancelled = false;
     axios
       .get(`/api/paper/${encodeURIComponent(paperId)}/permissions`)
@@ -49,34 +34,6 @@ const PermissionNotice = ({ paperId, tags }) => {
 
   if (!permissions) return null;
 
-  const save = async () => {
-    setSaving(true);
-    setMessage("");
-    const newTags = tagsText
-      .split(",")
-      .map((t) => t.trim())
-      .filter((t) => t.length > 0);
-    try {
-      await axios.put(`/api/paper/${encodeURIComponent(paperId)}`, {
-        tags: newTags,
-      });
-      setOpen(false);
-      // Reload so getServerSideProps refetches the updated record.
-      router.reload();
-    } catch (err) {
-      const res = err.response;
-      if (res && (res.status === 401 || res.status === 403)) {
-        setMessage(
-          (res.data && res.data.error) ||
-            "You are not allowed to edit this record."
-        );
-      } else {
-        setMessage("Saving failed, please try again later.");
-      }
-    }
-    setSaving(false);
-  };
-
   let text;
   if (permissions.can_edit) {
     text = `You can edit this record (${permissions.reason})`;
@@ -92,44 +49,16 @@ const PermissionNotice = ({ paperId, tags }) => {
         {text}
       </Typography>
       {permissions.can_edit ? (
-        <Fragment>
-          <Button size="small" variant="outlined" onClick={() => setOpen(true)}>
-            Edit metadata
-          </Button>
-          <Dialog
-            open={open}
-            onClose={() => setOpen(false)}
-            fullWidth
-            maxWidth="sm"
-          >
-            <DialogTitle>Edit record metadata</DialogTitle>
-            <DialogContent>
-              <Typography variant="body2" color="secondary" gutterBottom>
-                Minimal edit (MVP): record tags, comma separated. The full
-                curator-based editor arrives in a later phase.
-              </Typography>
-              <TextField
-                label="Tags"
-                value={tagsText}
-                onChange={(e) => setTagsText(e.target.value)}
-                fullWidth
-                margin="dense"
-                variant="outlined"
-              />
-              {message ? (
-                <Typography variant="body2" color="error">
-                  {message}
-                </Typography>
-              ) : null}
-            </DialogContent>
-            <DialogActions>
-              <Button onClick={() => setOpen(false)}>Cancel</Button>
-              <Button onClick={save} variant="contained" disabled={saving}>
-                Save
-              </Button>
-            </DialogActions>
-          </Dialog>
-        </Fragment>
+        <Button
+          size="small"
+          variant="outlined"
+          component={Link}
+          href={`/curator?edit=${encodeURIComponent(
+            paperId
+          )}&server=${encodeURIComponent(server || "")}`}
+        >
+          Edit in Curator
+        </Button>
       ) : null}
     </Box>
   );
@@ -137,7 +66,7 @@ const PermissionNotice = ({ paperId, tags }) => {
 
 PermissionNotice.propTypes = {
   paperId: PropTypes.string,
-  tags: PropTypes.array,
+  server: PropTypes.string,
 };
 
 export default PermissionNotice;

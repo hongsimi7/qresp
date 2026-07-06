@@ -295,6 +295,33 @@ def update_paper(id, paper):
     return {"id": str(existing.id), "success": True}, 200
 
 
+def raw_paper(id):
+    """
+    Return the stored record document for editing in the curator
+    Handler for GET: /api/paper/{id}/raw
+
+    Owner/admin only (same gate as updates) -- this is the edit flow's data
+    source. The public, display-shaped read stays GET /api/paper/{id}.
+    Server-owned fields are stripped from the response.
+    """
+    user = get_current_user()
+    try:
+        existing = Paper.objects.get(id=str(id))
+    except Exception as e:
+        msg = "Exception in raw paper api " + str(e)
+        print(msg)
+        return {"error": "Paper not found"}, 404
+
+    allowed, reason = can_edit_paper(existing, user)
+    if not allowed:
+        return {"error": reason}, 401 if user is None else 403
+
+    data = existing.to_mongo().to_dict()
+    data.pop("_id", None)
+    data.pop("owner_email", None)
+    return {"id": str(existing.id), "paper": data}, 200
+
+
 def paper_permissions(id):
     """
     Report whether the current session may edit the given record

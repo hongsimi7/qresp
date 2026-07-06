@@ -302,6 +302,27 @@ paths:
           description: Incorrect paper object
         500:
           description: Internal server error
+  /paper/{id}/raw:
+    get:
+      operationId: "project.api.raw_paper"
+      tags:
+        - "Paper details"
+      summary: "Returns the stored record document for editing (owner or admin only)"
+      parameters:
+        - in: path
+          name: id
+          type: string
+          required: true
+          description: Paper Id
+      responses:
+        200:
+          description: Stored record document returned
+        401:
+          description: Authentication required
+        403:
+          description: Only the record owner or an admin may load this
+        404:
+          description: Paper with this id does not exist
   /paper/{id}/permissions:
     get:
       operationId: "project.api.paper_permissions"

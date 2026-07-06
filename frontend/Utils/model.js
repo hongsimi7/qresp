@@ -74,39 +74,70 @@ const convertStatetoReqSchema = (state, servers) => {
   return schema;
 };
 
+// Persons coming out of MongoDB may carry extra keys (emailId, ...);
+// namesUtil.set concatenates every value, so trim to the name triple.
+const cleanName = (name) => ({
+  firstName: (name && name.firstName) || "",
+  middleName: (name && name.middleName) || "",
+  lastName: (name && name.lastName) || "",
+});
+
+// Stored/request schema document -> curator state (the exact inverse of
+// convertStatetoReqSchema). Defensive about legacy records with missing
+// sections, and unwraps journal.fullName for the publication string
+// (referenceUtil.set takes a single object).
 const convertReqSchematoState = (req) => {
-  const { journal, year, page, volume } = req.reference;
-  const publication = referenceUtil.set(journal, year, page, volume);
+  const reference = req.reference || {};
+  const info = req.info || {};
+  const workflow = req.workflow || {};
+  const documentation = req.documentation || {};
+
+  const publication = referenceUtil.set({
+    journal: (reference.journal && reference.journal.fullName) || "",
+    year: reference.year != null ? reference.year : "",
+    page: reference.page || "",
+    volume: reference.volume != null ? reference.volume : "",
+  });
 
   const state = {
-    curatorInfo: { ...req.info.insertedBy },
-    fileServerPath: req.info.fileServerPath,
+    curatorInfo: {
+      firstName: "",
+      middleName: "",
+      lastName: "",
+      emailId: "",
+      affiliation: "",
+      ...(info.insertedBy || {}),
+    },
+    fileServerPath: info.fileServerPath || "",
     paperInfo: {
-      PIs: namesUtil.set(req.PIs),
-      collections: req.collections,
-      tags: req.tags,
-      notebookFile: req.info.notebookFile,
-      notebookPath: req.info.notebookPath,
+      PIs: namesUtil.set((req.PIs || []).map(cleanName)),
+      collections: req.collections || [],
+      tags: req.tags || [],
+      notebookFile: info.notebookFile || "",
+      notebookPath: info.notebookPath || "",
     },
     referenceInfo: {
-      kind: req.reference.kind,
-      doi: req.reference.DOI,
-      authors: namesUtil.set(req.reference.authors),
-      title: req.reference.title,
+      kind: reference.kind || "",
+      doi: reference.DOI || "",
+      authors: namesUtil.set((reference.authors || []).map(cleanName)),
+      title: reference.title || "",
       publication: publication,
-      year: year,
-      url: req.reference.URLs,
-      abstract: req.reference.publishedAbstract,
+      year: reference.year != null ? reference.year : null,
+      url: reference.URLs || "",
+      abstract: reference.publishedAbstract || "",
     },
-    documentation: req.documentation.readme,
-    charts: req.charts,
-    tools: req.tools,
-    datasets: req.datasets,
-    scripts: req.scripts,
-    heads: req.heads,
+    documentation: documentation.readme || "",
+    charts: req.charts || [],
+    tools: req.tools || [],
+    datasets: req.datasets || [],
+    scripts: req.scripts || [],
+    heads: req.heads || [],
     workflow: {
-      ...req.workflow,
-      edges: req.workflow.edges.map((edge) => ({ from: edge[0], to: edge[1] })),
+      nodes: workflow.nodes || [],
+      edges: (workflow.edges || []).map((edge) => ({
+        from: edge[0],
+        to: edge[1],
+      })),
     },
     license: req.license || "",
   };
@@ -114,9 +145,38 @@ const convertReqSchematoState = (req) => {
   return state;
 };
 
+// Curator state -> PUT /api/paper/{id} payload for EDIT mode: the regular
+// publish payload, but fields the curator does not manage are preserved from
+// the original stored document (info.* extras like downloadPath/gitPath/
+// isPublic, and the original schema URL). Identity/server-owned fields are
+// stripped here and enforced server-side regardless.
+const convertStateToUpdatePayload = (state, originalDoc, servers) => {
+  const payload = convertStatetoReqSchema(state, servers);
+  const original = originalDoc || {};
+  const originalInfo = original.info || {};
+
+  payload.info = { ...originalInfo, ...payload.info };
+  if (!servers || !servers.downloadPath) {
+    payload.info.downloadPath = originalInfo.downloadPath || "";
+    payload.info.gitPath = originalInfo.gitPath || "";
+  }
+  if (original.schema) {
+    payload.schema = original.schema;
+  }
+
+  delete payload.id;
+  delete payload._id;
+  delete payload.owner_email;
+  delete payload.version;
+  delete payload.versions;
+
+  return payload;
+};
+
 export {
   convertViewSchemaToState,
   convertStateToViewSchema,
   convertStatetoReqSchema,
   convertReqSchematoState,
+  convertStateToUpdatePayload,
 };

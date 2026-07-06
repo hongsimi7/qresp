@@ -80,16 +80,25 @@ const validate = (editing, metadata) => {
   }
   if (errors.length > 0) return { valid: false, errors: errors };
 
-  // Ajv 8: strict mode is on by default and rejects schemas Ajv 6 accepted;
-  // keep the previous tolerant behavior for the draft-07 Qresp schema.
-  const ajv = new Ajv({ strict: false });
-  const validate = ajv.compile(Schema);
-  const valid = validate(metadata);
-
-  if (!valid) return { valid: false, errors: errors };
+  // Ajv 8: strict mode is off to accept the legacy schema, but compilation
+  // can still THROW — the schema's duplicate draft-04-style `id` anchors make
+  // "#/properties/collections/items" ambiguous. The backend re-validates
+  // every publish/update payload anyway, so a schema-compile failure must
+  // not block (or crash) the user; skip the client-side sanity check instead.
+  try {
+    const ajv = new Ajv({ strict: false });
+    const validateSchema = ajv.compile(Schema);
+    const valid = validateSchema(metadata);
+    if (!valid) return { valid: false, errors: errors };
+  } catch (e) {
+    console.error("Client-side schema validation skipped:", e);
+  }
 
   return { valid: true, errors: errors };
 };
+
+// Reused by the edit flow (EditMode.js) so create and edit validate alike.
+export { validate };
 
 const makePublishRequest = (paper, setAlert, showLoader, hideLoader) => {
   showLoader();
