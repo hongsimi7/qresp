@@ -3,7 +3,15 @@ import PropTypes from "prop-types";
 import { Grid } from "@mui/material";
 import TextInput from "./TextInput";
 
-const NameInput = ({ ids, names, remove, id, register, errors, defaults }) => {
+const NameInput = ({
+  ids = { firstName: "firstName", middleName: "middleName", lastName: "lastName" },
+  names = { firstName: "firstName", middleName: "middleName", lastName: "lastName" },
+  remove = null,
+  id,
+  register,
+  errors,
+  defaults,
+}) => {
   const width = 4;
 
   return (
@@ -56,20 +64,6 @@ const NameInput = ({ ids, names, remove, id, register, errors, defaults }) => {
       ) : null}
     </Grid>
   );
-};
-
-NameInput.defaultProps = {
-  ids: {
-    firstName: "firstName",
-    middleName: "middleName",
-    lastName: "lastName",
-  },
-  names: {
-    firstName: "firstName",
-    middleName: "middleName",
-    lastName: "lastName",
-  },
-  remove: null,
 };
 
 NameInput.propTypes = {

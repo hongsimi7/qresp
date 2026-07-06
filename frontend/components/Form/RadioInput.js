@@ -13,7 +13,16 @@ import {
 } from "@mui/material";
 
 const RadioInput = (props) => {
-  const { id, name, helperText, options, row, register, error, defVal } = props;
+  const {
+    id,
+    name,
+    helperText = "",
+    options,
+    row = false,
+    register,
+    error,
+    defVal,
+  } = props;
   const [hovering, setHovering] = useState(false);
   const [focused, setFocused] = useState(false);
 
@@ -72,11 +81,6 @@ const RadioInput = (props) => {
       </RadioGroup>
     </Tooltip>
   );
-};
-
-RadioInput.defaultProps = {
-  helperText: "",
-  row: false,
 };
 
 RadioInput.protoTypes = {

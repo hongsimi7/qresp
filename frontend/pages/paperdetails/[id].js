@@ -25,7 +25,7 @@ import { resolveServerSideApiBase } from "../../Utils/serverSideApi";
 
 import CuratorHelperState from "../../Context/CuratorHelpers/curatorHelperState";
 
-const PaperDetails = ({ paper, error, preview, query }) => {
+const PaperDetails = ({ paper, error, preview = false, query }) => {
   const {
     title,
     authors,
@@ -202,10 +202,6 @@ export async function getServerSideProps(ctx) {
     props: { paper, error, query, preview },
   };
 }
-
-PaperDetails.defaultProps = {
-  preview: false,
-};
 
 PaperDetails.propTypes = {
   preview: PropTypes.bool,

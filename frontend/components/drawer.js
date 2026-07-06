@@ -26,7 +26,7 @@ const StyledAccordionSummary = styled(AccordionSummary)({
 });
 
 const Drawer = (props) => {
-  const { heading, children, defaultOpen, editor } = props;
+  const { heading, children, defaultOpen = false, editor } = props;
 
   const [open, setOpen] = useState(defaultOpen ? true : false);
 
@@ -69,10 +69,6 @@ const Drawer = (props) => {
 };
 
 export { StyledAccordion, StyledAccordionSummary };
-
-Drawer.defaultProps = {
-  defaultOpen: false,
-};
 
 Drawer.propTypes = {
   heading: PropTypes.string.isRequired,

@@ -4,8 +4,16 @@ import PropTypes from "prop-types";
 import { TextField, Typography, Tooltip } from "@mui/material";
 
 const TextInput = (props) => {
-  const { helperText, id, label, error, register, registerOptions, ...rest } =
-    props;
+  const {
+    helperText = "",
+    id,
+    label,
+    error,
+    register,
+    registerOptions,
+    type = "text",
+    ...rest
+  } = props;
 
   // react-hook-form v7: register(name, options) returns
   // { name, ref, onChange, onBlur }. MUI's TextField forwards `ref` to its
@@ -32,6 +40,7 @@ const TextInput = (props) => {
     >
       <TextField
         {...rest}
+        type={type}
         {...(field
           ? { name: field.name, onChange: field.onChange, inputRef: field.ref }
           : {})}
@@ -53,11 +62,6 @@ const TextInput = (props) => {
       />
     </Tooltip>
   );
-};
-
-TextInput.defaultProps = {
-  type: "text",
-  helperText: "",
 };
 
 TextInput.propTypes = {

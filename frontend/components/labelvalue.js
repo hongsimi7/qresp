@@ -17,7 +17,7 @@ const BigTypography = styled(Typography)({
   },
 });
 
-const SimpleLabelValue = ({ label, value, direction }) => {
+const SimpleLabelValue = ({ label, value, direction = "row" }) => {
   return (
     <div>
       <Grid
@@ -48,17 +48,20 @@ const SimpleLabelValue = ({ label, value, direction }) => {
   );
 };
 
-SimpleLabelValue.defaultProps = {
-  direction: "row",
-};
-
 SimpleLabelValue.propTypes = {
   label: PropTypes.string.isRequired,
   value: PropTypes.string.isRequired,
   direction: PropTypes.string,
 };
 
-const LabelValue = ({ label, value, link, image, textVariant, direction }) => {
+const LabelValue = ({
+  label,
+  value,
+  link = null,
+  image = null,
+  textVariant = "body1",
+  direction = "row",
+}) => {
   if (Array.isArray(value) && value.length > 0 && typeof value[0] === "string") {
     value = value.join(", ");
   }
@@ -124,13 +127,6 @@ const LabelValue = ({ label, value, link, image, textVariant, direction }) => {
       </style>
     </div>
   );
-};
-
-LabelValue.defaultProps = {
-  link: null,
-  image: null,
-  textVariant: "body1",
-  direction: "row",
 };
 
 LabelValue.propTypes = {

@@ -6,7 +6,7 @@ import { Grid } from "@mui/material";
 import TextInput from "./TextInput";
 
 const TextInputField = (props) => {
-  const { id, label, required, action, ...rest } = props;
+  const { id, label, required = false, action, ...rest } = props;
   return (
       <Grid container spacing={0}>
         <Grid container direction="row" spacing={1} alignItems="center" alignContent="center" size={12}>
@@ -20,10 +20,6 @@ const TextInputField = (props) => {
         </Grid>
       </Grid>
   );
-};
-
-TextInputField.defaultProps = {
-  required: false,
 };
 
 TextInputField.propTypes = {

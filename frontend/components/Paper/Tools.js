@@ -40,7 +40,7 @@ const DetailsView = ({ rowdata }) => {
   );
 };
 
-const ToolsInfo = ({ tools, inDrawer, editColumn }) => {
+const ToolsInfo = ({ tools, inDrawer = true, editColumn = [] }) => {
   const columns = [
     {
       label: "Kind",
@@ -85,11 +85,6 @@ const ToolsInfo = ({ tools, inDrawer, editColumn }) => {
   ) : (
     <RecordTable rows={rows} columns={columns} />
   );
-};
-
-ToolsInfo.defaultProps = {
-  inDrawer: true,
-  editColumn: [],
 };
 
 ToolsInfo.propTypes = {

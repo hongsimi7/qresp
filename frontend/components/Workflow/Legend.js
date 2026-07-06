@@ -4,7 +4,7 @@ import { Grid, Typography } from "@mui/material";
 
 import StyledTooltip from "../tooltip";
 
-const Legend = ({ direction }) => {
+const Legend = ({ direction = "column" }) => {
   const styles = {
     height: "100%",
     border: "1px solid lightgray",
@@ -122,10 +122,6 @@ const Legend = ({ direction }) => {
       </style>
     </Grid>
   );
-};
-
-Legend.defaultProps = {
-  direction: "column",
 };
 
 Legend.propTypes = {

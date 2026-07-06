@@ -51,7 +51,12 @@ const FilesView = ({ rowdata }) => {
   );
 };
 
-const DatasetInfo = ({ datasets, fileserverpath, editColumn, inDrawer }) => {
+const DatasetInfo = ({
+  datasets,
+  fileserverpath,
+  editColumn = [],
+  inDrawer = true,
+}) => {
   const columns = [
     {
       label: "Description",
@@ -95,11 +100,6 @@ const DatasetInfo = ({ datasets, fileserverpath, editColumn, inDrawer }) => {
   ) : (
     <RecordTable rows={rows} columns={columns} />
   );
-};
-
-DatasetInfo.defaultProps = {
-  inDrawer: true,
-  editColumn: [],
 };
 
 DatasetInfo.propTypes = {

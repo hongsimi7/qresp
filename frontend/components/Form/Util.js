@@ -30,7 +30,7 @@ FormInputLabel.propTypes = {
   forId: PropTypes.string.isRequired,
 };
 
-const SubmitAndReset = ({ submitText, reset }) => {
+const SubmitAndReset = ({ submitText, reset = false }) => {
   return (
     <Box sx={{ mt: 1 }}>
       <Grid container direction="row" spacing={1}>
@@ -49,10 +49,6 @@ const SubmitAndReset = ({ submitText, reset }) => {
       </Grid>
     </Box>
   );
-};
-
-SubmitAndReset.defaultProps = {
-  reset: false,
 };
 
 SubmitAndReset.propTypes = {

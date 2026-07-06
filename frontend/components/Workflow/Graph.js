@@ -69,7 +69,7 @@ const getOptions = (manipulate = {}) => {
   };
 };
 
-const Graph = ({ workflow, data, manipulate }) => {
+const Graph = ({ workflow, data, manipulate = {} }) => {
   const [details, setDetails] = useState({});
   const [showDetails, setShowDetails] = useState(false);
 
@@ -172,10 +172,6 @@ const Graph = ({ workflow, data, manipulate }) => {
       <div ref={domNode} style={{ border: "1px solid lightgrey" }}></div>
     </Fragment>
   );
-};
-
-Graph.defaultProps = {
-  manipulate: {},
 };
 
 Graph.propTypes = {

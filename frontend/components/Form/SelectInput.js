@@ -5,7 +5,7 @@ import { Typography, Tooltip, TextField, MenuItem } from "@mui/material";
 import { Controller } from "react-hook-form";
 
 const SelectInput = (props) => {
-  const { id, placeholder, helperText, options, error, name, control } = props;
+  const { id, placeholder, helperText = "", options, error, name, control } = props;
 
   const [focused, setFocused] = useState(false);
   const [hovering, setHovering] = useState(false);
@@ -70,10 +70,6 @@ const SelectInput = (props) => {
       </Tooltip>
     </Fragment>
   );
-};
-
-SelectInput.defaultProps = {
-  helperText: "",
 };
 
 SelectInput.propTypes = {

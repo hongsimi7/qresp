@@ -51,7 +51,12 @@ const FilesView = ({ rowdata }) => {
   );
 };
 
-const ScriptsInfo = ({ scripts, fileserverpath, inDrawer, editColumn }) => {
+const ScriptsInfo = ({
+  scripts,
+  fileserverpath,
+  inDrawer = true,
+  editColumn = [],
+}) => {
   const columns = [
     {
       label: "Description",
@@ -94,11 +99,6 @@ const ScriptsInfo = ({ scripts, fileserverpath, inDrawer, editColumn }) => {
   ) : (
     <RecordTable rows={rows} columns={columns} />
   );
-};
-
-ScriptsInfo.defaultProps = {
-  inDrawer: true,
-  editColumn: [],
 };
 
 ScriptsInfo.propTypes = {

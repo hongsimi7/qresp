@@ -76,11 +76,11 @@ const ChartInfo = ({
   scripts,
   datasets,
   external,
-  showWorkflows,
+  showWorkflows = true,
   server,
-  showSlider,
-  inDrawer,
-  editColumn,
+  showSlider = true,
+  inDrawer = true,
+  editColumn = [],
 }) => {
   // Light Box Controls: the open slide index (-1 = closed).
   const [lightboxIndex, setLightboxIndex] = useState(-1);
@@ -282,13 +282,6 @@ const ChartInfo = ({
       ) : null}
     </Fragment>
   );
-};
-
-ChartInfo.defaultProps = {
-  showWorkflows: true,
-  showSlider: true,
-  inDrawer: true,
-  editColumn: [],
 };
 
 ChartInfo.propTypes = {
