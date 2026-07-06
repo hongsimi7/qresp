@@ -1,5 +1,6 @@
 import React, { useReducer, useEffect } from "react";
 import axios from "axios";
+import { useRouter } from "next/router";
 
 import AuthContext from "./authContext";
 import authReducer from "./authReducer";
@@ -76,6 +77,8 @@ if (axios.interceptors && axios.interceptors.response) {
 }
 
 const AuthState = (props) => {
+  const router = useRouter();
+
   const initialState = {
     loading: true,
     authenticated: false,
@@ -129,6 +132,9 @@ const AuthState = (props) => {
       type: SET_AUTH,
       payload: { authenticated: false, user: null },
     });
+    if (router && router.asPath !== "/") {
+      router.push("/");
+    }
   };
 
   useEffect(() => {

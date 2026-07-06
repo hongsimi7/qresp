@@ -4,8 +4,10 @@ import userEvent from "@testing-library/user-event";
 jest.mock("axios");
 import axios from "axios";
 
+const mockPush = jest.fn();
+
 jest.mock("next/router", () => ({
-  useRouter: () => ({ asPath: "/explorer" }),
+  useRouter: () => ({ asPath: "/explorer", push: mockPush }),
 }));
 
 import AuthState from "../Context/Auth/AuthState";
@@ -19,7 +21,10 @@ const renderControls = () =>
   );
 
 describe("AuthControls", () => {
-  afterEach(() => jest.resetAllMocks());
+  afterEach(() => {
+    jest.resetAllMocks();
+    mockPush.mockReset();
+  });
 
   it("shows the dev sign-in entry point when anonymous", async () => {
     axios.get.mockResolvedValue({
@@ -66,7 +71,7 @@ describe("AuthControls", () => {
     ).toBeInTheDocument();
   });
 
-  it("logs out back to the anonymous state", async () => {
+  it("logs out back to the anonymous state and returns home", async () => {
     axios.get.mockResolvedValue({
       data: {
         authenticated: true,
@@ -78,6 +83,7 @@ describe("AuthControls", () => {
     renderControls();
     await user.click(await screen.findByRole("button", { name: /sign out/i }));
     expect(axios.post).toHaveBeenCalledWith("/api/auth/logout");
+    expect(mockPush).toHaveBeenCalledWith("/");
     expect(
       await screen.findByRole("button", { name: /dev sign in/i })
     ).toBeInTheDocument();
