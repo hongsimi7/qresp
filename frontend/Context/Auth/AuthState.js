@@ -16,11 +16,22 @@ import { AUTH_LOADING, SET_AUTH, AUTH_ERROR } from "../types";
 // replayed in X-CSRF-Token on mutating requests. The interceptor attaches it
 // ONLY to same-origin calls (relative paths or the page origin, which is what
 // getServer() returns) — never to external hosts such as the DOI scraper.
-// The guard also keeps jest's axios automock (no interceptors object) happy.
+// Self-healing: if no token is cached when a mutation fires (fresh load,
+// failed initial /me, backend session replaced), it is fetched just in time;
+// and a 403 CSRF rejection drops the cache so the next attempt re-fetches.
+// The guards also keep jest's axios automock (no interceptors object) happy.
 let csrfToken = null;
 
+const fetchCsrfToken = async () => {
+  const res = await axios.get("/api/auth/me");
+  if (res.data && res.data.csrf_token) {
+    csrfToken = res.data.csrf_token;
+  }
+  return res;
+};
+
 if (axios.interceptors && axios.interceptors.request) {
-  axios.interceptors.request.use((config) => {
+  axios.interceptors.request.use(async (config) => {
     const method = (config.method || "get").toLowerCase();
     const mutating = ["post", "put", "patch", "delete"].includes(method);
     const url = config.url || "";
@@ -28,11 +39,39 @@ if (axios.interceptors && axios.interceptors.request) {
       url.startsWith("/") ||
       (typeof window !== "undefined" &&
         url.startsWith(window.location.origin));
-    if (mutating && sameOrigin && csrfToken) {
-      config.headers = config.headers || {};
-      config.headers["X-CSRF-Token"] = csrfToken;
+    if (mutating && sameOrigin) {
+      if (!csrfToken) {
+        // Just-in-time fetch; /api/auth/me is a GET, so this cannot recurse.
+        try {
+          await fetchCsrfToken();
+        } catch (err) {
+          console.error("Could not obtain a CSRF token:", err);
+        }
+      }
+      if (csrfToken) {
+        config.headers = config.headers || {};
+        config.headers["X-CSRF-Token"] = csrfToken;
+      }
     }
     return config;
+  });
+}
+
+if (axios.interceptors && axios.interceptors.response) {
+  axios.interceptors.response.use(undefined, (error) => {
+    const res = error && error.response;
+    if (
+      res &&
+      res.status === 403 &&
+      res.data &&
+      typeof res.data.error === "string" &&
+      res.data.error.indexOf("CSRF") !== -1
+    ) {
+      // Stale token (e.g. the backend session store was replaced): drop the
+      // cache so the user's retry fetches a fresh one.
+      csrfToken = null;
+    }
+    return Promise.reject(error);
   });
 }
 
@@ -49,10 +88,7 @@ const AuthState = (props) => {
   const refresh = async () => {
     dispatch({ type: AUTH_LOADING });
     try {
-      const res = await axios.get("/api/auth/me");
-      if (res.data && res.data.csrf_token) {
-        csrfToken = res.data.csrf_token;
-      }
+      const res = await fetchCsrfToken();
       dispatch({ type: SET_AUTH, payload: res.data });
     } catch (err) {
       console.error(err);

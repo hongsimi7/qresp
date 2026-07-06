@@ -55,7 +55,12 @@ const PaperInfoForm = ({ editor }) => {
     defaultValues: {
       ...paperInfo,
       PIs: formattedNames,
-      tags: paperInfo.tags.join(", "),
+      // State keeps tags/collections as arrays; this form edits them as
+      // comma-separated strings (split again in onSubmit). collections was
+      // missing the join, so re-editing a saved section — and curator edit
+      // mode loading ["MICCOM"] — failed yup's string check.
+      tags: (paperInfo.tags || []).join(", "),
+      collections: (paperInfo.collections || []).join(", "),
     },
   });
 
