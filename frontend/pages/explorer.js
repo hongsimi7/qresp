@@ -12,11 +12,14 @@ import Autocomplete from "@mui/material/Autocomplete";
 import AlertContext from "../Context/Alert/alertContext";
 
 import allServers from "../data/qresp_servers";
+import { buildQrespServerList } from "../Utils/qrespServers";
 
 const explorer = ({ error }) => {
   // Turbopack forbids reassigning an imported binding (the old code did
-  // `servers = []` on error), so derive a local list instead.
-  const servers = error ? [] : allServers;
+  // `servers = []` on error), so derive a local list instead. On tunneled
+  // staging (https://localhost:8443), add the current same-origin node so
+  // Explorer searches the staging DB instead of only the production nodes.
+  const [servers, setServers] = useState(error ? [] : allServers);
   const { setAlert, unsetAlert } = useContext(AlertContext);
 
   const explorerDescription =
@@ -70,6 +73,12 @@ const explorer = ({ error }) => {
       If problems persist please contact the administrator
     </Fragment>
   );
+
+  useEffect(() => {
+    if (!error && typeof window !== "undefined") {
+      setServers(buildQrespServerList(allServers, window.location.origin));
+    }
+  }, [error]);
 
   useEffect(() => {
     if (error) {

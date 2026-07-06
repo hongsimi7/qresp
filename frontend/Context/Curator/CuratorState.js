@@ -1,4 +1,4 @@
-import { useReducer, useEffect } from "react";
+import { useReducer, useEffect, useRef } from "react";
 import CuratorReducer from "./curatorReducer";
 import CuratorContext from "./curatorContext";
 
@@ -24,6 +24,9 @@ import {
 } from "../types";
 
 const CuratorState = (props) => {
+  const draftKey = props.draftKey === undefined ? "state" : props.draftKey;
+  const firstPersist = useRef(true);
+
   const initialState = {
     curatorInfo: {
       firstName: "",
@@ -63,30 +66,66 @@ const CuratorState = (props) => {
   const [state, dispatch] = useReducer(CuratorReducer, initialState);
 
   useEffect(() => {
-    const data = WebStore.get("state");
-    if (data !== null) {
-      setAll(data);
+    firstPersist.current = true;
+  }, [draftKey]);
+
+  useEffect(() => {
+    if (!draftKey) {
+      return;
     }
-  }, []);
+    if (firstPersist.current) {
+      firstPersist.current = false;
+      return;
+    }
+    if (JSON.stringify(state) === JSON.stringify(initialState)) {
+      WebStore.remove(draftKey);
+    } else {
+      WebStore.set(draftKey, state);
+    }
+  }, [state, draftKey]);
 
   useEffect(() => {
-    WebStore.set("state", state);
-  }, [state]);
-
-  useEffect(() => {
-    setNodes([
+    const nextNodes = [
       ...state.charts.map((el) => el.id),
       ...state.scripts.map((el) => el.id),
       ...state.datasets.map((el) => el.id),
       ...state.tools.map((el) => el.id),
       ...state.heads.map((el) => el.id),
-    ]);
-  }, [state.charts, state.scripts, state.datasets, state.tools, state.heads]);
+    ];
+    const currentNodes = state.workflow.nodes || [];
+    const nodesChanged =
+      nextNodes.length !== currentNodes.length ||
+      nextNodes.some((node, index) => node !== currentNodes[index]);
+    if (nodesChanged) {
+      setNodes(nextNodes);
+    }
+  }, [
+    state.charts,
+    state.scripts,
+    state.datasets,
+    state.tools,
+    state.heads,
+    state.workflow.nodes,
+  ]);
 
   const setAll = (data) => dispatch({ type: SET_CURATOR_STATE, payload: data });
 
-  const resetAll = () =>
+  const resetAll = () => {
+    if (draftKey) {
+      WebStore.remove(draftKey);
+    }
     dispatch({ type: SET_CURATOR_STATE, payload: initialState });
+  };
+
+  const getSavedDraft = () => (draftKey ? WebStore.get(draftKey) : null);
+
+  const resumeDraft = () => {
+    const data = getSavedDraft();
+    if (data !== null) {
+      setAll(data);
+    }
+    return data;
+  };
 
   const setCuratorInfo = (info) =>
     dispatch({ type: SET_CURATORINFO, payload: info });
@@ -145,6 +184,8 @@ const CuratorState = (props) => {
         metadata: state,
         setAll,
         resetAll,
+        getSavedDraft,
+        resumeDraft,
         setCuratorInfo,
         setFileServerPath,
         setPaperInfo,

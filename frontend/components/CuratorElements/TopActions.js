@@ -1,4 +1,4 @@
-import { useState, useContext, Fragment } from "react";
+import { useState, useContext, useEffect, Fragment } from "react";
 
 import {
   Grid,
@@ -47,15 +47,30 @@ const preview = (metadata, setAlert, router) => {
 };
 
 const TopActions = () => {
-  const { metadata, setAll, resetAll } = useContext(CuratorContext);
+  const { metadata, setAll, resetAll, getSavedDraft, resumeDraft } =
+    useContext(CuratorContext);
   const { setAlert, unsetAlert } = useContext(AlertContext);
   const { setSelectedHttp, selectedHttp } = useContext(ServerContext);
   const [mdata, setMdata] = useState("");
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
+  const [hasDraft, setHasDraft] = useState(false);
 
   const router = useRouter();
 
+  useEffect(() => {
+    setHasDraft(Boolean(getSavedDraft && getSavedDraft()));
+  }, [getSavedDraft]);
+
   const onClicks = {
+    draft: () => {
+      const data = resumeDraft && resumeDraft();
+      if (data) {
+        setHasDraft(false);
+      } else {
+        setHasDraft(false);
+        setAlert("No saved draft", "There is no saved draft to resume.", null);
+      }
+    },
     resume: () => {
       setResumeDialogOpen(true);
     },
@@ -76,6 +91,7 @@ const TopActions = () => {
           <RegularStyledButton
             onClick={() => {
               resetAll();
+              setHasDraft(false);
               unsetAlert();
             }}
           >
@@ -94,6 +110,13 @@ const TopActions = () => {
   };
 
   const buttons = {
+    draft: (fullWidth = false) => (
+      <StyledTooltip title="Restore the locally saved curator draft">
+        <RegularStyledButton fullWidth={fullWidth} onClick={onClicks.draft}>
+          Resume Saved Draft
+        </RegularStyledButton>
+      </StyledTooltip>
+    ),
     resume: (fullWidth = false) => (
       <StyledTooltip title="Continue with an existing metadata file (json)">
         <RegularStyledButton fullWidth={fullWidth} onClick={onClicks.resume}>
@@ -167,12 +190,22 @@ const TopActions = () => {
         {/* MUI v6+ removed <Hidden>; responsive display lives on each item so
             the Grid container keeps its direct Grid children. */}
         <Grid container direction="row" spacing={1} size={{ xs: 12, sm: 6 }}>
+          {hasDraft && (
+            <Grid sx={{ display: { xs: "none", sm: "block" } }}>
+              {buttons.draft()}
+            </Grid>
+          )}
           <Grid sx={{ display: { xs: "none", sm: "block" } }}>
             {buttons.resume()}
           </Grid>
           <Grid sx={{ display: { xs: "none", sm: "block" } }}>
             {buttons.scratch()}
           </Grid>
+          {hasDraft && (
+            <Grid sx={{ display: { xs: "block", sm: "none" } }} size={12}>
+              {buttons.draft(true)}
+            </Grid>
+          )}
           <Grid sx={{ display: { xs: "block", sm: "none" } }} size={4}>
             {buttons.resume(true)}
           </Grid>

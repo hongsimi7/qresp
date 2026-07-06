@@ -39,7 +39,7 @@ const curator = () => {
     typeof router.query.server === "string" ? router.query.server : "";
 
   return (
-    <CuratorState>
+    <CuratorState draftKey={editId ? null : "state"}>
       <CuratorHelperState>
         <SourceTreeState>
           <SEO title={"Qresp | Curator"} description={curatorDescription} />
