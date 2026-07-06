@@ -37,8 +37,15 @@ services:
   gui:
     restart: always
     build: ./frontend
+    environment:
+      # SSR-only base for /api fetches (pages/paperdetails): the public origin
+      # is not reachable from inside this container for same-origin targets.
+      # Never exposed to the browser (not NEXT_PUBLIC_*).
+      - QRESP_INTERNAL_API_URL=http://backend:5000
     networks:
       - frontend
+      # Reach the backend service directly for server-side rendering.
+      - backend
     command: pm2-runtime start yarn --name "QrespFrontend" --interpreter sh -- start
 
   nginx:

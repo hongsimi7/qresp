@@ -21,6 +21,8 @@ import PermissionNotice from "../../components/Paper/PermissionNotice";
 
 import axios from "axios";
 
+import { resolveServerSideApiBase } from "../../Utils/serverSideApi";
+
 import CuratorHelperState from "../../Context/CuratorHelpers/curatorHelperState";
 
 const PaperDetails = ({ paper, error, preview, query }) => {
@@ -171,18 +173,23 @@ export async function getServerSideProps(ctx) {
   // Query contains the args from the url
   const { query } = ctx;
 
+  // SSR runs inside the gui container, where the public origin
+  // (query.server) may not be reachable — resolve the fetch base instead.
+  // The public query.server passed to the page/props stays untouched.
+  const apiBase = resolveServerSideApiBase(ctx, query.server);
+
   var error = false;
   var paper;
   var preview = false;
   try {
     if (query.id.startsWith("PREVIEW")) {
       paper = await axios
-        .get(`${query.server}/api/preview/${query.id}`)
+        .get(`${apiBase}/api/preview/${query.id}`)
         .then((res) => res.data);
       preview = true;
     } else {
       paper = await axios
-        .get(`${query.server}/api/paper/${query.id}`)
+        .get(`${apiBase}/api/paper/${query.id}`)
         .then((res) => res.data);
     }
   } catch (e) {
