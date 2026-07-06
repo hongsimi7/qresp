@@ -6,39 +6,46 @@ import Drawer from "../drawer";
 import licenses from "../../data/licenses";
 
 const LicenseInfo = ({ type, editor, defaultOpen }) => {
+  const license = licenses[type];
+
   return (
     type && (
       <Drawer heading="License" editor={editor} defaultOpen={defaultOpen}>
-        <Grid container direction="row" alignItems="center">
+        <Grid container direction="row" sx={{ alignItems: "center" }}>
           <Grid size={{ xs: 12, md: 7 }}>
             <Typography color="secondary">
-              The work presented here is licensed under a {"  "}
-              <a
-                href={licenses[type].link}
-                target="_blank"
-                rel="noreferrer noopener"
-              >
-                {licenses[type].title}
-              </a>
+              The work presented here is licensed under a{" "}
+              {license ? (
+                <a
+                  href={license.link}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  {license.title}
+                </a>
+              ) : (
+                type
+              )}
             </Typography>
           </Grid>
-          <Grid size={{ xs: 12, md: 5 }}>
-            <Grid
-              container
-              direction="row"
-              alignItems="center"
-              justifyContent="center"
-              spacing={2}
-            >
-              {licenses[type].infographics.map((image) => {
-                return (
-                  <Grid key={image}>
-                    <img src={"/images/" + image} />
-                  </Grid>
-                );
-              })}
+          {license && (
+            <Grid size={{ xs: 12, md: 5 }}>
+              <Grid
+                container
+                direction="row"
+                spacing={2}
+                sx={{ alignItems: "center", justifyContent: "center" }}
+              >
+                {license.infographics.map((image) => {
+                  return (
+                    <Grid key={image}>
+                      <img src={"/images/" + image} />
+                    </Grid>
+                  );
+                })}
+              </Grid>
             </Grid>
-          </Grid>
+          )}
         </Grid>
       </Drawer>
     )
