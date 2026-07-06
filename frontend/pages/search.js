@@ -14,6 +14,7 @@ import Summary from "../components/Paper/Summary";
 import axios from "axios";
 import AlertContext from "../Context/Alert/alertContext";
 import ServerContext from "../Context/Servers/serverContext";
+import { resolveServerSideApiBase } from "../Utils/serverSideApi";
 
 const search = ({ initialdata, error, selectedservers }) => {
   const { setAlert, unsetAlert } = useContext(AlertContext);
@@ -162,11 +163,15 @@ export async function getServerSideProps(ctx) {
 
   for (let i = 0; i < servers.length; i++) {
     const server = servers[i];
+    const fetchBase = resolveServerSideApiBase(ctx, server);
     for (let j = 0; j < urls.length; j++) {
       const url = urls[j];
       try {
+        if (!fetchBase) {
+          throw new Error("No server-side API base available");
+        }
         var response = await axios
-          .get(`${server}/api/${url.endpoint}`)
+          .get(`${fetchBase}/api/${url.endpoint}`)
           .then((res) => res.data);
 
         if (url.endpoint === "search") {
