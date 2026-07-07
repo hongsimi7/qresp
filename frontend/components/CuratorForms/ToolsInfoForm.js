@@ -197,6 +197,27 @@ const ToolsInfoForm = () => {
     extraFields: extraFieldsSchema,
   });
 
+  // RHF v7 only knows values present in defaultValues or touched by the
+  // user; visually preselected "Software" radio and prefilled inputs are NOT registered otherwise. This
+  // form's useForm outlives the dialog, so it is re-seeded on every open.
+  const toolFormDefaults = (tool) => ({
+    kind: (tool && tool.kind) || "software",
+    packageName: (tool && tool.packageName) || "",
+    version: (tool && tool.version) || "",
+    executableName: (tool && tool.executableName) || "",
+    patches:
+      (tool &&
+        tool.patches &&
+        (Array.isArray(tool.patches)
+          ? tool.patches.join(", ")
+          : tool.patches)) ||
+      "",
+    description: (tool && tool.description) || "",
+    facilityName: (tool && tool.facilityName) || "",
+    measurement: (tool && tool.measurement) || "",
+    extraFields: cleanExtraFields(tool && tool.extraFields),
+  });
+
   const {
     register,
     unregister,
@@ -205,9 +226,16 @@ const ToolsInfoForm = () => {
     control,
     watch,
     setValue,
+    reset,
   } = useForm({
     resolver: yupResolver(schema),
+    defaultValues: toolFormDefaults(def),
   });
+
+  useEffect(() => {
+    if (open) reset(toolFormDefaults(def));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [def, open]);
 
   const kindWatcher = watch("kind", def == null ? "software" : def.kind);
 
@@ -291,7 +319,7 @@ const ToolsInfoForm = () => {
                   error={errors.kind}
                   options={radioOptions}
                   row={true}
-                  register={register}
+                  control={control}
                   defVal={def ? def.kind : "software"}
                   required
                 />

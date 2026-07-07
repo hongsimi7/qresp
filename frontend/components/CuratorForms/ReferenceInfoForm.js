@@ -27,7 +27,11 @@ const ReferenceInfoForm = ({ editor }) => {
 
   const schema = Yup.object({
     kind: Yup.string().required("Required"),
-    doi: Yup.string().matches(
+    // Optional field: an empty string (registered via defaultValues below)
+    // must not fail the format check.
+    doi: Yup.string()
+      .transform((value, original) => (original === "" ? undefined : value))
+      .matches(
       /^(10[.][0-9]{4,}(?:[.][0-9]+)*\/(?:(?!["&\'<>])\S)+)$/,
       "Please enter a valid DOI"
     ),
@@ -52,12 +56,24 @@ const ReferenceInfoForm = ({ editor }) => {
       .min(1750, "Cannot be less than 1700")
       .integer("Plese enter a valid year")
       .required("Required"),
-    url: Yup.string().url("Please enter a valid url"),
+    url: Yup.string()
+      .transform((value, original) => (original === "" ? undefined : value))
+      .url("Please enter a valid url"),
   });
 
+  // react-hook-form v7 only knows values listed here or touched by the
+  // user; visually prefilled inputs (defaultValue attrs, RadioGroup
+  // selection) are NOT registered. Without kind/title/doi/url/abstract in
+  // defaultValues, saving an untouched prefilled reference failed its
+  // required checks.
   const defaults = {
     authors: namesUtil.get(referenceInfo.authors),
     ...referenceUtil.get(referenceInfo.publication),
+    kind: referenceInfo.kind || "",
+    title: referenceInfo.title || "",
+    doi: referenceInfo.doi || "",
+    url: referenceInfo.url || "",
+    abstract: referenceInfo.abstract || "",
   };
 
   const {
@@ -156,7 +172,7 @@ const ReferenceInfoForm = ({ editor }) => {
               required={true}
               options={radioOptions}
               row={true}
-              register={register}
+              control={control}
               defVal={referenceInfo.kind}
             />
           </Grid>

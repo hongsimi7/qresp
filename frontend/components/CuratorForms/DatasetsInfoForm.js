@@ -1,4 +1,4 @@
-import { useContext, Fragment } from "react";
+import { useEffect, useContext, Fragment } from "react";
 
 import {
   Grid,
@@ -46,9 +46,29 @@ const DatasetsInfoForm = () => {
     extraFields: extraFieldsSchema,
   });
 
-  const { register, handleSubmit, formState: { errors }, control, setValue } = useForm({
-    resolver: yupResolver(schema),
+  // RHF v7 only knows values present in defaultValues or touched by the
+  // user; visually prefilled inputs are NOT registered otherwise. This
+  // form's useForm outlives the dialog, so it is re-seeded on every open.
+  const itemFormDefaults = (item) => ({
+    files: (item && item.files && item.files.join(", ")) || "",
+    readme: (item && item.readme) || "",
+    URLs:
+      (item &&
+        item.URLs &&
+        (Array.isArray(item.URLs) ? item.URLs.join(", ") : item.URLs)) ||
+      "",
+    extraFields: cleanExtraFields(item && item.extraFields),
   });
+
+  const { register, handleSubmit, formState: { errors }, control, setValue, reset } = useForm({
+    resolver: yupResolver(schema),
+    defaultValues: itemFormDefaults(def),
+  });
+
+  useEffect(() => {
+    if (open) reset(itemFormDefaults(def));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [def, open]);
 
   const onSubmit = (values) => {
     values.files = values.files.split(",").map((el) => el.trim());

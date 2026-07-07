@@ -1,4 +1,4 @@
-import { useState, useContext, Fragment } from "react";
+import { useEffect, useState, useContext, Fragment } from "react";
 
 import {
   Grid,
@@ -49,9 +49,29 @@ const ChartsInfoForm = () => {
     extraFields: extraFieldsSchema,
   });
 
-  const { register, handleSubmit, formState: { errors }, control, setValue } = useForm({
-    resolver: yupResolver(schema),
+  // RHF v7 only knows values present in defaultValues or touched by the
+  // user; visually prefilled inputs are NOT registered otherwise. This
+  // form's useForm outlives the dialog, so it is re-seeded on every open.
+  const chartFormDefaults = (chart) => ({
+    caption: (chart && chart.caption) || "",
+    number: (chart && chart.number) || charts.length,
+    properties:
+      (chart && chart.properties && chart.properties.join(", ")) || "",
+    files: (chart && chart.files && chart.files.join(", ")) || "",
+    imageFile: (chart && chart.imageFile) || "",
+    notebookFile: (chart && chart.notebookFile) || "",
+    extraFields: cleanExtraFields(chart && chart.extraFields),
   });
+
+  const { register, handleSubmit, formState: { errors }, control, setValue, reset } = useForm({
+    resolver: yupResolver(schema),
+    defaultValues: chartFormDefaults(def),
+  });
+
+  useEffect(() => {
+    if (open) reset(chartFormDefaults(def));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [def, open]);
 
   const onSubmit = (values) => {
     values.properties = values.properties.split(",").map((el) => el.trim());

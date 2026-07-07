@@ -12,6 +12,13 @@ import {
   Box,
 } from "@mui/material";
 
+import { useController } from "react-hook-form";
+
+// Controlled through react-hook-form's useController: the previous
+// register-as-refs wiring left the group value unreadable under RHF v7 with
+// MUI v9 (a visually selected radio came back as undefined on submit and
+// clicks read back as undefined), so the RadioGroup is now driven by form
+// state directly. Callers pass `control` (from useForm) instead of register.
 const RadioInput = (props) => {
   const {
     id,
@@ -19,16 +26,18 @@ const RadioInput = (props) => {
     helperText = "",
     options,
     row = false,
-    register,
+    control,
     error,
     defVal,
   } = props;
   const [hovering, setHovering] = useState(false);
   const [focused, setFocused] = useState(false);
 
-  // react-hook-form v7: register once and attach the field to every <Radio>;
-  // MUI chains a Radio's own onChange with the surrounding RadioGroup's.
-  const field = register ? register(name) : null;
+  const { field } = useController({
+    name,
+    control,
+    defaultValue: defVal || "",
+  });
 
   return (
     <Tooltip
@@ -39,30 +48,28 @@ const RadioInput = (props) => {
     >
       <RadioGroup
         id={id}
-        name={name}
+        name={field.name}
         style={{ width: "max-content" }}
         row={row}
         onFocus={() => setFocused(true)}
-        onBlur={(e) => setFocused(false)}
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => setHovering(false)}
-        onChange={(e) => setFocused(false)}
-        defaultValue={defVal || ""}
+        value={field.value == null ? "" : field.value}
+        onChange={(event) => {
+          setFocused(false);
+          field.onChange(event);
+        }}
+        onBlur={(event) => {
+          setFocused(false);
+          field.onBlur(event);
+        }}
       >
         {options.map((option) => {
           return (
             <FormControlLabel
               key={option.value}
               value={option.value}
-              control={
-                <Radio
-                  color="primary"
-                  name={field ? field.name : name}
-                  inputRef={field ? field.ref : undefined}
-                  onChange={field ? field.onChange : undefined}
-                  onBlur={field ? field.onBlur : undefined}
-                />
-              }
+              control={<Radio color="primary" />}
               label={
                 <Typography color="secondary">
                   <Box component="span" sx={{ fontWeight: "bold" }}>
@@ -88,7 +95,7 @@ RadioInput.protoTypes = {
   name: PropTypes.string.isRequired,
   helperText: PropTypes.string.isRequired,
   options: PropTypes.array.isRequired,
-  register: PropTypes.func.isRequired,
+  control: PropTypes.object.isRequired,
   row: PropTypes.bool,
   defVal: PropTypes.string,
   error: PropTypes.object,
