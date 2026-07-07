@@ -2,7 +2,9 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axios from "axios";
 
-import Publish from "../components/CuratorElements/Publish";
+import Publish, {
+  getPublishErrorMessage,
+} from "../components/CuratorElements/Publish";
 import AlertContext from "../Context/Alert/alertContext";
 import CuratorContext from "../Context/Curator/curatorContext";
 import CuratorHelperContext from "../Context/CuratorHelpers/curatorHelperContext";
@@ -63,5 +65,17 @@ describe("Publish", () => {
       expect.anything(),
       null
     );
+  });
+
+  it("extracts useful publish errors from current and legacy backend shapes", () => {
+    expect(
+      getPublishErrorMessage({ response: { data: { msg: "schema failed" } } })
+    ).toBe("schema failed");
+    expect(
+      getPublishErrorMessage({ response: { data: { error: "CSRF failed" } } })
+    ).toBe("CSRF failed");
+    expect(
+      getPublishErrorMessage({ response: { data: "Internal Server Error" } })
+    ).toBe("Internal Server Error");
   });
 });

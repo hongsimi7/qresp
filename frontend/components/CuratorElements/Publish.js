@@ -97,6 +97,21 @@ const validate = (editing, metadata) => {
 // Reused by the edit flow (EditMode.js) so create and edit validate alike.
 export { validate };
 
+const getPublishErrorMessage = (err) => {
+  const data = err && err.response && err.response.data;
+  if (typeof data === "string" && data.trim()) return data;
+  if (data && typeof data === "object") {
+    if (data.msg) return data.msg;
+    if (data.error) return data.error;
+    if (data.message) return data.message;
+    return JSON.stringify(data);
+  }
+  if (err && err.message) return err.message;
+  return "Please try again.";
+};
+
+export { getPublishErrorMessage };
+
 const makePublishRequest = (paper, setAlert, showLoader, hideLoader) => {
   showLoader();
   axios
@@ -117,16 +132,14 @@ const makePublishRequest = (paper, setAlert, showLoader, hideLoader) => {
     )
     .catch((err) => {
       console.error(err);
+      const message = getPublishErrorMessage(err);
       setAlert(
         "Error !",
         <p>
           We're very sorry but there was an error publishing the paper!, Please
           try again
           <br />
-          {err.response &&
-            err.response.data &&
-            err.response.data.msg &&
-            `Error Message:${err.response.data.msg}`}
+          {message && `Error Message: ${message}`}
         </p>,
         null
       );

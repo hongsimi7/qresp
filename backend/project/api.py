@@ -238,12 +238,14 @@ def publish(paper):
     # later inserted on /verify.
     paper.pop("owner_email", None)
     stamp_owner(paper)
-    result = Publish().publish(paper, request.headers.get('origin'))
+    origin = (request.headers.get('origin') or request.host_url or "").strip()
+    origin = origin.rstrip("/")
+    result = Publish().publish(paper, origin)
 
     if isinstance(result, int):
-        return 200
+        return {"success": True}, 200
     else:
-        return result['msg'], result['code']
+        return {"msg": result['msg']}, result['code']
 
 
 def verify(id):

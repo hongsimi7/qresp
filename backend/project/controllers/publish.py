@@ -92,6 +92,8 @@ class Publish:
 
         subject = 'Qresp Publish Verification'
 
+        server = (server or '').strip().rstrip('/')
+
         if server.startswith('http://'):
             server = server.replace('http://', 'https://', 1)
 

@@ -36,10 +36,12 @@ class TestPublishRequiresOwner(PermissionTestBase):
             os.remove(publish_file_path())
         super().tearDown()
 
-    def publish(self, payload):
+    def publish(self, payload, origin="https://localhost:8443"):
         # Publish builds the verify link from the Origin header (browsers
         # always send it on cross-page POSTs); provide it like a browser.
-        headers = {"Origin": "https://localhost:8443"}
+        headers = {}
+        if origin:
+            headers["Origin"] = origin
         if getattr(self, "csrf", None):
             headers["X-CSRF-Token"] = self.csrf
         with mock.patch("project.controllers.publish.mailClient") as mail, \
@@ -64,6 +66,29 @@ class TestPublishRequiresOwner(PermissionTestBase):
         with open(publish_file_path()) as f:
             stored = json.load(f)
         self.assertEqual(OWNER, stored["owner_email"])
+
+    def test_authenticated_publish_without_origin_header_uses_request_host(self):
+        self.login(OWNER)
+        response, mail = self.publish(load_fixture(), origin=None)
+        self.assertEqual(200, response.status_code, response.text)
+        mail.send.assert_called_once()
+
+    def test_publish_controller_error_is_returned_as_json_message(self):
+        self.login(OWNER)
+        headers = {
+            "Origin": "https://localhost:8443",
+            "X-CSRF-Token": self.csrf,
+        }
+        with mock.patch("project.api.Publish") as publish_cls:
+            publish_cls.return_value.publish.return_value = {
+                "msg": "schema failed",
+                "code": 400,
+            }
+            response = self.client.post(
+                "/api/publish", json=load_fixture(), headers=headers
+            )
+        self.assertEqual(400, response.status_code, response.text)
+        self.assertEqual("schema failed", response.json()["msg"])
 
     def test_client_supplied_owner_is_discarded(self):
         self.login(OWNER)
