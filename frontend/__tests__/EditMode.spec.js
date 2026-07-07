@@ -8,6 +8,7 @@ const push = jest.fn();
 jest.mock("next/router", () => ({ useRouter: () => ({ push }) }));
 
 import EditModeController from "../components/CuratorElements/EditMode";
+import AuthContext from "../Context/Auth/authContext";
 import CuratorContext from "../Context/Curator/curatorContext";
 import CuratorHelperContext from "../Context/CuratorHelpers/curatorHelperContext";
 import ServerContext from "../Context/Servers/serverContext";
@@ -19,8 +20,14 @@ import { convertReqSchematoState } from "../Utils/model";
 
 const setAlert = jest.fn();
 
-const renderController = ({ metadata, setAll = jest.fn(), editId = "abc123" } = {}) =>
+const renderController = ({
+  metadata,
+  setAll = jest.fn(),
+  editId = "abc123",
+  auth = { loading: false, authenticated: true },
+} = {}) =>
   render(
+    <AuthContext.Provider value={auth}>
     <CuratorContext.Provider value={{ metadata, setAll }}>
       <CuratorHelperContext.Provider value={{ editing: {} }}>
         <ServerContext.Provider value={{ selectedHttp: null }}>
@@ -39,6 +46,7 @@ const renderController = ({ metadata, setAll = jest.fn(), editId = "abc123" } = 
         </ServerContext.Provider>
       </CuratorHelperContext.Provider>
     </CuratorContext.Provider>
+    </AuthContext.Provider>
   );
 
 const mockPermissionAndRaw = ({ canEdit, authenticated = true }) => {
@@ -58,10 +66,30 @@ const mockPermissionAndRaw = ({ canEdit, authenticated = true }) => {
 describe("EditModeController", () => {
   afterEach(() => jest.resetAllMocks());
 
-  it("renders create mode untouched when no edit id is present", () => {
+  it("renders create mode for authenticated users when no edit id is present", () => {
     renderController({ editId: null });
     expect(screen.getByText("FORMS create")).toBeInTheDocument();
     expect(axios.get).not.toHaveBeenCalled();
+  });
+
+  it("asks anonymous visitors to sign in before creating (no forms, no publish)", () => {
+    renderController({
+      editId: null,
+      auth: { loading: false, authenticated: false },
+    });
+    expect(
+      screen.getByText(/sign in to curate and publish a record/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/FORMS/)).not.toBeInTheDocument();
+  });
+
+  it("waits for the auth state before deciding on create mode", () => {
+    renderController({
+      editId: null,
+      auth: { loading: true, authenticated: false },
+    });
+    expect(screen.getByText(/checking sign-in/i)).toBeInTheDocument();
+    expect(screen.queryByText(/FORMS/)).not.toBeInTheDocument();
   });
 
   it("blocks unauthorized users: message, no forms, no save", async () => {

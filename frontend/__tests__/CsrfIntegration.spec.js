@@ -10,6 +10,7 @@ jest.mock("next/router", () => ({ useRouter: () => ({ push }) }));
 
 // Importing AuthState registers the CSRF interceptors on the real axios.
 import AuthState from "../Context/Auth/AuthState";
+import AuthContext from "../Context/Auth/authContext";
 import EditModeController from "../components/CuratorElements/EditMode";
 import CuratorContext from "../Context/Curator/curatorContext";
 import CuratorHelperContext from "../Context/CuratorHelpers/curatorHelperContext";
@@ -91,7 +92,15 @@ const renderEditor = ({ withAuthState = false } = {}) => {
       </CuratorHelperContext.Provider>
     </CuratorContext.Provider>
   );
-  return render(withAuthState ? <AuthState>{tree}</AuthState> : tree);
+  return render(
+    withAuthState ? (
+      <AuthState>{tree}</AuthState>
+    ) : (
+      <AuthContext.Provider value={{ loading: false, authenticated: true }}>
+        {tree}
+      </AuthContext.Provider>
+    )
+  );
 };
 
 describe("CSRF integration for curator Save Changes (real axios)", () => {

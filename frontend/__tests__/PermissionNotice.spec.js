@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 jest.mock("axios");
 import axios from "axios";
@@ -71,6 +72,87 @@ describe("PermissionNotice", () => {
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: /edit in curator/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers Assign owner to admins on ownerless records and refetches after assigning", async () => {
+    mockPermissions({
+      can_edit: true,
+      reason: "admin",
+      owner_email: null,
+      authenticated: true,
+      is_admin: true,
+    });
+    axios.put.mockResolvedValue({
+      data: { id: "abc123", owner_email: "new@example.com", success: true },
+    });
+    const user = userEvent.setup();
+    renderNotice({ authenticated: true, loading: false });
+    await user.click(
+      await screen.findByRole("button", { name: /assign owner/i })
+    );
+    await user.type(screen.getByLabelText(/owner email/i), "new@example.com");
+    const getCallsBefore = axios.get.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: /^assign$/i }));
+    expect(axios.put).toHaveBeenCalledWith("/api/paper/abc123/owner", {
+      owner_email: "new@example.com",
+    });
+    // permissions are refetched so the notice reflects the new owner
+    expect(axios.get.mock.calls.length).toBeGreaterThan(getCallsBefore);
+  });
+
+  it("shows the backend error when assigning fails", async () => {
+    mockPermissions({
+      can_edit: true,
+      reason: "admin",
+      owner_email: null,
+      authenticated: true,
+      is_admin: true,
+    });
+    axios.put.mockRejectedValue({
+      response: {
+        status: 400,
+        data: { error: "owner_email must be a valid email address" },
+      },
+    });
+    const user = userEvent.setup();
+    renderNotice({ authenticated: true, loading: false });
+    await user.click(
+      await screen.findByRole("button", { name: /assign owner/i })
+    );
+    await user.click(screen.getByRole("button", { name: /^assign$/i }));
+    expect(
+      await screen.findByText(/must be a valid email address/i)
+    ).toBeInTheDocument();
+  });
+
+  it("hides Assign owner from non-admins and on records that have an owner", async () => {
+    mockPermissions({
+      can_edit: true,
+      reason: "owner",
+      owner_email: "owner@example.com",
+      authenticated: true,
+      is_admin: false,
+    });
+    const { unmount } = renderNotice({ authenticated: true, loading: false });
+    await screen.findByText(/you can edit this record/i);
+    expect(
+      screen.queryByRole("button", { name: /assign owner/i })
+    ).not.toBeInTheDocument();
+    unmount();
+
+    jest.resetAllMocks();
+    mockPermissions({
+      can_edit: true,
+      reason: "admin",
+      owner_email: "owner@example.com", // owned record: no assign button
+      authenticated: true,
+      is_admin: true,
+    });
+    renderNotice({ authenticated: true, loading: false });
+    await screen.findByText(/you can edit this record/i);
+    expect(
+      screen.queryByRole("button", { name: /assign owner/i })
     ).not.toBeInTheDocument();
   });
 

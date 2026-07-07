@@ -2,7 +2,10 @@
 # the canonical Flask request proxy is used here (the old
 # `from connexion import request, jsonifier` import is gone in Connexion 3;
 # `jsonifier` was never used).
+import re
+
 from flask import request
+from mongoengine import Q as MongoQ
 
 from project.auth import (can_edit_paper, csrf_protect, get_current_user,
                           is_admin, stamp_owner)
@@ -222,9 +225,18 @@ def publish(paper):
 
     :return: Metadata object using the id provided for the metadata
     """
-    # Record the verified session identity (if any) as the record owner; the
-    # stamped payload is what gets stored and later inserted on /verify.
-    # Anonymous publishing remains allowed (record is then ownerless).
+    # Production ownership rule: every NEW record must have a verified owner,
+    # so publishing now requires an authenticated session (Google in
+    # production; dev-login on staging while its gate is enabled). Anonymous
+    # browse/search/view and the non-persisting preview flow stay anonymous.
+    user = get_current_user()
+    if not user:
+        return {"msg": "Authentication is required to publish."}, 401
+
+    # The owner always comes from the SESSION; a client-provided value is
+    # discarded before stamping. The stamped payload is what gets stored and
+    # later inserted on /verify.
+    paper.pop("owner_email", None)
     stamp_owner(paper)
     result = Publish().publish(paper, request.headers.get('origin'))
 
@@ -320,6 +332,102 @@ def raw_paper(id):
     data.pop("_id", None)
     data.pop("owner_email", None)
     return {"id": str(existing.id), "paper": data}, 200
+
+
+def _require_admin():
+    """Shared guard for admin-only endpoints. Returns None when the session
+    user is an admin, otherwise the (body, status) error response."""
+    user = get_current_user()
+    if not user:
+        return {"error": "authentication required"}, 401
+    if not is_admin(user):
+        return {"error": "only an admin may perform this action"}, 403
+    return None
+
+
+def ownerless_papers():
+    """
+    List legacy records that have no verified owner yet
+    Handler for GET: /api/admin/ownerless-papers
+
+    Admin only. Returns a compact list for the assign-owner workflow,
+    including the curator-declared insertedBy email as a SUGGESTION (it is
+    unverified and must be confirmed by the admin).
+    """
+    denied = _require_admin()
+    if denied:
+        return denied
+
+    ownerless = Paper.objects(
+        MongoQ(owner_email__exists=False)
+        | MongoQ(owner_email=None)
+        | MongoQ(owner_email="")
+    )
+
+    papers = []
+    for paper in ownerless:
+        reference = getattr(paper, "reference", None)
+        inserted_by = getattr(getattr(paper, "info", None), "insertedBy", None)
+        authors = []
+        if reference is not None and reference.authors:
+            for author in reference.authors:
+                name = "%s %s" % (author.firstName or "", author.lastName or "")
+                authors.append(name.strip())
+        year = None
+        if reference is not None and reference.year:
+            try:
+                year = int(reference.year)
+            except (TypeError, ValueError):
+                year = None
+        papers.append({
+            "id": str(paper.id),
+            "title": reference.title if reference is not None else "",
+            "owner_email": paper.owner_email or None,
+            "suggested_owner_email": getattr(inserted_by, "emailId", None) or None,
+            "authors": ", ".join(authors),
+            "year": year,
+        })
+
+    return {"papers": papers, "count": len(papers)}, 200
+
+
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+@csrf_protect
+def assign_paper_owner(id, body):
+    """
+    Assign (or with force=true, replace) a record's verified owner
+    Handler for PUT: /api/paper/{id}/owner
+
+    Admin only. Sets ONLY owner_email — the write is an atomic field update,
+    so legacy documents that would no longer pass full model validation are
+    never touched beyond this one field.
+    """
+    denied = _require_admin()
+    if denied:
+        return denied
+
+    email = ((body or {}).get("owner_email") or "").strip().lower()
+    if not EMAIL_PATTERN.match(email):
+        return {"error": "owner_email must be a valid email address"}, 400
+
+    try:
+        existing = Paper.objects.get(id=str(id))
+    except Exception as e:
+        msg = "Exception in assign owner api " + str(e)
+        print(msg)
+        return {"error": "Paper not found"}, 404
+
+    current = (existing.owner_email or "").strip().lower()
+    if current and current != email and not bool((body or {}).get("force")):
+        return {
+            "error": "record already has owner %s; pass force=true to replace"
+                     % current
+        }, 409
+
+    Paper.objects(id=existing.id).update(set__owner_email=email)
+    return {"id": str(existing.id), "owner_email": email, "success": True}, 200
 
 
 def paper_permissions(id):

@@ -288,7 +288,7 @@ paths:
       operationId: "project.api.publish"
       tags:
         - "Generate Publish Link"
-      summary: "Send an email to the curator with the link to publish the paper"
+      summary: "Send an email to the curator with the link to publish the paper (authenticated users only; the session identity becomes the record owner)"
       parameters:
         - in: body
           name: paper
@@ -300,6 +300,8 @@ paths:
           description: Successfully generated the verify link
         400:
           description: Incorrect paper object
+        401:
+          description: Authentication is required to publish
         500:
           description: Internal server error
   /paper/{id}/raw:
@@ -323,6 +325,58 @@ paths:
           description: Only the record owner or an admin may load this
         404:
           description: Paper with this id does not exist
+  /admin/ownerless-papers:
+    get:
+      operationId: "project.api.ownerless_papers"
+      tags:
+        - "Admin"
+      summary: "Lists legacy records without a verified owner (admin only)"
+      responses:
+        200:
+          description: Compact list of ownerless records
+        401:
+          description: Authentication required
+        403:
+          description: Only an admin may list ownerless records
+  /paper/{id}/owner:
+    put:
+      operationId: "project.api.assign_paper_owner"
+      tags:
+        - "Admin"
+      summary: "Assigns a verified owner to a record (admin only)"
+      parameters:
+        - in: path
+          name: id
+          type: string
+          required: true
+          description: Paper Id
+        - in: body
+          name: body
+          required: true
+          description: The owner to assign; set force=true to replace an
+            existing owner.
+          schema:
+            type: object
+            required:
+              - owner_email
+            properties:
+              owner_email:
+                type: string
+              force:
+                type: boolean
+      responses:
+        200:
+          description: Owner assigned
+        400:
+          description: Invalid email address
+        401:
+          description: Authentication required
+        403:
+          description: Only an admin may assign owners
+        404:
+          description: Paper with this id does not exist
+        409:
+          description: Record already has a different owner (use force)
   /paper/{id}/permissions:
     get:
       operationId: "project.api.paper_permissions"

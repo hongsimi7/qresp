@@ -12,6 +12,7 @@ import {
 } from "../../Utils/model";
 import { validate } from "./Publish";
 
+import AuthContext from "../../Context/Auth/authContext";
 import CuratorContext from "../../Context/Curator/curatorContext";
 import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperContext";
 import ServerContext from "../../Context/Servers/serverContext";
@@ -101,6 +102,7 @@ SaveChangesBar.propTypes = {
 
 const EditModeController = ({ editId, server, children }) => {
   const { setAll } = useContext(CuratorContext);
+  const auth = useContext(AuthContext);
   const [status, setStatus] = useState(editId ? "loading" : "create");
   const [message, setMessage] = useState("");
   const [originalDoc, setOriginalDoc] = useState(null);
@@ -152,7 +154,33 @@ const EditModeController = ({ editId, server, children }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editId]);
 
-  if (status === "create") return children(false);
+  if (status === "create") {
+    // Production ownership rule: NEW records need a verified owner, so the
+    // backend rejects anonymous publishing (401). Gate the create UI on the
+    // same condition — the message replaces the forms/publish controls.
+    if (auth && auth.loading) {
+      return (
+        <Typography variant="h6" color="secondary" sx={{ mt: 4 }}>
+          Checking sign-in…
+        </Typography>
+      );
+    }
+    if (auth && !auth.authenticated) {
+      return (
+        <Box sx={{ mt: 4 }}>
+          <Typography variant="h6" color="secondary" gutterBottom>
+            Sign in to curate and publish a record.
+          </Typography>
+          <Typography variant="body1" color="secondary">
+            New records are owned by the account that publishes them — use
+            "Sign in with Google" in the header (or "Dev sign in" on staging)
+            and come back to the curator.
+          </Typography>
+        </Box>
+      );
+    }
+    return children(false);
+  }
 
   if (status === "loading") {
     return (
