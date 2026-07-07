@@ -1,16 +1,22 @@
-import { Fragment } from "react";
+import { Fragment, useEffect } from "react";
 import { Typography, Box, Container } from "@mui/material";
 
 import Link from "next/link";
 import axios from "axios";
 
 import { resolveServerSideApiBase } from "../../Utils/serverSideApi";
+import { clearBrowserDraft } from "../../Utils/browserDraft";
 
 import SEO from "../../components/seo";
 import StyledButton from "../../components/button";
 
 const Verify = ({ id, server, error }) => {
-  console.log(server)
+  useEffect(() => {
+    if (id && error.length === 0) {
+      clearBrowserDraft();
+    }
+  }, [id, error]);
+
   return (
     <Fragment>
       <SEO

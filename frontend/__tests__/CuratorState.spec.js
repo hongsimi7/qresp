@@ -87,6 +87,19 @@ describe("CuratorState draft persistence", () => {
     );
   });
 
+  it("auto-restores a saved create draft when requested by the curator route", async () => {
+    localStorage.setItem("state", JSON.stringify(savedDraft));
+    render(
+      <CuratorState autoResumeDraft={true}>
+        <Probe />
+      </CuratorState>
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("first-name")).toHaveTextContent("fake")
+    );
+  });
+
   it("clears the saved draft when starting blank", async () => {
     localStorage.setItem("state", JSON.stringify(savedDraft));
     const user = userEvent.setup();

@@ -22,6 +22,7 @@ import LicenseInfoElement from "../components/CuratorElements/LicenseElement";
 import FileTree from "../components/FileTree";
 import Publish from "../components/CuratorElements/Publish";
 import EditModeController from "../components/CuratorElements/EditMode";
+import { CURATOR_DRAFT_KEY } from "../Utils/browserDraft";
 
 const curator = () => {
   const curatorDescription =
@@ -37,9 +38,13 @@ const curator = () => {
       : null;
   const returnServer =
     typeof router.query.server === "string" ? router.query.server : "";
+  const autoResumeDraft = router.query.resumeDraft === "1";
 
   return (
-    <CuratorState draftKey={editId ? null : "state"}>
+    <CuratorState
+      draftKey={editId ? null : CURATOR_DRAFT_KEY}
+      autoResumeDraft={!editId && autoResumeDraft}
+    >
       <CuratorHelperState>
         <SourceTreeState>
           <SEO title={"Qresp | Curator"} description={curatorDescription} />

@@ -97,13 +97,13 @@ describe("Account page", () => {
     expect(screen.getByText(/contains: charts/i)).toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: /resume/i })
-    ).toHaveAttribute("href", "/curator");
+    ).toHaveAttribute("href", "/curator?resumeDraft=1");
 
     await user.click(screen.getByRole("button", { name: /clear/i }));
     expect(screen.queryByText("My draft paper")).not.toBeInTheDocument();
     expect(localStorage.getItem("state")).toBeNull();
     expect(
-      screen.getByText(/no draft saved in this browser/i)
+      screen.getByText(/no browser draft is saved on this device/i)
     ).toBeInTheDocument();
   });
 });

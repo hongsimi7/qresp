@@ -26,6 +26,7 @@ import {
 const CuratorState = (props) => {
   const draftKey = props.draftKey === undefined ? "state" : props.draftKey;
   const firstPersist = useRef(true);
+  const autoResumeAttempted = useRef(false);
 
   const initialState = {
     curatorInfo: {
@@ -67,6 +68,7 @@ const CuratorState = (props) => {
 
   useEffect(() => {
     firstPersist.current = true;
+    autoResumeAttempted.current = false;
   }, [draftKey]);
 
   useEffect(() => {
@@ -83,6 +85,17 @@ const CuratorState = (props) => {
       WebStore.set(draftKey, state);
     }
   }, [state, draftKey]);
+
+  useEffect(() => {
+    if (!draftKey || !props.autoResumeDraft || autoResumeAttempted.current) {
+      return;
+    }
+    autoResumeAttempted.current = true;
+    const data = WebStore.get(draftKey);
+    if (data !== null) {
+      setAll(data);
+    }
+  }, [draftKey, props.autoResumeDraft]);
 
   useEffect(() => {
     const nextNodes = [

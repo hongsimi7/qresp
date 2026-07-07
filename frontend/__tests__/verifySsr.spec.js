@@ -1,7 +1,8 @@
 jest.mock("axios");
 import axios from "axios";
+import { render, waitFor } from "@testing-library/react";
 
-import { getServerSideProps } from "../pages/verify/[id]";
+import Verify, { getServerSideProps } from "../pages/verify/[id]";
 
 // Staging bug: the verify page SSR fetched `${query.server}/api/verify/...`
 // with query.server = https://localhost:8443 — inside the gui container that
@@ -60,5 +61,23 @@ describe("verify page getServerSideProps", () => {
     });
     const result = await getServerSideProps(ctxFor("https://localhost:8443"));
     expect(result.props.error).toBe("Incorrect verify link");
+  });
+
+  it("clears the browser draft only after successful verification", async () => {
+    localStorage.setItem("state", JSON.stringify({ referenceInfo: { title: "Draft" } }));
+    render(<Verify id="paper123" server="https://localhost:8443" error="" />);
+    await waitFor(() => expect(localStorage.getItem("state")).toBeNull());
+  });
+
+  it("keeps the browser draft when verification fails", () => {
+    localStorage.setItem("state", JSON.stringify({ referenceInfo: { title: "Draft" } }));
+    render(
+      <Verify
+        id=""
+        server="https://localhost:8443"
+        error="Incorrect verify link"
+      />
+    );
+    expect(localStorage.getItem("state")).not.toBeNull();
   });
 });

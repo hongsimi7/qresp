@@ -75,10 +75,16 @@ const TopActions = () => {
       setResumeDialogOpen(true);
     },
     scratch: () => {
+      const draftExists = Boolean(getSavedDraft && getSavedDraft());
       setAlert(
-        "Warning",
-        "This is an irreversible operation, please download your work if you plan to use it in the future. Do you still wish to continue ?",
+        "Start from scratch?",
+        draftExists
+          ? "This will clear the browser draft currently saved on this device."
+          : "This will clear the current curator form.",
         <Fragment>
+          <RegularStyledButton onClick={unsetAlert}>
+            Keep Draft
+          </RegularStyledButton>
           <RegularStyledButton
             endIcon={<GetApp />}
             href={`data:text/json;charset=utf-8,${encodeURIComponent(
@@ -95,7 +101,7 @@ const TopActions = () => {
               unsetAlert();
             }}
           >
-            Yes, start from Scratch
+            Discard Draft and Start
           </RegularStyledButton>
         </Fragment>
       );

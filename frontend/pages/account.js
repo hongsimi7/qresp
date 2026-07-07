@@ -8,37 +8,15 @@ import SEO from "../components/seo";
 import Drawer from "../components/drawer";
 import { RegularStyledButton } from "../components/button";
 import AuthContext from "../Context/Auth/authContext";
-import WebStore from "../Utils/Persist";
+import {
+  clearBrowserDraft,
+  summarizeBrowserDraft,
+} from "../Utils/browserDraft";
 import { getServer } from "../Utils/utils";
 
 // Minimal signed-in account page (Qresp 2.0): profile, the user's published
 // records (backend-owned list), and any curator draft saved in THIS browser.
 // Deliberately small — no admin dashboard, no server-side drafts.
-
-const CURATOR_DRAFT_KEY = "state";
-
-const draftSummary = (draft) => {
-  if (!draft || typeof draft !== "object") return null;
-  const title =
-    (draft.referenceInfo && draft.referenceInfo.title) ||
-    (draft.paperInfo &&
-      draft.paperInfo.tags &&
-      draft.paperInfo.tags.join(", ")) ||
-    "";
-  const sections = [
-    draft.charts && draft.charts.length > 0 ? "charts" : null,
-    draft.datasets && draft.datasets.length > 0 ? "datasets" : null,
-    draft.tools && draft.tools.length > 0 ? "tools" : null,
-    draft.scripts && draft.scripts.length > 0 ? "scripts" : null,
-  ].filter(Boolean);
-  const hasContent =
-    title.length > 0 ||
-    sections.length > 0 ||
-    (draft.curatorInfo &&
-      (draft.curatorInfo.firstName || draft.curatorInfo.emailId));
-  if (!hasContent) return null;
-  return { title: title || "Untitled draft", sections };
-};
 
 const AccountPage = () => {
   const { loading, authenticated, user } = useContext(AuthContext);
@@ -63,11 +41,11 @@ const AccountPage = () => {
 
   useEffect(() => {
     // Browser-only: surface an existing curator draft from localStorage.
-    setDraft(draftSummary(WebStore.get(CURATOR_DRAFT_KEY)));
+    setDraft(summarizeBrowserDraft());
   }, []);
 
   const clearDraft = () => {
-    WebStore.remove(CURATOR_DRAFT_KEY);
+    clearBrowserDraft();
     setDraft(null);
   };
 
@@ -162,7 +140,7 @@ const AccountPage = () => {
           )}
         </Drawer>
 
-        <Drawer heading="Drafts on this browser" defaultOpen={true}>
+        <Drawer heading="Draft on this browser" defaultOpen={true}>
           {draft ? (
             <Box
               sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}
@@ -175,7 +153,7 @@ const AccountPage = () => {
                   </Typography>
                 ) : null}
               </Box>
-              <RegularStyledButton component={Link} href="/curator">
+              <RegularStyledButton component={Link} href="/curator?resumeDraft=1">
                 Resume
               </RegularStyledButton>
               <Button size="small" variant="outlined" onClick={clearDraft}>
@@ -184,8 +162,9 @@ const AccountPage = () => {
             </Box>
           ) : (
             <Typography color="secondary">
-              No draft saved in this browser. Anything you type in the curator
-              is kept here until you publish or clear it.
+              No browser draft is saved on this device. Anything you type in
+              the curator is kept here until you publish, clear it, or start
+              from scratch.
             </Typography>
           )}
         </Drawer>
