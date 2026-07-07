@@ -1,11 +1,10 @@
 import { useContext, Fragment } from "react";
-import { useRouter } from "next/router";
 import axios from "axios";
-import { Box, Grid } from "@mui/material";
+import { Box } from "@mui/material";
 
 import Ajv from "ajv";
 
-import StyledButton, { RegularStyledButton } from "../button";
+import StyledButton from "../button";
 import { convertStatetoReqSchema } from "../../Utils/model";
 import { getServer } from "../../Utils/utils";
 
@@ -15,8 +14,6 @@ import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperCont
 import ServerContext from "../../Context/Servers/serverContext";
 import AlertContext from "../../Context/Alert/alertContext";
 import LoadingContext from "../../Context/Loading/loadingContext";
-
-import { preview } from "./TopActions";
 
 const variableTotext = {
   curatorInfo: "Curator Information",
@@ -142,9 +139,8 @@ const Publish = () => {
 
   const { editing } = useContext(CuratorHelperContext);
   const { selectedHttp } = useContext(ServerContext);
-  const { setAlert, unsetAlert } = useContext(AlertContext);
+  const { setAlert } = useContext(AlertContext);
   const { showLoader, hideLoader } = useContext(LoadingContext);
-  const router = useRouter();
 
   const onClick = () => {
     const paper = convertStatetoReqSchema(metadata, selectedHttp);
@@ -162,51 +158,7 @@ const Publish = () => {
       return;
     }
 
-    setAlert(
-      "Warning",
-      <Grid container direction="column" spacing={1}>
-        <Grid>
-          Once published, you will not be able to alter the contents of the
-          published metadata. Please make sure the data you entered is correct.
-        </Grid>
-        <Grid container direction="row" spacing={1}>
-          <Grid size={{ sm: 6 }}>
-            <RegularStyledButton
-              href={`data:text/json;charset=utf-8,${encodeURIComponent(
-                JSON.stringify(metadata, null, 2)
-              )}`}
-              download="metadata.json"
-              fullWidth
-            >
-              Download Metadata
-            </RegularStyledButton>
-          </Grid>
-          <Grid size={{ sm: 6 }}>
-            <RegularStyledButton
-              fullWidth
-              onClick={(e) => {
-                e.preventDefault();
-                unsetAlert();
-                preview(metadata, setAlert, router);
-              }}
-            >
-              Preview
-            </RegularStyledButton>
-          </Grid>
-        </Grid>
-        <Grid>
-          <StyledButton
-            fullWidth
-            onClick={() =>
-              makePublishRequest(paper, setAlert, showLoader, hideLoader)
-            }
-          >
-            Publish
-          </StyledButton>
-        </Grid>
-      </Grid>,
-      null
-    );
+    makePublishRequest(paper, setAlert, showLoader, hideLoader);
   };
 
   return (
