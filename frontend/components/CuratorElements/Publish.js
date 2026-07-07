@@ -4,7 +4,7 @@ import { Box } from "@mui/material";
 
 import Ajv from "ajv";
 
-import StyledButton from "../button";
+import StyledButton, { RegularStyledButton } from "../button";
 import { convertStatetoReqSchema } from "../../Utils/model";
 import { getServer } from "../../Utils/utils";
 
@@ -122,8 +122,8 @@ const makePublishRequest = (paper, setAlert, showLoader, hideLoader) => {
         "Success",
         verifyLink ? (
           <p style={{ textAlign: "justify" }}>
-            The paper is queued for verification. Email delivery is disabled on
-            this server, so use this verification link:
+            Queued for verification. Click this verification link to finish
+            publishing.
             <br />
             <a href={verifyLink}>{verifyLink}</a>
           </p>
@@ -138,7 +138,11 @@ const makePublishRequest = (paper, setAlert, showLoader, hideLoader) => {
             <br /> Thank You
           </p>
         ),
-        null
+        verifyLink ? (
+          <RegularStyledButton component="a" href={verifyLink}>
+            Open verification link
+          </RegularStyledButton>
+        ) : null
       );
     })
     .catch((err) => {

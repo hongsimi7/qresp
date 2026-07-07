@@ -67,7 +67,7 @@ describe("Publish", () => {
     );
   });
 
-  it("shows the staging verification link when email delivery is skipped", async () => {
+  it("shows the staging verification link with a clear CTA when email is skipped", async () => {
     const verifyLink = "https://localhost:8443/verify/PUBLISH_test";
     axios.post.mockResolvedValueOnce({
       data: { success: true, verify_link: verifyLink, email_sent: false },
@@ -77,16 +77,42 @@ describe("Publish", () => {
 
     await user.click(screen.getByRole("button", { name: /^publish$/i }));
 
-    await waitFor(() => expect(setAlert).toHaveBeenCalledWith(
-      "Success",
-      expect.anything(),
-      null
-    ));
-    render(setAlert.mock.calls[0][1]);
+    await waitFor(() =>
+      expect(setAlert).toHaveBeenCalledWith(
+        "Success",
+        expect.anything(),
+        expect.anything()
+      )
+    );
+    const [, message, buttons] = setAlert.mock.calls[0];
+    render(message);
+    expect(
+      screen.getByText(/queued for verification\. click this verification link/i)
+    ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: verifyLink })).toHaveAttribute(
       "href",
       verifyLink
     );
+    render(buttons);
+    expect(
+      screen.getByRole("link", { name: /open verification link/i })
+    ).toHaveAttribute("href", verifyLink);
+  });
+
+  it("keeps the email-check message when the backend sent an email", async () => {
+    axios.post.mockResolvedValueOnce({ data: { success: true } });
+    const user = userEvent.setup();
+    const { setAlert } = renderPublish();
+
+    await user.click(screen.getByRole("button", { name: /^publish$/i }));
+
+    await waitFor(() =>
+      expect(setAlert).toHaveBeenCalledWith("Success", expect.anything(), null)
+    );
+    render(setAlert.mock.calls[0][1]);
+    expect(
+      screen.getByText(/we've sent you an email with a link/i)
+    ).toBeInTheDocument();
   });
 
   it("extracts useful publish errors from current and legacy backend shapes", () => {
