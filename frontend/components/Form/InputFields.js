@@ -99,7 +99,7 @@ RadioInputField.propTypes = {
   name: PropTypes.string.isRequired,
   options: PropTypes.array.isRequired,
   helperText: PropTypes.string.isRequired,
-  register: PropTypes.func.isRequired,
+  control: PropTypes.object.isRequired,
   error: PropTypes.object,
   required: PropTypes.bool,
   defVal: PropTypes.string,

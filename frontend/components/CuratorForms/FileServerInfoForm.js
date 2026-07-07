@@ -91,7 +91,7 @@ const FileServerInfoForm = ({ editor }) => {
               helperText="Select location type of the data source"
               options={options}
               row={true}
-              register={register}
+              control={control}
               error={errors.connectionType}
               defVal="http"
               id="connectionTypeRadio"
