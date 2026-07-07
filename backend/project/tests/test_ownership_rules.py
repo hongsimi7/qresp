@@ -36,7 +36,8 @@ class TestPublishRequiresOwner(PermissionTestBase):
             os.remove(publish_file_path())
         super().tearDown()
 
-    def publish(self, payload, origin="https://localhost:8443"):
+    def publish(self, payload, origin="https://localhost:8443",
+                mail_send_side_effect=None):
         # Publish builds the verify link from the Origin header (browsers
         # always send it on cross-page POSTs); provide it like a browser.
         headers = {}
@@ -47,6 +48,8 @@ class TestPublishRequiresOwner(PermissionTestBase):
         with mock.patch("project.controllers.publish.mailClient") as mail, \
                 mock.patch("project.controllers.publish.Publish.generateId",
                            return_value=PUBLISH_ID):
+            if mail_send_side_effect is not None:
+                mail.send.side_effect = mail_send_side_effect
             response = self.client.post(
                 "/api/publish", json=payload, headers=headers
             )
@@ -84,6 +87,54 @@ class TestPublishRequiresOwner(PermissionTestBase):
         self.assertIn("/verify/%s" % PUBLISH_ID, body["verify_link"])
         mail.send.assert_not_called()
         self.assertTrue(os.path.exists(publish_file_path()))
+
+    def test_skip_email_path_never_touches_the_real_mail_client(self):
+        # No mailClient mock at all: if the skip path reached SMTP, the real
+        # client would raise (no server configured) and this would 500.
+        self.login(OWNER)
+        headers = {
+            "Origin": "https://localhost:8443",
+            "X-CSRF-Token": self.csrf,
+        }
+        with mock.patch.dict(os.environ, {"QRESP_PUBLISH_SKIP_EMAIL": "1"}), \
+                mock.patch(
+                    "project.controllers.publish.Publish.generateId",
+                    return_value=PUBLISH_ID):
+            response = self.client.post(
+                "/api/publish", json=load_fixture(), headers=headers
+            )
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertFalse(response.json()["email_sent"])
+
+    def test_queue_write_failure_returns_specific_message(self):
+        self.login(OWNER)
+        from project.controllers.publish import Publish
+
+        original_init = Publish.__init__
+
+        def broken_dir_init(instance):
+            original_init(instance)
+            instance.dir_prefix = os.path.join(
+                os.getcwd(), "papers", "no-such-queue-dir") + os.sep
+
+        with mock.patch.object(Publish, "__init__", broken_dir_init):
+            response, mail = self.publish(load_fixture())
+        self.assertEqual(500, response.status_code, response.text)
+        self.assertIn("Could not queue the paper for verification",
+                      response.json()["msg"])
+        mail.send.assert_not_called()
+
+    def test_smtp_failure_returns_specific_message(self):
+        self.login(OWNER)
+        response, _ = self.publish(
+            load_fixture(),
+            mail_send_side_effect=Exception("connection refused"),
+        )
+        self.assertEqual(500, response.status_code, response.text)
+        self.assertEqual(
+            "Verification email could not be sent. Check SMTP configuration.",
+            response.json()["msg"],
+        )
 
     def test_publish_controller_error_is_returned_as_json_message(self):
         self.login(OWNER)

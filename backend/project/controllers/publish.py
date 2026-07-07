@@ -1,6 +1,7 @@
 from os import getcwd, listdir
 from sys import stderr
 import json
+import traceback
 from uuid import uuid4
 
 from project.utils.mail import mailClient
@@ -124,8 +125,11 @@ class Publish:
             with open("{}{}.json".format(self.dir_prefix, id), 'w') as f:
                 json.dump(paper, f, ensure_ascii=False)
         except Exception as e:
-            print(e, file=stderr)
-            return {"msg": "Could not queue the paper for verification", "code": 500}
+            traceback.print_exc(file=stderr)
+            return {
+                "msg": "Could not queue the paper for verification: %s" % e,
+                "code": 500,
+            }
 
         if _truthy(Config.get_setting('PUBLISH', 'PUBLISH_SKIP_EMAIL')):
             return {
@@ -137,8 +141,10 @@ class Publish:
         try:
             mailClient.send(subject, "", html, curatorDetails['emailId'])
             return 200
-        except Exception as e:
-            print(e, file=stderr)
+        except Exception:
+            # Full cause goes to the server log only; the client gets a
+            # stable, secret-free message.
+            traceback.print_exc(file=stderr)
             return {
                 "msg": "Verification email could not be sent. Check SMTP configuration.",
                 "code": 500,
