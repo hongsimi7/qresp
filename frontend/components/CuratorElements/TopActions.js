@@ -47,7 +47,7 @@ const preview = (metadata, setAlert, router) => {
 };
 
 const TopActions = () => {
-  const { metadata, setAll, resetAll, getSavedDraft, resumeDraft } =
+  const { metadata, setAll, resetAll, getSavedDraft, resumeDraft, hasMeaningfulDraft } =
     useContext(CuratorContext);
   const { setAlert, unsetAlert } = useContext(AlertContext);
   const { setSelectedHttp, selectedHttp } = useContext(ServerContext);
@@ -75,33 +75,33 @@ const TopActions = () => {
       setResumeDialogOpen(true);
     },
     scratch: () => {
-      const draftExists = Boolean(getSavedDraft && getSavedDraft());
+      const hasCurrentWork = hasMeaningfulDraft ? hasMeaningfulDraft() : false;
       setAlert(
         "Start from scratch?",
-        draftExists
-          ? "This will clear the browser draft currently saved on this device."
+        hasCurrentWork
+          ? "Save this curator draft before clearing the form, or discard it and start fresh."
           : "This will clear the current curator form.",
         <Fragment>
           <RegularStyledButton onClick={unsetAlert}>
-            Keep Draft
-          </RegularStyledButton>
-          <RegularStyledButton
-            endIcon={<GetApp />}
-            href={`data:text/json;charset=utf-8,${encodeURIComponent(
-              JSON.stringify(onClicks.download(metadata), null, 2)
-            )}`}
-            download="metadata.json"
-          >
-            Download Metadata
+            Cancel
           </RegularStyledButton>
           <RegularStyledButton
             onClick={() => {
-              resetAll();
+              resetAll({ preserveDraft: true });
+              setHasDraft(true);
+              unsetAlert();
+            }}
+          >
+            Save Draft and Start Fresh
+          </RegularStyledButton>
+          <RegularStyledButton
+            onClick={() => {
+              resetAll({ preserveDraft: false });
               setHasDraft(false);
               unsetAlert();
             }}
           >
-            Discard Draft and Start
+            Discard and Start Fresh
           </RegularStyledButton>
         </Fragment>
       );
@@ -138,7 +138,7 @@ const TopActions = () => {
       </StyledTooltip>
     ),
     download: (fullWidth = false) => (
-      <StyledTooltip title=" Download metadata of the paper being curated">
+      <StyledTooltip title="Export metadata of the paper being curated">
         <RegularStyledButton
           fullWidth={fullWidth}
           endIcon={<GetApp />}
@@ -147,7 +147,7 @@ const TopActions = () => {
           )}`}
           download="metadata.json"
         >
-          Download Metadata
+          Export Metadata
         </RegularStyledButton>
       </StyledTooltip>
     ),

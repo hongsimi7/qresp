@@ -4,6 +4,12 @@ const CURATOR_DRAFT_KEY = "state";
 
 const getBrowserDraft = () => WebStore.get(CURATOR_DRAFT_KEY);
 
+const saveBrowserDraft = (draft) => {
+  if (!draft || typeof draft !== "object") return false;
+  WebStore.set(CURATOR_DRAFT_KEY, draft);
+  return true;
+};
+
 const clearBrowserDraft = () => WebStore.remove(CURATOR_DRAFT_KEY);
 
 const hasBrowserDraft = () => Boolean(getBrowserDraft());
@@ -36,5 +42,6 @@ export {
   clearBrowserDraft,
   getBrowserDraft,
   hasBrowserDraft,
+  saveBrowserDraft,
   summarizeBrowserDraft,
 };

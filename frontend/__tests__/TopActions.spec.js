@@ -27,6 +27,7 @@ const renderTopActions = ({ hasDraft = true } = {}) => {
   const setAlert = jest.fn();
   const unsetAlert = jest.fn();
   const resetAll = jest.fn();
+  const hasMeaningfulDraft = jest.fn(() => hasDraft);
   render(
     <CuratorContext.Provider
       value={{
@@ -35,6 +36,7 @@ const renderTopActions = ({ hasDraft = true } = {}) => {
         resetAll,
         getSavedDraft: jest.fn(() => (hasDraft ? metadata : null)),
         resumeDraft: jest.fn(),
+        hasMeaningfulDraft,
       }}
     >
       <AlertContext.Provider value={{ setAlert, unsetAlert }}>
@@ -65,22 +67,61 @@ describe("TopActions draft controls", () => {
 
     expect(setAlert).toHaveBeenCalledWith(
       "Start from scratch?",
-      "This will clear the browser draft currently saved on this device.",
+      "Save this curator draft before clearing the form, or discard it and start fresh.",
       expect.anything()
     );
 
     render(setAlert.mock.calls[0][2]);
     expect(
-      screen.getByRole("button", { name: /keep draft/i })
+      screen.getByRole("button", { name: /^cancel$/i })
     ).toBeInTheDocument();
     expect(
-      screen.getAllByRole("link", { name: /download metadata/i }).length
-    ).toBeGreaterThan(0);
+      screen.queryByRole("link", { name: /download metadata/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /save draft and start fresh/i })
+    ).toBeInTheDocument();
 
     await user.click(
-      screen.getByRole("button", { name: /discard draft and start/i })
+      screen.getByRole("button", { name: /discard and start fresh/i })
     );
-    expect(resetAll).toHaveBeenCalledTimes(1);
+    expect(resetAll).toHaveBeenCalledWith({ preserveDraft: false });
+    expect(unsetAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it("can save the browser draft before starting from scratch", async () => {
+    const user = userEvent.setup();
+    const { setAlert, unsetAlert, resetAll } = renderTopActions();
+
+    await user.click(
+      screen.getAllByRole("button", {
+        name: /clear the session and start afresh/i,
+      })[0]
+    );
+
+    render(setAlert.mock.calls[0][2]);
+    await user.click(
+      screen.getByRole("button", { name: /save draft and start fresh/i })
+    );
+
+    expect(resetAll).toHaveBeenCalledWith({ preserveDraft: true });
+    expect(unsetAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the form untouched when cancelling start from scratch", async () => {
+    const user = userEvent.setup();
+    const { setAlert, unsetAlert, resetAll } = renderTopActions();
+
+    await user.click(
+      screen.getAllByRole("button", {
+        name: /clear the session and start afresh/i,
+      })[0]
+    );
+
+    render(setAlert.mock.calls[0][2]);
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(resetAll).not.toHaveBeenCalled();
     expect(unsetAlert).toHaveBeenCalledTimes(1);
   });
 });

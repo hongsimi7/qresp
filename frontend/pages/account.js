@@ -140,7 +140,7 @@ const AccountPage = () => {
           )}
         </Drawer>
 
-        <Drawer heading="Draft on this browser" defaultOpen={true}>
+        <Drawer heading="Single draft on this browser" defaultOpen={true}>
           {draft ? (
             <Box
               sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}
@@ -162,9 +162,9 @@ const AccountPage = () => {
             </Box>
           ) : (
             <Typography color="secondary">
-              No browser draft is saved on this device. Anything you type in
-              the curator is kept here until you publish, clear it, or start
-              from scratch.
+              No browser draft is saved on this device. Qresp currently keeps
+              one local draft per browser; server-saved drafts are not enabled
+              yet.
             </Typography>
           )}
         </Drawer>

@@ -50,6 +50,9 @@ const Probe = () => {
       <span data-testid="has-draft">{getSavedDraft() ? "yes" : "no"}</span>
       <button onClick={resumeDraft}>Resume</button>
       <button onClick={resetAll}>Start blank</button>
+      <button onClick={() => resetAll({ preserveDraft: true })}>
+        Save and start blank
+      </button>
     </div>
   );
 };
@@ -109,9 +112,31 @@ describe("CuratorState draft persistence", () => {
       </CuratorState>
     );
 
-    await user.click(screen.getByRole("button", { name: /start blank/i }));
+    await user.click(screen.getByRole("button", { name: /^start blank$/i }));
 
     expect(localStorage.getItem("state")).toBeNull();
+    expect(screen.getByTestId("first-name")).toHaveTextContent("blank");
+  });
+
+  it("can preserve the saved draft while starting a blank form", async () => {
+    localStorage.setItem("state", JSON.stringify(savedDraft));
+    const user = userEvent.setup();
+    render(
+      <CuratorState autoResumeDraft={true}>
+        <Probe />
+      </CuratorState>
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("first-name")).toHaveTextContent("fake")
+    );
+    await user.click(
+      screen.getByRole("button", { name: /save and start blank/i })
+    );
+
+    expect(JSON.parse(localStorage.getItem("state")).curatorInfo.firstName).toBe(
+      "fake"
+    );
     expect(screen.getByTestId("first-name")).toHaveTextContent("blank");
   });
 

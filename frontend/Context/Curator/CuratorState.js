@@ -3,6 +3,7 @@ import CuratorReducer from "./curatorReducer";
 import CuratorContext from "./curatorContext";
 
 import WebStore from "../../Utils/Persist";
+import { summarizeBrowserDraft } from "../../Utils/browserDraft";
 
 import {
   SET_CURATOR_STATE,
@@ -27,6 +28,7 @@ const CuratorState = (props) => {
   const draftKey = props.draftKey === undefined ? "state" : props.draftKey;
   const firstPersist = useRef(true);
   const autoResumeAttempted = useRef(false);
+  const preserveDraftOnNextReset = useRef(false);
 
   const initialState = {
     curatorInfo: {
@@ -80,6 +82,10 @@ const CuratorState = (props) => {
       return;
     }
     if (JSON.stringify(state) === JSON.stringify(initialState)) {
+      if (preserveDraftOnNextReset.current) {
+        preserveDraftOnNextReset.current = false;
+        return;
+      }
       WebStore.remove(draftKey);
     } else {
       WebStore.set(draftKey, state);
@@ -123,8 +129,21 @@ const CuratorState = (props) => {
 
   const setAll = (data) => dispatch({ type: SET_CURATOR_STATE, payload: data });
 
-  const resetAll = () => {
-    if (draftKey) {
+  const hasMeaningfulDraft = () => Boolean(summarizeBrowserDraft(state));
+
+  const saveDraft = () => {
+    if (!draftKey || !hasMeaningfulDraft()) {
+      return false;
+    }
+    WebStore.set(draftKey, state);
+    return true;
+  };
+
+  const resetAll = (options = {}) => {
+    if (draftKey && options.preserveDraft) {
+      saveDraft();
+      preserveDraftOnNextReset.current = true;
+    } else if (draftKey) {
       WebStore.remove(draftKey);
     }
     dispatch({ type: SET_CURATOR_STATE, payload: initialState });
@@ -199,6 +218,8 @@ const CuratorState = (props) => {
         resetAll,
         getSavedDraft,
         resumeDraft,
+        saveDraft,
+        hasMeaningfulDraft,
         setCuratorInfo,
         setFileServerPath,
         setPaperInfo,

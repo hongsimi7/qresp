@@ -103,7 +103,7 @@ describe("Account page", () => {
     expect(screen.queryByText("My draft paper")).not.toBeInTheDocument();
     expect(localStorage.getItem("state")).toBeNull();
     expect(
-      screen.getByText(/no browser draft is saved on this device/i)
+      screen.getByText(/one local draft per browser/i)
     ).toBeInTheDocument();
   });
 });
