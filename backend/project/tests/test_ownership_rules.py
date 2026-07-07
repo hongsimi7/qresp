@@ -73,6 +73,18 @@ class TestPublishRequiresOwner(PermissionTestBase):
         self.assertEqual(200, response.status_code, response.text)
         mail.send.assert_called_once()
 
+    def test_publish_can_skip_email_for_staging_and_return_verify_link(self):
+        self.login(OWNER)
+        with mock.patch.dict(os.environ, {"QRESP_PUBLISH_SKIP_EMAIL": "1"}):
+            response, mail = self.publish(load_fixture())
+        self.assertEqual(200, response.status_code, response.text)
+        body = response.json()
+        self.assertTrue(body["success"])
+        self.assertFalse(body["email_sent"])
+        self.assertIn("/verify/%s" % PUBLISH_ID, body["verify_link"])
+        mail.send.assert_not_called()
+        self.assertTrue(os.path.exists(publish_file_path()))
+
     def test_publish_controller_error_is_returned_as_json_message(self):
         self.login(OWNER)
         headers = {

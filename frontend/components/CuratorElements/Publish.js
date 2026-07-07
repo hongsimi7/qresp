@@ -116,20 +116,31 @@ const makePublishRequest = (paper, setAlert, showLoader, hideLoader) => {
   showLoader();
   axios
     .post(getServer() + "/api/publish", paper)
-    .then(() =>
+    .then((res) => {
+      const verifyLink = res.data && res.data.verify_link;
       setAlert(
         "Success",
-        <p style={{ textAlign: "justify" }}>
-          We've sent you an email with a link to publish the paper. Check the
-          email you provided, just click the link in there to publish the paper.
-          <br /> If you have any questions or issues, please feel free to write
-          to us.
-          <br />
-          <br /> Thank You
-        </p>,
+        verifyLink ? (
+          <p style={{ textAlign: "justify" }}>
+            The paper is queued for verification. Email delivery is disabled on
+            this server, so use this verification link:
+            <br />
+            <a href={verifyLink}>{verifyLink}</a>
+          </p>
+        ) : (
+          <p style={{ textAlign: "justify" }}>
+            We've sent you an email with a link to publish the paper. Check the
+            email you provided, just click the link in there to publish the
+            paper.
+            <br /> If you have any questions or issues, please feel free to
+            write to us.
+            <br />
+            <br /> Thank You
+          </p>
+        ),
         null
-      )
-    )
+      );
+    })
     .catch((err) => {
       console.error(err);
       const message = getPublishErrorMessage(err);

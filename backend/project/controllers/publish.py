@@ -6,6 +6,11 @@ from uuid import uuid4
 from project.utils.mail import mailClient
 from project.utils.validate import Validate
 from project.paperdao import PaperDAO
+from project.config import Config
+
+
+def _truthy(value):
+    return str(value or '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 
 class Publish:
@@ -118,8 +123,23 @@ class Publish:
         try:
             with open("{}{}.json".format(self.dir_prefix, id), 'w') as f:
                 json.dump(paper, f, ensure_ascii=False)
-                mailClient.send(subject, "", html, curatorDetails['emailId'])
-                return 200
         except Exception as e:
             print(e, file=stderr)
-            return {"msg": "Internal Server Error", "code": 500}
+            return {"msg": "Could not queue the paper for verification", "code": 500}
+
+        if _truthy(Config.get_setting('PUBLISH', 'PUBLISH_SKIP_EMAIL')):
+            return {
+                "id": id,
+                "verify_link": verifyLinkUrl,
+                "email_sent": False,
+            }
+
+        try:
+            mailClient.send(subject, "", html, curatorDetails['emailId'])
+            return 200
+        except Exception as e:
+            print(e, file=stderr)
+            return {
+                "msg": "Verification email could not be sent. Check SMTP configuration.",
+                "code": 500,
+            }

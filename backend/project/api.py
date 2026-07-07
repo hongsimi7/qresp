@@ -244,8 +244,9 @@ def publish(paper):
 
     if isinstance(result, int):
         return {"success": True}, 200
-    else:
+    if isinstance(result, dict) and "code" in result:
         return {"msg": result['msg']}, result['code']
+    return {"success": True, **result}, 200
 
 
 def verify(id):

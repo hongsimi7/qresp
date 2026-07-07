@@ -14,6 +14,8 @@ environment variables on the staging backend container.
 - [ ] `QRESP_GOOGLE_REDIRECT_URI=https://localhost:8443/api/auth/google/callback`
       (must match an authorized redirect URI on the Google OAuth client; use
       the public staging hostname instead if testing without the tunnel)
+- [ ] `QRESP_PUBLISH_SKIP_EMAIL=1` (staging QA only: show the publish verify
+      link in the browser instead of sending SMTP email; never in production)
 - [ ] `QRESP_OAUTHLIB_INSECURE_TRANSPORT=1` **only if** the callback is served
       over plain HTTP (not needed for the HTTPS tunnel; never in production)
 

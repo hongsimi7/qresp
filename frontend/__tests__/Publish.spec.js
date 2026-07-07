@@ -67,6 +67,28 @@ describe("Publish", () => {
     );
   });
 
+  it("shows the staging verification link when email delivery is skipped", async () => {
+    const verifyLink = "https://localhost:8443/verify/PUBLISH_test";
+    axios.post.mockResolvedValueOnce({
+      data: { success: true, verify_link: verifyLink, email_sent: false },
+    });
+    const user = userEvent.setup();
+    const { setAlert } = renderPublish();
+
+    await user.click(screen.getByRole("button", { name: /^publish$/i }));
+
+    await waitFor(() => expect(setAlert).toHaveBeenCalledWith(
+      "Success",
+      expect.anything(),
+      null
+    ));
+    render(setAlert.mock.calls[0][1]);
+    expect(screen.getByRole("link", { name: verifyLink })).toHaveAttribute(
+      "href",
+      verifyLink
+    );
+  });
+
   it("extracts useful publish errors from current and legacy backend shapes", () => {
     expect(
       getPublishErrorMessage({ response: { data: { msg: "schema failed" } } })
