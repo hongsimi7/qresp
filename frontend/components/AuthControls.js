@@ -12,6 +12,7 @@ import {
   Typography,
 } from "@mui/material";
 
+import Link from "next/link";
 import { useRouter } from "next/router";
 
 import AuthContext from "../Context/Auth/authContext";
@@ -50,9 +51,18 @@ const AuthControls = () => {
   if (authenticated) {
     return (
       <Fragment>
+        {/* The signed-in name links to the account page. */}
         <Typography
           variant="body2"
-          sx={{ color: "#FFF", alignSelf: "center", mx: 1 }}
+          component={Link}
+          href="/account"
+          sx={{
+            color: "#FFF",
+            alignSelf: "center",
+            mx: 1,
+            textDecoration: "none",
+            "&:hover": { textDecoration: "underline" },
+          }}
         >
           {user.name || user.email}
           {user.is_admin ? " (admin)" : ""}

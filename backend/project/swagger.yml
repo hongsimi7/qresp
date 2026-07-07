@@ -325,6 +325,17 @@ paths:
           description: Only the record owner or an admin may load this
         404:
           description: Paper with this id does not exist
+  /account/papers:
+    get:
+      operationId: "project.api.account_papers"
+      tags:
+        - "Account"
+      summary: "Lists records owned by the current session user"
+      responses:
+        200:
+          description: Compact list of the user's records
+        401:
+          description: Authentication required
   /admin/ownerless-papers:
     get:
       operationId: "project.api.ownerless_papers"

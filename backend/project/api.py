@@ -337,6 +337,51 @@ def raw_paper(id):
     return {"id": str(existing.id), "paper": data}, 200
 
 
+def _paper_summary(paper):
+    """Compact record listing entry shared by the admin ownerless inventory
+    and the account page."""
+    reference = getattr(paper, "reference", None)
+    authors = []
+    if reference is not None and reference.authors:
+        for author in reference.authors:
+            name = "%s %s" % (author.firstName or "", author.lastName or "")
+            authors.append(name.strip())
+    year = None
+    if reference is not None and reference.year:
+        try:
+            year = int(reference.year)
+        except (TypeError, ValueError):
+            year = None
+    return {
+        "id": str(paper.id),
+        "title": reference.title if reference is not None else "",
+        "owner_email": paper.owner_email or None,
+        "authors": ", ".join(authors),
+        "year": year,
+        "tags": list(paper.tags or []),
+        "collections": list(paper.collections or []),
+    }
+
+
+def account_papers():
+    """
+    List records owned by the current session user
+    Handler for GET: /api/account/papers
+
+    Powers the /account page. Anonymous requests get 401; admins see only
+    THEIR OWN records here (the ownerless inventory is a separate admin
+    endpoint).
+    """
+    user = get_current_user()
+    if not user:
+        return {"error": "authentication required"}, 401
+
+    email = (user.get("email") or "").strip().lower()
+    owned = Paper.objects(owner_email=email)
+    papers = [_paper_summary(paper) for paper in owned]
+    return {"papers": papers, "count": len(papers)}, 200
+
+
 def _require_admin():
     """Shared guard for admin-only endpoints. Returns None when the session
     user is an admin, otherwise the (body, status) error response."""
@@ -369,27 +414,12 @@ def ownerless_papers():
 
     papers = []
     for paper in ownerless:
-        reference = getattr(paper, "reference", None)
+        summary = _paper_summary(paper)
         inserted_by = getattr(getattr(paper, "info", None), "insertedBy", None)
-        authors = []
-        if reference is not None and reference.authors:
-            for author in reference.authors:
-                name = "%s %s" % (author.firstName or "", author.lastName or "")
-                authors.append(name.strip())
-        year = None
-        if reference is not None and reference.year:
-            try:
-                year = int(reference.year)
-            except (TypeError, ValueError):
-                year = None
-        papers.append({
-            "id": str(paper.id),
-            "title": reference.title if reference is not None else "",
-            "owner_email": paper.owner_email or None,
-            "suggested_owner_email": getattr(inserted_by, "emailId", None) or None,
-            "authors": ", ".join(authors),
-            "year": year,
-        })
+        summary["suggested_owner_email"] = (
+            getattr(inserted_by, "emailId", None) or None
+        )
+        papers.append(summary)
 
     return {"papers": papers, "count": len(papers)}, 200
 
