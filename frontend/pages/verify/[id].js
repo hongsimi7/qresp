@@ -4,6 +4,8 @@ import { Typography, Box, Container } from "@mui/material";
 import Link from "next/link";
 import axios from "axios";
 
+import { resolveServerSideApiBase } from "../../Utils/serverSideApi";
+
 import SEO from "../../components/seo";
 import StyledButton from "../../components/button";
 
@@ -49,7 +51,8 @@ const Verify = ({ id, server, error }) => {
   );
 };
 
-export async function getServerSideProps({ query }) {
+export async function getServerSideProps(ctx) {
+  const { query } = ctx;
   var data = { id: "", error: "" };
 
   if (!("server" in query) || !query.server)
@@ -61,9 +64,16 @@ export async function getServerSideProps({ query }) {
       },
     };
 
+  // SSR runs inside the gui container, where a localhost/same-origin
+  // query.server is unreachable (staging verification links failed with
+  // ECONNREFUSED 127.0.0.1:8443) — resolve the fetch base the same way
+  // paperdetails/search do. The public query.server passed to the page for
+  // user-facing links stays untouched.
+  const apiBase = resolveServerSideApiBase(ctx, query.server);
+
   try {
     const response = await axios
-      .get(`${query.server}/api/verify/${query.id}`)
+      .get(`${apiBase}/api/verify/${query.id}`)
       .then((res) => res.data);
     data = response;
   } catch (error) {
