@@ -3,12 +3,14 @@
 # `from connexion import request, jsonifier` import is gone in Connexion 3;
 # `jsonifier` was never used).
 import re
+from datetime import datetime
 
 from flask import request
 from mongoengine import Q as MongoQ
 
 from project.auth import (can_edit_paper, csrf_protect, get_current_user,
                           is_admin, stamp_owner)
+from project.models import CuratorDraft
 from project.paperdao import *
 from project.util import Dtree
 
@@ -380,6 +382,140 @@ def account_papers():
     owned = Paper.objects(owner_email=email)
     papers = [_paper_summary(paper) for paper in owned]
     return {"papers": papers, "count": len(papers)}, 200
+
+
+def _draft_display_title(state, given_title):
+    """Explicit title if provided, otherwise derived from the draft content."""
+    if given_title and str(given_title).strip():
+        return str(given_title).strip()
+    state = state or {}
+    reference = state.get("referenceInfo") or {}
+    if reference.get("title"):
+        return reference["title"]
+    paper_info = state.get("paperInfo") or {}
+    tags = paper_info.get("tags") or []
+    if tags:
+        return ", ".join(str(tag) for tag in tags[:5])
+    return "Untitled draft"
+
+
+def _draft_summary(draft):
+    return {
+        "id": str(draft.id),
+        "title": draft.title or "Untitled draft",
+        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+        "owner_email": draft.owner_email,
+    }
+
+
+def _own_draft_or_error(id):
+    """Owner-scoped draft lookup. Returns (draft, None) or (None, response)."""
+    user = get_current_user()
+    if not user:
+        return None, ({"error": "authentication required"}, 401)
+    email = (user.get("email") or "").strip().lower()
+    try:
+        draft = CuratorDraft.objects.get(id=str(id))
+    except Exception:
+        return None, ({"error": "Draft not found"}, 404)
+    if (draft.owner_email or "").lower() != email:
+        # 404, not 403: draft ids must not be probeable across accounts.
+        return None, ({"error": "Draft not found"}, 404)
+    return draft, None
+
+
+def account_drafts():
+    """
+    List the session user's curator drafts
+    Handler for GET: /api/account/drafts
+    """
+    user = get_current_user()
+    if not user:
+        return {"error": "authentication required"}, 401
+    email = (user.get("email") or "").strip().lower()
+    drafts = CuratorDraft.objects(owner_email=email).order_by("-updated_at")
+    return {"drafts": [_draft_summary(d) for d in drafts],
+            "count": drafts.count()}, 200
+
+
+@csrf_protect
+def create_account_draft(body):
+    """
+    Save a NEW curator draft for the session user
+    Handler for POST: /api/account/drafts
+
+    Accepts arbitrarily incomplete curator state — drafts are never
+    publish/schema-validated.
+    """
+    user = get_current_user()
+    if not user:
+        return {"error": "authentication required"}, 401
+    email = (user.get("email") or "").strip().lower()
+
+    state = (body or {}).get("state") or {}
+    if not isinstance(state, dict):
+        return {"error": "state must be an object"}, 400
+    now = datetime.utcnow()
+    draft = CuratorDraft(
+        owner_email=email,
+        title=_draft_display_title(state, (body or {}).get("title")),
+        state=state,
+        created_at=now,
+        updated_at=now,
+    )
+    draft.save()
+    return _draft_summary(draft), 200
+
+
+def account_draft(id):
+    """
+    Return one of the session user's drafts, including its full state
+    Handler for GET: /api/account/drafts/{id}
+    """
+    draft, error = _own_draft_or_error(id)
+    if error:
+        return error
+    summary = _draft_summary(draft)
+    summary["state"] = draft.state or {}
+    return summary, 200
+
+
+@csrf_protect
+def update_account_draft(id, body):
+    """
+    Update one of the session user's drafts (title and/or state)
+    Handler for PUT: /api/account/drafts/{id}
+    """
+    draft, error = _own_draft_or_error(id)
+    if error:
+        return error
+
+    body = body or {}
+    if "state" in body:
+        if not isinstance(body["state"], dict):
+            return {"error": "state must be an object"}, 400
+        draft.state = body["state"]
+    if "title" in body:
+        draft.title = _draft_display_title(draft.state, body["title"])
+    elif not draft.title:
+        draft.title = _draft_display_title(draft.state, None)
+    draft.updated_at = datetime.utcnow()
+    draft.save()
+    return _draft_summary(draft), 200
+
+
+@csrf_protect
+def delete_account_draft(id):
+    """
+    Delete one of the session user's drafts
+    Handler for DELETE: /api/account/drafts/{id}
+    """
+    draft, error = _own_draft_or_error(id)
+    if error:
+        return error
+    draft.delete()
+    return {"success": True}, 200
 
 
 def _require_admin():

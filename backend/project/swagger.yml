@@ -336,6 +336,110 @@ paths:
           description: Compact list of the user's records
         401:
           description: Authentication required
+  /account/drafts:
+    get:
+      operationId: "project.api.account_drafts"
+      tags:
+        - "Account"
+      summary: "Lists the current session user's curator drafts"
+      responses:
+        200:
+          description: Compact list of the user's drafts (no state payloads)
+        401:
+          description: Authentication required
+    post:
+      operationId: "project.api.create_account_draft"
+      tags:
+        - "Account"
+      summary: "Saves a new curator draft (state may be arbitrarily incomplete)"
+      parameters:
+        - in: body
+          name: body
+          required: true
+          description: Draft payload; state is stored as-is, never
+            publish-validated.
+          schema:
+            type: object
+            properties:
+              title:
+                type: string
+              state:
+                type: object
+      responses:
+        200:
+          description: Draft created; summary returned
+        400:
+          description: Invalid draft payload
+        401:
+          description: Authentication required
+  /account/drafts/{id}:
+    get:
+      operationId: "project.api.account_draft"
+      tags:
+        - "Account"
+      summary: "Returns one of the user's drafts including its full state"
+      parameters:
+        - in: path
+          name: id
+          type: string
+          required: true
+          description: Draft Id
+      responses:
+        200:
+          description: Draft returned
+        401:
+          description: Authentication required
+        404:
+          description: No such draft for this user
+    put:
+      operationId: "project.api.update_account_draft"
+      tags:
+        - "Account"
+      summary: "Updates one of the user's drafts (title and/or state)"
+      parameters:
+        - in: path
+          name: id
+          type: string
+          required: true
+          description: Draft Id
+        - in: body
+          name: body
+          required: true
+          description: Fields to update; state is stored as-is.
+          schema:
+            type: object
+            properties:
+              title:
+                type: string
+              state:
+                type: object
+      responses:
+        200:
+          description: Draft updated; summary returned
+        400:
+          description: Invalid draft payload
+        401:
+          description: Authentication required
+        404:
+          description: No such draft for this user
+    delete:
+      operationId: "project.api.delete_account_draft"
+      tags:
+        - "Account"
+      summary: "Deletes one of the user's drafts"
+      parameters:
+        - in: path
+          name: id
+          type: string
+          required: true
+          description: Draft Id
+      responses:
+        200:
+          description: Draft deleted
+        401:
+          description: Authentication required
+        404:
+          description: No such draft for this user
   /admin/ownerless-papers:
     get:
       operationId: "project.api.ownerless_papers"

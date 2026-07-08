@@ -193,3 +193,21 @@ class Paper(Document):
     meta = {'strict': False,
             'queryset_class': FilterQuerySet
             }
+
+
+class CuratorDraft(Document):
+    """Account-owned curator draft saved explicitly from /curator.
+
+    `state` is the raw serialized curator state and is deliberately NOT
+    publish/schema-validated — a draft may be arbitrarily incomplete. Drafts
+    are private to their owner (looked up by the verified session email).
+    """
+    owner_email = StringField(required=True, max_length=254)
+    title = StringField(default="")
+    state = DictField()
+    created_at = DateTimeField()
+    updated_at = DateTimeField()
+    meta = {
+        'collection': 'curator_drafts',
+        'indexes': ['owner_email'],
+    }
