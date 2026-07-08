@@ -1,5 +1,13 @@
-import { Fragment, useContext, useEffect, useRef } from "react";
-import { Container, Box } from "@mui/material";
+import { Fragment, useCallback, useContext, useEffect, useRef, useState } from "react";
+import {
+  Container,
+  Box,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  TextField,
+} from "@mui/material";
 import { useRouter } from "next/router";
 
 import CuratorState from "../Context/Curator/CuratorState";
@@ -66,6 +74,7 @@ const CuratorFormsRemounter = ({ children }) => {
 const CuratorDraftNavigationGuard = ({ editMode }) => {
   const router = useRouter();
   const {
+    getDraftTitle,
     hasMeaningfulDraft,
     hasUnsavedDraftChanges,
     saveDraft,
@@ -74,6 +83,46 @@ const CuratorDraftNavigationGuard = ({ editMode }) => {
   } = useContext(CuratorContext);
   const { setAlert, unsetAlert } = useContext(AlertContext);
   const { authenticated } = useContext(AuthContext);
+  const [leaveDraftDialog, setLeaveDraftDialog] = useState({
+    open: false,
+    nextPath: "",
+    title: "",
+  });
+
+  const closeLeaveDraftDialog = () =>
+    setLeaveDraftDialog((current) => ({ ...current, open: false }));
+
+  const openLeaveDraftDialog = useCallback(
+    (nextPath) => {
+      unsetAlert();
+      setLeaveDraftDialog({
+        open: true,
+        nextPath,
+        title:
+          (getDraftTitle && getDraftTitle()) ||
+          "Untitled draft",
+      });
+    },
+    [getDraftTitle, unsetAlert]
+  );
+
+  const saveNamedDraftAndLeave = () => {
+    const title = leaveDraftDialog.title.trim() || "Untitled draft";
+    saveDraftToServer(title)
+      .then(() => {
+        const { nextPath } = leaveDraftDialog;
+        setLeaveDraftDialog({ open: false, nextPath: "", title: "" });
+        router.push(nextPath);
+      })
+      .catch(() => {
+        setLeaveDraftDialog((current) => ({ ...current, open: false }));
+        setAlert(
+          "Error",
+          "Your draft could not be saved, so you are still on the curator. Please check that you are still signed in and try again.",
+          null
+        );
+      });
+  };
 
   useEffect(() => {
     if (editMode || typeof window === "undefined") return undefined;
@@ -130,21 +179,6 @@ const CuratorDraftNavigationGuard = ({ editMode }) => {
         router.push(nextPath);
       };
 
-      const saveAndLeave = () => {
-        saveDraftToServer()
-          .then(() => {
-            unsetAlert();
-            router.push(nextPath);
-          })
-          .catch(() => {
-            setAlert(
-              "Error",
-              "Your draft could not be saved, so you are still on the curator. Please check that you are still signed in and try again.",
-              null
-            );
-          });
-      };
-
       setAlert(
         "Save draft before leaving?",
         authenticated
@@ -152,7 +186,7 @@ const CuratorDraftNavigationGuard = ({ editMode }) => {
           : "You have unsaved curator changes. Sign in to save them as an account draft, or leave without saving (a local recovery copy stays in this browser).",
         <Fragment>
           {authenticated ? (
-            <RegularStyledButton onClick={saveAndLeave}>
+            <RegularStyledButton onClick={() => openLeaveDraftDialog(nextPath)}>
               Save Draft and Leave
             </RegularStyledButton>
           ) : null}
@@ -176,8 +210,10 @@ const CuratorDraftNavigationGuard = ({ editMode }) => {
     authenticated,
     draftDirty,
     editMode,
+    getDraftTitle,
     hasUnsavedDraftChanges,
     hasMeaningfulDraft,
+    openLeaveDraftDialog,
     router,
     saveDraft,
     saveDraftToServer,
@@ -185,7 +221,39 @@ const CuratorDraftNavigationGuard = ({ editMode }) => {
     unsetAlert,
   ]);
 
-  return null;
+  return (
+    <Dialog
+      open={leaveDraftDialog.open}
+      onClose={closeLeaveDraftDialog}
+      maxWidth="xs"
+      fullWidth
+    >
+      <DialogTitle>Save draft before leaving</DialogTitle>
+      <DialogContent dividers>
+        <TextField
+          autoFocus
+          label="Draft name"
+          value={leaveDraftDialog.title}
+          onChange={(event) =>
+            setLeaveDraftDialog((current) => ({
+              ...current,
+              title: event.target.value,
+            }))
+          }
+          fullWidth
+          helperText="Drafts can be incomplete. Required fields are checked when you publish."
+        />
+      </DialogContent>
+      <DialogActions>
+        <RegularStyledButton onClick={closeLeaveDraftDialog}>
+          Cancel
+        </RegularStyledButton>
+        <RegularStyledButton onClick={saveNamedDraftAndLeave}>
+          Save Draft and Leave
+        </RegularStyledButton>
+      </DialogActions>
+    </Dialog>
+  );
 };
 
 const curator = () => {
@@ -252,4 +320,5 @@ const curator = () => {
   );
 };
 
+export { CuratorDraftNavigationGuard };
 export default curator;
