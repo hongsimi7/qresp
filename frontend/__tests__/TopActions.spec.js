@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import TopActions from "../components/CuratorElements/TopActions";
 import AlertContext from "../Context/Alert/alertContext";
+import AuthContext from "../Context/Auth/authContext";
 import CuratorContext from "../Context/Curator/curatorContext";
 import ServerContext from "../Context/Servers/serverContext";
 
@@ -23,11 +24,12 @@ const metadata = {
   license: "",
 };
 
-const renderTopActions = ({ hasDraft = true } = {}) => {
+const renderTopActions = ({ hasDraft = true, authenticated = true } = {}) => {
   const setAlert = jest.fn();
   const unsetAlert = jest.fn();
   const resetAll = jest.fn();
   const hasMeaningfulDraft = jest.fn(() => hasDraft);
+  const saveDraftToServer = jest.fn(() => Promise.resolve("draft123"));
   render(
     <CuratorContext.Provider
       value={{
@@ -37,21 +39,24 @@ const renderTopActions = ({ hasDraft = true } = {}) => {
         getSavedDraft: jest.fn(() => (hasDraft ? metadata : null)),
         resumeDraft: jest.fn(),
         hasMeaningfulDraft,
+        saveDraftToServer,
       }}
     >
-      <AlertContext.Provider value={{ setAlert, unsetAlert }}>
-        <ServerContext.Provider
-          value={{
-            selectedHttp: null,
-            setSelectedHttp: jest.fn(),
-          }}
-        >
-          <TopActions />
-        </ServerContext.Provider>
-      </AlertContext.Provider>
+      <AuthContext.Provider value={{ authenticated }}>
+        <AlertContext.Provider value={{ setAlert, unsetAlert }}>
+          <ServerContext.Provider
+            value={{
+              selectedHttp: null,
+              setSelectedHttp: jest.fn(),
+            }}
+          >
+            <TopActions />
+          </ServerContext.Provider>
+        </AlertContext.Provider>
+      </AuthContext.Provider>
     </CuratorContext.Provider>
   );
-  return { setAlert, unsetAlert, resetAll };
+  return { setAlert, unsetAlert, resetAll, saveDraftToServer };
 };
 
 describe("TopActions draft controls", () => {
@@ -67,8 +72,9 @@ describe("TopActions draft controls", () => {
 
     expect(setAlert).toHaveBeenCalledWith(
       "Start from scratch?",
-      "Save this curator draft before clearing the form, or discard it and start fresh.",
-      expect.anything()
+      "Save this work as a draft in your account before clearing the form, or discard it and start fresh.",
+      expect.anything(),
+      { hideDismiss: true }
     );
 
     render(setAlert.mock.calls[0][2]);
@@ -89,9 +95,10 @@ describe("TopActions draft controls", () => {
     expect(unsetAlert).toHaveBeenCalledTimes(1);
   });
 
-  it("can save the browser draft before starting from scratch", async () => {
+  it("can save the account draft before starting from scratch", async () => {
     const user = userEvent.setup();
-    const { setAlert, unsetAlert, resetAll } = renderTopActions();
+    const { setAlert, unsetAlert, resetAll, saveDraftToServer } =
+      renderTopActions();
 
     await user.click(
       screen.getAllByRole("button", {
@@ -104,7 +111,8 @@ describe("TopActions draft controls", () => {
       screen.getByRole("button", { name: /save draft and start fresh/i })
     );
 
-    expect(resetAll).toHaveBeenCalledWith({ preserveDraft: true });
+    await waitFor(() => expect(saveDraftToServer).toHaveBeenCalledTimes(1));
+    expect(resetAll).toHaveBeenCalledWith({ preserveDraft: false });
     expect(unsetAlert).toHaveBeenCalledTimes(1);
   });
 

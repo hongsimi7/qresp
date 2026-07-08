@@ -1,9 +1,10 @@
-import { useReducer, useEffect, useRef } from "react";
+import { useReducer, useEffect, useRef, useState } from "react";
 import CuratorReducer from "./curatorReducer";
 import CuratorContext from "./curatorContext";
 
 import WebStore from "../../Utils/Persist";
 import { summarizeBrowserDraft } from "../../Utils/browserDraft";
+import { saveServerDraft } from "../../Utils/serverDrafts";
 
 import {
   SET_CURATOR_STATE,
@@ -29,6 +30,16 @@ const CuratorState = (props) => {
   const firstPersist = useRef(true);
   const autoResumeAttempted = useRef(false);
   const preserveDraftOnNextReset = useRef(false);
+
+  // Server drafts: id of the account draft this form was loaded from (saves
+  // update it instead of creating duplicates), a dirty flag for the
+  // navigation guard, and a version counter that remounts the form tree on
+  // reset so uncontrolled RHF inputs actually blank.
+  const [activeDraftId, setActiveDraftId] = useState(null);
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [resetVersion, setResetVersion] = useState(0);
+  const firstDirtyCheck = useRef(true);
+  const skipNextDirty = useRef(false);
 
   const initialState = {
     curatorInfo: {
@@ -127,7 +138,47 @@ const CuratorState = (props) => {
     state.workflow.nodes,
   ]);
 
-  const setAll = (data) => dispatch({ type: SET_CURATOR_STATE, payload: data });
+  useEffect(() => {
+    if (skipNextDirty.current) {
+      skipNextDirty.current = false;
+      firstDirtyCheck.current = false;
+      return;
+    }
+    if (firstDirtyCheck.current) {
+      firstDirtyCheck.current = false;
+      return;
+    }
+    setDraftDirty(true);
+  }, [state]);
+
+  const normalizeState = (data = {}) => ({
+    ...initialState,
+    ...data,
+    curatorInfo: {
+      ...initialState.curatorInfo,
+      ...(data.curatorInfo || {}),
+    },
+    paperInfo: {
+      ...initialState.paperInfo,
+      ...(data.paperInfo || {}),
+    },
+    referenceInfo: {
+      ...initialState.referenceInfo,
+      ...(data.referenceInfo || {}),
+    },
+    workflow: {
+      ...initialState.workflow,
+      ...(data.workflow || {}),
+    },
+    charts: data.charts || initialState.charts,
+    tools: data.tools || initialState.tools,
+    datasets: data.datasets || initialState.datasets,
+    scripts: data.scripts || initialState.scripts,
+    heads: data.heads || initialState.heads,
+  });
+
+  const setAll = (data) =>
+    dispatch({ type: SET_CURATOR_STATE, payload: normalizeState(data) });
 
   const hasMeaningfulDraft = () => Boolean(summarizeBrowserDraft(state));
 
@@ -146,7 +197,35 @@ const CuratorState = (props) => {
     } else if (draftKey) {
       WebStore.remove(draftKey);
     }
+    skipNextDirty.current = true;
+    setActiveDraftId(null);
+    setDraftDirty(false);
+    // Remount the form tree: context reset alone leaves stale values in the
+    // always-mounted uncontrolled form inputs.
+    setResetVersion((version) => version + 1);
     dispatch({ type: SET_CURATOR_STATE, payload: initialState });
+  };
+
+  // Persist the current form to the signed-in user's account drafts. Updates
+  // the loaded draft when there is one, otherwise creates a new draft and
+  // starts tracking its id. Resolves to the draft id; rejects on API errors
+  // (e.g. 401 when not signed in) so callers can surface them.
+  const saveDraftToServer = async () => {
+    const id = await saveServerDraft(activeDraftId, state);
+    if (id) {
+      setActiveDraftId(id);
+    }
+    setDraftDirty(false);
+    return id;
+  };
+
+  // Called by the ?draft=<id> loader after fetching a server draft: fills the
+  // form without marking it dirty (nothing is unsaved right after a load).
+  const applyServerDraft = (draft) => {
+    skipNextDirty.current = true;
+    setAll((draft && draft.state) || {});
+    setActiveDraftId(draft ? draft.id : null);
+    setDraftDirty(false);
   };
 
   const getSavedDraft = () => (draftKey ? WebStore.get(draftKey) : null);
@@ -220,6 +299,11 @@ const CuratorState = (props) => {
         resumeDraft,
         saveDraft,
         hasMeaningfulDraft,
+        activeDraftId,
+        draftDirty,
+        resetVersion,
+        saveDraftToServer,
+        applyServerDraft,
         setCuratorInfo,
         setFileServerPath,
         setPaperInfo,

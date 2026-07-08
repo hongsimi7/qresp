@@ -25,6 +25,18 @@ const authedUser = {
   },
 };
 
+const mockAccountApi = ({ papers = [], drafts = [] } = {}) => {
+  axios.get.mockImplementation((url) => {
+    if (url === "/api/account/papers") {
+      return Promise.resolve({ data: { count: papers.length, papers } });
+    }
+    if (url === "/api/account/drafts") {
+      return Promise.resolve({ data: { count: drafts.length, drafts } });
+    }
+    return Promise.reject(new Error(`Unexpected URL: ${url}`));
+  });
+};
+
 describe("Account page", () => {
   afterEach(() => {
     jest.resetAllMocks();
@@ -40,21 +52,18 @@ describe("Account page", () => {
   });
 
   it("shows the profile and the user's records with view/edit links", async () => {
-    axios.get.mockResolvedValue({
-      data: {
-        count: 1,
-        papers: [
-          {
-            id: "abc123",
-            title: "Photoelectron Spectra",
-            authors: "Alex Gaiduk",
-            year: 2016,
-            tags: ["DFT"],
-            collections: ["MICCOM"],
-            owner_email: "owner@example.com",
-          },
-        ],
-      },
+    mockAccountApi({
+      papers: [
+        {
+          id: "abc123",
+          title: "Photoelectron Spectra",
+          authors: "Alex Gaiduk",
+          year: 2016,
+          tags: ["DFT"],
+          collections: ["MICCOM"],
+          owner_email: "owner@example.com",
+        },
+      ],
     });
     renderAccount(authedUser);
     expect(screen.getByText("Owner Example")).toBeInTheDocument();
@@ -64,6 +73,7 @@ describe("Account page", () => {
       await screen.findByText(/photoelectron spectra \(2016\)/i)
     ).toBeInTheDocument();
     expect(axios.get).toHaveBeenCalledWith("/api/account/papers");
+    expect(axios.get).toHaveBeenCalledWith("/api/account/drafts");
     const view = screen.getByRole("link", { name: /^view$/i });
     expect(view.getAttribute("href")).toContain("/paperdetails/abc123");
     const edit = screen.getByRole("link", { name: /edit in curator/i });
@@ -71,7 +81,7 @@ describe("Account page", () => {
   });
 
   it("shows the admin badge for admins", async () => {
-    axios.get.mockResolvedValue({ data: { count: 0, papers: [] } });
+    mockAccountApi();
     renderAccount({
       ...authedUser,
       user: { ...authedUser.user, is_admin: true },
@@ -83,7 +93,7 @@ describe("Account page", () => {
   });
 
   it("surfaces a browser draft with Resume and Clear", async () => {
-    axios.get.mockResolvedValue({ data: { count: 0, papers: [] } });
+    mockAccountApi();
     localStorage.setItem(
       "state",
       JSON.stringify({
@@ -103,7 +113,43 @@ describe("Account page", () => {
     expect(screen.queryByText("My draft paper")).not.toBeInTheDocument();
     expect(localStorage.getItem("state")).toBeNull();
     expect(
-      screen.getByText(/one local draft per browser/i)
+      screen.getByText(/no local recovery draft/i)
     ).toBeInTheDocument();
+  });
+
+  it("lists multiple account drafts with resume and delete actions", async () => {
+    mockAccountApi({
+      drafts: [
+        {
+          id: "draft1",
+          title: "First draft",
+          updated_at: "2026-07-08T12:00:00",
+        },
+        {
+          id: "draft2",
+          title: "Second draft",
+          updated_at: "2026-07-08T13:00:00",
+        },
+      ],
+    });
+    axios.delete.mockResolvedValue({ data: { success: true } });
+    const user = userEvent.setup();
+
+    renderAccount(authedUser);
+
+    expect(await screen.findByText("First draft")).toBeInTheDocument();
+    expect(screen.getByText("Second draft")).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: /resume/i })[0]).toHaveAttribute(
+      "href",
+      "/curator?draft=draft1"
+    );
+
+    await user.click(screen.getAllByRole("button", { name: /delete/i })[0]);
+
+    await waitFor(() =>
+      expect(axios.delete).toHaveBeenCalledWith("/api/account/drafts/draft1")
+    );
+    expect(screen.queryByText("First draft")).not.toBeInTheDocument();
+    expect(screen.getByText("Second draft")).toBeInTheDocument();
   });
 });

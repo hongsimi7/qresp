@@ -1,4 +1,4 @@
-import { useState, useContext, useEffect, Fragment } from "react";
+import { useState, useContext, Fragment } from "react";
 
 import {
   Grid,
@@ -25,6 +25,7 @@ import { RegularStyledButton } from "../button";
 import CuratorContext from "../../Context/Curator/curatorContext";
 import AlertContext from "../../Context/Alert/alertContext";
 import ServerContext from "../../Context/Servers/serverContext";
+import AuthContext from "../../Context/Auth/authContext";
 
 const preview = (metadata, setAlert, router) => {
   axios
@@ -47,63 +48,90 @@ const preview = (metadata, setAlert, router) => {
 };
 
 const TopActions = () => {
-  const { metadata, setAll, resetAll, getSavedDraft, resumeDraft, hasMeaningfulDraft } =
+  const { metadata, setAll, resetAll, hasMeaningfulDraft, saveDraftToServer } =
     useContext(CuratorContext);
   const { setAlert, unsetAlert } = useContext(AlertContext);
   const { setSelectedHttp, selectedHttp } = useContext(ServerContext);
+  const { authenticated } = useContext(AuthContext);
   const [mdata, setMdata] = useState("");
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
-  const [hasDraft, setHasDraft] = useState(false);
 
   const router = useRouter();
-
-  useEffect(() => {
-    setHasDraft(Boolean(getSavedDraft && getSavedDraft()));
-  }, [getSavedDraft]);
+  const dialogButtonSx = {
+    minWidth: { xs: "100%", sm: 0 },
+    whiteSpace: "nowrap",
+  };
 
   const onClicks = {
-    draft: () => {
-      const data = resumeDraft && resumeDraft();
-      if (data) {
-        setHasDraft(false);
-      } else {
-        setHasDraft(false);
-        setAlert("No saved draft", "There is no saved draft to resume.", null);
+    saveDraft: () => {
+      if (!authenticated) {
+        setAlert(
+          "Sign in required",
+          "Sign in to save drafts to your account. Account drafts can be resumed from any browser via the Account page.",
+          null
+        );
+        return;
       }
+      saveDraftToServer()
+        .then(() => {
+          setAlert(
+            "Draft saved",
+            "Your draft was saved to your account. Resume it any time from Account > My drafts.",
+            null
+          );
+        })
+        .catch(() => {
+          setAlert(
+            "Error",
+            "Your draft could not be saved. Please check that you are still signed in and try again.",
+            null
+          );
+        });
     },
     resume: () => {
       setResumeDialogOpen(true);
     },
     scratch: () => {
       const hasCurrentWork = hasMeaningfulDraft ? hasMeaningfulDraft() : false;
+      const discardAndReset = () => {
+        resetAll({ preserveDraft: false });
+        unsetAlert();
+      };
+      const saveAndReset = () => {
+        saveDraftToServer()
+          .then(() => {
+            resetAll({ preserveDraft: false });
+            unsetAlert();
+          })
+          .catch(() => {
+            setAlert(
+              "Error",
+              "Your draft could not be saved, so the form was left untouched. Please check that you are still signed in and try again.",
+              null
+            );
+          });
+      };
       setAlert(
         "Start from scratch?",
         hasCurrentWork
-          ? "Save this curator draft before clearing the form, or discard it and start fresh."
+          ? authenticated
+            ? "Save this work as a draft in your account before clearing the form, or discard it and start fresh."
+            : "This will clear the current curator form. Sign in first if you want to save this work as an account draft."
           : "This will clear the current curator form.",
         <Fragment>
-          <RegularStyledButton onClick={unsetAlert}>
+          <RegularStyledButton sx={dialogButtonSx} onClick={unsetAlert}>
             Cancel
           </RegularStyledButton>
-          <RegularStyledButton
-            onClick={() => {
-              resetAll({ preserveDraft: true });
-              setHasDraft(true);
-              unsetAlert();
-            }}
-          >
-            Save Draft and Start Fresh
-          </RegularStyledButton>
-          <RegularStyledButton
-            onClick={() => {
-              resetAll({ preserveDraft: false });
-              setHasDraft(false);
-              unsetAlert();
-            }}
-          >
+          {authenticated && hasCurrentWork ? (
+            <RegularStyledButton sx={dialogButtonSx} onClick={saveAndReset}>
+              Save Draft and Start Fresh
+            </RegularStyledButton>
+          ) : null}
+          <RegularStyledButton sx={dialogButtonSx} onClick={discardAndReset}>
             Discard and Start Fresh
           </RegularStyledButton>
-        </Fragment>
+        </Fragment>,
+        { hideDismiss: true }
       );
     },
     download: (metadata) => {
@@ -116,10 +144,10 @@ const TopActions = () => {
   };
 
   const buttons = {
-    draft: (fullWidth = false) => (
-      <StyledTooltip title="Restore the locally saved curator draft">
-        <RegularStyledButton fullWidth={fullWidth} onClick={onClicks.draft}>
-          Resume Saved Draft
+    saveDraft: (fullWidth = false) => (
+      <StyledTooltip title="Save this work as a draft in your account">
+        <RegularStyledButton fullWidth={fullWidth} onClick={onClicks.saveDraft}>
+          Save Draft
         </RegularStyledButton>
       </StyledTooltip>
     ),
@@ -196,26 +224,22 @@ const TopActions = () => {
         {/* MUI v6+ removed <Hidden>; responsive display lives on each item so
             the Grid container keeps its direct Grid children. */}
         <Grid container direction="row" spacing={1} size={{ xs: 12, sm: 6 }}>
-          {hasDraft && (
-            <Grid sx={{ display: { xs: "none", sm: "block" } }}>
-              {buttons.draft()}
-            </Grid>
-          )}
+          <Grid sx={{ display: { xs: "none", sm: "block" } }}>
+            {buttons.saveDraft()}
+          </Grid>
           <Grid sx={{ display: { xs: "none", sm: "block" } }}>
             {buttons.resume()}
           </Grid>
           <Grid sx={{ display: { xs: "none", sm: "block" } }}>
             {buttons.scratch()}
           </Grid>
-          {hasDraft && (
-            <Grid sx={{ display: { xs: "block", sm: "none" } }} size={12}>
-              {buttons.draft(true)}
-            </Grid>
-          )}
-          <Grid sx={{ display: { xs: "block", sm: "none" } }} size={4}>
+          <Grid sx={{ display: { xs: "block", sm: "none" } }} size={12}>
+            {buttons.saveDraft(true)}
+          </Grid>
+          <Grid sx={{ display: { xs: "block", sm: "none" } }} size={5}>
             {buttons.resume(true)}
           </Grid>
-          <Grid sx={{ display: { xs: "block", sm: "none" } }} size={8}>
+          <Grid sx={{ display: { xs: "block", sm: "none" } }} size={7}>
             {buttons.scratch(true)}
           </Grid>
         </Grid>

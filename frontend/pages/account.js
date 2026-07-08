@@ -12,20 +12,30 @@ import {
   clearBrowserDraft,
   summarizeBrowserDraft,
 } from "../Utils/browserDraft";
+import { deleteServerDraft, listServerDrafts } from "../Utils/serverDrafts";
 import { getServer } from "../Utils/utils";
 
-// Minimal signed-in account page (Qresp 2.0): profile, the user's published
-// records (backend-owned list), and any curator draft saved in THIS browser.
-// Deliberately small — no admin dashboard, no server-side drafts.
+const formatDate = (value) => {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString();
+};
 
 const AccountPage = () => {
   const { loading, authenticated, user } = useContext(AuthContext);
   const [papers, setPapers] = useState(null);
-  const [draft, setDraft] = useState(null);
+  const [drafts, setDrafts] = useState(null);
+  const [draftError, setDraftError] = useState("");
+  const [localDraft, setLocalDraft] = useState(null);
 
   useEffect(() => {
     if (!authenticated) return undefined;
     let cancelled = false;
+    setPapers(null);
+    setDrafts(null);
+    setDraftError("");
+
     axios
       .get("/api/account/papers")
       .then((res) => {
@@ -34,19 +44,41 @@ const AccountPage = () => {
       .catch(() => {
         if (!cancelled) setPapers([]);
       });
+
+    listServerDrafts()
+      .then((items) => {
+        if (!cancelled) setDrafts(items);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDrafts([]);
+          setDraftError("Could not load your drafts.");
+        }
+      });
+
     return () => {
       cancelled = true;
     };
   }, [authenticated]);
 
   useEffect(() => {
-    // Browser-only: surface an existing curator draft from localStorage.
-    setDraft(summarizeBrowserDraft());
+    setLocalDraft(summarizeBrowserDraft());
   }, []);
 
-  const clearDraft = () => {
+  const clearLocalDraft = () => {
     clearBrowserDraft();
-    setDraft(null);
+    setLocalDraft(null);
+  };
+
+  const removeDraft = (id) => {
+    setDraftError("");
+    deleteServerDraft(id)
+      .then(() => {
+        setDrafts((items) => (items || []).filter((draft) => draft.id !== id));
+      })
+      .catch(() => {
+        setDraftError("Could not delete this draft. Please try again.");
+      });
   };
 
   const origin = typeof window === "undefined" ? "" : getServer();
@@ -55,7 +87,7 @@ const AccountPage = () => {
   if (loading) {
     content = (
       <Typography variant="h6" color="secondary" sx={{ mt: 4 }}>
-        Checking sign-in…
+        Checking sign-in...
       </Typography>
     );
   } else if (!authenticated) {
@@ -74,12 +106,12 @@ const AccountPage = () => {
     content = (
       <Fragment>
         <Drawer heading="Profile" defaultOpen={true}>
-          <Typography color="secondary">
-            {user.name}
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Typography color="secondary">{user.name}</Typography>
             {user.is_admin ? (
-              <Chip label="admin" size="small" color="primary" sx={{ ml: 1 }} />
+              <Chip label="admin" size="small" color="primary" />
             ) : null}
-          </Typography>
+          </Box>
           <Typography color="secondary">{user.email}</Typography>
           <Typography variant="body2" color="secondary">
             Signed in with {user.provider === "google" ? "Google" : user.provider}
@@ -88,7 +120,7 @@ const AccountPage = () => {
 
         <Drawer heading="My published records" defaultOpen={true}>
           {papers === null ? (
-            <Typography color="secondary">Loading…</Typography>
+            <Typography color="secondary">Loading...</Typography>
           ) : papers.length === 0 ? (
             <Typography color="secondary">
               No published records yet. Records you publish become editable
@@ -140,31 +172,82 @@ const AccountPage = () => {
           )}
         </Drawer>
 
-        <Drawer heading="Single draft on this browser" defaultOpen={true}>
-          {draft ? (
+        <Drawer heading="My drafts" defaultOpen={true}>
+          {draftError ? (
+            <Typography color="error" sx={{ mb: 1 }}>
+              {draftError}
+            </Typography>
+          ) : null}
+          {drafts === null ? (
+            <Typography color="secondary">Loading drafts...</Typography>
+          ) : drafts.length === 0 ? (
+            <Typography color="secondary">
+              No account drafts yet. Use Save Draft in the curator to keep
+              incomplete work in your account.
+            </Typography>
+          ) : (
+            drafts.map((draft) => (
+              <Box
+                key={draft.id}
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 1,
+                  mb: 1,
+                  flexWrap: "wrap",
+                }}
+              >
+                <Box sx={{ flexGrow: 1 }}>
+                  <Typography color="secondary">{draft.title}</Typography>
+                  <Typography variant="body2" color="secondary">
+                    Updated {formatDate(draft.updated_at) || "recently"}
+                  </Typography>
+                </Box>
+                <RegularStyledButton
+                  component={Link}
+                  href={`/curator?draft=${encodeURIComponent(draft.id)}`}
+                >
+                  Resume
+                </RegularStyledButton>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => removeDraft(draft.id)}
+                >
+                  Delete
+                </Button>
+              </Box>
+            ))
+          )}
+        </Drawer>
+
+        <Drawer heading="Local recovery draft" defaultOpen={true}>
+          {localDraft ? (
             <Box
               sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}
             >
               <Box sx={{ flexGrow: 1 }}>
-                <Typography color="secondary">{draft.title}</Typography>
-                {draft.sections.length > 0 ? (
+                <Typography color="secondary">{localDraft.title}</Typography>
+                {localDraft.sections.length > 0 ? (
                   <Typography variant="body2" color="secondary">
-                    Contains: {draft.sections.join(", ")}
+                    Contains: {localDraft.sections.join(", ")}
                   </Typography>
                 ) : null}
+                <Typography variant="body2" color="secondary">
+                  This recovery copy is stored only in this browser. Save it as
+                  an account draft from the curator if you want to keep it.
+                </Typography>
               </Box>
               <RegularStyledButton component={Link} href="/curator?resumeDraft=1">
                 Resume
               </RegularStyledButton>
-              <Button size="small" variant="outlined" onClick={clearDraft}>
+              <Button size="small" variant="outlined" onClick={clearLocalDraft}>
                 Clear
               </Button>
             </Box>
           ) : (
             <Typography color="secondary">
-              No browser draft is saved on this device. Qresp currently keeps
-              one local draft per browser; server-saved drafts are not enabled
-              yet.
+              No local recovery draft is saved in this browser.
             </Typography>
           )}
         </Drawer>

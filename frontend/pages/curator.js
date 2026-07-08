@@ -1,4 +1,4 @@
-import { Fragment, useContext, useEffect } from "react";
+import { Fragment, useContext, useEffect, useRef } from "react";
 import { Container, Box } from "@mui/material";
 import { useRouter } from "next/router";
 
@@ -24,19 +24,57 @@ import FileTree from "../components/FileTree";
 import Publish from "../components/CuratorElements/Publish";
 import EditModeController from "../components/CuratorElements/EditMode";
 import { CURATOR_DRAFT_KEY } from "../Utils/browserDraft";
+import { fetchServerDraft } from "../Utils/serverDrafts";
 import CuratorContext from "../Context/Curator/curatorContext";
 import AlertContext from "../Context/Alert/alertContext";
+import AuthContext from "../Context/Auth/authContext";
+
+// Loads an account draft (?draft=<id>) into the curator form. The loaded
+// draft id stays active so Save Draft updates it instead of duplicating it.
+const ServerDraftLoader = ({ draftId }) => {
+  const { applyServerDraft } = useContext(CuratorContext);
+  const { setAlert } = useContext(AlertContext);
+  const attemptedRef = useRef(null);
+
+  useEffect(() => {
+    if (!draftId || attemptedRef.current === draftId) return;
+    attemptedRef.current = draftId;
+    fetchServerDraft(draftId)
+      .then((draft) => applyServerDraft(draft))
+      .catch(() => {
+        setAlert(
+          "Draft not found",
+          "This draft could not be loaded. It may have been deleted, or you may need to sign in with the account that owns it.",
+          null
+        );
+      });
+    // applyServerDraft/setAlert are stable enough for this one-shot fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftId]);
+
+  return null;
+};
+
+// Remounts the curator form tree whenever the context is reset. Without
+// this, uncontrolled form inputs keep showing their old values after
+// "Start from Scratch" even though the context state is blank.
+const CuratorFormsRemounter = ({ children }) => {
+  const { resetVersion } = useContext(CuratorContext);
+  return <Fragment key={resetVersion}>{children}</Fragment>;
+};
 
 const CuratorDraftNavigationGuard = ({ editMode }) => {
   const router = useRouter();
-  const { hasMeaningfulDraft, saveDraft, resetAll } = useContext(CuratorContext);
+  const { hasMeaningfulDraft, saveDraft, draftDirty, saveDraftToServer } =
+    useContext(CuratorContext);
   const { setAlert, unsetAlert } = useContext(AlertContext);
+  const { authenticated } = useContext(AuthContext);
 
   useEffect(() => {
     if (editMode || typeof window === "undefined") return undefined;
 
     const shouldGuard = () =>
-      hasMeaningfulDraft && hasMeaningfulDraft();
+      hasMeaningfulDraft && hasMeaningfulDraft() && draftDirty;
 
     const handleBeforeUnload = (event) => {
       if (!shouldGuard()) return undefined;
@@ -78,28 +116,45 @@ const CuratorDraftNavigationGuard = ({ editMode }) => {
       event.preventDefault();
       event.stopPropagation();
 
-      const leave = (preserveDraft) => {
+      const leaveWithoutSaving = () => {
+        // The local recovery copy (autosave) stays behind; only account
+        // drafts count as "saved".
         unsetAlert();
-        if (preserveDraft) {
-          saveDraft();
-        } else {
-          resetAll({ preserveDraft: false });
-        }
         router.push(nextPath);
+      };
+
+      const saveAndLeave = () => {
+        saveDraftToServer()
+          .then(() => {
+            unsetAlert();
+            router.push(nextPath);
+          })
+          .catch(() => {
+            setAlert(
+              "Error",
+              "Your draft could not be saved, so you are still on the curator. Please check that you are still signed in and try again.",
+              null
+            );
+          });
       };
 
       setAlert(
         "Save draft before leaving?",
-        "You have curator work in this browser. Save it as the browser draft before leaving, or leave without saving it.",
+        authenticated
+          ? "You have unsaved curator changes. Save them as a draft in your account before leaving, or leave without saving."
+          : "You have unsaved curator changes. Sign in to save them as an account draft, or leave without saving (a local recovery copy stays in this browser).",
         <Fragment>
-          <RegularStyledButton onClick={() => leave(true)}>
-            Save Draft and Leave
-          </RegularStyledButton>
-          <RegularStyledButton onClick={() => leave(false)}>
+          {authenticated ? (
+            <RegularStyledButton onClick={saveAndLeave}>
+              Save Draft and Leave
+            </RegularStyledButton>
+          ) : null}
+          <RegularStyledButton onClick={leaveWithoutSaving}>
             Leave Without Saving
           </RegularStyledButton>
           <RegularStyledButton onClick={unsetAlert}>Stay</RegularStyledButton>
-        </Fragment>
+        </Fragment>,
+        { hideDismiss: true }
       );
     };
 
@@ -110,7 +165,17 @@ const CuratorDraftNavigationGuard = ({ editMode }) => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
       document.removeEventListener("click", handleDocumentClick, true);
     };
-  }, [editMode, hasMeaningfulDraft, resetAll, router, saveDraft, setAlert, unsetAlert]);
+  }, [
+    authenticated,
+    draftDirty,
+    editMode,
+    hasMeaningfulDraft,
+    router,
+    saveDraft,
+    saveDraftToServer,
+    setAlert,
+    unsetAlert,
+  ]);
 
   return null;
 };
@@ -129,12 +194,16 @@ const curator = () => {
       : null;
   const returnServer =
     typeof router.query.server === "string" ? router.query.server : "";
+  const draftId =
+    !editId && typeof router.query.draft === "string" && router.query.draft.length > 0
+      ? router.query.draft
+      : null;
   const autoResumeDraft = router.query.resumeDraft === "1";
 
   return (
     <CuratorState
       draftKey={editId ? null : CURATOR_DRAFT_KEY}
-      autoResumeDraft={!editId && autoResumeDraft}
+      autoResumeDraft={!editId && !draftId && autoResumeDraft}
     >
       <CuratorHelperState>
         <SourceTreeState>
@@ -145,23 +214,26 @@ const curator = () => {
               {(editMode) => (
                 <Fragment>
                   <CuratorDraftNavigationGuard editMode={editMode} />
+                  {!editMode && <ServerDraftLoader draftId={draftId} />}
                   {!editMode && (
                     <Box sx={{ mt: 4, mb: 4 }}>
                       <TopActions />
                     </Box>
                   )}
-                  <CuratorElement />
-                  <FileServerElement />
-                  <PaperInfoElement />
-                  <ReferenceInfoElement />
-                  <ChartsInfoElement />
-                  <ToolsInfoElement />
-                  <DatasetsInfoElement />
-                  <ScriptsInfoElement />
-                  <DocumentationInfoElement />
-                  <WorkflowInfoElement />
-                  <LicenseInfoElement />
-                  {!editMode && <Publish />}
+                  <CuratorFormsRemounter>
+                    <CuratorElement />
+                    <FileServerElement />
+                    <PaperInfoElement />
+                    <ReferenceInfoElement />
+                    <ChartsInfoElement />
+                    <ToolsInfoElement />
+                    <DatasetsInfoElement />
+                    <ScriptsInfoElement />
+                    <DocumentationInfoElement />
+                    <WorkflowInfoElement />
+                    <LicenseInfoElement />
+                    {!editMode && <Publish />}
+                  </CuratorFormsRemounter>
                 </Fragment>
               )}
             </EditModeController>
