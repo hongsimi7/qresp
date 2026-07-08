@@ -7,6 +7,7 @@ import Ajv from "ajv";
 import StyledButton, { RegularStyledButton } from "../button";
 import { convertStatetoReqSchema } from "../../Utils/model";
 import { getServer } from "../../Utils/utils";
+import { deleteServerDraft } from "../../Utils/serverDrafts";
 
 import Schema from "../../public/schema_v1.2.json";
 import CuratorContext from "../../Context/Curator/curatorContext";
@@ -112,12 +113,46 @@ const getPublishErrorMessage = (err) => {
 
 export { getPublishErrorMessage };
 
-const makePublishRequest = (paper, setAlert, showLoader, hideLoader) => {
+const makePublishRequest = (
+  paper,
+  setAlert,
+  showLoader,
+  hideLoader,
+  draft = {}
+) => {
+  const { activeDraftId, clearActiveDraft } = draft;
   showLoader();
   axios
     .post(getServer() + "/api/publish", paper)
     .then((res) => {
       const verifyLink = res.data && res.data.verify_link;
+      // Only safe to clear the account draft AFTER the paper is verified
+      // (the verify link/email finishes publishing). So we don't auto-delete;
+      // instead, when publishing from a saved draft, we offer an explicit
+      // "delete that draft" action the user can take once they've verified.
+      const removeDraft = () => {
+        deleteServerDraft(activeDraftId)
+          .then(() => {
+            if (clearActiveDraft) clearActiveDraft();
+            setAlert(
+              "Draft removed",
+              "The saved draft you published from was deleted from your account.",
+              null
+            );
+          })
+          .catch(() => {
+            setAlert(
+              "Error",
+              "The draft could not be deleted. You can remove it from Account > My drafts.",
+              null
+            );
+          });
+      };
+      const draftButton = activeDraftId ? (
+        <RegularStyledButton onClick={removeDraft}>
+          Delete the saved draft
+        </RegularStyledButton>
+      ) : null;
       setAlert(
         "Success",
         verifyLink ? (
@@ -126,6 +161,14 @@ const makePublishRequest = (paper, setAlert, showLoader, hideLoader) => {
             publishing.
             <br />
             <a href={verifyLink}>{verifyLink}</a>
+            {activeDraftId ? (
+              <Fragment>
+                <br />
+                <br />
+                Once you have finished verifying, you can delete the saved
+                draft you published from.
+              </Fragment>
+            ) : null}
           </p>
         ) : (
           <p style={{ textAlign: "justify" }}>
@@ -139,10 +182,15 @@ const makePublishRequest = (paper, setAlert, showLoader, hideLoader) => {
           </p>
         ),
         verifyLink ? (
-          <RegularStyledButton component="a" href={verifyLink}>
-            Open verification link
-          </RegularStyledButton>
-        ) : null
+          <Fragment>
+            <RegularStyledButton component="a" href={verifyLink}>
+              Open verification link
+            </RegularStyledButton>
+            {draftButton}
+          </Fragment>
+        ) : (
+          draftButton
+        )
       );
     })
     .catch((err) => {
@@ -163,7 +211,8 @@ const makePublishRequest = (paper, setAlert, showLoader, hideLoader) => {
 };
 
 const Publish = () => {
-  const { metadata } = useContext(CuratorContext);
+  const { metadata, activeDraftId, clearActiveDraft } =
+    useContext(CuratorContext);
 
   const { editing } = useContext(CuratorHelperContext);
   const { selectedHttp } = useContext(ServerContext);
@@ -186,7 +235,10 @@ const Publish = () => {
       return;
     }
 
-    makePublishRequest(paper, setAlert, showLoader, hideLoader);
+    makePublishRequest(paper, setAlert, showLoader, hideLoader, {
+      activeDraftId,
+      clearActiveDraft,
+    });
   };
 
   return (

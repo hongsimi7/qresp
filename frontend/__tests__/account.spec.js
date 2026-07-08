@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 jest.mock("axios");
@@ -144,12 +144,49 @@ describe("Account page", () => {
       "/curator?draft=draft1"
     );
 
-    await user.click(screen.getAllByRole("button", { name: /delete/i })[0]);
+    // Delete is confirmed in a dialog before anything is removed.
+    await user.click(screen.getAllByRole("button", { name: /^delete$/i })[0]);
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/first draft/i)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: /^delete$/i }));
 
     await waitFor(() =>
       expect(axios.delete).toHaveBeenCalledWith("/api/account/drafts/draft1")
     );
     expect(screen.queryByText("First draft")).not.toBeInTheDocument();
     expect(screen.getByText("Second draft")).toBeInTheDocument();
+  });
+
+  it("renames an account draft through the rename dialog", async () => {
+    mockAccountApi({
+      drafts: [
+        { id: "draft1", title: "Old name", updated_at: "2026-07-08T12:00:00" },
+      ],
+    });
+    axios.put.mockResolvedValue({
+      data: {
+        id: "draft1",
+        title: "New name",
+        updated_at: "2026-07-08T14:00:00",
+      },
+    });
+    const user = userEvent.setup();
+
+    renderAccount(authedUser);
+    await screen.findByText("Old name");
+    await user.click(screen.getByRole("button", { name: /rename/i }));
+
+    const dialog = screen.getByRole("dialog");
+    const input = within(dialog).getByLabelText(/draft name/i);
+    await user.clear(input);
+    await user.type(input, "New name");
+    await user.click(within(dialog).getByRole("button", { name: /save/i }));
+
+    await waitFor(() =>
+      expect(axios.put).toHaveBeenCalledWith("/api/account/drafts/draft1", {
+        title: "New name",
+      })
+    );
+    expect(await screen.findByText("New name")).toBeInTheDocument();
   });
 });

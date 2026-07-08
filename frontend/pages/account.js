@@ -1,7 +1,18 @@
 import { Fragment, useContext, useEffect, useState } from "react";
 
 import axios from "axios";
-import { Box, Button, Chip, Container, Typography } from "@mui/material";
+import {
+  Box,
+  Button,
+  Chip,
+  Container,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  TextField,
+  Typography,
+} from "@mui/material";
 import Link from "next/link";
 
 import SEO from "../components/seo";
@@ -13,7 +24,11 @@ import {
   clearBrowserDraft,
   summarizeBrowserDraft,
 } from "../Utils/browserDraft";
-import { deleteServerDraft, listServerDrafts } from "../Utils/serverDrafts";
+import {
+  deleteServerDraft,
+  listServerDrafts,
+  updateServerDraft,
+} from "../Utils/serverDrafts";
 import { getServer } from "../Utils/utils";
 
 const formatDate = (value) => {
@@ -29,6 +44,9 @@ const AccountPage = () => {
   const [drafts, setDrafts] = useState(null);
   const [draftError, setDraftError] = useState("");
   const [localDraft, setLocalDraft] = useState(null);
+  // One dialog drives both draft actions: { type: "rename"|"delete", id, title }.
+  const [draftDialog, setDraftDialog] = useState(null);
+  const [draftSaving, setDraftSaving] = useState(false);
 
   useEffect(() => {
     if (!authenticated) return undefined;
@@ -71,14 +89,45 @@ const AccountPage = () => {
     setLocalDraft(null);
   };
 
-  const removeDraft = (id) => {
+  const closeDraftDialog = () => {
+    setDraftDialog(null);
+    setDraftSaving(false);
+  };
+
+  const confirmDeleteDraft = () => {
+    const id = draftDialog.id;
+    setDraftSaving(true);
     setDraftError("");
     deleteServerDraft(id)
       .then(() => {
         setDrafts((items) => (items || []).filter((draft) => draft.id !== id));
+        closeDraftDialog();
       })
       .catch(() => {
         setDraftError("Could not delete this draft. Please try again.");
+        closeDraftDialog();
+      });
+  };
+
+  const confirmRenameDraft = () => {
+    const { id, title } = draftDialog;
+    const nextTitle = (title || "").trim() || "Untitled draft";
+    setDraftSaving(true);
+    setDraftError("");
+    updateServerDraft(id, { title: nextTitle })
+      .then((updated) => {
+        setDrafts((items) =>
+          (items || []).map((draft) =>
+            draft.id === id
+              ? { ...draft, title: updated.title, updated_at: updated.updated_at }
+              : draft
+          )
+        );
+        closeDraftDialog();
+      })
+      .catch(() => {
+        setDraftError("Could not rename this draft. Please try again.");
+        closeDraftDialog();
       });
   };
 
@@ -224,7 +273,27 @@ const AccountPage = () => {
                 <Button
                   size="small"
                   variant="outlined"
-                  onClick={() => removeDraft(draft.id)}
+                  onClick={() =>
+                    setDraftDialog({
+                      type: "rename",
+                      id: draft.id,
+                      title: draft.title || "",
+                    })
+                  }
+                >
+                  Rename
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  onClick={() =>
+                    setDraftDialog({
+                      type: "delete",
+                      id: draft.id,
+                      title: draft.title || "Untitled draft",
+                    })
+                  }
                 >
                   Delete
                 </Button>
@@ -263,6 +332,66 @@ const AccountPage = () => {
             </Typography>
           )}
         </Drawer>
+
+        <Dialog
+          open={Boolean(draftDialog)}
+          onClose={closeDraftDialog}
+          fullWidth
+          maxWidth="xs"
+        >
+          {draftDialog && draftDialog.type === "rename" ? (
+            <Fragment>
+              <DialogTitle>Rename draft</DialogTitle>
+              <DialogContent>
+                <TextField
+                  autoFocus
+                  label="Draft name"
+                  value={draftDialog.title}
+                  onChange={(e) =>
+                    setDraftDialog((current) => ({
+                      ...current,
+                      title: e.target.value,
+                    }))
+                  }
+                  fullWidth
+                  margin="dense"
+                  variant="outlined"
+                />
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={closeDraftDialog}>Cancel</Button>
+                <Button
+                  onClick={confirmRenameDraft}
+                  variant="contained"
+                  disabled={draftSaving}
+                >
+                  Save
+                </Button>
+              </DialogActions>
+            </Fragment>
+          ) : draftDialog ? (
+            <Fragment>
+              <DialogTitle>Delete this draft?</DialogTitle>
+              <DialogContent>
+                <Typography color="secondary">
+                  &ldquo;{draftDialog.title}&rdquo; will be permanently deleted
+                  from your account. This cannot be undone.
+                </Typography>
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={closeDraftDialog}>Cancel</Button>
+                <Button
+                  onClick={confirmDeleteDraft}
+                  variant="contained"
+                  color="error"
+                  disabled={draftSaving}
+                >
+                  Delete
+                </Button>
+              </DialogActions>
+            </Fragment>
+          ) : null}
+        </Dialog>
       </Fragment>
     );
   }

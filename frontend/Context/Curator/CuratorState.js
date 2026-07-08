@@ -276,6 +276,14 @@ const CuratorState = (props) => {
     return draft && draft.id;
   };
 
+  // Forget the tracked account draft without touching the form (used after
+  // the user deletes the draft they published from). Subsequent Save Draft
+  // then creates a fresh draft instead of PUTting a deleted id.
+  const clearActiveDraft = () => {
+    setActiveDraftId(null);
+    setActiveDraftTitle("");
+  };
+
   // Called by the ?draft=<id> loader after fetching a server draft: fills the
   // form without marking it dirty (nothing is unsaved right after a load).
   const applyServerDraft = (draft) => {
@@ -367,6 +375,7 @@ const CuratorState = (props) => {
         registerDraftFlusher,
         saveDraftToServer,
         applyServerDraft,
+        clearActiveDraft,
         setCuratorInfo,
         setFileServerPath,
         setPaperInfo,
