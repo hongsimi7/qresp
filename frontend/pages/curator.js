@@ -65,8 +65,13 @@ const CuratorFormsRemounter = ({ children }) => {
 
 const CuratorDraftNavigationGuard = ({ editMode }) => {
   const router = useRouter();
-  const { hasMeaningfulDraft, saveDraft, draftDirty, saveDraftToServer } =
-    useContext(CuratorContext);
+  const {
+    hasMeaningfulDraft,
+    hasUnsavedDraftChanges,
+    saveDraft,
+    draftDirty,
+    saveDraftToServer,
+  } = useContext(CuratorContext);
   const { setAlert, unsetAlert } = useContext(AlertContext);
   const { authenticated } = useContext(AuthContext);
 
@@ -74,7 +79,9 @@ const CuratorDraftNavigationGuard = ({ editMode }) => {
     if (editMode || typeof window === "undefined") return undefined;
 
     const shouldGuard = () =>
-      hasMeaningfulDraft && hasMeaningfulDraft() && draftDirty;
+      hasUnsavedDraftChanges
+        ? hasUnsavedDraftChanges()
+        : hasMeaningfulDraft && hasMeaningfulDraft() && draftDirty;
 
     const handleBeforeUnload = (event) => {
       if (!shouldGuard()) return undefined;
@@ -169,6 +176,7 @@ const CuratorDraftNavigationGuard = ({ editMode }) => {
     authenticated,
     draftDirty,
     editMode,
+    hasUnsavedDraftChanges,
     hasMeaningfulDraft,
     router,
     saveDraft,

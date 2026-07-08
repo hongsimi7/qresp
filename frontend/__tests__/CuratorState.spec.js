@@ -1,4 +1,4 @@
-import { useContext, useEffect } from "react";
+import { useContext, useEffect, useState } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -89,6 +89,39 @@ const ServerDraftProbe = () => {
     <button onClick={() => saveDraftToServer("Named server draft")}>
       Save server draft
     </button>
+  );
+};
+
+const UnsavedOpenFormProbe = () => {
+  const { registerDraftFlusher, hasUnsavedDraftChanges } =
+    useContext(CuratorContext);
+  const [status, setStatus] = useState("unknown");
+
+  useEffect(
+    () =>
+      registerDraftFlusher("open-curator-form", () => ({
+        curatorInfo: {
+          firstName: "Typed",
+          middleName: "",
+          lastName: "",
+          emailId: "",
+          affiliation: "",
+        },
+      })),
+    [registerDraftFlusher]
+  );
+
+  return (
+    <div>
+      <span data-testid="unsaved-status">{status}</span>
+      <button
+        onClick={() =>
+          setStatus(hasUnsavedDraftChanges() ? "unsaved" : "clean")
+        }
+      >
+        Check unsaved
+      </button>
+    </div>
   );
 };
 
@@ -209,5 +242,18 @@ describe("CuratorState draft persistence", () => {
         "Named server draft"
       )
     );
+  });
+
+  it("treats unsaved open-form values as navigation-worthy changes", async () => {
+    const user = userEvent.setup();
+    render(
+      <CuratorState draftKey={null}>
+        <UnsavedOpenFormProbe />
+      </CuratorState>
+    );
+
+    await user.click(screen.getByRole("button", { name: /check unsaved/i }));
+
+    expect(screen.getByTestId("unsaved-status")).toHaveTextContent("unsaved");
   });
 });

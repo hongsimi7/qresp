@@ -218,6 +218,20 @@ const CuratorState = (props) => {
   const hasMeaningfulDraft = () =>
     Boolean(summarizeBrowserDraft(collectDraftState()));
 
+  const hasUnsavedDraftChanges = useCallback(() => {
+    const draftState = collectDraftState();
+    if (!summarizeBrowserDraft(draftState)) {
+      return false;
+    }
+    if (draftDirty) {
+      return true;
+    }
+    return (
+      JSON.stringify(draftState) !==
+      JSON.stringify(normalizeState(stateRef.current || state))
+    );
+  }, [collectDraftState, draftDirty, state]);
+
   const saveDraft = () => {
     const draftState = collectDraftState();
     if (!draftKey || !summarizeBrowserDraft(draftState)) {
@@ -343,6 +357,7 @@ const CuratorState = (props) => {
         resumeDraft,
         saveDraft,
         hasMeaningfulDraft,
+        hasUnsavedDraftChanges,
         activeDraftId,
         activeDraftTitle,
         draftDirty,
