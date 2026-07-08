@@ -79,14 +79,29 @@ environment variables on the staging backend container.
 
 ## Soft-deactivate published records (owner/admin)
 
-- [ ] On an owned staging/test record's paperdetails: "Deactivate" → confirm
-      dialog explains it hides but does not delete → confirm
-- [ ] The record disappears from `/search` and `/explorer` and its filter
-      dropdowns; its detail page 404s for an anonymous/other user
-- [ ] The owner/admin can still open the deactivated record and sees the
-      "This record is deactivated" notice + "Reactivate"
-- [ ] `/account` "My published records" flags it "deactivated"
-- [ ] "Reactivate" → confirm → record is public again (search/detail)
+Chosen design (documented): deactivated records are hidden from the PUBLIC
+detail route for everyone, including the owner. Next SSR fetches
+`/api/paper/{id}` server-side WITHOUT the browser session cookie, so an
+owner's request is anonymous and correctly 404s. Therefore all owner/admin
+management of deactivated records happens on `/account` (client-side,
+authenticated), NOT on the public detail page. `is_active` is toggled only via
+`PUT /api/paper/{id}/active`; metadata edits never change it.
+
+- [ ] `/account` "My published records": an ACTIVE owned record shows
+      View + Edit in Curator + **Deactivate**
+- [ ] Click "Deactivate" → confirm dialog says it hides but does NOT delete
+      (preserved, reversible) → confirm
+- [ ] The record disappears from `/search`, `/explorer` and their filter
+      dropdowns; its detail page 404s for anonymous/other users
+- [ ] Back on `/account`, that record now shows a "deactivated" chip,
+      **no View button** (it would 404), Edit in Curator, and **Reactivate**
+- [ ] "Edit in Curator" on the deactivated record loads, Save Changes
+      succeeds, and returns to `/account` (not a 404 detail page); the record
+      stays deactivated (search still hides it)
+- [ ] "Reactivate" → confirm dialog → record is public again in search/detail
+- [ ] (Active record only) paperdetails still offers owner/admin Deactivate in
+      the permission notice; after deactivating there, reloading the detail
+      404s by design — manage it from `/account` thereafter
 
 ## Admin: ownerless records
 

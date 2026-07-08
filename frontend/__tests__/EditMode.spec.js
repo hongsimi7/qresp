@@ -154,6 +154,40 @@ describe("EditModeController", () => {
     );
   });
 
+  it("edits a DEACTIVATED record and returns to /account (not the 404 detail page)", async () => {
+    // Deactivated records are editable by the owner, but their public detail
+    // route 404s (SSR is anonymous), so the save must land on /account.
+    axios.get.mockImplementation((url) => {
+      if (url.endsWith("/permissions")) {
+        return Promise.resolve({
+          data: {
+            can_edit: true,
+            authenticated: true,
+            reason: "owner",
+            is_active: false,
+          },
+        });
+      }
+      if (url.endsWith("/raw")) {
+        return Promise.resolve({
+          data: { id: "abc123", paper: { ...paperDoc, is_active: false } },
+        });
+      }
+      return Promise.reject(new Error("unexpected GET " + url));
+    });
+    axios.put.mockResolvedValue({ data: { id: "abc123", success: true } });
+    const metadata = convertReqSchematoState(paperDoc);
+    const user = userEvent.setup();
+    renderController({ metadata });
+    await user.click(
+      await screen.findByRole("button", { name: /save changes/i })
+    );
+    // The edit payload must not carry is_active (only /active toggles it).
+    const putPayload = axios.put.mock.calls[0][1];
+    expect(putPayload).not.toHaveProperty("is_active");
+    expect(push).toHaveBeenCalledWith("/account");
+  });
+
   it("shows the backend reason when saving is forbidden", async () => {
     mockPermissionAndRaw({ canEdit: true });
     axios.put.mockRejectedValue({

@@ -31,6 +31,15 @@ const backToPaperHref = (editId, server) =>
     server || ""
   )}`;
 
+// Where to go after saving/cancelling an edit. Deactivated records are hidden
+// from the public detail route (SSR fetches anonymously and 404s), so we send
+// the owner back to /account — their management surface — instead of a broken
+// detail page. Active records return to their detail page as before.
+const afterEditHref = (editId, server, originalDoc) =>
+  originalDoc && originalDoc.is_active === false
+    ? "/account"
+    : backToPaperHref(editId, server);
+
 const SaveChangesBar = ({ editId, server, originalDoc }) => {
   const { metadata } = useContext(CuratorContext);
   const { editing } = useContext(CuratorHelperContext);
@@ -64,7 +73,7 @@ const SaveChangesBar = ({ editId, server, originalDoc }) => {
     showLoader();
     try {
       await axios.put(`/api/paper/${encodeURIComponent(editId)}`, payload);
-      router.push(backToPaperHref(editId, server));
+      router.push(afterEditHref(editId, server, originalDoc));
     } catch (err) {
       console.error(err);
       const res = err.response;
@@ -83,7 +92,7 @@ const SaveChangesBar = ({ editId, server, originalDoc }) => {
         Editing published record
       </Typography>
       <RegularStyledButton
-        onClick={() => router.push(backToPaperHref(editId, server))}
+        onClick={() => router.push(afterEditHref(editId, server, originalDoc))}
       >
         Cancel
       </RegularStyledButton>

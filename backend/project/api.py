@@ -304,7 +304,10 @@ def update_paper(id, paper):
         return {"error": reason}, 401 if user is None else 403
 
     # Server-owned / immutable fields are never taken from the payload.
-    for blocked in ("id", "_id", "owner_email", "version", "versions"):
+    # is_active is toggled ONLY through PUT /api/paper/{id}/active, so a metadata
+    # edit can never (accidentally or maliciously) reactivate a hidden record.
+    for blocked in ("id", "_id", "owner_email", "version", "versions",
+                    "is_active"):
         paper.pop(blocked, None)
 
     try:
@@ -312,9 +315,11 @@ def update_paper(id, paper):
         data.pop("_id", None)
         data.update(paper)
         # Keep only defined model fields (constructor coercion + validation),
-        # and force the verified owner from the stored record.
+        # and force the verified owner + current activation state from the
+        # stored record so editing preserves them.
         data = {k: v for k, v in data.items() if k in Paper._fields}
         data["owner_email"] = existing.owner_email
+        data["is_active"] = existing.is_active
         updated = Paper(**data)
         updated.id = existing.id
         updated.save()

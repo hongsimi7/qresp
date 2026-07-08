@@ -80,6 +80,132 @@ describe("Account page", () => {
     expect(edit.getAttribute("href")).toContain("/curator?edit=abc123");
   });
 
+  it("hides View and offers Reactivate for a deactivated record", async () => {
+    mockAccountApi({
+      papers: [
+        {
+          id: "p1",
+          title: "Hidden Paper",
+          authors: "A. Author",
+          year: 2020,
+          is_active: false,
+        },
+      ],
+    });
+    renderAccount(authedUser);
+    expect(await screen.findByText(/hidden paper/i)).toBeInTheDocument();
+    expect(screen.getByText("deactivated")).toBeInTheDocument();
+    // No View link that would land on the public 404 detail page.
+    expect(
+      screen.queryByRole("link", { name: /^view$/i })
+    ).not.toBeInTheDocument();
+    // Edit stays available; Reactivate is offered.
+    expect(
+      screen.getByRole("link", { name: /edit in curator/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /reactivate/i })
+    ).toBeInTheDocument();
+  });
+
+  it("shows View and Deactivate for an active record", async () => {
+    mockAccountApi({
+      papers: [
+        {
+          id: "p1",
+          title: "Active Paper",
+          authors: "A. Author",
+          year: 2020,
+          is_active: true,
+        },
+      ],
+    });
+    renderAccount(authedUser);
+    expect(await screen.findByText(/active paper/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^view$/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /deactivate/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /reactivate/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("deactivates a record via the confirm dialog and updates the UI", async () => {
+    mockAccountApi({
+      papers: [
+        {
+          id: "p1",
+          title: "Active Paper",
+          authors: "A. Author",
+          year: 2020,
+          is_active: true,
+        },
+      ],
+    });
+    axios.put.mockResolvedValue({
+      data: { id: "p1", is_active: false, success: true },
+    });
+    const user = userEvent.setup();
+    renderAccount(authedUser);
+    await screen.findByText(/active paper/i);
+    await user.click(screen.getByRole("button", { name: /deactivate/i }));
+    const dialog = screen.getByRole("dialog");
+    // Wording makes clear this is a soft, reversible hide (not a hard delete).
+    expect(within(dialog).getByText(/not deleted/i)).toBeInTheDocument();
+    await user.click(
+      within(dialog).getByRole("button", { name: /deactivate/i })
+    );
+    await waitFor(() =>
+      expect(axios.put).toHaveBeenCalledWith("/api/paper/p1/active", {
+        active: false,
+      })
+    );
+    // findByRole polls past the dialog's close animation (which keeps the
+    // background aria-hidden briefly) before the row roles become queryable.
+    expect(
+      await screen.findByRole("button", { name: /reactivate/i })
+    ).toBeInTheDocument();
+    expect(screen.getByText("deactivated")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /^view$/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("reactivates a record via the confirm dialog and updates the UI", async () => {
+    mockAccountApi({
+      papers: [
+        {
+          id: "p1",
+          title: "Hidden Paper",
+          authors: "A. Author",
+          year: 2020,
+          is_active: false,
+        },
+      ],
+    });
+    axios.put.mockResolvedValue({
+      data: { id: "p1", is_active: true, success: true },
+    });
+    const user = userEvent.setup();
+    renderAccount(authedUser);
+    await screen.findByText(/hidden paper/i);
+    await user.click(screen.getByRole("button", { name: /reactivate/i }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: /reactivate/i })
+    );
+    await waitFor(() =>
+      expect(axios.put).toHaveBeenCalledWith("/api/paper/p1/active", {
+        active: true,
+      })
+    );
+    expect(
+      await screen.findByRole("link", { name: /^view$/i })
+    ).toBeInTheDocument();
+    expect(screen.queryByText("deactivated")).not.toBeInTheDocument();
+  });
+
   it("shows the admin badge for admins", async () => {
     mockAccountApi();
     renderAccount({

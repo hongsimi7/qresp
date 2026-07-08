@@ -47,6 +47,10 @@ const AccountPage = () => {
   // One dialog drives both draft actions: { type: "rename"|"delete", id, title }.
   const [draftDialog, setDraftDialog] = useState(null);
   const [draftSaving, setDraftSaving] = useState(false);
+  // Published-record activation: { type: "deactivate"|"reactivate", id, title }.
+  const [recordDialog, setRecordDialog] = useState(null);
+  const [recordSaving, setRecordSaving] = useState(false);
+  const [recordError, setRecordError] = useState("");
 
   useEffect(() => {
     if (!authenticated) return undefined;
@@ -131,6 +135,39 @@ const AccountPage = () => {
       });
   };
 
+  const closeRecordDialog = () => {
+    setRecordDialog(null);
+    setRecordSaving(false);
+  };
+
+  // "Delete" for a published record is a SOFT deactivate (never a hard delete):
+  // it hides the record from public search/explorer/detail but preserves it,
+  // and it can be reactivated. Toggling goes only through the /active endpoint.
+  const confirmSetActive = () => {
+    const { id, type } = recordDialog;
+    const active = type === "reactivate";
+    setRecordSaving(true);
+    setRecordError("");
+    axios
+      .put(`/api/paper/${encodeURIComponent(id)}/active`, { active })
+      .then(() => {
+        setPapers((items) =>
+          (items || []).map((paper) =>
+            paper.id === id ? { ...paper, is_active: active } : paper
+          )
+        );
+        closeRecordDialog();
+      })
+      .catch(() => {
+        setRecordError(
+          active
+            ? "Could not reactivate this record. Please try again."
+            : "Could not deactivate this record. Please try again."
+        );
+        closeRecordDialog();
+      });
+  };
+
   const origin = typeof window === "undefined" ? "" : getServer();
 
   let content;
@@ -169,6 +206,11 @@ const AccountPage = () => {
         </Drawer>
 
         <Drawer heading="My published records" defaultOpen={true}>
+          {recordError ? (
+            <Typography color="error" sx={{ mb: 1 }}>
+              {recordError}
+            </Typography>
+          ) : null}
           {papers === null ? (
             <Typography color="secondary">Loading...</Typography>
           ) : papers.length === 0 ? (
@@ -177,53 +219,96 @@ const AccountPage = () => {
               from here.
             </Typography>
           ) : (
-            papers.map((paper) => (
-              <Box
-                key={paper.id}
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 1,
-                  mb: 1,
-                  flexWrap: "wrap",
-                }}
-              >
-                <Box sx={{ flexGrow: 1 }}>
-                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                    <Typography color="secondary">
-                      {paper.title}
-                      {paper.year ? ` (${paper.year})` : ""}
+            papers.map((paper) => {
+              const deactivated = paper.is_active === false;
+              return (
+                <Box
+                  key={paper.id}
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 1,
+                    mb: 1,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <Box sx={{ flexGrow: 1 }}>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                      <Typography color="secondary">
+                        {paper.title}
+                        {paper.year ? ` (${paper.year})` : ""}
+                      </Typography>
+                      {deactivated ? (
+                        <Chip
+                          label="deactivated"
+                          size="small"
+                          color="default"
+                        />
+                      ) : null}
+                    </Box>
+                    <Typography variant="body2" color="secondary">
+                      {paper.authors}
                     </Typography>
-                    {paper.is_active === false ? (
-                      <Chip label="deactivated" size="small" color="default" />
-                    ) : null}
                   </Box>
-                  <Typography variant="body2" color="secondary">
-                    {paper.authors}
-                  </Typography>
+                  {/* Deactivated records are hidden from the public detail
+                      route (SSR fetches anonymously and 404s), so we don't
+                      offer a View that would land on an error page. */}
+                  {deactivated ? null : (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      component={Link}
+                      href={`/paperdetails/${encodeURIComponent(
+                        paper.id
+                      )}?server=${encodeURIComponent(origin)}`}
+                    >
+                      View
+                    </Button>
+                  )}
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    component={Link}
+                    href={`/curator?edit=${encodeURIComponent(
+                      paper.id
+                    )}&server=${encodeURIComponent(origin)}`}
+                  >
+                    Edit in Curator
+                  </Button>
+                  {deactivated ? (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color="primary"
+                      onClick={() =>
+                        setRecordDialog({
+                          type: "reactivate",
+                          id: paper.id,
+                          title: paper.title || "this record",
+                        })
+                      }
+                    >
+                      Reactivate
+                    </Button>
+                  ) : (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color="error"
+                      onClick={() =>
+                        setRecordDialog({
+                          type: "deactivate",
+                          id: paper.id,
+                          title: paper.title || "this record",
+                        })
+                      }
+                    >
+                      Deactivate
+                    </Button>
+                  )}
                 </Box>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  component={Link}
-                  href={`/paperdetails/${encodeURIComponent(
-                    paper.id
-                  )}?server=${encodeURIComponent(origin)}`}
-                >
-                  View
-                </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  component={Link}
-                  href={`/curator?edit=${encodeURIComponent(
-                    paper.id
-                  )}&server=${encodeURIComponent(origin)}`}
-                >
-                  Edit in Curator
-                </Button>
-              </Box>
-            ))
+              );
+            })
           )}
         </Drawer>
 
@@ -332,6 +417,45 @@ const AccountPage = () => {
             </Typography>
           )}
         </Drawer>
+
+        <Dialog
+          open={Boolean(recordDialog)}
+          onClose={closeRecordDialog}
+          fullWidth
+          maxWidth="xs"
+        >
+          {recordDialog ? (
+            <Fragment>
+              <DialogTitle>
+                {recordDialog.type === "reactivate"
+                  ? "Reactivate this record?"
+                  : "Deactivate this record?"}
+              </DialogTitle>
+              <DialogContent>
+                <Typography color="secondary">
+                  {recordDialog.type === "reactivate"
+                    ? `“${recordDialog.title}” will become publicly visible again in search, the explorer and its detail page.`
+                    : `“${recordDialog.title}” will be hidden from public search, the explorer and its detail page. It is not deleted — it stays in your account and you can reactivate it at any time.`}
+                </Typography>
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={closeRecordDialog}>Cancel</Button>
+                <Button
+                  onClick={confirmSetActive}
+                  variant="contained"
+                  color={
+                    recordDialog.type === "reactivate" ? "primary" : "error"
+                  }
+                  disabled={recordSaving}
+                >
+                  {recordDialog.type === "reactivate"
+                    ? "Reactivate"
+                    : "Deactivate"}
+                </Button>
+              </DialogActions>
+            </Fragment>
+          ) : null}
+        </Dialog>
 
         <Dialog
           open={Boolean(draftDialog)}

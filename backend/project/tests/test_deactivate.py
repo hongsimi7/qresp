@@ -109,3 +109,39 @@ class TestSoftDeactivate(PermissionTestBase):
     def test_permissions_reports_active_state(self):
         body = self.permissions(self.owned_id)
         self.assertTrue(body["is_active"])
+
+    # ---- editing a deactivated record (owner/admin) ------------------------
+
+    def test_owner_can_load_raw_of_deactivated_record(self):
+        self.login(OWNER)
+        self._set_active(self.owned_id, False)
+        response = self.client.get(f"/api/paper/{self.owned_id}/raw")
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertTrue(response.json()["paper"])
+
+    def test_owner_can_edit_deactivated_record_and_stays_deactivated(self):
+        self.login(OWNER)
+        self._set_active(self.owned_id, False)
+        response = self.client.put(
+            f"/api/paper/{self.owned_id}",
+            json={"tags": ["edited-while-hidden"]},
+            headers={"X-CSRF-Token": self.csrf},
+        )
+        self.assertEqual(200, response.status_code, response.text)
+        updated = Paper.objects.get(id=self.owned_id)
+        self.assertEqual(["edited-while-hidden"], list(updated.tags))
+        # The edit must NOT resurrect the record.
+        self.assertFalse(updated.is_active)
+
+    def test_edit_payload_cannot_reactivate_a_record(self):
+        # is_active is owned by the /active endpoint only; a crafted metadata
+        # PUT must never flip it.
+        self.login(OWNER)
+        self._set_active(self.owned_id, False)
+        response = self.client.put(
+            f"/api/paper/{self.owned_id}",
+            json={"tags": ["sneaky"], "is_active": True},
+            headers={"X-CSRF-Token": self.csrf},
+        )
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertFalse(Paper.objects.get(id=self.owned_id).is_active)
