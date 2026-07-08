@@ -141,6 +141,16 @@ class PaperDAO(MongoDBConnection, WorkflowObject):
         paper.save()
         return str(paper.id)
 
+    def getPaperIdByTitle(self, title):
+        """ Resolves an existing paper id by exact title (the same key
+        insertIntoPapers dedups on). Used to make re-verification idempotent.
+        :return: str id or None
+        """
+        if not title:
+            return None
+        existing = Paper.objects(reference__title=title).first()
+        return str(existing.id) if existing else None
+
     def insertDOI(self, id, doi):
         """ Inserts into collection"""
         paper = Paper.objects(id=id).update(info__doi=doi)

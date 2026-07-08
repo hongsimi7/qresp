@@ -43,12 +43,25 @@ const Verify = ({ id, server, error }) => {
             </Fragment>
           ) : (
             <Fragment>
-              <Typography variant="h2">Error !</Typography>
-              <Typography variant="h4" gutterBottom>
-                Your paper could not be published, please contact the
+              <Typography variant="h2" gutterBottom>
+                We couldn&rsquo;t finish publishing
+              </Typography>
+              {/* Backend messages here are secret-free and specific (invalid
+                  or already-used link, already published, missing server).
+                  Show them directly instead of a generic "contact us". */}
+              <Typography variant="h5" gutterBottom>
+                {error}
+              </Typography>
+              <Typography variant="body1" color="secondary" gutterBottom>
+                If you have already published this paper, it may already be in
+                the database. If the problem persists, please contact the
                 administrators.
               </Typography>
-              <Typography variant="caption">Error Message: {error}</Typography>
+              {server ? (
+                <StyledButton component={Link} href="/explorer">
+                  Browse published papers
+                </StyledButton>
+              ) : null}
             </Fragment>
           )}
         </Container>

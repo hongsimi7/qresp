@@ -51,13 +51,21 @@ class Publish:
         try:
             with open("{}{}.json".format(self.dir_prefix, id), 'r') as f:
                 paper = json.load(f)
-                id = PaperDAO().insertIntoPapers(paper)
-                if not id:
-                    return {"msg": "Paper Already Exists in the database (Same title or doi)", "code": 400}
-                return id
+            dao = PaperDAO()
+            new_id = dao.insertIntoPapers(paper)
+            if new_id:
+                return new_id
+            # Already published (same title): make the verify link idempotent
+            # so clicking it again just lands the user on the existing paper
+            # instead of showing a scary error.
+            existing_id = dao.getPaperIdByTitle(
+                (paper.get('reference') or {}).get('title'))
+            if existing_id:
+                return existing_id
+            return {"msg": "This paper has already been published.", "code": 409}
         except FileNotFoundError as e:
             print(e, file=stderr)
-            return {"msg": "Incorrect verify link, this paper is not present in the wait queue", "code": 400}
+            return {"msg": "This verification link is invalid or has already been used. If you just published, your paper may already be in the database.", "code": 404}
         except Exception as e:
             print(e, file=stderr)
             return {"msg": "Internal Server Error", "code": 500}
