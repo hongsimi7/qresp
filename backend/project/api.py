@@ -111,6 +111,20 @@ def paper(id):
     """
     paperdetail = None
     try:
+        stored = Paper.objects.get(id=str(id))
+    except Exception as e:
+        msg = "Exception in paper api " + str(e)
+        print(msg)
+        return msg, 400
+
+    # Deactivated records are hidden from the public detail view; only the
+    # owner or an admin may still load them (to review or reactivate).
+    if stored.is_active is False:
+        allowed, _ = can_edit_paper(stored, get_current_user())
+        if not allowed:
+            return {"error": "This record is not available."}, 404
+
+    try:
         dao = PaperDAO()
         paperdetail = dao.getPaperDetails(id)
     except Exception as e:
@@ -312,6 +326,36 @@ def update_paper(id, paper):
     return {"id": str(existing.id), "success": True}, 200
 
 
+@csrf_protect
+def set_paper_active(id, body):
+    """
+    Activate or deactivate (soft delete) a published record
+    Handler for PUT: /api/paper/{id}/active
+
+    Owner/admin only (auth.can_edit_paper). Writes ONLY is_active as an atomic
+    field update, so legacy documents that would fail full model validation
+    are untouched. Deactivation is reversible and preserves the record.
+    """
+    user = get_current_user()
+    try:
+        existing = Paper.objects.get(id=str(id))
+    except Exception as e:
+        msg = "Exception in set paper active api " + str(e)
+        print(msg)
+        return {"error": "Paper not found"}, 404
+
+    allowed, reason = can_edit_paper(existing, user)
+    if not allowed:
+        return {"error": reason}, 401 if user is None else 403
+
+    active = (body or {}).get("active")
+    if not isinstance(active, bool):
+        return {"error": "active must be a boolean (true to reactivate, false to deactivate)"}, 400
+
+    Paper.objects(id=existing.id).update(set__is_active=active)
+    return {"id": str(existing.id), "is_active": active, "success": True}, 200
+
+
 def raw_paper(id):
     """
     Return the stored record document for editing in the curator
@@ -362,6 +406,7 @@ def _paper_summary(paper):
         "year": year,
         "tags": list(paper.tags or []),
         "collections": list(paper.collections or []),
+        "is_active": paper.is_active is not False,
     }
 
 
@@ -622,4 +667,5 @@ def paper_permissions(id):
         "owner_email": paper.owner_email,
         "authenticated": user is not None,
         "is_admin": is_admin(user),
+        "is_active": paper.is_active is not False,
     }, 200

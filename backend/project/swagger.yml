@@ -304,6 +304,41 @@ paths:
           description: Authentication is required to publish
         500:
           description: Internal server error
+  /paper/{id}/active:
+    put:
+      operationId: "project.api.set_paper_active"
+      tags:
+        - "Paper details"
+      summary: "Activate or deactivate (soft delete) a record (owner or admin only)"
+      parameters:
+        - in: path
+          name: id
+          type: string
+          required: true
+          description: Paper Id
+        - in: body
+          name: body
+          required: true
+          description: Set active=false to hide the record from public
+            discovery, active=true to restore it.
+          schema:
+            type: object
+            required:
+              - active
+            properties:
+              active:
+                type: boolean
+      responses:
+        200:
+          description: Record activation state updated
+        400:
+          description: active must be a boolean
+        401:
+          description: Authentication required
+        403:
+          description: Only the record owner or an admin may change this
+        404:
+          description: Paper with this id does not exist
   /paper/{id}/raw:
     get:
       operationId: "project.api.raw_paper"

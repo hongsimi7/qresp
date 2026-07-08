@@ -19,14 +19,14 @@ class PaperDAO(MongoDBConnection, WorkflowObject):
         """ fetches all collections from paper
         :return list: List of collections
         """
-        paperCollectionlist = Paper.objects.get_unique_values('collections')
+        paperCollectionlist = active_papers().get_unique_values('collections')
         return paperCollectionlist
 
     def getPublicationList(self):
         """ fetches all publications from paper
         :return list: List of publications
         """
-        paperPublicationlist = Paper.objects.get_unique_values(
+        paperPublicationlist = active_papers().get_unique_values(
             'reference.journal.fullName')
         return paperPublicationlist
 
@@ -34,7 +34,7 @@ class PaperDAO(MongoDBConnection, WorkflowObject):
         """ fetches all authors from paper
         :return list authorslist: List of all authors
         """
-        authorslist = Paper.objects.get_unique_names('reference.authors')
+        authorslist = active_papers().get_unique_names('reference.authors')
         return authorslist
 
     def getAllPapers(self):
@@ -151,6 +151,11 @@ class PaperDAO(MongoDBConnection, WorkflowObject):
         :return: list filteredSearchobjects: filtered search objects
         """
         filteredSearchobjects = []
+        # Deactivated records never appear in public search/explorer results.
+        # All search entry points funnel through here, so this is the single
+        # gate. `is_active__ne=False` keeps legacy records that predate the
+        # flag (field absent => active).
+        filteredPaper = filteredPaper.filter(is_active__ne=False)
         for paper in filteredPaper:
             search = Search()
             search.id = str(paper.id)

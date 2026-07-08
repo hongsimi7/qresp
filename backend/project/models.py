@@ -190,9 +190,21 @@ class Paper(Document):
     # Distinct from info.insertedBy.emailId, which is curator-DECLARED, not
     # verified.
     owner_email = StringField(max_length=254)
+    # Soft-deactivation flag. Absent on legacy records => active; only an
+    # explicit False hides a record from public search/explorer/detail. Owner
+    # or admin can toggle it (project.api.set_paper_active). Preferred over
+    # physical delete so published records are preserved and reversible.
+    is_active = BooleanField(default=True)
     meta = {'strict': False,
             'queryset_class': FilterQuerySet
             }
+
+
+def active_papers():
+    """Queryset of records visible to the public: legacy records without the
+    flag (field absent) and explicitly active ones. Only an explicit
+    is_active=False hides a record from public discovery surfaces."""
+    return Paper.objects(is_active__ne=False)
 
 
 class CuratorDraft(Document):
