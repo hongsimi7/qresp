@@ -29,6 +29,9 @@ const PermissionNotice = ({ paperId, server }) => {
   const [assignEmail, setAssignEmail] = useState("");
   const [assignMessage, setAssignMessage] = useState("");
   const [assigning, setAssigning] = useState(false);
+  const [activeOpen, setActiveOpen] = useState(false);
+  const [activeMessage, setActiveMessage] = useState("");
+  const [activeSaving, setActiveSaving] = useState(false);
 
   const fetchPermissions = useCallback(async () => {
     try {
@@ -76,6 +79,27 @@ const PermissionNotice = ({ paperId, server }) => {
     setAssigning(false);
   };
 
+  const isActive = permissions.is_active !== false;
+
+  const setActive = async (active) => {
+    setActiveSaving(true);
+    setActiveMessage("");
+    try {
+      await axios.put(`/api/paper/${encodeURIComponent(paperId)}/active`, {
+        active,
+      });
+      setActiveOpen(false);
+      await fetchPermissions();
+    } catch (err) {
+      const res = err.response;
+      setActiveMessage(
+        (res && res.data && res.data.error) ||
+          "Updating this record failed, please try again."
+      );
+    }
+    setActiveSaving(false);
+  };
+
   let text;
   if (permissions.can_edit) {
     text = `You can edit this record (${permissions.reason})`;
@@ -88,10 +112,16 @@ const PermissionNotice = ({ paperId, server }) => {
   const showAssignOwner = permissions.is_admin && !permissions.owner_email;
 
   return (
-    <Box sx={{ mb: 1, display: "flex", alignItems: "center", gap: 1 }}>
+    <Box sx={{ mb: 1, display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
       <Typography variant="subtitle2" color="secondary">
         {text}
       </Typography>
+      {permissions.can_edit && !isActive ? (
+        <Typography variant="subtitle2" color="error">
+          This record is deactivated: it is hidden from public search and its
+          detail page. Only you and admins can see it.
+        </Typography>
+      ) : null}
       {permissions.can_edit ? (
         <Button
           size="small"
@@ -103,6 +133,54 @@ const PermissionNotice = ({ paperId, server }) => {
         >
           Edit in Curator
         </Button>
+      ) : null}
+      {permissions.can_edit ? (
+        <Fragment>
+          <Button
+            size="small"
+            variant="outlined"
+            color={isActive ? "error" : "primary"}
+            onClick={() => {
+              setActiveMessage("");
+              setActiveOpen(true);
+            }}
+          >
+            {isActive ? "Deactivate" : "Reactivate"}
+          </Button>
+          <Dialog
+            open={activeOpen}
+            onClose={() => setActiveOpen(false)}
+            fullWidth
+            maxWidth="xs"
+          >
+            <DialogTitle>
+              {isActive ? "Deactivate this record?" : "Reactivate this record?"}
+            </DialogTitle>
+            <DialogContent>
+              <Typography variant="body2" color="secondary" gutterBottom>
+                {isActive
+                  ? "Deactivating hides this record from public search, the explorer and its detail page. Nothing is deleted, and you can reactivate it at any time."
+                  : "Reactivating makes this record public again: it will reappear in search, the explorer and its detail page."}
+              </Typography>
+              {activeMessage ? (
+                <Typography variant="body2" color="error">
+                  {activeMessage}
+                </Typography>
+              ) : null}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setActiveOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => setActive(!isActive)}
+                variant="contained"
+                color={isActive ? "error" : "primary"}
+                disabled={activeSaving}
+              >
+                {isActive ? "Deactivate" : "Reactivate"}
+              </Button>
+            </DialogActions>
+          </Dialog>
+        </Fragment>
       ) : null}
       {showAssignOwner ? (
         <Fragment>

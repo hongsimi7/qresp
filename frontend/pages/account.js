@@ -139,10 +139,15 @@ const AccountPage = () => {
                 }}
               >
                 <Box sx={{ flexGrow: 1 }}>
-                  <Typography color="secondary">
-                    {paper.title}
-                    {paper.year ? ` (${paper.year})` : ""}
-                  </Typography>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <Typography color="secondary">
+                      {paper.title}
+                      {paper.year ? ` (${paper.year})` : ""}
+                    </Typography>
+                    {paper.is_active === false ? (
+                      <Chip label="deactivated" size="small" color="default" />
+                    ) : null}
+                  </Box>
                   <Typography variant="body2" color="secondary">
                     {paper.authors}
                   </Typography>

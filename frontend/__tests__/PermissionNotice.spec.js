@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 jest.mock("axios");
@@ -154,6 +154,97 @@ describe("PermissionNotice", () => {
     expect(
       screen.queryByRole("button", { name: /assign owner/i })
     ).not.toBeInTheDocument();
+  });
+
+  it("lets owners deactivate an active record after confirmation and refetches", async () => {
+    mockPermissions({
+      can_edit: true,
+      reason: "owner",
+      owner_email: "owner@example.com",
+      authenticated: true,
+      is_admin: false,
+      is_active: true,
+    });
+    axios.put.mockResolvedValue({
+      data: { id: "abc123", is_active: false, success: true },
+    });
+    const user = userEvent.setup();
+    renderNotice({ authenticated: true, loading: false });
+    await user.click(
+      await screen.findByRole("button", { name: /^deactivate$/i })
+    );
+    // Confirmation dialog, not an immediate destructive action.
+    const confirm = within(
+      screen.getByRole("dialog")
+    ).getByRole("button", { name: /^deactivate$/i });
+    const getCallsBefore = axios.get.mock.calls.length;
+    await user.click(confirm);
+    expect(axios.put).toHaveBeenCalledWith("/api/paper/abc123/active", {
+      active: false,
+    });
+    expect(axios.get.mock.calls.length).toBeGreaterThan(getCallsBefore);
+  });
+
+  it("shows a deactivated notice and a Reactivate action to the owner", async () => {
+    mockPermissions({
+      can_edit: true,
+      reason: "owner",
+      owner_email: "owner@example.com",
+      authenticated: true,
+      is_admin: false,
+      is_active: false,
+    });
+    renderNotice({ authenticated: true, loading: false });
+    expect(
+      await screen.findByText(/this record is deactivated/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^reactivate$/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^deactivate$/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not offer deactivate to users who cannot edit", async () => {
+    mockPermissions({
+      can_edit: false,
+      reason: "only the record owner or an admin can edit this record",
+      owner_email: "owner@example.com",
+      authenticated: true,
+      is_admin: false,
+      is_active: true,
+    });
+    renderNotice({ authenticated: true, loading: false });
+    await screen.findByText(/only the record owner or an admin/i);
+    expect(
+      screen.queryByRole("button", { name: /deactivate/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the backend error when deactivating fails", async () => {
+    mockPermissions({
+      can_edit: true,
+      reason: "owner",
+      owner_email: "owner@example.com",
+      authenticated: true,
+      is_admin: false,
+      is_active: true,
+    });
+    axios.put.mockRejectedValue({
+      response: { status: 403, data: { error: "not allowed here" } },
+    });
+    const user = userEvent.setup();
+    renderNotice({ authenticated: true, loading: false });
+    await user.click(
+      await screen.findByRole("button", { name: /^deactivate$/i })
+    );
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /^deactivate$/i,
+      })
+    );
+    expect(await screen.findByText(/not allowed here/i)).toBeInTheDocument();
   });
 
   it("renders nothing when the permission fetch fails (e.g. previews)", async () => {
