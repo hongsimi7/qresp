@@ -53,8 +53,57 @@ environment variables on the staging backend container.
 - [ ] Header name → `/account`: profile shows name/email/provider (+admin
       badge if allowlisted); the new record appears under "My published
       records" with working View / Edit in Curator links
-- [ ] "Drafts on this browser" lists an in-progress curator draft with
+- [ ] "Local recovery draft" lists an in-progress curator draft with
       Resume/Clear (start typing in /curator create mode first)
+
+## Account server drafts (signed in)
+
+- [ ] In `/curator` create mode, fill a few fields (even incomplete, no
+      charts/datasets) → "Save Draft" → name it → success dialog
+- [ ] `/account` → "My drafts" lists it with an "Updated …" time
+- [ ] Save a second draft → both appear (multiple drafts supported)
+- [ ] Resume a draft → `/curator?draft=<id>` reloads exactly that draft's state
+- [ ] Edit and Save Draft again → the SAME draft updates (no duplicate in the list)
+- [ ] "Rename" a draft → title updates in the list
+- [ ] "Delete" a draft → confirmation dialog first → confirm removes it
+- [ ] "Start from Scratch" with unsaved work → dialog offers Cancel /
+      Save Draft and Start Fresh / Discard and Start Fresh (no duplicate
+      Dismiss); "Discard" truly blanks the form
+- [ ] Navigating away with unsaved changes prompts Save Draft and Leave /
+      Leave Without Saving / Stay
+- [ ] Publishing from a resumed draft → success dialog offers "Delete the
+      saved draft"; the account draft is only removed when you click it
+- [ ] Export/Import Metadata (Upload Metadata / Export Metadata) still work and
+      are independent of account drafts
+- [ ] Anonymous: "Save Draft" prompts to sign in (no server draft is created)
+
+## Soft-deactivate published records (owner/admin)
+
+- [ ] On an owned staging/test record's paperdetails: "Deactivate" → confirm
+      dialog explains it hides but does not delete → confirm
+- [ ] The record disappears from `/search` and `/explorer` and its filter
+      dropdowns; its detail page 404s for an anonymous/other user
+- [ ] The owner/admin can still open the deactivated record and sees the
+      "This record is deactivated" notice + "Reactivate"
+- [ ] `/account` "My published records" flags it "deactivated"
+- [ ] "Reactivate" → confirm → record is public again (search/detail)
+
+## Admin: ownerless records
+
+- [ ] Signed in as an allowlisted admin, `/account` shows an
+      "Ownerless records (admin)" section listing legacy records with no owner
+- [ ] Each row shows the (unverified) suggested email; "Assign" sets the owner
+      and the row disappears; a bad email shows the backend error inline
+- [ ] Non-admins do not see the section; `GET /api/admin/ownerless-papers`
+      with a non-admin cookie → 403
+
+## Verify link edge cases
+
+- [ ] Re-click a verification link after publishing → still lands on the paper
+      (idempotent), NOT an error, and no duplicate record is created
+- [ ] A tampered/unknown `/verify/PUBLISH_bogus?server=…` → "couldn't finish
+      publishing" page with a specific message and a Browse link (not a blank
+      "contact the administrators")
 
 Identity/verification model (documented, not configurable in UI): Google
 (or staging dev-login) provides the verified identity and owner_email;

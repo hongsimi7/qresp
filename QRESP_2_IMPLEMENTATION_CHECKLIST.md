@@ -24,16 +24,18 @@ Direction change 2026-07-03: curation-assistant/AI-workflow-automation work is *
 - Defer: roles UI, account page, token refresh, linking multiple emails.
 - Guardrails: client id/secret via `config.ini`/`QRESP_*` env only — **never committed**; `OAUTHLIB_INSECURE_TRANSPORT` dev-only.
 
-### 4. Ownership + edit/delete permission system
+### 4. Ownership + edit/delete permission system — ✅ MVP done (2026-07-08)
 - Why: submitters cannot fix or retract published records today (top user request; `REVISION_DESIGN.md` analyzed this pre-auth — Google identity now supersedes its email-token scheme, keep its threat model + soft-delete stance).
-- Ownership anchor (already in schema): `Paper.info.insertedBy.emailId` (+ `info.isPublic` flag). Admin = email allowlist in config.
-- MVP: backend `PUT /api/paper/{id}` (edit metadata via existing validation path) and `POST /api/paper/{id}/deactivate` (soft: `isPublic=false`; **no hard delete**), both guarded by session email == owner or admin; frontend: Edit / Deactivate buttons on paperdetails visible only to owner/admin (edit re-uses the curator form pre-filled — the `/curator` flow already supports loading metadata).
+- Ownership anchor: verified session email stamped as `Paper.owner_email` at publish (distinct from curator-declared `info.insertedBy.emailId`). Admin = `QRESP_ADMIN_EMAILS` allowlist.
+- Done — edit: `GET /api/paper/{id}/raw` + `PUT /api/paper/{id}` (owner/admin, existing validation path); paperdetails permission notice + "Edit in Curator" (curator edit mode).
+- Done — soft-deactivate: `Paper.is_active` (absent ⇒ active, legacy-safe) + `PUT /api/paper/{id}/active` (owner/admin, atomic write, **no hard delete**); deactivated records hidden from search/explorer/filter dropdowns and 404 on the public detail for non-owners; owner/admin retain access + Deactivate/Reactivate controls with confirmation; account list flags deactivated.
+- Done — account server drafts: `CuratorDraft` + `GET/POST /api/account/drafts`, `GET/PUT/DELETE /api/account/drafts/{id}` (owner-scoped, never publish-validated so incomplete drafts save; cross-user ⇒ 404). Curator "Save Draft", `?draft=<id>` resume, active-draft tracking, three-button Start-From-Scratch, nav guard; `/account` My drafts with Resume/Rename/Delete (confirmed) + multiple drafts; local browser copy kept only as recovery.
+- Done — admin ownerless management: `/account` admin-only section over `GET /api/admin/ownerless-papers` + `PUT /api/paper/{id}/owner`.
+- Done — publish/verify hardening: idempotent verify links (re-click lands on the paper, no duplicate), specific verify error messages, staging skip-email vs SMTP paths, publish success offers to delete the source account draft (only after the user verifies).
 - Defer: revision history, ownership transfer, re-publish workflow, hard deletion.
 
-### 5. Agentic literature explorer
-- Why: discovery — connect a Qresp record to related external literature and similar internal records, with explanations.
-- MVP: `GET /api/paper/{id}/related` returning (a) internal: Mongo tag/title/abstract similarity over existing search fields; (b) external: one scholarly API (Crossref or Semantic Scholar) queried by title/DOI; (c) 1–2 sentence "why related" per hit from an LLM call (server-side, key via env); frontend: a "Related" section on paperdetails. Cache responses per paper id.
-- Defer: embeddings store, multi-step agent loops, federation across Qresp nodes, user feedback loop. (This is the only goal that touches an LLM; still **no workflow-automation code**, no Google Drive/Gmail.)
+### 5. Agentic literature explorer — ⛔ out of scope (paused)
+- Paused with the curation-assistant/AI direction (see header, 2026-07-03). No `/related` endpoint, no external scholarly API, no LLM calls in this MVP. Kept here only to record the deferral; do not implement without an explicit new decision.
 
 ## Implementation order
 1. **UI regression repair** (goal 2) — everything else demos on top of this.
