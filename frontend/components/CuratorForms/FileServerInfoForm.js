@@ -1,6 +1,6 @@
 import PropTypes from "prop-types";
 
-import { useContext } from "react";
+import { useContext, useEffect } from "react";
 import { Grid } from "@mui/material";
 
 import Drawer from "../drawer";
@@ -29,9 +29,9 @@ const FileServerInfoForm = ({ editor }) => {
       .url("Please enter a valid url"),
   });
 
-  const { register, handleSubmit, formState: { errors }, watch, control } = useForm({
+  const { register, handleSubmit, formState: { errors }, watch, control, getValues } = useForm({
     resolver: yupResolver(schema),
-    defaultValues: { connectionType: "http" },
+    defaultValues: { connectionType: "http", dataServer: "" },
   });
 
   const saveMethod = (server) => {
@@ -79,7 +79,18 @@ const FileServerInfoForm = ({ editor }) => {
     SourceTreeContext
   );
   const { showLoader, hideLoader } = useContext(LoadingContext);
-  const { setFileServerPath } = useContext(CuratorContext);
+  const { fileServerPath, setFileServerPath, registerDraftFlusher } =
+    useContext(CuratorContext);
+
+  useEffect(() => {
+    if (!registerDraftFlusher) return undefined;
+    return registerDraftFlusher("fileServerPath", () => {
+      const values = getValues();
+      return {
+        fileServerPath: values.dataServer || fileServerPath || "",
+      };
+    });
+  }, [fileServerPath, getValues, registerDraftFlusher]);
 
   return (
     <Drawer heading="Where is the paper" defaultOpen={true}>

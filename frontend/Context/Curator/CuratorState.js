@@ -1,4 +1,4 @@
-import { useReducer, useEffect, useRef, useState } from "react";
+import { useReducer, useCallback, useEffect, useRef, useState } from "react";
 import CuratorReducer from "./curatorReducer";
 import CuratorContext from "./curatorContext";
 
@@ -36,10 +36,13 @@ const CuratorState = (props) => {
   // navigation guard, and a version counter that remounts the form tree on
   // reset so uncontrolled RHF inputs actually blank.
   const [activeDraftId, setActiveDraftId] = useState(null);
+  const [activeDraftTitle, setActiveDraftTitle] = useState("");
   const [draftDirty, setDraftDirty] = useState(false);
   const [resetVersion, setResetVersion] = useState(0);
   const firstDirtyCheck = useRef(true);
   const skipNextDirty = useRef(false);
+  const stateRef = useRef(null);
+  const draftFlushers = useRef(new Map());
 
   const initialState = {
     curatorInfo: {
@@ -78,6 +81,10 @@ const CuratorState = (props) => {
   };
 
   const [state, dispatch] = useReducer(CuratorReducer, initialState);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   useEffect(() => {
     firstPersist.current = true;
@@ -180,13 +187,43 @@ const CuratorState = (props) => {
   const setAll = (data) =>
     dispatch({ type: SET_CURATOR_STATE, payload: normalizeState(data) });
 
-  const hasMeaningfulDraft = () => Boolean(summarizeBrowserDraft(state));
+  const registerDraftFlusher = useCallback((key, flusher) => {
+    if (!key || typeof flusher !== "function") {
+      return () => {};
+    }
+    draftFlushers.current.set(key, flusher);
+    return () => {
+      if (draftFlushers.current.get(key) === flusher) {
+        draftFlushers.current.delete(key);
+      }
+    };
+  }, []);
+
+  const collectDraftState = useCallback(() => {
+    let nextState = normalizeState(stateRef.current || state);
+    draftFlushers.current.forEach((flusher) => {
+      const patch = flusher(nextState);
+      if (patch && typeof patch === "object") {
+        nextState = normalizeState({ ...nextState, ...patch });
+      }
+    });
+    return nextState;
+  }, [state]);
+
+  const getDraftTitle = useCallback(() => {
+    const summary = summarizeBrowserDraft(collectDraftState());
+    return activeDraftTitle || (summary && summary.title) || "Untitled draft";
+  }, [activeDraftTitle, collectDraftState]);
+
+  const hasMeaningfulDraft = () =>
+    Boolean(summarizeBrowserDraft(collectDraftState()));
 
   const saveDraft = () => {
-    if (!draftKey || !hasMeaningfulDraft()) {
+    const draftState = collectDraftState();
+    if (!draftKey || !summarizeBrowserDraft(draftState)) {
       return false;
     }
-    WebStore.set(draftKey, state);
+    WebStore.set(draftKey, draftState);
     return true;
   };
 
@@ -199,6 +236,7 @@ const CuratorState = (props) => {
     }
     skipNextDirty.current = true;
     setActiveDraftId(null);
+    setActiveDraftTitle("");
     setDraftDirty(false);
     // Remount the form tree: context reset alone leaves stale values in the
     // always-mounted uncontrolled form inputs.
@@ -210,13 +248,18 @@ const CuratorState = (props) => {
   // the loaded draft when there is one, otherwise creates a new draft and
   // starts tracking its id. Resolves to the draft id; rejects on API errors
   // (e.g. 401 when not signed in) so callers can surface them.
-  const saveDraftToServer = async () => {
-    const id = await saveServerDraft(activeDraftId, state);
-    if (id) {
-      setActiveDraftId(id);
+  const saveDraftToServer = async (title) => {
+    const draftState = collectDraftState();
+    const nextTitle = (title || getDraftTitle()).trim() || "Untitled draft";
+    const draft = await saveServerDraft(activeDraftId, draftState, nextTitle);
+    if (draft && draft.id) {
+      setActiveDraftId(draft.id);
     }
+    setActiveDraftTitle((draft && draft.title) || nextTitle);
+    skipNextDirty.current = true;
+    dispatch({ type: SET_CURATOR_STATE, payload: draftState });
     setDraftDirty(false);
-    return id;
+    return draft && draft.id;
   };
 
   // Called by the ?draft=<id> loader after fetching a server draft: fills the
@@ -225,6 +268,7 @@ const CuratorState = (props) => {
     skipNextDirty.current = true;
     setAll((draft && draft.state) || {});
     setActiveDraftId(draft ? draft.id : null);
+    setActiveDraftTitle(draft ? draft.title || "" : "");
     setDraftDirty(false);
   };
 
@@ -300,8 +344,12 @@ const CuratorState = (props) => {
         saveDraft,
         hasMeaningfulDraft,
         activeDraftId,
+        activeDraftTitle,
         draftDirty,
         resetVersion,
+        collectDraftState,
+        getDraftTitle,
+        registerDraftFlusher,
         saveDraftToServer,
         applyServerDraft,
         setCuratorInfo,

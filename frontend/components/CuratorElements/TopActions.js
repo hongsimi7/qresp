@@ -48,18 +48,68 @@ const preview = (metadata, setAlert, router) => {
 };
 
 const TopActions = () => {
-  const { metadata, setAll, resetAll, hasMeaningfulDraft, saveDraftToServer } =
-    useContext(CuratorContext);
+  const {
+    metadata,
+    setAll,
+    resetAll,
+    hasMeaningfulDraft,
+    getDraftTitle,
+    saveDraftToServer,
+  } = useContext(CuratorContext);
   const { setAlert, unsetAlert } = useContext(AlertContext);
   const { setSelectedHttp, selectedHttp } = useContext(ServerContext);
   const { authenticated } = useContext(AuthContext);
   const [mdata, setMdata] = useState("");
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
+  const [draftDialog, setDraftDialog] = useState({
+    open: false,
+    mode: "save",
+    title: "",
+  });
 
   const router = useRouter();
   const dialogButtonSx = {
     minWidth: { xs: "100%", sm: 0 },
     whiteSpace: "nowrap",
+  };
+
+  const openDraftDialog = (mode = "save") => {
+    setDraftDialog({
+      open: true,
+      mode,
+      title:
+        (getDraftTitle && getDraftTitle()) ||
+        (metadata.referenceInfo && metadata.referenceInfo.title) ||
+        "Untitled draft",
+    });
+  };
+
+  const closeDraftDialog = () =>
+    setDraftDialog((current) => ({ ...current, open: false }));
+
+  const saveNamedDraft = () => {
+    const title = draftDialog.title.trim() || "Untitled draft";
+    saveDraftToServer(title)
+      .then(() => {
+        closeDraftDialog();
+        if (draftDialog.mode === "scratch") {
+          resetAll({ preserveDraft: false });
+          unsetAlert();
+          return;
+        }
+        setAlert(
+          "Draft saved",
+          "Your draft was saved to your account. Resume it any time from Account > My drafts.",
+          null
+        );
+      })
+      .catch(() => {
+        setAlert(
+          "Error",
+          "Your draft could not be saved. Please check that you are still signed in and try again.",
+          null
+        );
+      });
   };
 
   const onClicks = {
@@ -72,21 +122,7 @@ const TopActions = () => {
         );
         return;
       }
-      saveDraftToServer()
-        .then(() => {
-          setAlert(
-            "Draft saved",
-            "Your draft was saved to your account. Resume it any time from Account > My drafts.",
-            null
-          );
-        })
-        .catch(() => {
-          setAlert(
-            "Error",
-            "Your draft could not be saved. Please check that you are still signed in and try again.",
-            null
-          );
-        });
+      openDraftDialog("save");
     },
     resume: () => {
       setResumeDialogOpen(true);
@@ -98,18 +134,8 @@ const TopActions = () => {
         unsetAlert();
       };
       const saveAndReset = () => {
-        saveDraftToServer()
-          .then(() => {
-            resetAll({ preserveDraft: false });
-            unsetAlert();
-          })
-          .catch(() => {
-            setAlert(
-              "Error",
-              "Your draft could not be saved, so the form was left untouched. Please check that you are still signed in and try again.",
-              null
-            );
-          });
+        unsetAlert();
+        openDraftDialog("scratch");
       };
       setAlert(
         "Start from scratch?",
@@ -301,6 +327,43 @@ const TopActions = () => {
           </RegularStyledButton>
           <RegularStyledButton onClick={() => setResumeDialogOpen(false)}>
             Cancel
+          </RegularStyledButton>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={draftDialog.open}
+        onClose={closeDraftDialog}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>
+          {draftDialog.mode === "scratch"
+            ? "Save draft before starting fresh"
+            : "Save draft"}
+        </DialogTitle>
+        <DialogContent dividers>
+          <TextField
+            autoFocus
+            label="Draft name"
+            value={draftDialog.title}
+            onChange={(event) =>
+              setDraftDialog((current) => ({
+                ...current,
+                title: event.target.value,
+              }))
+            }
+            fullWidth
+            helperText="Drafts can be incomplete. Required fields are checked when you publish."
+          />
+        </DialogContent>
+        <DialogActions>
+          <RegularStyledButton onClick={closeDraftDialog}>
+            Cancel
+          </RegularStyledButton>
+          <RegularStyledButton onClick={saveNamedDraft}>
+            {draftDialog.mode === "scratch"
+              ? "Save Draft and Start Fresh"
+              : "Save Draft"}
           </RegularStyledButton>
         </DialogActions>
       </Dialog>

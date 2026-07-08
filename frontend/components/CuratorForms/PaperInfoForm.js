@@ -1,4 +1,4 @@
-import { useContext } from "react";
+import { useContext, useEffect } from "react";
 import PropTypes from "prop-types";
 
 import { Grid, Tooltip, Typography, IconButton } from "@mui/material";
@@ -28,6 +28,7 @@ const PaperInfoForm = ({ editor }) => {
     setPaperInfo,
     setReferenceAuthors,
     fileServerPath,
+    registerDraftFlusher,
   } = useContext(CuratorContext);
   const { setSaveMethod, openSelector, HideSelector } = useContext(
     SourceTreeContext
@@ -50,7 +51,7 @@ const PaperInfoForm = ({ editor }) => {
   });
 
   const formattedNames = namesUtil.get(paperInfo.PIs);
-  const { register, handleSubmit, formState: { errors }, watch, control, setValue } = useForm({
+  const { register, handleSubmit, formState: { errors }, watch, control, setValue, getValues } = useForm({
     resolver: yupResolver(schema),
     defaultValues: {
       ...paperInfo,
@@ -69,14 +70,37 @@ const PaperInfoForm = ({ editor }) => {
     name: "PIs",
   });
 
+  const splitList = (value) =>
+    String(value || "")
+      .split(",")
+      .map((el) => el.trim())
+      .filter(Boolean);
+
+  const toPaperInfo = (values) => {
+    const next = {
+      ...paperInfo,
+      ...values,
+      collections: splitList(values.collections),
+      tags: splitList(values.tags),
+      PIs: namesUtil.set(values.PIs || []),
+    };
+    if (next.notebookFile && next.notebookFile.length > 0) {
+      next.notebookPath = fileServerPath + next.notebookFile;
+    }
+    return next;
+  };
+
+  useEffect(() => {
+    if (!registerDraftFlusher) return undefined;
+    return registerDraftFlusher("paperInfo", () => ({
+      paperInfo: toPaperInfo(getValues()),
+    }));
+  }, [getValues, registerDraftFlusher, toPaperInfo]);
+
   const onSubmit = (values) => {
-    values.collections = values.collections.split(",").map((el) => el.trim());
-    values.tags = values.tags.split(",").map((el) => el.trim());
-    values.PIs = namesUtil.set(values.PIs);
-    if (values.notebookFile.length > 0)
-      values["notebookPath"] = fileServerPath + values.notebookFile;
-    setPaperInfo(values);
-    setReferenceAuthors(values.PIs);
+    const next = toPaperInfo(values);
+    setPaperInfo(next);
+    setReferenceAuthors(next.PIs);
     editor();
   };
 

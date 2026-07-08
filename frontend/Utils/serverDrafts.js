@@ -29,12 +29,13 @@ export const deleteServerDraft = (id) =>
     .then((res) => res.data);
 
 // Update the active draft when one is loaded, otherwise create a new one.
-// Resolves to the draft id so callers can track it for subsequent saves.
+// Resolves to the saved draft document so callers can keep id/title in sync.
 export const saveServerDraft = (activeDraftId, state, title) => {
   if (activeDraftId) {
-    return updateServerDraft(activeDraftId, { state }).then(
-      (draft) => draft.id || activeDraftId
-    );
+    return updateServerDraft(activeDraftId, {
+      state,
+      ...(title ? { title } : {}),
+    });
   }
-  return createServerDraft(state, title).then((draft) => draft.id);
+  return createServerDraft(state, title);
 };

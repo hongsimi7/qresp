@@ -30,6 +30,7 @@ const renderTopActions = ({ hasDraft = true, authenticated = true } = {}) => {
   const resetAll = jest.fn();
   const hasMeaningfulDraft = jest.fn(() => hasDraft);
   const saveDraftToServer = jest.fn(() => Promise.resolve("draft123"));
+  const getDraftTitle = jest.fn(() => "Draft title");
   render(
     <CuratorContext.Provider
       value={{
@@ -39,6 +40,7 @@ const renderTopActions = ({ hasDraft = true, authenticated = true } = {}) => {
         getSavedDraft: jest.fn(() => (hasDraft ? metadata : null)),
         resumeDraft: jest.fn(),
         hasMeaningfulDraft,
+        getDraftTitle,
         saveDraftToServer,
       }}
     >
@@ -60,6 +62,26 @@ const renderTopActions = ({ hasDraft = true, authenticated = true } = {}) => {
 };
 
 describe("TopActions draft controls", () => {
+  it("asks for a draft name before saving an account draft", async () => {
+    const user = userEvent.setup();
+    const { saveDraftToServer } = renderTopActions();
+
+    await user.click(
+      screen.getAllByRole("button", {
+        name: /save this work as a draft in your account/i,
+      })[0]
+    );
+
+    expect(screen.getByLabelText(/draft name/i)).toHaveValue("Draft title");
+    await user.clear(screen.getByLabelText(/draft name/i));
+    await user.type(screen.getByLabelText(/draft name/i), "Named QA draft");
+    await user.click(screen.getByRole("button", { name: /^save draft$/i }));
+
+    await waitFor(() =>
+      expect(saveDraftToServer).toHaveBeenCalledWith("Named QA draft")
+    );
+  });
+
   it("asks what to do with the browser draft before starting from scratch", async () => {
     const user = userEvent.setup();
     const { setAlert, unsetAlert, resetAll } = renderTopActions();
@@ -111,9 +133,20 @@ describe("TopActions draft controls", () => {
       screen.getByRole("button", { name: /save draft and start fresh/i })
     );
 
-    await waitFor(() => expect(saveDraftToServer).toHaveBeenCalledTimes(1));
+    expect(await screen.findByLabelText(/draft name/i)).toHaveValue(
+      "Draft title"
+    );
+    await user.clear(screen.getByLabelText(/draft name/i));
+    await user.type(screen.getByLabelText(/draft name/i), "Before reset");
+    await user.click(
+      screen.getByRole("button", { name: /save draft and start fresh/i })
+    );
+
+    await waitFor(() =>
+      expect(saveDraftToServer).toHaveBeenCalledWith("Before reset")
+    );
     expect(resetAll).toHaveBeenCalledWith({ preserveDraft: false });
-    expect(unsetAlert).toHaveBeenCalledTimes(1);
+    expect(unsetAlert).toHaveBeenCalledTimes(2);
   });
 
   it("leaves the form untouched when cancelling start from scratch", async () => {

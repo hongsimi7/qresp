@@ -1,9 +1,16 @@
-import { useContext } from "react";
+import { useContext, useEffect } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import CuratorState from "../Context/Curator/CuratorState";
 import CuratorContext from "../Context/Curator/curatorContext";
+import { saveServerDraft } from "../Utils/serverDrafts";
+
+jest.mock("../Utils/serverDrafts", () => ({
+  saveServerDraft: jest.fn(() =>
+    Promise.resolve({ id: "draft123", title: "Saved draft" })
+  ),
+}));
 
 const savedDraft = {
   curatorInfo: {
@@ -57,9 +64,38 @@ const Probe = () => {
   );
 };
 
+const ServerDraftProbe = () => {
+  const { registerDraftFlusher, saveDraftToServer } =
+    useContext(CuratorContext);
+
+  useEffect(
+    () =>
+      registerDraftFlusher("open-reference-form", () => ({
+        referenceInfo: {
+          title: "Unsaved reference title",
+          authors: "",
+          publication: "",
+          year: null,
+          doi: "",
+          kind: "",
+          url: "",
+          abstract: "",
+        },
+      })),
+    [registerDraftFlusher]
+  );
+
+  return (
+    <button onClick={() => saveDraftToServer("Named server draft")}>
+      Save server draft
+    </button>
+  );
+};
+
 describe("CuratorState draft persistence", () => {
   beforeEach(() => {
     localStorage.clear();
+    saveServerDraft.mockClear();
   });
 
   it("does not silently restore a saved create draft on mount", () => {
@@ -150,5 +186,28 @@ describe("CuratorState draft persistence", () => {
 
     expect(screen.getByTestId("first-name")).toHaveTextContent("blank");
     expect(screen.getByTestId("has-draft")).toHaveTextContent("no");
+  });
+
+  it("saves registered open-form values to account drafts before validation", async () => {
+    const user = userEvent.setup();
+    render(
+      <CuratorState draftKey={null}>
+        <ServerDraftProbe />
+      </CuratorState>
+    );
+
+    await user.click(screen.getByRole("button", { name: /save server draft/i }));
+
+    await waitFor(() =>
+      expect(saveServerDraft).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({
+          referenceInfo: expect.objectContaining({
+            title: "Unsaved reference title",
+          }),
+        }),
+        "Named server draft"
+      )
+    );
   });
 });

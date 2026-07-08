@@ -21,7 +21,8 @@ import AlertContext from "../../Context/Alert/alertContext";
 import LoadingContext from "../../Context/Loading/loadingContext";
 
 const ReferenceInfoForm = ({ editor }) => {
-  const { referenceInfo, setReferenceInfo } = useContext(CuratorContext);
+  const { referenceInfo, setReferenceInfo, registerDraftFlusher } =
+    useContext(CuratorContext);
   const { setAlert } = useContext(AlertContext);
   const { showLoader, hideLoader } = useContext(LoadingContext);
 
@@ -122,17 +123,41 @@ const ReferenceInfoForm = ({ editor }) => {
       .finally(() => hideLoader());
   };
 
-  const onSubmit = (values) => {
-    setReferenceInfo({
-      authors: namesUtil.set(values.authors),
-      publication: referenceUtil.set(values),
+  const toReferenceInfo = (values) => {
+    const hasPublication = ["journal", "year", "volume", "page"].some((key) =>
+      String(values[key] || "").trim()
+    );
+    return {
+      authors: namesUtil.set(values.authors || []),
+      publication: hasPublication
+        ? referenceUtil.set({
+            journal: values.journal || "",
+            year: values.year || "",
+            volume: values.volume || "",
+            page: values.page || "",
+          })
+        : "",
       doi: values.doi,
       kind: values.kind,
       title: values.title,
       year: values.year,
       url: values.url,
       abstract: values.abstract,
-    });
+    };
+  };
+
+  useEffect(() => {
+    if (!registerDraftFlusher) return undefined;
+    return registerDraftFlusher("referenceInfo", () => ({
+      referenceInfo: {
+        ...referenceInfo,
+        ...toReferenceInfo(getValues()),
+      },
+    }));
+  }, [getValues, referenceInfo, registerDraftFlusher]);
+
+  const onSubmit = (values) => {
+    setReferenceInfo(toReferenceInfo(values));
     editor();
   };
 

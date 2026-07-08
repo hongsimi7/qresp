@@ -1,4 +1,4 @@
-import { useContext } from "react";
+import { useContext, useEffect } from "react";
 import PropTypes from "prop-types";
 
 import { useForm } from "react-hook-form";
@@ -14,7 +14,8 @@ import Drawer from "../drawer";
 import CuratorContext from "../../Context/Curator/curatorContext";
 
 const CuratorInfoForm = ({ editor }) => {
-  const { curatorInfo, setCuratorInfo } = useContext(CuratorContext);
+  const { curatorInfo, setCuratorInfo, registerDraftFlusher } =
+    useContext(CuratorContext);
 
   const nameFields = {
     firstName: "firstName",
@@ -30,9 +31,17 @@ const CuratorInfoForm = ({ editor }) => {
     affiliation: Yup.string(),
   });
 
-  const { register, handleSubmit, formState: { errors }, setValue } = useForm({
+  const { register, handleSubmit, formState: { errors }, getValues } = useForm({
     resolver: yupResolver(schema),
+    defaultValues: { ...curatorInfo },
   });
+
+  useEffect(() => {
+    if (!registerDraftFlusher) return undefined;
+    return registerDraftFlusher("curatorInfo", () => ({
+      curatorInfo: { ...curatorInfo, ...getValues() },
+    }));
+  }, [curatorInfo, getValues, registerDraftFlusher]);
 
   const onSubmit = (values) => {
     setCuratorInfo(values);

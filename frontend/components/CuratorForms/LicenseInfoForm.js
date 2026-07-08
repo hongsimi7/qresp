@@ -1,4 +1,4 @@
-import { useContext } from "react";
+import { useContext, useEffect } from "react";
 import PropTypes from "prop-types";
 
 import { useForm } from "react-hook-form";
@@ -17,15 +17,24 @@ import licenses from "../../data/licenses";
 import CuratorContext from "../../Context/Curator/curatorContext";
 
 const LicenseInfoForm = ({ editor }) => {
-  const { setLicense } = useContext(CuratorContext);
+  const { license, setLicense, registerDraftFlusher } =
+    useContext(CuratorContext);
 
   const schema = Yup.object({
     license: Yup.string().required("Required"),
   });
 
-  const { control, handleSubmit, formState: { errors } } = useForm({
+  const { control, handleSubmit, formState: { errors }, getValues } = useForm({
     resolver: yupResolver(schema),
+    defaultValues: { license: license || "" },
   });
+
+  useEffect(() => {
+    if (!registerDraftFlusher) return undefined;
+    return registerDraftFlusher("license", () => ({
+      license: getValues("license") || "",
+    }));
+  }, [getValues, registerDraftFlusher]);
 
   const onSubmit = (values) => {
     setLicense(values.license);

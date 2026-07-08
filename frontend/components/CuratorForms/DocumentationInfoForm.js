@@ -1,4 +1,4 @@
-import { useContext } from "react";
+import { useContext, useEffect } from "react";
 import PropTypes from "prop-types";
 
 import { useForm } from "react-hook-form";
@@ -14,15 +14,24 @@ import Drawer from "../drawer";
 import CuratorContext from "../../Context/Curator/curatorContext";
 
 const DocumentationInfoForm = ({ editor }) => {
-  const { documentation, setDocumentation } = useContext(CuratorContext);
+  const { documentation, setDocumentation, registerDraftFlusher } =
+    useContext(CuratorContext);
 
   const schema = Yup.object({
     documentation: Yup.string(),
   });
 
-  const { register, handleSubmit, formState: { errors }, setValue } = useForm({
+  const { register, handleSubmit, formState: { errors }, getValues } = useForm({
     resolver: yupResolver(schema),
+    defaultValues: { documentation },
   });
+
+  useEffect(() => {
+    if (!registerDraftFlusher) return undefined;
+    return registerDraftFlusher("documentation", () => ({
+      documentation: getValues("documentation") || "",
+    }));
+  }, [getValues, registerDraftFlusher]);
 
   const onSubmit = (values) => {
     setDocumentation(values.documentation);
