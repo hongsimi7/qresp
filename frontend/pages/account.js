@@ -7,6 +7,7 @@ import Link from "next/link";
 import SEO from "../components/seo";
 import Drawer from "../components/drawer";
 import { RegularStyledButton } from "../components/button";
+import OwnerlessRecords from "../components/Account/OwnerlessRecords";
 import AuthContext from "../Context/Auth/authContext";
 import {
   clearBrowserDraft,
@@ -176,6 +177,12 @@ const AccountPage = () => {
             ))
           )}
         </Drawer>
+
+        {user.is_admin ? (
+          <Drawer heading="Ownerless records (admin)" defaultOpen={false}>
+            <OwnerlessRecords />
+          </Drawer>
+        ) : null}
 
         <Drawer heading="My drafts" defaultOpen={true}>
           {draftError ? (
