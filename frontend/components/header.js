@@ -83,8 +83,16 @@ const Header = () => {
             </Box>
             <Box sx={{ display: "flex" }}>
               {/* MUI v6+ removed <Hidden>; use responsive display instead. */}
-              <Box sx={{ display: { xs: "none", md: "flex" } }}>{links}</Box>
-              <Box sx={{ display: { xs: "flex", md: "none" } }}>
+              <Box
+                sx={{
+                  display: { xs: "none", lg: "flex" },
+                  alignItems: "center",
+                  flexWrap: "nowrap",
+                }}
+              >
+                {links}
+              </Box>
+              <Box sx={{ display: { xs: "flex", lg: "none" } }}>
                 <StyledButton onClick={handleOpen}>
                   <Menu />
                 </StyledButton>

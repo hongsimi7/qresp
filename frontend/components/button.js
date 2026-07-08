@@ -7,6 +7,7 @@ const StyledButton = styled(Button)({
   backgroundColor: "#800000",
   fontSize: "18px",
   color: "#FFF",
+  whiteSpace: "nowrap",
   "&:hover": {
     backgroundColor: "#B30000",
     borderColor: "#800000",

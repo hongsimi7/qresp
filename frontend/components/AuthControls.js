@@ -60,6 +60,10 @@ const AuthControls = () => {
             color: "#FFF",
             alignSelf: "center",
             mx: 1,
+            maxWidth: 180,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
             textDecoration: "none",
             "&:hover": { textDecoration: "underline" },
           }}
@@ -67,7 +71,11 @@ const AuthControls = () => {
           {user.name || user.email}
           {user.is_admin ? " (admin)" : ""}
         </Typography>
-        <Button color="inherit" sx={{ color: "#FFF" }} onClick={logout}>
+        <Button
+          color="inherit"
+          sx={{ color: "#FFF", whiteSpace: "nowrap" }}
+          onClick={logout}
+        >
           Sign out
         </Button>
       </Fragment>
@@ -81,7 +89,7 @@ const AuthControls = () => {
           remounts and AuthState refetches /api/auth/me. */}
       <Button
         color="inherit"
-        sx={{ color: "#FFF" }}
+        sx={{ color: "#FFF", whiteSpace: "nowrap" }}
         component="a"
         href={`/api/auth/google?next=${encodeURIComponent(
           (router && router.asPath) || "/"
@@ -91,7 +99,7 @@ const AuthControls = () => {
       </Button>
       <Button
         color="inherit"
-        sx={{ color: "#FFF" }}
+        sx={{ color: "#FFF", whiteSpace: "nowrap" }}
         onClick={() => setOpen(true)}
       >
         Dev sign in
