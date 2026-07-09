@@ -103,6 +103,37 @@ authenticated), NOT on the public detail page. `is_active` is toggled only via
       the permission notice; after deactivating there, reloading the detail
       404s by design — manage it from `/account` thereafter
 
+## Editors (edit-only co-authors) and audit
+
+Roles: admin manages everything; owner edits + manages their record;
+editor_emails edit ONLY (no deactivate/reactivate, no owner assignment, no
+editor-list changes). `is_active`/editors/audit fields can never be changed
+through the metadata PUT payload.
+
+- [ ] As the owner on `/account`: "Editors" → add a second staging account's
+      email (comma-separated) → Save
+- [ ] As that editor: the record appears on `/account` with an "editor" chip,
+      View + Edit in Curator only (no Deactivate, no Editors button)
+- [ ] Editor edits via Edit in Curator → Save Changes succeeds
+- [ ] Editor direct API checks: `PUT /api/paper/{id}/active` → 403;
+      `PUT /api/paper/{id}/editors` → 403
+- [ ] paperdetails as editor: notice says "you can edit this record (editor)",
+      no Deactivate button
+- [ ] Admin reassigns the owner (`PUT /api/paper/{id}/owner`, force) → the old
+      owner loses edit unless first added to editors
+- [ ] After an edit/deactivate/editors change, the stored record carries
+      updated_at / updated_by_email and an appended edit_history entry
+      (check via mongo shell or /raw as owner)
+
+## Edit-mode unsaved changes guard
+
+- [ ] In `/curator?edit=<id>`, change a field (or just TYPE in an open section
+      form without pressing its save) and click a nav link → dialog offers
+      Leave Without Saving / Stay only (no draft-save option, no Dismiss)
+- [ ] "Stay" keeps you on the curator; "Leave Without Saving" navigates
+- [ ] With no changes, navigation is not intercepted
+- [ ] Save Changes then navigate → no prompt
+
 ## Admin: ownerless records
 
 - [ ] Signed in as an allowlisted admin, `/account` shows an
