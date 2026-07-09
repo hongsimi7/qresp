@@ -512,6 +512,19 @@ paths:
           description: Authentication required
         404:
           description: No such draft for this user
+  /admin/papers:
+    get:
+      operationId: "project.api.admin_papers"
+      tags:
+        - "Admin"
+      summary: "Lists ALL records — active, deactivated, ownerless — for admin management"
+      responses:
+        200:
+          description: Compact list of every stored record
+        401:
+          description: Authentication required
+        403:
+          description: Only an admin may list all records
   /admin/ownerless-papers:
     get:
       operationId: "project.api.ownerless_papers"

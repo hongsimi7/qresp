@@ -474,6 +474,8 @@ def _paper_summary(paper):
         "collections": list(paper.collections or []),
         "is_active": paper.is_active is not False,
         "editor_emails": list(paper.editor_emails or []),
+        "updated_at": paper.updated_at.isoformat() if paper.updated_at else None,
+        "updated_by_email": paper.updated_by_email or None,
     }
 
 
@@ -670,6 +672,26 @@ def _require_admin():
     if not is_admin(user):
         return {"error": "only an admin may perform this action"}, 403
     return None
+
+
+def admin_papers():
+    """
+    List ALL published records for admin management
+    Handler for GET: /api/admin/papers
+
+    Admin only. Unlike the public search (which hides deactivated records)
+    and /account/papers (owner/editor scoped), this returns every stored
+    record — active, deactivated, ownerless, and other users' — so admins can
+    reassign owners, manage editors, and toggle activation from /account.
+    Legacy fields are normalized by _paper_summary (missing is_active =>
+    active, missing editor_emails => [], missing owner_email => ownerless).
+    """
+    denied = _require_admin()
+    if denied:
+        return denied
+
+    papers = [_paper_summary(paper) for paper in Paper.objects()]
+    return {"papers": papers, "count": len(papers)}, 200
 
 
 def ownerless_papers():
