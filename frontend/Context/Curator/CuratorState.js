@@ -284,6 +284,15 @@ const CuratorState = (props) => {
     setActiveDraftTitle("");
   };
 
+  // Used by edit mode (EditModeController) to fill the form from a stored
+  // record without marking it dirty — the unsaved-changes guard must only
+  // fire on actual user edits after the load.
+  const applyLoadedRecord = (data) => {
+    skipNextDirty.current = true;
+    setAll(data || {});
+    setDraftDirty(false);
+  };
+
   // Called by the ?draft=<id> loader after fetching a server draft: fills the
   // form without marking it dirty (nothing is unsaved right after a load).
   const applyServerDraft = (draft) => {
@@ -375,6 +384,7 @@ const CuratorState = (props) => {
         registerDraftFlusher,
         saveDraftToServer,
         applyServerDraft,
+        applyLoadedRecord,
         clearActiveDraft,
         setCuratorInfo,
         setFileServerPath,

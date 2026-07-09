@@ -2,7 +2,10 @@ import { useState } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { CuratorDraftNavigationGuard } from "../pages/curator";
+import {
+  CuratorDraftNavigationGuard,
+  CuratorEditNavigationGuard,
+} from "../pages/curator";
 import AlertContext from "../Context/Alert/alertContext";
 import AuthContext from "../Context/Auth/authContext";
 import CuratorContext from "../Context/Curator/curatorContext";
@@ -64,6 +67,94 @@ const renderGuard = () => {
   render(<Harness />);
   return { saveDraftToServer, unsetAlert };
 };
+
+const renderEditGuard = ({ hasChanges = true } = {}) => {
+  const setAlert = jest.fn();
+  const unsetAlert = jest.fn();
+
+  const Harness = () => {
+    const [alertContent, setAlertContent] = useState(null);
+    return (
+      <CuratorContext.Provider
+        value={{
+          hasUnsavedDraftChanges: jest.fn(() => hasChanges),
+        }}
+      >
+        <AuthContext.Provider value={{ authenticated: true }}>
+          <AlertContext.Provider
+            value={{
+              setAlert: setAlert.mockImplementation(
+                (title, message, content) => setAlertContent(content)
+              ),
+              unsetAlert: () => {
+                unsetAlert();
+                setAlertContent(null);
+              },
+            }}
+          >
+            <a href="/explorer">Explorer</a>
+            {alertContent ? <div>{alertContent}</div> : null}
+            <CuratorEditNavigationGuard />
+          </AlertContext.Provider>
+        </AuthContext.Provider>
+      </CuratorContext.Provider>
+    );
+  };
+
+  render(<Harness />);
+  return { setAlert, unsetAlert };
+};
+
+describe("CuratorEditNavigationGuard", () => {
+  beforeEach(() => {
+    mockPush.mockClear();
+  });
+
+  it("offers Leave Without Saving / Stay on unsaved edits — and no draft saving", async () => {
+    const user = userEvent.setup();
+    const { setAlert } = renderEditGuard();
+
+    await user.click(screen.getByRole("link", { name: /explorer/i }));
+
+    expect(setAlert).toHaveBeenCalledWith(
+      "Leave without saving?",
+      expect.stringContaining("unsaved changes"),
+      expect.anything(),
+      { hideDismiss: true }
+    );
+    // Edit mode has no draft flow: the dialog must not offer to save a draft.
+    expect(
+      screen.queryByRole("button", { name: /save draft/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /leave without saving/i })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /stay/i })).toBeInTheDocument();
+  });
+
+  it("navigates on Leave Without Saving and stays on Stay", async () => {
+    const user = userEvent.setup();
+    renderEditGuard();
+
+    await user.click(screen.getByRole("link", { name: /explorer/i }));
+    await user.click(screen.getByRole("button", { name: /stay/i }));
+    expect(mockPush).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("link", { name: /explorer/i }));
+    await user.click(
+      screen.getByRole("button", { name: /leave without saving/i })
+    );
+    expect(mockPush).toHaveBeenCalledWith("/explorer");
+  });
+
+  it("does not intercept navigation when there are no unsaved edits", async () => {
+    const user = userEvent.setup();
+    const { setAlert } = renderEditGuard({ hasChanges: false });
+
+    await user.click(screen.getByRole("link", { name: /explorer/i }));
+    expect(setAlert).not.toHaveBeenCalled();
+  });
+});
 
 describe("CuratorDraftNavigationGuard", () => {
   beforeEach(() => {

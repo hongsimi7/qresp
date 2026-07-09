@@ -71,6 +71,95 @@ const CuratorFormsRemounter = ({ children }) => {
   return <Fragment key={resetVersion}>{children}</Fragment>;
 };
 
+// Resolve a document click into an in-app navigation target, or null when the
+// click must not be guarded: modified/aux clicks, downloads, new-tab targets,
+// external origins, and same-path links. Shared by both navigation guards.
+const resolveGuardedNavTarget = (event, router) => {
+  if (
+    event.defaultPrevented ||
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  ) {
+    return null;
+  }
+  const anchor = event.target.closest && event.target.closest("a[href]");
+  if (!anchor || anchor.hasAttribute("download")) return null;
+  if (anchor.target && anchor.target !== "_self") return null;
+  let url;
+  try {
+    url = new URL(anchor.href, window.location.href);
+  } catch (e) {
+    return null;
+  }
+  if (url.origin !== window.location.origin) return null;
+  const nextPath = `${url.pathname}${url.search}${url.hash}`;
+  if (nextPath === router.asPath) return null;
+  return nextPath;
+};
+
+// Edit mode's unsaved-changes guard: no draft saving here (drafts are a
+// create-mode concept) — just warn before losing edits. Uses
+// hasUnsavedDraftChanges, which also snapshots OPEN section forms via the
+// registered flushers, so unsaved-but-typed values count as changes.
+const CuratorEditNavigationGuard = () => {
+  const router = useRouter();
+  const { hasUnsavedDraftChanges } = useContext(CuratorContext);
+  const { setAlert, unsetAlert } = useContext(AlertContext);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const shouldGuard = () =>
+      hasUnsavedDraftChanges && hasUnsavedDraftChanges();
+
+    const handleBeforeUnload = (event) => {
+      if (!shouldGuard()) return undefined;
+      event.preventDefault();
+      event.returnValue = "";
+      return "";
+    };
+
+    const handleDocumentClick = (event) => {
+      if (!shouldGuard()) return;
+      const nextPath = resolveGuardedNavTarget(event, router);
+      if (!nextPath) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      setAlert(
+        "Leave without saving?",
+        "You have unsaved changes to this record. They will be lost if you leave — use Save Changes to keep them.",
+        <Fragment>
+          <RegularStyledButton
+            onClick={() => {
+              unsetAlert();
+              router.push(nextPath);
+            }}
+          >
+            Leave Without Saving
+          </RegularStyledButton>
+          <RegularStyledButton onClick={unsetAlert}>Stay</RegularStyledButton>
+        </Fragment>,
+        { hideDismiss: true }
+      );
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    document.addEventListener("click", handleDocumentClick, true);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      document.removeEventListener("click", handleDocumentClick, true);
+    };
+  }, [hasUnsavedDraftChanges, router, setAlert, unsetAlert]);
+
+  return null;
+};
+
 const CuratorDraftNavigationGuard = ({ editMode }) => {
   const router = useRouter();
   const {
@@ -141,33 +230,9 @@ const CuratorDraftNavigationGuard = ({ editMode }) => {
     };
 
     const handleDocumentClick = (event) => {
-      if (
-        event.defaultPrevented ||
-        event.button !== 0 ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.shiftKey ||
-        event.altKey ||
-        !shouldGuard()
-      ) {
-        return;
-      }
-
-      const anchor = event.target.closest && event.target.closest("a[href]");
-      if (!anchor || anchor.hasAttribute("download")) return;
-      if (anchor.target && anchor.target !== "_self") return;
-
-      let url;
-      try {
-        url = new URL(anchor.href, window.location.href);
-      } catch (e) {
-        return;
-      }
-
-      if (url.origin !== window.location.origin) return;
-
-      const nextPath = `${url.pathname}${url.search}${url.hash}`;
-      if (nextPath === router.asPath) return;
+      if (!shouldGuard()) return;
+      const nextPath = resolveGuardedNavTarget(event, router);
+      if (!nextPath) return;
 
       event.preventDefault();
       event.stopPropagation();
@@ -290,6 +355,7 @@ const curator = () => {
               {(editMode) => (
                 <Fragment>
                   <CuratorDraftNavigationGuard editMode={editMode} />
+                  {editMode && <CuratorEditNavigationGuard />}
                   {!editMode && <ServerDraftLoader draftId={draftId} />}
                   {!editMode && (
                     <Box sx={{ mt: 4, mb: 4 }}>
@@ -320,5 +386,5 @@ const curator = () => {
   );
 };
 
-export { CuratorDraftNavigationGuard };
+export { CuratorDraftNavigationGuard, CuratorEditNavigationGuard };
 export default curator;
