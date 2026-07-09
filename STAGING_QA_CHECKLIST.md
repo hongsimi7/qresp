@@ -134,6 +134,25 @@ through the metadata PUT payload.
 - [ ] With no changes, navigation is not intercepted
 - [ ] Save Changes then navigate → no prompt
 
+## Admin: all records management
+
+Two admin drawers on /account by design: "Ownerless records" is a short
+migration helper (shows the curator-declared owner suggestion); "All records"
+is the complete management surface over every stored record.
+
+- [ ] As an allowlisted admin, `/account` shows "All records (admin)" listing
+      every record — including deactivated, ownerless, and other users'
+      records — with owner, editor list, status chips and last-updated info
+- [ ] Active row: View / Edit in Curator / Editors / Reassign Owner /
+      Deactivate; deactivated row: no View, Reactivate instead
+- [ ] "Reassign Owner" → dialog explains the old owner loses edit unless kept
+      as editor → confirm → row shows the new owner; the new owner can edit,
+      the old owner cannot
+- [ ] "Editors" / "Deactivate" / "Reactivate" work from this list and update
+      the row in place
+- [ ] Non-admin: section absent; `GET /api/admin/papers` with a non-admin
+      cookie → 403, anonymous → 401
+
 ## Admin: ownerless records
 
 - [ ] Signed in as an allowlisted admin, `/account` shows an

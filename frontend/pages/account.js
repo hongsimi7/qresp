@@ -19,6 +19,7 @@ import SEO from "../components/seo";
 import Drawer from "../components/drawer";
 import { RegularStyledButton } from "../components/button";
 import OwnerlessRecords from "../components/Account/OwnerlessRecords";
+import AllRecords from "../components/Account/AllRecords";
 import AuthContext from "../Context/Auth/authContext";
 import {
   clearBrowserDraft,
@@ -377,9 +378,19 @@ const AccountPage = () => {
           )}
         </Drawer>
 
+        {/* Two admin drawers, deliberately: "Ownerless records" stays as a
+            short migration helper (it shows the curator-declared owner
+            suggestion), while "All records" is the complete management
+            surface over every stored record. */}
         {user.is_admin ? (
           <Drawer heading="Ownerless records (admin)" defaultOpen={false}>
             <OwnerlessRecords />
+          </Drawer>
+        ) : null}
+
+        {user.is_admin ? (
+          <Drawer heading="All records (admin)" defaultOpen={false}>
+            <AllRecords />
           </Drawer>
         ) : null}
 

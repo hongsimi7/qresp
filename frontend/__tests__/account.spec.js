@@ -25,13 +25,28 @@ const authedUser = {
   },
 };
 
-const mockAccountApi = ({ papers = [], drafts = [] } = {}) => {
+const mockAccountApi = ({
+  papers = [],
+  drafts = [],
+  adminPapers = [],
+  ownerless = [],
+} = {}) => {
   axios.get.mockImplementation((url) => {
     if (url === "/api/account/papers") {
       return Promise.resolve({ data: { count: papers.length, papers } });
     }
     if (url === "/api/account/drafts") {
       return Promise.resolve({ data: { count: drafts.length, drafts } });
+    }
+    if (url === "/api/admin/papers") {
+      return Promise.resolve({
+        data: { count: adminPapers.length, papers: adminPapers },
+      });
+    }
+    if (url === "/api/admin/ownerless-papers") {
+      return Promise.resolve({
+        data: { count: ownerless.length, papers: ownerless },
+      });
     }
     return Promise.reject(new Error(`Unexpected URL: ${url}`));
   });
@@ -321,6 +336,46 @@ describe("Account page", () => {
     expect(
       await screen.findByText(/no published records yet/i)
     ).toBeInTheDocument();
+  });
+
+  it("gives admins the All records section, listing records they do not own", async () => {
+    mockAccountApi({
+      adminPapers: [
+        {
+          id: "x1",
+          title: "Foreign Paper",
+          authors: "Someone Else",
+          year: 2018,
+          owner_email: "someone@example.com",
+          editor_emails: [],
+          is_active: true,
+        },
+      ],
+    });
+    renderAccount({
+      ...authedUser,
+      user: { ...authedUser.user, is_admin: true },
+    });
+    expect(
+      screen.getByText(/all records \(admin\)/i)
+    ).toBeInTheDocument();
+    // A record the admin neither owns nor edits appears (it is NOT in the
+    // "My published records" list, which is empty here).
+    expect(await screen.findByText(/foreign paper/i)).toBeInTheDocument();
+    expect(axios.get).toHaveBeenCalledWith("/api/admin/papers");
+  });
+
+  it("hides the admin sections from non-admins", async () => {
+    mockAccountApi();
+    renderAccount(authedUser);
+    await screen.findByText(/no published records yet/i);
+    expect(
+      screen.queryByText(/all records \(admin\)/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/ownerless records \(admin\)/i)
+    ).not.toBeInTheDocument();
+    expect(axios.get).not.toHaveBeenCalledWith("/api/admin/papers");
   });
 
   it("surfaces a browser draft with Resume and Clear", async () => {
