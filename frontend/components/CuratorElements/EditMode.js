@@ -110,8 +110,11 @@ SaveChangesBar.propTypes = {
 };
 
 const EditModeController = ({ editId, server, children }) => {
-  const { setAll } = useContext(CuratorContext);
+  const { setAll, applyLoadedRecord } = useContext(CuratorContext);
   const auth = useContext(AuthContext);
+  // applyLoadedRecord fills the form WITHOUT marking it dirty, so the
+  // edit-mode unsaved-changes guard only fires on real user edits.
+  const loadIntoState = applyLoadedRecord || setAll;
   const [status, setStatus] = useState(editId ? "loading" : "create");
   const [message, setMessage] = useState("");
   const [originalDoc, setOriginalDoc] = useState(null);
@@ -134,7 +137,7 @@ const EditModeController = ({ editId, server, children }) => {
           if (!cancelled) {
             setMessage(
               permissions.authenticated
-                ? "Only the record owner or an admin can edit this record."
+                ? "Only the record owner, an editor, or an admin can edit this record."
                 : "Sign in to edit this record."
             );
             setStatus("unauthorized");
@@ -146,7 +149,7 @@ const EditModeController = ({ editId, server, children }) => {
           .then((res) => res.data);
         if (cancelled) return;
         setOriginalDoc(raw.paper);
-        setAll(convertReqSchematoState(raw.paper));
+        loadIntoState(convertReqSchematoState(raw.paper));
         setStatus("ready");
       } catch (err) {
         console.error(err);

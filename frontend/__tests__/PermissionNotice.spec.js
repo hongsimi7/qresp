@@ -61,14 +61,14 @@ describe("PermissionNotice", () => {
   it("explains owner/admin-only for other users without the edit link", async () => {
     mockPermissions({
       can_edit: false,
-      reason: "only the record owner or an admin can edit this record",
+      reason: "only the record owner, an editor, or an admin can edit this record",
       owner_email: "owner@example.com",
       authenticated: true,
       is_admin: false,
     });
     renderNotice({ authenticated: true, loading: false });
     expect(
-      await screen.findByText(/only the record owner or an admin/i)
+      await screen.findByText(/only the record owner, an editor, or an admin/i)
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: /edit in curator/i })
@@ -164,6 +164,7 @@ describe("PermissionNotice", () => {
       authenticated: true,
       is_admin: false,
       is_active: true,
+      can_manage: true,
     });
     axios.put.mockResolvedValue({
       data: { id: "abc123", is_active: false, success: true },
@@ -193,6 +194,7 @@ describe("PermissionNotice", () => {
       authenticated: true,
       is_admin: false,
       is_active: false,
+      can_manage: true,
     });
     renderNotice({ authenticated: true, loading: false });
     expect(
@@ -206,17 +208,43 @@ describe("PermissionNotice", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("gives editors the edit link but no deactivate control (edit-only role)", async () => {
+    mockPermissions({
+      can_edit: true,
+      reason: "editor",
+      owner_email: "owner@example.com",
+      authenticated: true,
+      is_admin: false,
+      is_active: true,
+      role: "editor",
+      can_manage: false,
+    });
+    renderNotice({ authenticated: true, loading: false });
+    expect(
+      await screen.findByText(/you can edit this record \(editor\)/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /edit in curator/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /deactivate/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /reactivate/i })
+    ).not.toBeInTheDocument();
+  });
+
   it("does not offer deactivate to users who cannot edit", async () => {
     mockPermissions({
       can_edit: false,
-      reason: "only the record owner or an admin can edit this record",
+      reason: "only the record owner, an editor, or an admin can edit this record",
       owner_email: "owner@example.com",
       authenticated: true,
       is_admin: false,
       is_active: true,
     });
     renderNotice({ authenticated: true, loading: false });
-    await screen.findByText(/only the record owner or an admin/i);
+    await screen.findByText(/only the record owner, an editor, or an admin/i);
     expect(
       screen.queryByRole("button", { name: /deactivate/i })
     ).not.toBeInTheDocument();
@@ -230,6 +258,7 @@ describe("PermissionNotice", () => {
       authenticated: true,
       is_admin: false,
       is_active: true,
+      can_manage: true,
     });
     axios.put.mockRejectedValue({
       response: { status: 403, data: { error: "not allowed here" } },

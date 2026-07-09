@@ -106,10 +106,13 @@ const PermissionNotice = ({ paperId, server }) => {
   } else if (!permissions.authenticated) {
     text = "Sign in to edit this record";
   } else {
-    text = "Only the record owner or an admin can edit this record";
+    text = "Only the record owner, an editor, or an admin can edit this record";
   }
 
   const showAssignOwner = permissions.is_admin && !permissions.owner_email;
+  // Deactivation is a MANAGE action (owner/admin): editors can edit the
+  // record but never hide/unhide it. The backend enforces the same rule.
+  const canManage = permissions.can_manage === true;
 
   return (
     <Box sx={{ mb: 1, display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
@@ -134,7 +137,7 @@ const PermissionNotice = ({ paperId, server }) => {
           Edit in Curator
         </Button>
       ) : null}
-      {permissions.can_edit ? (
+      {canManage ? (
         <Fragment>
           <Button
             size="small"

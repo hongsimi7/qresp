@@ -47,7 +47,8 @@ const AccountPage = () => {
   // One dialog drives both draft actions: { type: "rename"|"delete", id, title }.
   const [draftDialog, setDraftDialog] = useState(null);
   const [draftSaving, setDraftSaving] = useState(false);
-  // Published-record activation: { type: "deactivate"|"reactivate", id, title }.
+  // Published-record management: { type: "deactivate"|"reactivate"|"editors",
+  // id, title, value?, error? } — value/error only for the editors dialog.
   const [recordDialog, setRecordDialog] = useState(null);
   const [recordSaving, setRecordSaving] = useState(false);
   const [recordError, setRecordError] = useState("");
@@ -168,6 +169,46 @@ const AccountPage = () => {
       });
   };
 
+  // Replace the record's editor list (owner/admin only, enforced server-side).
+  // Editors get edit-only access: they cannot deactivate the record or change
+  // this list. Comma-separated input; the backend normalizes and validates.
+  const confirmSetEditors = () => {
+    const { id, value } = recordDialog;
+    const editors = (value || "")
+      .split(",")
+      .map((email) => email.trim())
+      .filter(Boolean);
+    setRecordSaving(true);
+    axios
+      .put(`/api/paper/${encodeURIComponent(id)}/editors`, {
+        editor_emails: editors,
+      })
+      .then((res) => {
+        setPapers((items) =>
+          (items || []).map((paper) =>
+            paper.id === id
+              ? { ...paper, editor_emails: res.data.editor_emails }
+              : paper
+          )
+        );
+        closeRecordDialog();
+      })
+      .catch((err) => {
+        const res = err.response;
+        setRecordSaving(false);
+        setRecordDialog((current) =>
+          current
+            ? {
+                ...current,
+                error:
+                  (res && res.data && res.data.error) ||
+                  "Could not update the editors. Please try again.",
+              }
+            : current
+        );
+      });
+  };
+
   const origin = typeof window === "undefined" ? "" : getServer();
 
   let content;
@@ -221,6 +262,11 @@ const AccountPage = () => {
           ) : (
             papers.map((paper) => {
               const deactivated = paper.is_active === false;
+              // Editors get edit-only access; managing (deactivate/reactivate
+              // and the editor list) stays with the owner — and admins, whose
+              // rows here are their own records anyway. The backend enforces
+              // this regardless of what is rendered.
+              const canManage = user.is_admin || paper.role !== "editor";
               return (
                 <Box
                   key={paper.id}
@@ -238,6 +284,9 @@ const AccountPage = () => {
                         {paper.title}
                         {paper.year ? ` (${paper.year})` : ""}
                       </Typography>
+                      {paper.role === "editor" ? (
+                        <Chip label="editor" size="small" color="default" />
+                      ) : null}
                       {deactivated ? (
                         <Chip
                           label="deactivated"
@@ -275,7 +324,23 @@ const AccountPage = () => {
                   >
                     Edit in Curator
                   </Button>
-                  {deactivated ? (
+                  {canManage ? (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() =>
+                        setRecordDialog({
+                          type: "editors",
+                          id: paper.id,
+                          title: paper.title || "this record",
+                          value: (paper.editor_emails || []).join(", "),
+                        })
+                      }
+                    >
+                      Editors
+                    </Button>
+                  ) : null}
+                  {!canManage ? null : deactivated ? (
                     <Button
                       size="small"
                       variant="outlined"
@@ -424,7 +489,47 @@ const AccountPage = () => {
           fullWidth
           maxWidth="xs"
         >
-          {recordDialog ? (
+          {recordDialog && recordDialog.type === "editors" ? (
+            <Fragment>
+              <DialogTitle>Editors</DialogTitle>
+              <DialogContent>
+                <Typography variant="body2" color="secondary" gutterBottom>
+                  Editors can edit &ldquo;{recordDialog.title}&rdquo; but
+                  cannot deactivate it or change this list.
+                </Typography>
+                <TextField
+                  autoFocus
+                  label="Editor emails"
+                  value={recordDialog.value || ""}
+                  onChange={(e) =>
+                    setRecordDialog((current) => ({
+                      ...current,
+                      value: e.target.value,
+                    }))
+                  }
+                  fullWidth
+                  margin="dense"
+                  variant="outlined"
+                  helperText="Comma-separated email addresses. Leave empty to remove all editors."
+                />
+                {recordDialog.error ? (
+                  <Typography variant="body2" color="error">
+                    {recordDialog.error}
+                  </Typography>
+                ) : null}
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={closeRecordDialog}>Cancel</Button>
+                <Button
+                  onClick={confirmSetEditors}
+                  variant="contained"
+                  disabled={recordSaving}
+                >
+                  Save
+                </Button>
+              </DialogActions>
+            </Fragment>
+          ) : recordDialog ? (
             <Fragment>
               <DialogTitle>
                 {recordDialog.type === "reactivate"

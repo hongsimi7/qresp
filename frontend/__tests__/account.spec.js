@@ -206,6 +206,111 @@ describe("Account page", () => {
     expect(screen.queryByText("deactivated")).not.toBeInTheDocument();
   });
 
+  it("marks editor records edit-only: editor chip, no manage buttons", async () => {
+    mockAccountApi({
+      papers: [
+        {
+          id: "p1",
+          title: "Shared Paper",
+          authors: "A. Author",
+          year: 2021,
+          is_active: true,
+          role: "editor",
+          editor_emails: ["owner@example.com"],
+        },
+      ],
+    });
+    renderAccount(authedUser);
+    expect(await screen.findByText(/shared paper/i)).toBeInTheDocument();
+    expect(screen.getByText("editor")).toBeInTheDocument();
+    // Editors can view and edit, but never manage.
+    expect(screen.getByRole("link", { name: /^view$/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /edit in curator/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /deactivate/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /editors/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("lets the owner manage editors through the Editors dialog", async () => {
+    mockAccountApi({
+      papers: [
+        {
+          id: "p1",
+          title: "My Paper",
+          authors: "A. Author",
+          year: 2021,
+          is_active: true,
+          role: "owner",
+          editor_emails: ["old@example.com"],
+        },
+      ],
+    });
+    axios.put.mockResolvedValue({
+      data: {
+        id: "p1",
+        editor_emails: ["old@example.com", "new@example.com"],
+        success: true,
+      },
+    });
+    const user = userEvent.setup();
+    renderAccount(authedUser);
+    await screen.findByText(/my paper/i);
+    await user.click(screen.getByRole("button", { name: /editors/i }));
+
+    const dialog = screen.getByRole("dialog");
+    const input = within(dialog).getByLabelText(/editor emails/i);
+    expect(input).toHaveValue("old@example.com");
+    await user.clear(input);
+    await user.type(input, "old@example.com, new@example.com");
+    await user.click(within(dialog).getByRole("button", { name: /save/i }));
+
+    await waitFor(() =>
+      expect(axios.put).toHaveBeenCalledWith("/api/paper/p1/editors", {
+        editor_emails: ["old@example.com", "new@example.com"],
+      })
+    );
+  });
+
+  it("shows the backend error inline when the editor update fails", async () => {
+    mockAccountApi({
+      papers: [
+        {
+          id: "p1",
+          title: "My Paper",
+          authors: "A. Author",
+          year: 2021,
+          is_active: true,
+          role: "owner",
+          editor_emails: [],
+        },
+      ],
+    });
+    axios.put.mockRejectedValue({
+      response: {
+        status: 400,
+        data: { error: "invalid editor email: not-an-email" },
+      },
+    });
+    const user = userEvent.setup();
+    renderAccount(authedUser);
+    await screen.findByText(/my paper/i);
+    await user.click(screen.getByRole("button", { name: /editors/i }));
+    const dialog = screen.getByRole("dialog");
+    await user.type(
+      within(dialog).getByLabelText(/editor emails/i),
+      "not-an-email"
+    );
+    await user.click(within(dialog).getByRole("button", { name: /save/i }));
+    expect(
+      await within(dialog).findByText(/invalid editor email/i)
+    ).toBeInTheDocument();
+  });
+
   it("shows the admin badge for admins", async () => {
     mockAccountApi();
     renderAccount({

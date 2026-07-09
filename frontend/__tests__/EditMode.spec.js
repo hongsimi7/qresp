@@ -97,7 +97,7 @@ describe("EditModeController", () => {
     const setAll = jest.fn();
     renderController({ setAll });
     expect(
-      await screen.findByText(/only the record owner or an admin/i)
+      await screen.findByText(/only the record owner, an editor, or an admin/i)
     ).toBeInTheDocument();
     expect(screen.queryByText(/FORMS/)).not.toBeInTheDocument();
     expect(
