@@ -80,7 +80,9 @@ class TestPaperPermissionsEndpoint(PermissionTestBase):
         self.login(OTHER)
         body = self.permissions(self.owned_id)
         self.assertFalse(body["can_edit"])
-        self.assertIn("owner or an admin", body["reason"])
+        self.assertIn("owner, an editor, or an admin", body["reason"])
+        self.assertEqual("none", body["role"])
+        self.assertFalse(body["can_manage"])
 
     def test_admin_can_edit_owned_record(self):
         self.login(ADMIN)

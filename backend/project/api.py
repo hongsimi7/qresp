@@ -8,8 +8,8 @@ from datetime import datetime
 from flask import request
 from mongoengine import Q as MongoQ
 
-from project.auth import (can_edit_paper, csrf_protect, get_current_user,
-                          is_admin, stamp_owner)
+from project.auth import (can_edit_paper, can_manage_paper, csrf_protect,
+                          get_current_user, is_admin, paper_role, stamp_owner)
 from project.models import CuratorDraft
 from project.paperdao import *
 from project.util import Dtree
@@ -304,10 +304,12 @@ def update_paper(id, paper):
         return {"error": reason}, 401 if user is None else 403
 
     # Server-owned / immutable fields are never taken from the payload.
-    # is_active is toggled ONLY through PUT /api/paper/{id}/active, so a metadata
-    # edit can never (accidentally or maliciously) reactivate a hidden record.
+    # is_active is toggled ONLY through PUT /api/paper/{id}/active and
+    # editor_emails ONLY through PUT /api/paper/{id}/editors, so a metadata
+    # edit can never change activation, the editor list, or the audit trail.
     for blocked in ("id", "_id", "owner_email", "version", "versions",
-                    "is_active"):
+                    "is_active", "editor_emails", "updated_at",
+                    "updated_by_email", "edit_history"):
         paper.pop(blocked, None)
 
     try:
@@ -315,11 +317,21 @@ def update_paper(id, paper):
         data.pop("_id", None)
         data.update(paper)
         # Keep only defined model fields (constructor coercion + validation),
-        # and force the verified owner + current activation state from the
-        # stored record so editing preserves them.
+        # and force the verified owner + current activation/editor state from
+        # the stored record so editing preserves them.
         data = {k: v for k, v in data.items() if k in Paper._fields}
         data["owner_email"] = existing.owner_email
         data["is_active"] = existing.is_active
+        data["editor_emails"] = list(existing.editor_emails or [])
+        # Minimal audit trail: who touched the record, when, and how.
+        now = datetime.utcnow()
+        actor = _session_email(user)
+        data["updated_at"] = now
+        data["updated_by_email"] = actor
+        history = list(existing.edit_history or [])
+        history.append(
+            {"email": actor, "action": "edit", "timestamp": now.isoformat()})
+        data["edit_history"] = history
         updated = Paper(**data)
         updated.id = existing.id
         updated.save()
@@ -337,9 +349,10 @@ def set_paper_active(id, body):
     Activate or deactivate (soft delete) a published record
     Handler for PUT: /api/paper/{id}/active
 
-    Owner/admin only (auth.can_edit_paper). Writes ONLY is_active as an atomic
-    field update, so legacy documents that would fail full model validation
-    are untouched. Deactivation is reversible and preserves the record.
+    Owner/admin only (auth.can_manage_paper — editors are edit-only). Writes
+    is_active plus the audit fields as an atomic update, so legacy documents
+    that would fail full model validation are untouched. Deactivation is
+    reversible and preserves the record.
     """
     user = get_current_user()
     try:
@@ -349,7 +362,7 @@ def set_paper_active(id, body):
         print(msg)
         return {"error": "Paper not found"}, 404
 
-    allowed, reason = can_edit_paper(existing, user)
+    allowed, reason = can_manage_paper(existing, user)
     if not allowed:
         return {"error": reason}, 401 if user is None else 403
 
@@ -357,8 +370,56 @@ def set_paper_active(id, body):
     if not isinstance(active, bool):
         return {"error": "active must be a boolean (true to reactivate, false to deactivate)"}, 400
 
-    Paper.objects(id=existing.id).update(set__is_active=active)
+    Paper.objects(id=existing.id).update(
+        set__is_active=active,
+        **_audit_update_kwargs(user, "reactivate" if active else "deactivate")
+    )
     return {"id": str(existing.id), "is_active": active, "success": True}, 200
+
+
+@csrf_protect
+def set_paper_editors(id, body):
+    """
+    Replace the record's editor list
+    Handler for PUT: /api/paper/{id}/editors
+
+    Owner/admin only (auth.can_manage_paper). Editors gain EDIT access only —
+    they cannot deactivate the record, assign owners, or change this list.
+    Emails are normalized (trimmed, lowercased) and deduplicated; the write is
+    atomic so legacy documents are never re-validated wholesale.
+    """
+    user = get_current_user()
+    try:
+        existing = Paper.objects.get(id=str(id))
+    except Exception as e:
+        msg = "Exception in set paper editors api " + str(e)
+        print(msg)
+        return {"error": "Paper not found"}, 404
+
+    allowed, reason = can_manage_paper(existing, user)
+    if not allowed:
+        return {"error": reason}, 401 if user is None else 403
+
+    raw_editors = (body or {}).get("editor_emails")
+    if not isinstance(raw_editors, list):
+        return {"error": "editor_emails must be a list of email addresses"}, 400
+
+    editors = []
+    for item in raw_editors:
+        email = str(item or "").strip().lower()
+        if not email:
+            continue
+        if not EMAIL_PATTERN.match(email):
+            return {"error": "invalid editor email: %s" % email}, 400
+        if email not in editors:
+            editors.append(email)
+
+    Paper.objects(id=existing.id).update(
+        set__editor_emails=editors,
+        **_audit_update_kwargs(user, "update_editors")
+    )
+    return {"id": str(existing.id), "editor_emails": editors,
+            "success": True}, 200
 
 
 def raw_paper(id):
@@ -412,6 +473,28 @@ def _paper_summary(paper):
         "tags": list(paper.tags or []),
         "collections": list(paper.collections or []),
         "is_active": paper.is_active is not False,
+        "editor_emails": list(paper.editor_emails or []),
+    }
+
+
+def _session_email(user):
+    return ((user or {}).get("email") or "").strip().lower()
+
+
+def _audit_update_kwargs(user, action):
+    """Atomic-update kwargs stamping the minimal audit trail on a mutation.
+    Used with Paper.objects(...).update(...) so legacy documents that would
+    fail full model validation are never re-saved wholesale."""
+    now = datetime.utcnow()
+    email = _session_email(user)
+    return {
+        "set__updated_at": now,
+        "set__updated_by_email": email,
+        "push__edit_history": {
+            "email": email,
+            "action": action,
+            "timestamp": now.isoformat(),
+        },
     }
 
 
@@ -422,15 +505,25 @@ def account_papers():
 
     Powers the /account page. Anonymous requests get 401; admins see only
     THEIR OWN records here (the ownerless inventory is a separate admin
-    endpoint).
+    endpoint). Lists records the user OWNS plus records where they are a
+    listed editor, with the role marked per record.
     """
     user = get_current_user()
     if not user:
         return {"error": "authentication required"}, 401
 
-    email = (user.get("email") or "").strip().lower()
-    owned = Paper.objects(owner_email=email)
-    papers = [_paper_summary(paper) for paper in owned]
+    email = _session_email(user)
+    related = Paper.objects(
+        MongoQ(owner_email=email) | MongoQ(editor_emails=email)
+    )
+    papers = []
+    for paper in related:
+        summary = _paper_summary(paper)
+        summary["role"] = (
+            "owner" if (paper.owner_email or "").strip().lower() == email
+            else "editor"
+        )
+        papers.append(summary)
     return {"papers": papers, "count": len(papers)}, 200
 
 
@@ -645,7 +738,10 @@ def assign_paper_owner(id, body):
                      % current
         }, 409
 
-    Paper.objects(id=existing.id).update(set__owner_email=email)
+    Paper.objects(id=existing.id).update(
+        set__owner_email=email,
+        **_audit_update_kwargs(get_current_user(), "assign_owner")
+    )
     return {"id": str(existing.id), "owner_email": email, "success": True}, 200
 
 
@@ -666,11 +762,19 @@ def paper_permissions(id):
         return {"error": "Paper not found"}, 404
 
     allowed, reason = can_edit_paper(paper, user)
-    return {
+    manage_allowed, _ = can_manage_paper(paper, user)
+    response = {
         "can_edit": allowed,
         "reason": reason,
         "owner_email": paper.owner_email,
         "authenticated": user is not None,
         "is_admin": is_admin(user),
         "is_active": paper.is_active is not False,
-    }, 200
+        "role": paper_role(paper, user) or "none",
+        "can_manage": manage_allowed,
+    }
+    # The editor list is management data: only expose it to those who can
+    # change it (owner/admin), not to editors or the public.
+    if manage_allowed:
+        response["editor_emails"] = list(paper.editor_emails or [])
+    return response, 200

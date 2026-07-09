@@ -339,6 +339,43 @@ paths:
           description: Only the record owner or an admin may change this
         404:
           description: Paper with this id does not exist
+  /paper/{id}/editors:
+    put:
+      operationId: "project.api.set_paper_editors"
+      tags:
+        - "Paper details"
+      summary: "Replaces the record's editor list (owner or admin only; editors are edit-only)"
+      parameters:
+        - in: path
+          name: id
+          type: string
+          required: true
+          description: Paper Id
+        - in: body
+          name: body
+          required: true
+          description: Full replacement editor list; emails are normalized
+            lowercase and deduplicated.
+          schema:
+            type: object
+            required:
+              - editor_emails
+            properties:
+              editor_emails:
+                type: array
+                items:
+                  type: string
+      responses:
+        200:
+          description: Editor list updated
+        400:
+          description: editor_emails missing or contains an invalid email
+        401:
+          description: Authentication required
+        403:
+          description: Only the record owner or an admin may manage editors
+        404:
+          description: Paper with this id does not exist
   /paper/{id}/raw:
     get:
       operationId: "project.api.raw_paper"

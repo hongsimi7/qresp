@@ -190,11 +190,23 @@ class Paper(Document):
     # Distinct from info.insertedBy.emailId, which is curator-DECLARED, not
     # verified.
     owner_email = StringField(max_length=254)
+    # Additional verified emails allowed to EDIT this record (not manage it:
+    # deactivation, owner assignment and this list itself stay owner/admin
+    # only). Absent on legacy records => no editors. Managed exclusively via
+    # PUT /api/paper/{id}/editors; normalized lowercase there.
+    editor_emails = ListField(StringField(max_length=254))
     # Soft-deactivation flag. Absent on legacy records => active; only an
     # explicit False hides a record from public search/explorer/detail. Owner
     # or admin can toggle it (project.api.set_paper_active). Preferred over
     # physical delete so published records are preserved and reversible.
     is_active = BooleanField(default=True)
+    # Minimal audit trail, stamped server-side on every successful mutation
+    # (edit / assign_owner / update_editors / deactivate / reactivate).
+    # Absent on legacy records. edit_history entries are
+    # {email, action, timestamp(iso)} dicts appended chronologically.
+    updated_at = DateTimeField()
+    updated_by_email = StringField(max_length=254)
+    edit_history = ListField(DictField())
     meta = {'strict': False,
             'queryset_class': FilterQuerySet
             }

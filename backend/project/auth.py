@@ -110,22 +110,62 @@ def is_admin(user):
     return (user.get("email") or "").lower() in _admin_emails()
 
 
-def can_edit_paper(paper, user):
-    """Permission rule for modifying a record. Returns (allowed, reason).
+def paper_role(paper, user):
+    """The session user's role on a record: 'admin', 'owner', 'editor' or
+    None. Emails are compared case-insensitively; editor_emails is stored
+    normalized (lowercase) but matched defensively anyway."""
+    if not user:
+        return None
+    if is_admin(user):
+        return "admin"
+    email = (user.get("email") or "").strip().lower()
+    if not email:
+        return None
+    owner = (getattr(paper, "owner_email", None) or "").strip().lower()
+    if owner and owner == email:
+        return "owner"
+    editors = getattr(paper, "editor_emails", None) or []
+    if email in {(e or "").strip().lower() for e in editors}:
+        return "editor"
+    return None
 
-    anonymous -> no; admin -> yes; owner -> yes; ownerless record (legacy,
-    no owner_email) -> admin only; anyone else -> no.
+
+def can_edit_paper(paper, user):
+    """Permission rule for EDITING a record's metadata. Returns
+    (allowed, reason).
+
+    anonymous -> no; admin -> yes; owner -> yes; listed editor -> yes;
+    ownerless record (legacy, no owner_email/editors) -> admin only;
+    anyone else -> no.
     """
     if not user:
         return False, "authentication required"
-    if is_admin(user):
-        return True, "admin"
+    role = paper_role(paper, user)
+    if role:
+        return True, role
+    owner = (getattr(paper, "owner_email", None) or "").strip().lower()
+    editors = getattr(paper, "editor_emails", None) or []
+    if not owner and not editors:
+        return False, "record has no owner; only an admin can edit it"
+    return False, ("only the record owner, an editor, or an admin can edit "
+                   "this record")
+
+
+def can_manage_paper(paper, user):
+    """Permission rule for MANAGING a record (deactivate/reactivate, editor
+    list). Stricter than editing: editors are edit-only by design. Returns
+    (allowed, reason)."""
+    if not user:
+        return False, "authentication required"
+    role = paper_role(paper, user)
+    if role in ("admin", "owner"):
+        return True, role
+    if role == "editor":
+        return False, "editors can edit this record but not manage it"
     owner = (getattr(paper, "owner_email", None) or "").strip().lower()
     if not owner:
-        return False, "record has no owner; only an admin can edit it"
-    if owner == (user.get("email") or "").lower():
-        return True, "owner"
-    return False, "only the record owner or an admin can edit this record"
+        return False, "record has no owner; only an admin can manage it"
+    return False, "only the record owner or an admin can manage this record"
 
 
 def stamp_owner(paper):
