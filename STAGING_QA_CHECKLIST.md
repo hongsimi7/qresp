@@ -18,6 +18,28 @@ environment variables on the staging backend container.
       link in the browser instead of sending SMTP email; never in production)
 - [ ] `QRESP_OAUTHLIB_INSECURE_TRANSPORT=1` **only if** the callback is served
       over plain HTTP (not needed for the HTTPS tunnel; never in production)
+- [ ] Institutional login (after registering a staging client — see
+      CILOGON_INSTITUTIONAL_LOGIN_SETUP.md): `QRESP_CILOGON_CLIENT_ID`,
+      `QRESP_CILOGON_CLIENT_SECRET`, `QRESP_CILOGON_REDIRECT_URI`
+      (= the registered staging callback, exactly)
+
+## Institutional login (CILogon) — pending client registration
+
+- [ ] Unconfigured: "Sign in with your institution" → JSON 503 "not
+      configured"; Google + dev-login unaffected
+- [ ] Configured: button → CILogon IdP selector → University of Chicago SSO
+      → returns to the ORIGINATING page; header shows the name
+- [ ] `/account` shows "Signed in with your institution (CILogon)"
+- [ ] A second IdP (another campus, or CILogon's ORCID/GitHub options)
+      creates a SEPARATE external identity (distinct issuer+subject)
+- [ ] Publish → verify → edit → drafts → (allowlisted email) admin surfaces
+      all work through the CILogon session
+- [ ] `QRESP_ADMIN_EMAILS` matching the asserted institutional email grants
+      the admin badge/surfaces
+- [ ] Sign out ends only the Qresp session (campus SSO remains signed in)
+- [ ] Legacy note: records owned by a DIFFERENT email (e.g. Gmail) are not
+      visible to the institutional identity until an admin reassigns
+      ownership or adds the new email as an editor (expected behavior)
 
 ## API smoke (curl -k through the tunnel)
 

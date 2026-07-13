@@ -83,6 +83,10 @@ Direction change 2026-07-03: curation-assistant/AI-workflow-automation work is *
 - [ ] Session cookie flags (Secure/HttpOnly/SameSite) verified through nginx on staging.
 - [ ] Rate limiting/lockout on auth + publish endpoints.
 - [ ] Ensure `QRESP_ENABLE_DEV_LOGIN` is unset in production config.
+- [ ] CILogon institutional login (code complete 2026-07-13, `CILOGON_INSTITUTIONAL_LOGIN_SETUP.md`):
+      register staging + production clients at cilogon.org/oauth2/register,
+      set `QRESP_CILOGON_*` env vars, and run the staging E2E QA (UChicago +
+      a second IdP) — NOT yet verified against real CILogon.
 - [ ] `verify=False` TLS skips in `util.py` registry/schema fetches (pre-existing).
 - [ ] Staging QA pass per `STAGING_QA_CHECKLIST.md`.
 
