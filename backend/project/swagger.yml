@@ -680,6 +680,49 @@ paths:
           description: Invalid state/nonce, missing code, or rejected identity token
         503:
           description: Institutional login is not configured on this server
+  /auth/microsoft:
+    get:
+      operationId: "project.auth.microsoft_login"
+      tags:
+        - "Authentication"
+      summary: "Starts Microsoft Entra (work/school) OIDC sign-in (identity-only scopes, PKCE)"
+      parameters:
+        - in: query
+          name: next
+          type: string
+          required: false
+          description: Same-origin path to return to after sign-in
+      responses:
+        302:
+          description: Redirect to the Microsoft account-selection screen
+        503:
+          description: Microsoft sign-in is not configured on this server
+  /auth/microsoft/callback:
+    get:
+      operationId: "project.auth.microsoft_callback"
+      tags:
+        - "Authentication"
+      summary: "Completes Microsoft Entra sign-in and stores the session user"
+      parameters:
+        - in: query
+          name: state
+          type: string
+          required: false
+        - in: query
+          name: code
+          type: string
+          required: false
+        - in: query
+          name: error
+          type: string
+          required: false
+      responses:
+        302:
+          description: Signed in; redirect back to the app
+        400:
+          description: Invalid state/nonce, missing code, or rejected identity token
+        503:
+          description: Microsoft sign-in is not configured on this server
   /auth/me:
     get:
       operationId: "project.auth.me"

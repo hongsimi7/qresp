@@ -13,6 +13,7 @@ in the session — only the identity claims below.
 import base64
 import functools
 import hashlib
+import re
 import secrets
 from datetime import datetime
 from urllib.parse import urlencode
@@ -51,6 +52,34 @@ CILOGON_PKCE_KEY = "cilogon_code_verifier"
 # ID-token signature algorithms CILogon publishes; "none" is implicitly
 # rejected by the allowlist.
 CILOGON_ID_TOKEN_ALGS = ["RS256", "RS384", "RS512"]
+
+# Microsoft Entra ID (work/school accounts): direct OIDC sign-in for
+# universities on Microsoft 365, complementing CILogon and Google. Configured
+# EXCLUSIVELY via environment variables (QRESP_MICROSOFT_CLIENT_ID /
+# _CLIENT_SECRET / _REDIRECT_URI, optional _TENANT) — never config.ini.
+# The default 'organizations' authority accepts ANY organizational (Entra)
+# tenant and EXCLUDES consumer/personal Microsoft accounts. Scopes are
+# identity-only and hardcoded: no Microsoft Graph, Outlook, OneDrive, Teams,
+# calendar, contacts, or files access can ever be requested by this flow.
+MICROSOFT_AUTHORITY_BASE = "https://login.microsoftonline.com"
+MICROSOFT_DEFAULT_TENANT = "organizations"
+MICROSOFT_SCOPES = "openid profile email"
+MICROSOFT_STATE_KEY = "microsoft_state"
+MICROSOFT_NONCE_KEY = "microsoft_nonce"
+MICROSOFT_PKCE_KEY = "microsoft_code_verifier"
+# Entra v2.0 signs id_tokens with RS256; "none" is implicitly rejected.
+MICROSOFT_ID_TOKEN_ALGS = ["RS256"]
+# The v2.0 issuer embeds the token's own tenant GUID; with the multitenant
+# 'organizations' authority the discovery issuer is only a template, so the
+# real issuer must be validated against this shape AND the tid claim.
+MICROSOFT_ISSUER_RE = re.compile(
+    r"^https://login\.microsoftonline\.com/"
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{12})/v2\.0$")
+# Tenant values are used in URLs: GUID, domain, or the special authorities.
+MICROSOFT_TENANT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _dev_login_enabled():
@@ -379,9 +408,11 @@ def _cilogon_metadata(discovery_url):
     return metadata
 
 
-def _cilogon_signing_key(jwks_uri, id_token):
-    """Resolve the JWKS key matching the token's kid header. Fetched through
-    `requests` (uniformly mockable in tests); verification itself is PyJWT's."""
+def _oidc_signing_key(jwks_uri, id_token):
+    """Resolve the JWKS key matching the token's kid header (provider-
+    agnostic: CILogon and Microsoft both publish standard JWKS). Fetched
+    through `requests` (uniformly mockable in tests); verification itself is
+    PyJWT's."""
     header = jwt.get_unverified_header(id_token)
     kid = header.get("kid")
     response = requests.get(jwks_uri, timeout=10)
@@ -396,7 +427,7 @@ def _validate_cilogon_id_token(id_token, metadata, client_id, expected_nonce):
     """Full OIDC ID-token validation: signature against the provider JWKS,
     issuer, audience, expiry, required claims, and the session nonce.
     Raises jwt.InvalidTokenError (or subclasses) on any failure."""
-    signing_key = _cilogon_signing_key(metadata["jwks_uri"], id_token)
+    signing_key = _oidc_signing_key(metadata["jwks_uri"], id_token)
     claims = jwt.decode(
         id_token,
         signing_key,
@@ -561,6 +592,250 @@ def cilogon_callback(code=None, state=None, error=None):
     account_id = _record_external_identity(
         claims.get("iss"), claims.get("sub"), "cilogon", email, name,
         idp_name=claims.get("idp_name"))
+    if account_id:
+        user["account_id"] = account_id
+    session[AUTH_SESSION_KEY] = user
+
+    target = _safe_next_path(session.pop(AUTH_NEXT_KEY, None)) or "/"
+    return redirect(target, code=302)
+
+
+def _microsoft_config():
+    """Microsoft Entra OIDC client settings, environment-only
+    (QRESP_MICROSOFT_*). Returns None values when not configured — the app
+    must boot, and every other login must keep working, without them."""
+    cfg = {}
+    for key in ("MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET",
+                "MICROSOFT_REDIRECT_URI"):
+        value = Config.get_setting("MICROSOFT", key)
+        cfg[key] = value.strip() if value else None
+    tenant = (Config.get_setting("MICROSOFT", "MICROSOFT_TENANT") or "").strip()
+    if not tenant or not MICROSOFT_TENANT_RE.match(tenant):
+        # Default (and fallback for URL-unsafe values): organizational
+        # tenants only — consumer/personal Microsoft accounts stay excluded.
+        tenant = MICROSOFT_DEFAULT_TENANT
+    cfg["TENANT"] = tenant
+    cfg["DISCOVERY_URL"] = (
+        "%s/%s/v2.0/.well-known/openid-configuration"
+        % (MICROSOFT_AUTHORITY_BASE, tenant))
+    return cfg
+
+
+def _microsoft_ready(cfg):
+    return bool(cfg["MICROSOFT_CLIENT_ID"] and cfg["MICROSOFT_CLIENT_SECRET"]
+                and cfg["MICROSOFT_REDIRECT_URI"])
+
+
+# Discovery metadata cache, keyed by discovery URL (process-lifetime).
+# Tests clear this between cases.
+_microsoft_metadata_cache = {}
+
+
+def _microsoft_metadata(discovery_url):
+    cached = _microsoft_metadata_cache.get(discovery_url)
+    if cached:
+        return cached
+    response = requests.get(discovery_url, timeout=10)
+    response.raise_for_status()
+    metadata = response.json()
+    _microsoft_metadata_cache[discovery_url] = metadata
+    return metadata
+
+
+def _validate_microsoft_id_token(id_token, metadata, cfg, expected_nonce):
+    """Full Entra v2.0 ID-token validation: signature against the tenant
+    JWKS, audience, expiry, required claims, nonce — plus the multitenant
+    issuer rule: the issuer must be the Entra v2.0 issuer FOR THE TOKEN'S OWN
+    TENANT (iss GUID == tid claim), because the 'organizations' authority's
+    discovery issuer is only a `{tenantid}` template. When a specific tenant
+    is configured, the token's tenant must also match it. Raises
+    jwt.InvalidTokenError (or subclasses) on any failure."""
+    signing_key = _oidc_signing_key(metadata["jwks_uri"], id_token)
+    claims = jwt.decode(
+        id_token,
+        signing_key,
+        algorithms=MICROSOFT_ID_TOKEN_ALGS,
+        audience=cfg["MICROSOFT_CLIENT_ID"],
+        options={
+            "require": ["exp", "iat", "iss", "aud", "sub"],
+            # The issuer is tenant-dependent under multitenant sign-in;
+            # validated manually right below instead of against a constant.
+            "verify_iss": False,
+        },
+    )
+    issuer = claims.get("iss") or ""
+    matched = MICROSOFT_ISSUER_RE.match(issuer)
+    if not matched:
+        raise jwt.InvalidIssuerError("unexpected issuer")
+    issuer_tenant = matched.group(1).lower()
+    tid = (claims.get("tid") or "").lower()
+    if not tid:
+        raise jwt.InvalidTokenError("missing tenant id (tid) claim")
+    if issuer_tenant != tid:
+        raise jwt.InvalidIssuerError("issuer tenant does not match tid claim")
+    if (cfg["TENANT"].lower() not in ("organizations", "common")
+            and tid != cfg["TENANT"].lower()):
+        raise jwt.InvalidIssuerError(
+            "token tenant does not match the configured tenant")
+    if not claims.get("oid"):
+        raise jwt.InvalidTokenError("missing object id (oid) claim")
+    nonce = claims.get("nonce") or ""
+    if not expected_nonce or not secrets.compare_digest(
+            str(expected_nonce), str(nonce)):
+        raise jwt.InvalidTokenError("nonce missing or mismatched")
+    return claims
+
+
+def microsoft_login(next=None):
+    """GET /api/auth/microsoft — start the Microsoft Entra OIDC flow.
+
+    Work/school accounts only (default 'organizations' authority).
+    Authorization Code flow with server-side session state, nonce, and PKCE
+    (S256); prompt=select_account so a signed-out user can pick a different
+    Microsoft account. Identity-only scopes — no Graph/mail/files.
+    """
+    cfg = _microsoft_config()
+    if not _microsoft_ready(cfg):
+        return {"error": "Microsoft sign-in is not configured on this "
+                         "server."}, 503
+
+    try:
+        metadata = _microsoft_metadata(cfg["DISCOVERY_URL"])
+    except Exception as e:
+        print("Microsoft discovery failed: %s" % e)
+        return {"error": "The Microsoft sign-in service could not be "
+                         "reached, please try again later."}, 503
+
+    next_path = _safe_next_path(next)
+    if next_path:
+        session[AUTH_NEXT_KEY] = next_path
+    else:
+        session.pop(AUTH_NEXT_KEY, None)
+
+    state = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(32)
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode("ascii")).digest()
+    ).rstrip(b"=").decode("ascii")
+
+    session[MICROSOFT_STATE_KEY] = state
+    session[MICROSOFT_NONCE_KEY] = nonce
+    session[MICROSOFT_PKCE_KEY] = code_verifier
+
+    params = {
+        "response_type": "code",
+        "client_id": cfg["MICROSOFT_CLIENT_ID"],
+        "redirect_uri": cfg["MICROSOFT_REDIRECT_URI"],
+        "scope": MICROSOFT_SCOPES,
+        "state": state,
+        "nonce": nonce,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "response_mode": "query",
+        # Let the user pick the account each time — after a Qresp logout a
+        # different Microsoft identity can be chosen.
+        "prompt": "select_account",
+    }
+    authorization_url = "%s?%s" % (
+        metadata["authorization_endpoint"], urlencode(params))
+    return redirect(authorization_url, code=302)
+
+
+def microsoft_callback(code=None, state=None, error=None):
+    """GET /api/auth/microsoft/callback — finish the Microsoft Entra flow.
+
+    Verifies state, exchanges the code (PKCE verifier + exact configured
+    redirect URI), fully validates the ID token (JWKS signature, audience,
+    expiry, nonce, issuer==tid multitenant rule), records the durable
+    external identity (issuer + object id — never email), and establishes
+    the same session shape every other login uses. Provider tokens are used
+    transiently and never persisted.
+    """
+    cfg = _microsoft_config()
+    if not _microsoft_ready(cfg):
+        return {"error": "Microsoft sign-in is not configured on this "
+                         "server."}, 503
+
+    if error:
+        return {"error": "Microsoft sign-in was cancelled or failed: %s"
+                         % error}, 400
+
+    expected_state = session.pop(MICROSOFT_STATE_KEY, None)
+    code_verifier = session.pop(MICROSOFT_PKCE_KEY, None)
+    expected_nonce = session.pop(MICROSOFT_NONCE_KEY, None)
+
+    if (not expected_state or not state
+            or not secrets.compare_digest(str(expected_state), str(state))):
+        return {"error": "Invalid OAuth state, please retry signing in."}, 400
+    if not code:
+        return {"error": "Missing authorization code."}, 400
+    if not code_verifier or not expected_nonce:
+        return {"error": "Your sign-in session expired, please retry "
+                         "signing in."}, 400
+
+    try:
+        metadata = _microsoft_metadata(cfg["DISCOVERY_URL"])
+        token_response = requests.post(
+            metadata["token_endpoint"],
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": cfg["MICROSOFT_REDIRECT_URI"],
+                "client_id": cfg["MICROSOFT_CLIENT_ID"],
+                "client_secret": cfg["MICROSOFT_CLIENT_SECRET"],
+                "code_verifier": code_verifier,
+                "scope": MICROSOFT_SCOPES,
+            },
+            timeout=10,
+        )
+        token_response.raise_for_status()
+        tokens = token_response.json()
+    except Exception as e:
+        print("Microsoft token exchange failed: %s" % e)
+        return {"error": "Microsoft sign-in failed, please try again."}, 400
+
+    id_token = tokens.get("id_token")
+    if not id_token:
+        return {"error": "Microsoft did not return an identity token."}, 400
+
+    try:
+        claims = _validate_microsoft_id_token(
+            id_token, metadata, cfg, expected_nonce)
+    except Exception as e:
+        print("Microsoft ID token rejected: %s" % e)
+        return {"error": "The Microsoft identity token could not be "
+                         "verified, please retry signing in."}, 400
+
+    # email claim first; preferred_username only when it is actually an
+    # email (Entra UPNs usually are, but are not guaranteed to be). No
+    # userinfo fallback: Entra's userinfo endpoint lives on Microsoft Graph,
+    # which this integration deliberately never calls.
+    email = (claims.get("email") or "").strip().lower()
+    if not email:
+        candidate = (claims.get("preferred_username") or "").strip().lower()
+        if _EMAIL_RE.match(candidate):
+            email = candidate
+    if not email:
+        return {"error": "Your Microsoft account did not provide a usable "
+                         "email address, which Qresp requires to link your "
+                         "records. Please contact the administrators."}, 400
+
+    name = (claims.get("name") or "").strip() or email
+
+    user = {
+        "email": email,
+        "name": name,
+        # Identity comes from Entra; admin comes exclusively from the local
+        # allowlist — Microsoft roles/groups/admin claims are never trusted.
+        "is_admin": email in _admin_emails(),
+        "provider": "microsoft",
+    }
+    # Durable identity key: the validated tenant-scoped issuer plus the
+    # immutable directory object id (oid) — stable even if the email or UPN
+    # changes, and never colliding across tenants.
+    account_id = _record_external_identity(
+        claims.get("iss"), claims.get("oid"), "microsoft", email, name)
     if account_id:
         user["account_id"] = account_id
     session[AUTH_SESSION_KEY] = user
