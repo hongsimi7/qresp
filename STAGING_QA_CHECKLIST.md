@@ -23,6 +23,27 @@ environment variables on the staging backend container.
       `QRESP_CILOGON_CLIENT_SECRET`, `QRESP_CILOGON_REDIRECT_URI`
       (= the registered staging callback, exactly)
 
+## Microsoft Entra sign-in — pending app registration
+
+- [ ] Env on staging backend (see MICROSOFT_ENTRA_LOGIN_SETUP.md):
+      `QRESP_MICROSOFT_CLIENT_ID`, `QRESP_MICROSOFT_CLIENT_SECRET`,
+      `QRESP_MICROSOFT_REDIRECT_URI`
+      (= `https://localhost:8443/api/auth/microsoft/callback`, exactly as
+      registered); optional `QRESP_MICROSOFT_TENANT` (default organizations)
+- [ ] Unconfigured: "Sign in with Microsoft" → JSON 503; CILogon, Google and
+      dev-login unaffected
+- [ ] Configured: button → Microsoft account picker → work/school sign-in →
+      returns to the ORIGINATING page; header shows the name; `/account`
+      shows "Signed in with Microsoft"
+- [ ] Publish → verify → edit → drafts → (allowlisted email) admin surfaces
+      all work through the Microsoft session
+- [ ] Sign out, then sign in again → the account PICKER appears
+      (select_account), allowing a different Microsoft account
+- [ ] Personal (consumer) Microsoft accounts are rejected by the
+      organizations authority
+- [ ] Campus requiring admin consent shows Entra's approval screen (expected;
+      use CILogon for that campus until consent is granted)
+
 ## Institutional login (CILogon) — pending client registration
 
 - [ ] Unconfigured: "Sign in with your institution" → JSON 503 "not

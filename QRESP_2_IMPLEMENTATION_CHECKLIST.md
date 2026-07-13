@@ -87,6 +87,12 @@ Direction change 2026-07-03: curation-assistant/AI-workflow-automation work is *
       register staging + production clients at cilogon.org/oauth2/register,
       set `QRESP_CILOGON_*` env vars, and run the staging E2E QA (UChicago +
       a second IdP) — NOT yet verified against real CILogon.
+- [ ] Microsoft Entra sign-in (code complete 2026-07-13, `MICROSOFT_ENTRA_LOGIN_SETUP.md`):
+      create the multitenant app registration ("Accounts in any
+      organizational directory", Web redirect
+      /api/auth/microsoft/callback), set `QRESP_MICROSOFT_*` env vars, and
+      run the staging E2E QA — NOT yet verified against a real Entra tenant;
+      some campuses may require tenant-admin consent.
 - [ ] `verify=False` TLS skips in `util.py` registry/schema fetches (pre-existing).
 - [ ] Staging QA pass per `STAGING_QA_CHECKLIST.md`.
 
