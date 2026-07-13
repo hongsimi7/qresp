@@ -326,6 +326,17 @@ describe("Account page", () => {
     ).toBeInTheDocument();
   });
 
+  it("labels a Microsoft session on the profile", async () => {
+    mockAccountApi();
+    renderAccount({
+      ...authedUser,
+      user: { ...authedUser.user, provider: "microsoft" },
+    });
+    expect(
+      screen.getByText(/signed in with microsoft/i)
+    ).toBeInTheDocument();
+  });
+
   it("shows the admin badge for admins", async () => {
     mockAccountApi();
     renderAccount({

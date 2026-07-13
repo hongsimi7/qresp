@@ -66,7 +66,22 @@ describe("AuthControls", () => {
     );
   });
 
-  it("shows BOTH institutional login and the temporary Google fallback", async () => {
+  it("offers Microsoft (work/school) sign-in pointing at the backend flow", async () => {
+    axios.get.mockResolvedValue({
+      data: { authenticated: false, user: null },
+    });
+    renderControls();
+    const microsoftLink = await screen.findByRole("link", {
+      name: /sign in with microsoft/i,
+    });
+    // carries the current page as a same-origin return path
+    expect(microsoftLink).toHaveAttribute(
+      "href",
+      "/api/auth/microsoft?next=%2Fexplorer"
+    );
+  });
+
+  it("shows institution, Microsoft, AND the temporary Google fallback together", async () => {
     axios.get.mockResolvedValue({
       data: { authenticated: false, user: null },
     });
@@ -75,7 +90,13 @@ describe("AuthControls", () => {
       await screen.findByRole("link", { name: /sign in with your institution/i })
     ).toBeInTheDocument();
     expect(
+      screen.getByRole("link", { name: /sign in with microsoft/i })
+    ).toBeInTheDocument();
+    expect(
       screen.getByRole("link", { name: /sign in with google/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /dev sign in/i })
     ).toBeInTheDocument();
   });
 

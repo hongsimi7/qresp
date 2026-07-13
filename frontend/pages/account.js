@@ -248,6 +248,8 @@ const AccountPage = () => {
               ? "Google"
               : user.provider === "cilogon"
               ? "your institution (CILogon)"
+              : user.provider === "microsoft"
+              ? "Microsoft"
               : user.provider}
           </Typography>
         </Drawer>

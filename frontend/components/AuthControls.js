@@ -90,9 +90,10 @@ const AuthControls = () => {
           /api/auth/me. Institutional login goes through CILogon, which
           brokers the university IdP selection; Google stays as a temporary
           fallback during the migration. */}
-      {/* size="small" keeps the three anonymous actions inside the nowrap
-          header row at the lg breakpoint now that institutional login is
-          offered alongside the temporary Google fallback. */}
+      {/* size="small" keeps the anonymous actions compact inside the nowrap
+          header row (inline at the xl breakpoint; the drawer stacks them
+          below that). Microsoft covers universities on Entra/M365 directly;
+          CILogon brokers campus SSO; Google stays as a temporary fallback. */}
       <Button
         color="inherit"
         size="small"
@@ -103,6 +104,17 @@ const AuthControls = () => {
         )}`}
       >
         Sign in with your institution
+      </Button>
+      <Button
+        color="inherit"
+        size="small"
+        sx={{ color: "#FFF", whiteSpace: "nowrap" }}
+        component="a"
+        href={`/api/auth/microsoft?next=${encodeURIComponent(
+          (router && router.asPath) || "/"
+        )}`}
+      >
+        Sign in with Microsoft
       </Button>
       <Button
         color="inherit"

@@ -70,7 +70,9 @@ const Header = () => {
   return (
     <AppBar position="sticky" color="primary" elevation={0}>
       <Toolbar>
-        <Container>
+        {/* xl (not the default lg) so the full inline links row — nav plus
+            the four sign-in controls — fits on one line where it is shown. */}
+        <Container maxWidth="xl">
           <Box sx={{ display: "flex", flexDirection: "row", flexGrow: 1, alignItems: "center", m: 1 }}>
             <Box sx={{ display: "flex", alignItems: "center", flexGrow: 1 }}>
               <Button component={Link} href="/">
@@ -82,17 +84,22 @@ const Header = () => {
               </Button>
             </Box>
             <Box sx={{ display: "flex" }}>
-              {/* MUI v6+ removed <Hidden>; use responsive display instead. */}
+              {/* MUI v6+ removed <Hidden>; use responsive display instead.
+                  With four anonymous sign-in options (institution, Microsoft,
+                  Google, dev) the nowrap links row no longer fits in an
+                  lg-capped container, so the inline row shows at xl+ (inside
+                  an xl container, set above) and everything below that uses
+                  the drawer, which stacks the links without wrapping. */}
               <Box
                 sx={{
-                  display: { xs: "none", lg: "flex" },
+                  display: { xs: "none", xl: "flex" },
                   alignItems: "center",
                   flexWrap: "nowrap",
                 }}
               >
                 {links}
               </Box>
-              <Box sx={{ display: { xs: "flex", lg: "none" } }}>
+              <Box sx={{ display: { xs: "flex", xl: "none" } }}>
                 <StyledButton onClick={handleOpen}>
                   <Menu />
                 </StyledButton>
