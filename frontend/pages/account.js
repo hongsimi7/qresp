@@ -243,7 +243,12 @@ const AccountPage = () => {
           </Box>
           <Typography color="secondary">{user.email}</Typography>
           <Typography variant="body2" color="secondary">
-            Signed in with {user.provider === "google" ? "Google" : user.provider}
+            Signed in with{" "}
+            {user.provider === "google"
+              ? "Google"
+              : user.provider === "cilogon"
+              ? "your institution (CILogon)"
+              : user.provider}
           </Typography>
         </Drawer>
 

@@ -84,11 +84,29 @@ const AuthControls = () => {
 
   return (
     <Fragment>
-      {/* Full-page navigation: the backend redirects to Google and back to
-          the current page (validated same-origin `next`); on return the app
-          remounts and AuthState refetches /api/auth/me. */}
+      {/* Full-page navigation: the backend redirects to the identity
+          provider and back to the current page (validated same-origin
+          `next`); on return the app remounts and AuthState refetches
+          /api/auth/me. Institutional login goes through CILogon, which
+          brokers the university IdP selection; Google stays as a temporary
+          fallback during the migration. */}
+      {/* size="small" keeps the three anonymous actions inside the nowrap
+          header row at the lg breakpoint now that institutional login is
+          offered alongside the temporary Google fallback. */}
       <Button
         color="inherit"
+        size="small"
+        sx={{ color: "#FFF", whiteSpace: "nowrap" }}
+        component="a"
+        href={`/api/auth/cilogon?next=${encodeURIComponent(
+          (router && router.asPath) || "/"
+        )}`}
+      >
+        Sign in with your institution
+      </Button>
+      <Button
+        color="inherit"
+        size="small"
         sx={{ color: "#FFF", whiteSpace: "nowrap" }}
         component="a"
         href={`/api/auth/google?next=${encodeURIComponent(
@@ -99,6 +117,7 @@ const AuthControls = () => {
       </Button>
       <Button
         color="inherit"
+        size="small"
         sx={{ color: "#FFF", whiteSpace: "nowrap" }}
         onClick={() => setOpen(true)}
       >

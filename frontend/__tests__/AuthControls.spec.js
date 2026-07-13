@@ -36,6 +36,21 @@ describe("AuthControls", () => {
     ).toBeInTheDocument();
   });
 
+  it("offers institutional (CILogon) sign-in pointing at the backend flow", async () => {
+    axios.get.mockResolvedValue({
+      data: { authenticated: false, user: null },
+    });
+    renderControls();
+    const institutionLink = await screen.findByRole("link", {
+      name: /sign in with your institution/i,
+    });
+    // carries the current page as a same-origin return path
+    expect(institutionLink).toHaveAttribute(
+      "href",
+      "/api/auth/cilogon?next=%2Fexplorer"
+    );
+  });
+
   it("offers Google sign-in pointing at the backend flow when anonymous", async () => {
     axios.get.mockResolvedValue({
       data: { authenticated: false, user: null },
@@ -49,6 +64,42 @@ describe("AuthControls", () => {
       "href",
       "/api/auth/google?next=%2Fexplorer"
     );
+  });
+
+  it("shows BOTH institutional login and the temporary Google fallback", async () => {
+    axios.get.mockResolvedValue({
+      data: { authenticated: false, user: null },
+    });
+    renderControls();
+    expect(
+      await screen.findByRole("link", { name: /sign in with your institution/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /sign in with google/i })
+    ).toBeInTheDocument();
+  });
+
+  it("hides the sign-in links once authenticated (CILogon session)", async () => {
+    axios.get.mockResolvedValue({
+      data: {
+        authenticated: true,
+        user: {
+          email: "prof@uchicago.edu",
+          name: "Prof Example",
+          is_admin: false,
+          provider: "cilogon",
+          account_id: "abc123",
+        },
+      },
+    });
+    renderControls();
+    expect(await screen.findByText(/Prof Example/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /sign in with your institution/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /sign out/i })
+    ).toBeInTheDocument();
   });
 
   it("shows the user and a sign-out button when authenticated", async () => {
