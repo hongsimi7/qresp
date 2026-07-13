@@ -637,6 +637,63 @@ paths:
           description: Invalid state, missing code, or Google error
         503:
           description: Google login is not configured on this server
+  /import/doi:
+    post:
+      operationId: "project.manuscript.lookup_doi"
+      tags:
+        - "Import"
+      summary: "Proposes bibliographic metadata for a DOI (authenticated; proposals only)"
+      parameters:
+        - in: body
+          name: body
+          required: true
+          description: "The DOI to look up (URL and doi: prefixes accepted)."
+          schema:
+            type: object
+            required:
+              - doi
+            properties:
+              doi:
+                type: string
+      responses:
+        200:
+          description: Proposed metadata returned (fields may be partial)
+        400:
+          description: Not a valid DOI
+        401:
+          description: Authentication required
+        404:
+          description: DOI not found in the registry
+        502:
+          description: DOI registry unreachable or erroring
+  /import/manuscript:
+    post:
+      operationId: "project.manuscript.import_manuscript"
+      tags:
+        - "Import"
+      summary: "Proposes draft metadata from a .tex file or Overleaf .zip (in-memory, never stored or executed)"
+      parameters:
+        - in: body
+          name: body
+          required: true
+          description: The manuscript source file, base64-encoded client-side.
+          schema:
+            type: object
+            required:
+              - filename
+              - content_base64
+            properties:
+              filename:
+                type: string
+              content_base64:
+                type: string
+      responses:
+        200:
+          description: Proposed metadata with provenance and warnings
+        400:
+          description: Unsupported, oversized, unsafe, or unparseable upload
+        401:
+          description: Authentication required
   /auth/cilogon:
     get:
       operationId: "project.auth.cilogon_login"
