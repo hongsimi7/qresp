@@ -212,6 +212,33 @@ class Paper(Document):
             }
 
 
+class ExternalIdentity(Document):
+    """Durable account identity asserted by an external identity provider
+    (CILogon institutional login, Google).
+
+    Keyed by the IMMUTABLE OIDC pair issuer+subject — never by email, which
+    institutions can change or reassign. The asserted email/name are stored
+    for display and for the CURRENT email-based ownership/admin checks; the
+    future ownership migration (owner_account_id) will reference this
+    document's id instead. No provider tokens are ever stored here.
+    """
+    issuer = StringField(required=True)
+    subject = StringField(required=True)
+    provider = StringField(required=True)  # 'cilogon' | 'google'
+    email = StringField(max_length=254)    # normalized asserted email
+    name = StringField()
+    idp_name = StringField()               # e.g. the university name, if asserted
+    created_at = DateTimeField()
+    last_login_at = DateTimeField()
+    meta = {
+        'collection': 'external_identities',
+        'indexes': [
+            {'fields': ['issuer', 'subject'], 'unique': True},
+            'email',
+        ],
+    }
+
+
 def active_papers():
     """Queryset of records visible to the public: legacy records without the
     flag (field absent) and explicitly active ones. Only an explicit

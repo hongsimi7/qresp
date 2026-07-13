@@ -27,6 +27,9 @@ mongoengine
 pymongo
 requests
 requests_oauthlib
+# OIDC ID-token validation for institutional login (CILogon): maintained JWT
+# library with RS256/JWKS support — never hand-roll token verification.
+PyJWT[crypto]
 WTForms
 lxml
 gunicorn
