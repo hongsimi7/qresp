@@ -35,6 +35,17 @@ Direction change 2026-07-03: curation-assistant/AI-workflow-automation work is *
 - Done — publish/verify hardening: idempotent verify links (re-click lands on the paper, no duplicate), specific verify error messages, staging skip-email vs SMTP paths, publish success offers to delete the source account draft (only after the user verifies).
 - Defer: revision history, ownership transfer, re-publish workflow, hard deletion.
 
+### 4b. Auto-Curation Lite phase 1 — ✅ done (2026-07-13)
+- DOI lookup (`POST /api/import/doi`, Crossref, mocked-network tests) + safe
+  manuscript source import (`POST /api/import/manuscript`, .tex / Overleaf
+  .zip, in-memory only, hardened against zip abuse, never compiled/executed,
+  never stored/logged/echoed). Curator "Import Manuscript Source" dialog with
+  review/provenance/conflict handling, explicit Apply, append-only tag
+  suggestions, and a missing-for-publish checklist; drafts stay saveable
+  while incomplete. Docs: `MANUSCRIPT_IMPORT.md`. Out of scope (future
+  phases): PDF/OCR, dataset ZIP inventory, LLM extraction, workflow
+  generation, auto-publication.
+
 ### 5. Agentic literature explorer — ⛔ out of scope (paused)
 - Paused with the curation-assistant/AI direction (see header, 2026-07-03). No `/related` endpoint, no external scholarly API, no LLM calls in this MVP. Kept here only to record the deferral; do not implement without an explicit new decision.
 

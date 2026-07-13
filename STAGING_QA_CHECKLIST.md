@@ -120,6 +120,21 @@ environment variables on the staging backend container.
       are independent of account drafts
 - [ ] Anonymous: "Save Draft" prompts to sign in (no server draft is created)
 
+## Manuscript import (Auto-Curation Lite phase 1)
+
+- [ ] Signed in, /curator → "Import Manuscript Source" → dialog opens
+      (anonymous users get a sign-in explanation instead)
+- [ ] Paste a real DOI → Look up DOI → proposed fields with provenance;
+      Apply fills only empty fields; a pre-filled title stays unless its
+      checkbox is checked (both values shown)
+- [ ] Upload a .tex with \title/\author/abstract → proposals appear;
+      Apply → forms show the values; missing-for-publish checklist lists
+      charts/datasets/license etc.; Save Draft still works while incomplete
+- [ ] Upload an Overleaf .zip (main + \input + .bib) → main file named,
+      included files listed, bib DOIs shown as reference candidates only
+- [ ] A zip with a traversal path / >200 files → clear error, nothing applied
+- [ ] "Upload Metadata" (JSON) still works exactly as before
+
 ## Soft-deactivate published records (owner/admin)
 
 Chosen design (documented): deactivated records are hidden from the PUBLIC
