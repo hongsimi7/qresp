@@ -276,6 +276,11 @@ const CuratorState = (props) => {
     return draft && draft.id;
   };
 
+  // Remount the form tree WITHOUT clearing state: used after programmatic
+  // state updates (e.g. applying manuscript-import proposals) so the
+  // always-mounted uncontrolled form inputs re-seed from the new values.
+  const remountForms = () => setResetVersion((version) => version + 1);
+
   // Forget the tracked account draft without touching the form (used after
   // the user deletes the draft they published from). Subsequent Save Draft
   // then creates a fresh draft instead of PUTting a deleted id.
@@ -379,6 +384,7 @@ const CuratorState = (props) => {
         activeDraftTitle,
         draftDirty,
         resetVersion,
+        remountForms,
         collectDraftState,
         getDraftTitle,
         registerDraftFlusher,

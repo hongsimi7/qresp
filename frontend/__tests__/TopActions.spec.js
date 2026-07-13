@@ -61,6 +61,39 @@ const renderTopActions = ({ hasDraft = true, authenticated = true } = {}) => {
   return { setAlert, unsetAlert, resetAll, saveDraftToServer };
 };
 
+describe("TopActions manuscript import", () => {
+  it("offers Import Manuscript Source alongside the unchanged Upload Metadata", () => {
+    renderTopActions();
+    expect(
+      screen.getAllByRole("button", {
+        name: /propose draft fields from a doi or a \.tex\/overleaf zip/i,
+      }).length
+    ).toBeGreaterThan(0);
+    // The existing JSON metadata workflow is untouched.
+    expect(
+      screen.getAllByRole("button", {
+        name: /continue with an existing metadata file \(json\)/i,
+      }).length
+    ).toBeGreaterThan(0);
+  });
+
+  it("asks anonymous users to sign in instead of opening the import dialog", async () => {
+    const user = userEvent.setup();
+    const { setAlert } = renderTopActions({ authenticated: false });
+    await user.click(
+      screen.getAllByRole("button", {
+        name: /propose draft fields from a doi or a \.tex\/overleaf zip/i,
+      })[0]
+    );
+    expect(setAlert).toHaveBeenCalledWith(
+      "Sign in required",
+      expect.stringContaining("proposes values"),
+      null
+    );
+    expect(screen.queryByLabelText(/^doi$/i)).not.toBeInTheDocument();
+  });
+});
+
 describe("TopActions draft controls", () => {
   it("asks for a draft name before saving an account draft", async () => {
     const user = userEvent.setup();
