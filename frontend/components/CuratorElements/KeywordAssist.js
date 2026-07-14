@@ -27,7 +27,17 @@ import CuratorContext from "../../Context/Curator/curatorContext";
 // selected tags are handed to the host form, which APPENDS them to Keywords.
 
 const KeywordAssist = ({ onApply }) => {
-  const { collectDraftState } = useContext(CuratorContext) || {};
+  const { collectDraftState, referenceInfo } =
+    useContext(CuratorContext) || {};
+
+  // Conservative eligibility: suggestions need SOME useful primary-paper
+  // metadata. A manually entered (and saved) title or abstract is enough;
+  // fetching a DOI or importing a manuscript source populates them too.
+  // While ineligible the action is disabled and no request is ever made.
+  const biblio = referenceInfo || {};
+  const eligible = Boolean(
+    (biblio.title || "").trim() || (biblio.abstract || "").trim()
+  );
 
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -71,6 +81,7 @@ const KeywordAssist = ({ onApply }) => {
   };
 
   const openAndFetch = () => {
+    if (!eligible) return;
     setOpen(true);
     fetchSuggestions();
   };
@@ -89,9 +100,29 @@ const KeywordAssist = ({ onApply }) => {
 
   return (
     <Fragment>
-      <Button size="small" variant="outlined" onClick={openAndFetch}>
+      <Button
+        size="small"
+        variant="outlined"
+        onClick={openAndFetch}
+        disabled={!eligible}
+      >
         Suggest Keywords with AI
       </Button>
+      <Typography
+        variant="body2"
+        color="secondary"
+        sx={{ mt: 0.5 }}
+      >
+        Keyword suggestions use this paper&rsquo;s title, abstract, venue,
+        and DOI. Fetch a DOI, import a manuscript source, or complete the
+        title or abstract first.
+      </Typography>
+      {!eligible ? (
+        <Typography variant="body2" color="error">
+          Add a title or abstract, fetch a DOI, or import a manuscript
+          source to request keyword suggestions.
+        </Typography>
+      ) : null}
       <Dialog open={open} onClose={close} maxWidth="xs" fullWidth>
         <DialogTitle>Suggest Keywords with AI</DialogTitle>
         <DialogContent dividers>
@@ -101,6 +132,11 @@ const KeywordAssist = ({ onApply }) => {
             suggestions: nothing is added until you select keywords and click
             Apply, and applied keywords are appended to your existing ones —
             never replacing them.
+          </Typography>
+          <Typography variant="body2" color="secondary" gutterBottom>
+            For richer suggestions, import a .tex file or Overleaf .zip from
+            Publication Information. Manuscript excerpts are sent to the AI
+            provider only after explicit consent.
           </Typography>
           {loading ? (
             <Box sx={{ display: "flex", justifyContent: "center", my: 2 }}>

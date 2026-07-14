@@ -17,11 +17,13 @@ const state = () => ({
   paperInfo: { tags: ["existing"] },
 });
 
-const renderAssist = () => {
+const renderAssist = (draftState = state()) => {
   const onApply = jest.fn();
-  const collectDraftState = jest.fn(() => state());
+  const collectDraftState = jest.fn(() => draftState);
   render(
-    <CuratorContext.Provider value={{ collectDraftState }}>
+    <CuratorContext.Provider
+      value={{ collectDraftState, referenceInfo: draftState.referenceInfo }}
+    >
       <KeywordAssist onApply={onApply} />
     </CuratorContext.Provider>
   );
@@ -30,6 +32,76 @@ const renderAssist = () => {
 
 describe("KeywordAssist (Suggest Keywords with AI)", () => {
   afterEach(() => jest.resetAllMocks());
+
+  it("is disabled with a clear reason (and makes NO request) without title/abstract", () => {
+    const empty = state();
+    empty.referenceInfo = { ...empty.referenceInfo, title: "", abstract: "" };
+    renderAssist(empty);
+
+    const button = screen.getByRole("button", {
+      name: /suggest keywords with ai/i,
+    });
+    expect(button).toBeDisabled();
+    // Prerequisite guidance + the metadata-missing reason are both visible,
+    // and this state is clearly LOCAL (distinct from the server-side
+    // "not configured" message, which never appears here).
+    expect(
+      screen.getByText(/keyword suggestions use this paper.s title, abstract, venue, and doi/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/add a title or abstract, fetch a doi, or import a manuscript source/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/not configured on this server/i)
+    ).not.toBeInTheDocument();
+    // Disabled at the pointer-events level: no interaction, no request.
+    expect(button).toHaveStyle("pointer-events: none");
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it("becomes available with a manual title only", () => {
+    const titled = state();
+    titled.referenceInfo = {
+      ...titled.referenceInfo,
+      title: "Typed by hand",
+      abstract: "",
+    };
+    renderAssist(titled);
+    expect(
+      screen.getByRole("button", { name: /suggest keywords with ai/i })
+    ).toBeEnabled();
+    expect(
+      screen.queryByText(/add a title or abstract/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it("becomes available with an abstract only (e.g. DOI-fetched or imported)", () => {
+    const abstractOnly = state();
+    abstractOnly.referenceInfo = {
+      ...abstractOnly.referenceInfo,
+      title: "",
+      abstract: "Populated by Fetch DOI or manuscript import.",
+    };
+    renderAssist(abstractOnly);
+    expect(
+      screen.getByRole("button", { name: /suggest keywords with ai/i })
+    ).toBeEnabled();
+  });
+
+  it("explains the richer manuscript path with honest EXCERPT wording", async () => {
+    axios.post.mockResolvedValue({ data: { keywords: [], warnings: [] } });
+    const user = userEvent.setup();
+    renderAssist();
+    await user.click(
+      screen.getByRole("button", { name: /suggest keywords with ai/i })
+    );
+    expect(
+      await screen.findByText(/import a \.tex file or overleaf \.zip from publication information/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/manuscript excerpts are sent to the ai provider only after explicit consent/i)
+    ).toBeInTheDocument();
+  });
 
   it("sends only the primary paper's bibliographic metadata", async () => {
     axios.post.mockResolvedValue({ data: { keywords: ["DFT"], warnings: [] } });
