@@ -1,13 +1,13 @@
 # Auto-Curation Lite (Phase 1) — DOI Lookup & Manuscript Source Import
 
-The **Import information for this paper** area inside the curator's
-**Publication Information for This Paper** section proposes metadata for the
-one primary paper being curated, from either a pasted **DOI** ("Fetch DOI")
-or an uploaded **manuscript source** ("Import manuscript source": a `.tex`
-file or a `.zip` exported from Overleaf). It is a *proposal* tool: every
-value goes through a review dialog, the user picks which fields to apply,
-and nothing is ever published or overwritten automatically. The existing
-**Upload Metadata** (JSON) workflow is unchanged and unrelated.
+The **Publication Information for This Paper** section owns the ONE
+canonical DOI field (with its Fetch button) and the **Import Manuscript
+Source** card (a `.tex` file or a `.zip` exported from Overleaf) for the one
+primary paper being curated — there is deliberately no second DOI entry
+point. Manuscript import is a *proposal* tool: every value goes through a
+review dialog, the user picks which fields to apply, and nothing is ever
+published or overwritten automatically. The existing **Upload Metadata**
+(JSON) workflow is unchanged and unrelated.
 
 ## Data flow (final)
 

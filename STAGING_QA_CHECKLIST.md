@@ -122,11 +122,12 @@ environment variables on the staging backend container.
 
 ## Manuscript import (Auto-Curation Lite phase 1)
 
-- [ ] Signed in, /curator → "Publication Information for This Paper" →
-      "Import information for this paper" area shows DOI + Fetch DOI +
-      Import manuscript source (anonymous users see a sign-in hint; the
-      GLOBAL toolbar has no import button); "Qresp Curation Information"
-      holds ONLY PIs / PaperStack / Keywords / notebook
+- [ ] Signed in, /curator → "Publication Information for This Paper" shows
+      ONE canonical DOI field (with Fetch) plus the "Import Manuscript
+      Source" card — no second DOI input anywhere (anonymous users see a
+      sign-in hint; the GLOBAL toolbar has no import button);
+      "Qresp Curation Information" holds ONLY PIs / PaperStack / Keywords /
+      notebook and the gated "Suggest Keywords with AI" action
 - [ ] Paste a real DOI → Fetch DOI → proposed fields with provenance (kind
       mapped from the registry); Apply fills only empty fields; a pre-filled
       title stays unless its checkbox is checked (both values shown); the
@@ -138,9 +139,12 @@ environment variables on the staging backend container.
 
 ## AI keyword suggestions (Qwen) — pending provider configuration
 
-- [ ] Unconfigured: "Suggest Keywords with AI" (Qresp Curation Information)
-      shows "not configured on this server"; import-review AI fetch says the
-      same; nothing else breaks
+- [ ] Without a title/abstract the "Suggest Keywords with AI" button is
+      DISABLED with the local "Add a title or abstract, fetch a DOI, or
+      import a manuscript source" reason (no request is made); after adding
+      a title it enables
+- [ ] Unconfigured: an ELIGIBLE click shows "not configured on this server";
+      import-review AI fetch says the same; nothing else breaks
 - [ ] Configured (QRESP_QWEN_* env on the backend): metadata-only suggestions
       return ≤8 deduplicated keywords, all unchecked; Apply appends only the
       selected ones to Keywords
