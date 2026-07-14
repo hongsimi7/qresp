@@ -122,15 +122,32 @@ environment variables on the staging backend container.
 
 ## Manuscript import (Auto-Curation Lite phase 1)
 
-- [ ] Signed in, /curator → "Add info about your paper" →
+- [ ] Signed in, /curator → "Publication Information for This Paper" →
       "Import information for this paper" area shows DOI + Fetch DOI +
       Import manuscript source (anonymous users see a sign-in hint; the
-      GLOBAL toolbar no longer has an import button)
+      GLOBAL toolbar has no import button); "Qresp Curation Information"
+      holds ONLY PIs / PaperStack / Keywords / notebook
 - [ ] Paste a real DOI → Fetch DOI → proposed fields with provenance (kind
       mapped from the registry); Apply fills only empty fields; a pre-filled
       title stays unless its checkbox is checked (both values shown); the
-      "Add Reference to your paper" form is not the destination
+      values land in Publication Information (the record's reference block)
 - [ ] A .tex without DOI proposes kind=Preprint chipped "suggested"
+- [ ] The per-author "Add selected paper authors as Principal Investigators"
+      picker starts all-unchecked; ticking one APPENDS that author to PIs
+- [ ] Post-apply checklist marks PaperStack / notebook as "(manual)"
+
+## AI keyword suggestions (Qwen) — pending provider configuration
+
+- [ ] Unconfigured: "Suggest Keywords with AI" (Qresp Curation Information)
+      shows "not configured on this server"; import-review AI fetch says the
+      same; nothing else breaks
+- [ ] Configured (QRESP_QWEN_* env on the backend): metadata-only suggestions
+      return ≤8 deduplicated keywords, all unchecked; Apply appends only the
+      selected ones to Keywords
+- [ ] Manuscript import review: consent checkbox defaults OFF and the fetch
+      button stays disabled until ticked; after fetching, "AI suggestions
+      (Qwen)" appear as a separate unchecked group
+- [ ] Per-user daily limit returns a clear message once exceeded (429)
 - [ ] Upload a .tex with \title/\author/abstract → proposals appear;
       Apply → forms show the values; missing-for-publish checklist lists
       charts/datasets/license etc.; Save Draft still works while incomplete

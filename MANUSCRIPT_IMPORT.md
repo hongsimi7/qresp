@@ -1,40 +1,38 @@
 # Auto-Curation Lite (Phase 1) — DOI Lookup & Manuscript Source Import
 
 The **Import information for this paper** area inside the curator's
-**Add info about your paper** section proposes metadata for the PRIMARY
-paper being curated, from either a pasted **DOI** ("Fetch DOI") or an
-uploaded **manuscript source** ("Import manuscript source": a `.tex` file or
-a `.zip` exported from Overleaf). It is a *proposal* tool: every value goes
-through a review dialog, the user picks which fields to apply, and nothing
-is ever published or overwritten automatically. The import writes through
-the primary-paper adapter (`frontend/Utils/primaryPaper.js`) — the separate
-**Add Reference to your paper** form is never its destination, and the
-existing **Upload Metadata** (JSON) workflow is unchanged and unrelated.
+**Publication Information for This Paper** section proposes metadata for the
+one primary paper being curated, from either a pasted **DOI** ("Fetch DOI")
+or an uploaded **manuscript source** ("Import manuscript source": a `.tex`
+file or a `.zip` exported from Overleaf). It is a *proposal* tool: every
+value goes through a review dialog, the user picks which fields to apply,
+and nothing is ever published or overwritten automatically. The existing
+**Upload Metadata** (JSON) workflow is unchanged and unrelated.
 
 ## Data flow (final)
 
-- **`publicationInfo`** (curator state) = the PRIMARY paper's bibliography
-  (kind/title/authors/doi/publication/year/url/abstract), edited inside
-  "Add info about your paper" and the only import destination. On
-  publish/update it serializes into the legacy **`reference`** block — the
-  field search, paper details, publish validation and dedup already read —
-  so nothing downstream changes and no records are migrated.
-- **`referenceInfo`** (curator state) = the separate CITED work behind
-  "Add Reference to your paper". It persists as the optional
-  **`citedReference`** block (omitted when empty; the publish schema allows
-  additional properties), and is NEVER touched by primary-paper import.
-- **Loading**: `reference` → `publicationInfo` (every legacy record reads
-  correctly); `citedReference` → `referenceInfo` (empty on legacy records,
-  which never had a separate citation). Legacy DRAFTS/metadata exports
-  (which stored the primary bibliography in `referenceInfo`) are migrated on
-  load: their data moves to `publicationInfo` and the cited-work slot starts
-  empty.
-- PIs, PaperStack/collections, keywords/tags, and the notebook file remain
-  manual Paper-Information fields: import appends tags only when explicitly
-  selected, copies authors into PIs only via the explicit
-  "Use imported authors as Principal Investigators" opt-in (default
-  unchecked), and can never write collections/notebook/file-server/sections/
-  workflow/license/documentation/curator identity.
+- A Qresp record represents ONE primary paper. Its bibliography is the
+  curator state's **`referenceInfo`** slice — the single canonical source,
+  edited in "Publication Information for This Paper" and the only import
+  destination (via `frontend/Utils/primaryPaper.js`). It publishes as the
+  record's existing **`reference`** block, which search, paper details,
+  publish validation and dedup already read — no schema change, no record
+  migration, no duplicated title/DOI data, and no separate cited-works model
+  (none ever existed in the schema).
+- **Loading**: `reference` → `referenceInfo` for every legacy record.
+  Legacy drafts/metadata JSON load unchanged; drafts saved by a short-lived
+  intermediate branch shape (which used a `publicationInfo` key) are
+  absorbed back into `referenceInfo` automatically.
+- **"Qresp Curation Information"** (formerly "Add info about your paper")
+  owns only the curation metadata: Principal Investigators, PaperStack /
+  collections, Keywords, and the Main Notebook File. Import can never write
+  collections/notebook/file-server/sections/workflow/license/documentation/
+  curator identity; tags are appended only when explicitly selected; and
+  authors join the PIs only through the per-author
+  "Add selected paper authors as Principal Investigators" picker (every
+  author unchecked by default, selected names appended — never replacing
+  existing PIs). PaperStack and the notebook file are explicitly marked
+  "(manual)" in the post-apply checklist.
 
 ## Supported inputs
 
@@ -106,6 +104,34 @@ that every backend-legal upload reaches the backend's own validation (clear
 bounding requests. The effective end-user file limit remains 10 MB —
 enforced in the backend both on the encoded length and the decoded bytes;
 nothing else about extraction, persistence, or limits changed.
+
+## Optional AI keyword suggestions (Qwen, opt-in)
+
+- **Disabled by default.** Enabled only when the server sets ALL of:
+  `QRESP_QWEN_ENABLED=1`, `QRESP_QWEN_API_KEY`, `QRESP_QWEN_BASE_URL`
+  (OpenAI-compatible endpoint), `QRESP_QWEN_MODEL`. Optional tuning:
+  `QRESP_QWEN_TIMEOUT_SECONDS` (default 15),
+  `QRESP_QWEN_MAX_MANUSCRIPT_CHARS` (default 60000),
+  `QRESP_QWEN_MAX_REQUESTS_PER_USER_PER_DAY` (default 20; a persistent
+  per-user daily counter enforces it). Environment variables only — never
+  config.ini; no key or provider URL ever reaches the browser.
+- **Two entry points, both suggestion-only:** "Suggest Keywords with AI" in
+  Qresp Curation Information sends only the paper's title/abstract/venue/DOI;
+  manuscript imports additionally offer a default-OFF consent checkbox
+  ("Analyze extracted manuscript text with AI to suggest keywords.") in the
+  review dialog — only after ticking it AND clicking the fetch button is the
+  uploaded file re-sent to the backend, re-extracted in memory, stripped of
+  its bibliography (so cited works don't dominate), bounded, chunked (max 3
+  chunks) and sent to the provider.
+- **What can leave the server:** at most the clipped
+  title/abstract/venue/DOI and bounded manuscript-body excerpts, inside a
+  fixed prompt that marks them as untrusted data and requests JSON keyword
+  candidates only (no tools, no instruction-following). Datasets, scripts,
+  credentials, file paths, emails, workflow data and profiles are never sent.
+- **Results:** strictly parsed, normalized, deduplicated, capped at 8, shown
+  as a separate "AI suggestions (Qwen)" group with every suggestion
+  unchecked; selected ones are appended to Keywords on Apply — nothing is
+  ever auto-written, and manuscript text is never stored or logged anywhere.
 
 ## Not supported yet (future phases)
 
