@@ -62,6 +62,18 @@ and nothing is ever published or overwritten automatically. The existing
   require an authenticated session and the standard CSRF token.
 - **No AI/LLM processing anywhere in this feature.**
 
+## Deployment note: nginx 15M vs importer 10M
+
+The importer's RAW file cap is 10 MB (backend `MAX_UPLOAD_BYTES`), but the
+frontend transports the file base64-encoded inside a JSON body, which
+inflates the HTTP request to ~13.4 MB (10 MB × 4/3 plus the JSON envelope).
+`nginx/default.conf` therefore sets `client_max_body_size 15M`: large enough
+that every backend-legal upload reaches the backend's own validation (clear
+"too large"/safety errors instead of an opaque nginx 413), while still
+bounding requests. The effective end-user file limit remains 10 MB —
+enforced in the backend both on the encoded length and the decoded bytes;
+nothing else about extraction, persistence, or limits changed.
+
 ## Not supported yet (future phases)
 
 - PDF import / OCR.
