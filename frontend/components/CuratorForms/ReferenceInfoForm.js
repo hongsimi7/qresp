@@ -19,6 +19,7 @@ import * as Yup from "yup";
 import CuratorContext from "../../Context/Curator/curatorContext";
 import AlertContext from "../../Context/Alert/alertContext";
 import LoadingContext from "../../Context/Loading/loadingContext";
+import PaperImport from "../CuratorElements/PaperImport";
 
 const ReferenceInfoForm = ({ editor }) => {
   const { referenceInfo, setReferenceInfo, registerDraftFlusher } =
@@ -184,7 +185,11 @@ const ReferenceInfoForm = ({ editor }) => {
   }, [referenceInfo.authors]);
 
   return (
-    <Drawer heading="Add Reference to your paper" defaultOpen={true}>
+    <Drawer heading="Publication Information for This Paper" defaultOpen={true}>
+      {/* This section IS the primary paper's bibliography (the record's
+          `reference` block) — including DOI fetch and manuscript-source
+          import. It is not a cited-works list. */}
+      <PaperImport />
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container direction="column" spacing={1}>
           <Grid>

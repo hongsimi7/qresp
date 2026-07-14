@@ -30,9 +30,7 @@ const baseState = () => ({
   fileServerPath: "",
   paperInfo: { PIs: "Giulia Galli", collections: [], tags: [],
                notebookFile: "", notebookPath: "" },
-  publicationInfo: emptyBiblio(),
-  referenceInfo: { ...emptyBiblio(), title: "A Cited Work",
-                   doi: "10.9/cited" },
+  referenceInfo: emptyBiblio(),
   documentation: "",
   charts: [{ id: "c0" }],
   tools: [],
@@ -89,7 +87,7 @@ const fetchDoi = async (user) => {
 const applyButton = () =>
   screen.getByRole("button", { name: /apply to paper information/i });
 
-describe("PaperImport (inside Add info about your paper)", () => {
+describe("PaperImport (Publication Information for This Paper)", () => {
   afterEach(() => jest.resetAllMocks());
 
   it("shows the DOI fetch and manuscript import controls", () => {
@@ -106,7 +104,15 @@ describe("PaperImport (inside Add info about your paper)", () => {
     ).toBeInTheDocument();
   });
 
-  it("DOI import writes publicationInfo — never referenceInfo, never setReferenceInfo", async () => {
+  it("asks anonymous users to sign in instead of showing controls", () => {
+    renderImport({ authenticated: false });
+    expect(
+      screen.getByText(/sign in to import this paper/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText(/doi/i)).not.toBeInTheDocument();
+  });
+
+  it("DOI import writes the canonical primary-paper record, never the form setter", async () => {
     axios.post.mockResolvedValue({ data: doiResponse });
     const user = userEvent.setup();
     const { setAll, remountForms, setReferenceInfo, state } = renderImport();
@@ -123,45 +129,47 @@ describe("PaperImport (inside Add info about your paper)", () => {
     await user.click(applyButton());
     expect(setAll).toHaveBeenCalledTimes(1);
     const applied = setAll.mock.calls[0][0];
-    // PRIMARY paper metadata path:
-    expect(applied.publicationInfo.title).toBe("New Imported Title");
-    expect(applied.publicationInfo.kind).toBe("journal");
-    expect(applied.publicationInfo.doi).toBe("10.1234/qresp.demo");
-    expect(applied.publicationInfo.authors).toContain("Lovelace");
-    expect(applied.publicationInfo.publication).toContain(
+    // Canonical primary-paper bibliography (publishes as `reference`).
+    expect(applied.referenceInfo.title).toBe("New Imported Title");
+    expect(applied.referenceInfo.kind).toBe("journal");
+    expect(applied.referenceInfo.doi).toBe("10.1234/qresp.demo");
+    expect(applied.referenceInfo.authors).toContain("Lovelace");
+    expect(applied.referenceInfo.publication).toContain(
       "Journal of Computing"
     );
-    // The cited-work slice is byte-identical to what the user had.
-    expect(applied.referenceInfo).toEqual(state.referenceInfo);
-    expect(applied.referenceInfo.title).toBe("A Cited Work");
+    // The Reference form's setter is never used; only setAll via the adapter.
     expect(setReferenceInfo).not.toHaveBeenCalled();
-    // Untouchable slices stay untouched.
+    // Curation metadata stays manual/untouched.
+    expect(applied.paperInfo.PIs).toBe("Giulia Galli");
+    expect(applied.paperInfo.collections).toEqual([]);
+    expect(applied.paperInfo.notebookFile).toBe("");
     expect(applied.curatorInfo).toEqual(state.curatorInfo);
     expect(applied.charts).toEqual(state.charts);
     expect(applied.license).toBe("CC-BY");
-    expect(applied.paperInfo.collections).toEqual([]);
-    expect(applied.paperInfo.notebookFile).toBe("");
     expect(remountForms).toHaveBeenCalled();
   });
 
-  it("authors do NOT become PIs unless the explicit opt-in is checked", async () => {
+  it("offers a per-author PI picker, all unchecked by default", async () => {
     axios.post.mockResolvedValue({ data: doiResponse });
     const user = userEvent.setup();
     const { setAll } = renderImport();
 
     await fetchDoi(user);
     await screen.findByText(/proposed: new imported title/i);
-    const optIn = screen.getByRole("checkbox", {
-      name: /apply use imported authors as principal investigators/i,
+    expect(
+      screen.getByText(/add selected paper authors as principal investigators/i)
+    ).toBeInTheDocument();
+    const authorBox = screen.getByRole("checkbox", {
+      name: /add author ada b\. lovelace as principal investigator/i,
     });
-    expect(optIn).not.toBeChecked();
+    expect(authorBox).not.toBeChecked();
 
     await user.click(applyButton());
     // Default apply: PIs unchanged.
     expect(setAll.mock.calls[0][0].paperInfo.PIs).toBe("Giulia Galli");
   });
 
-  it("copies authors into PIs when the opt-in IS checked", async () => {
+  it("appends only the SELECTED authors to the existing PIs", async () => {
     axios.post.mockResolvedValue({ data: doiResponse });
     const user = userEvent.setup();
     const { setAll } = renderImport();
@@ -170,11 +178,15 @@ describe("PaperImport (inside Add info about your paper)", () => {
     await screen.findByText(/proposed: new imported title/i);
     await user.click(
       screen.getByRole("checkbox", {
-        name: /apply use imported authors as principal investigators/i,
+        name: /add author ada b\. lovelace as principal investigator/i,
       })
     );
     await user.click(applyButton());
-    expect(setAll.mock.calls[0][0].paperInfo.PIs).toContain("Lovelace");
+    const pis = setAll.mock.calls[0][0].paperInfo.PIs;
+    // Appended, never replacing the existing PI.
+    expect(pis).toContain("Giulia Galli");
+    expect(pis).toContain("Lovelace");
+    expect(pis.indexOf("Giulia Galli")).toBe(0);
   });
 
   it("tags are suggestions: default unchecked, added only when selected", async () => {
@@ -208,7 +220,7 @@ describe("PaperImport (inside Add info about your paper)", () => {
     ]);
   });
 
-  it("TeX import without a DOI suggests kind=preprint into publicationInfo", async () => {
+  it("TeX import without a DOI suggests kind=preprint into the canonical record", async () => {
     const texContent = "\\title{Zip Title}\\begin{document}\\end{document}";
     axios.post.mockResolvedValue({
       data: {
@@ -223,7 +235,7 @@ describe("PaperImport (inside Add info about your paper)", () => {
       },
     });
     const user = userEvent.setup();
-    const { setAll, setReferenceInfo, state } = renderImport();
+    const { setAll, setReferenceInfo } = renderImport();
 
     const file = new File([texContent], "paper.tex", { type: "text/x-tex" });
     await user.upload(document.getElementById("paper-import-file"), file);
@@ -240,19 +252,19 @@ describe("PaperImport (inside Add info about your paper)", () => {
 
     await user.click(applyButton());
     const applied = setAll.mock.calls[0][0];
-    expect(applied.publicationInfo.title).toBe("Zip Title");
-    expect(applied.publicationInfo.kind).toBe("preprint");
-    // Nothing invented, and the cited work stays untouched.
-    expect(applied.publicationInfo.doi).toBe("");
-    expect(applied.publicationInfo.year).toBeNull();
-    expect(applied.referenceInfo).toEqual(state.referenceInfo);
+    expect(applied.referenceInfo.title).toBe("Zip Title");
+    expect(applied.referenceInfo.kind).toBe("preprint");
+    // Nothing invented.
+    expect(applied.referenceInfo.doi).toBe("");
+    expect(applied.referenceInfo.year).toBeNull();
+    expect(applied.referenceInfo.publication).toBe("");
     expect(setReferenceInfo).not.toHaveBeenCalled();
   });
 
   it("never overwrites a populated primary-paper field unless checked", async () => {
     axios.post.mockResolvedValue({ data: doiResponse });
     const state = baseState();
-    state.publicationInfo.title = "My Existing Title";
+    state.referenceInfo.title = "My Existing Title";
     const user = userEvent.setup();
     const { setAll } = renderImport({ state });
 
@@ -267,8 +279,8 @@ describe("PaperImport (inside Add info about your paper)", () => {
 
     await user.click(applyButton());
     const applied = setAll.mock.calls[0][0];
-    expect(applied.publicationInfo.title).toBe("My Existing Title");
-    expect(applied.publicationInfo.doi).toBe("10.1234/qresp.demo");
+    expect(applied.referenceInfo.title).toBe("My Existing Title");
+    expect(applied.referenceInfo.doi).toBe("10.1234/qresp.demo");
   });
 
   it("lists PaperStack and notebook as manual items in the checklist after apply", async () => {

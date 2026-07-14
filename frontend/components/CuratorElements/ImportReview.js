@@ -9,6 +9,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   Typography,
 } from "@mui/material";
 
@@ -33,12 +34,12 @@ import {
 // only completeness gate.
 const missingForPublish = (state) => {
   const missing = [];
-  const publication = state.publicationInfo || {};
+  const biblio = state.referenceInfo || {};
   const info = state.curatorInfo || {};
   const paper = state.paperInfo || {};
-  if (!(publication.title || "").trim()) missing.push("Title");
-  if (!(publication.authors || "").trim()) missing.push("Authors");
-  if (!(publication.publication || "").trim() || !publication.year)
+  if (!(biblio.title || "").trim()) missing.push("Title");
+  if (!(biblio.authors || "").trim()) missing.push("Authors");
+  if (!(biblio.publication || "").trim() || !biblio.year)
     missing.push("Publication and year");
   if (!(paper.PIs || "").trim()) missing.push("Principal Investigators");
   if (!(paper.collections || []).length)
@@ -145,20 +146,6 @@ const buildRows = (result, currentPaper) => {
       });
     }
   }
-  if (proposal.authors && proposal.authors.length) {
-    // Authors are NOT automatically Principal Investigators — this is an
-    // explicit, default-unchecked opt-in.
-    rows.push({
-      key: "authorsAsPIs",
-      label: "Use imported authors as Principal Investigators",
-      proposedText: namesUtil.set(proposal.authors),
-      currentText: (currentPaper.PIs || "").trim(),
-      applyValue: namesUtil.set(proposal.authors),
-      source: "opt-in",
-      alternatives: [],
-      defaultSelected: false,
-    });
-  }
   return rows;
 };
 
@@ -168,12 +155,16 @@ const ImportReview = ({ open, result, onClose }) => {
 
   const [rows, setRows] = useState([]);
   const [selected, setSelected] = useState({});
+  // Per-author opt-in for "Add selected paper authors as Principal
+  // Investigators" — every author UNCHECKED by default.
+  const [piSelection, setPiSelection] = useState({});
   const [applied, setApplied] = useState(null); // missing-info checklist
 
   useEffect(() => {
     if (!open || !result) {
       setRows([]);
       setSelected({});
+      setPiSelection({});
       setApplied(null);
       return;
     }
@@ -186,6 +177,7 @@ const ImportReview = ({ open, result, onClose }) => {
         return acc;
       }, {})
     );
+    setPiSelection({});
     setApplied(null);
     // collectDraftState is stable enough for this open-time snapshot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -197,19 +189,20 @@ const ImportReview = ({ open, result, onClose }) => {
     const current = collectDraftState();
     const updates = {};
     let tags = [];
-    let authorsAsPIs = "";
     rows.forEach((row) => {
       if (!selected[row.key]) return;
       if (row.key === "tags") {
         tags = row.applyValue;
-      } else if (row.key === "authorsAsPIs") {
-        authorsAsPIs = row.applyValue;
       } else {
         updates[row.key] = row.applyValue;
       }
     });
+    const proposalAuthors = (result && result.proposal
+      && result.proposal.authors) || [];
+    const selectedAuthors = proposalAuthors.filter(
+      (author, index) => piSelection[index]);
     const next = applyPrimaryPaperToState(current, updates, tags,
-                                          authorsAsPIs);
+                                          selectedAuthors);
     setAll(next);
     // Re-seed the always-mounted forms from the updated state.
     if (remountForms) remountForms();
@@ -328,6 +321,48 @@ const ImportReview = ({ open, result, onClose }) => {
                 </Box>
               ))
             )}
+            {(result.proposal && result.proposal.authors || []).length ? (
+              <Box sx={{ mt: 3 }}>
+                <Typography color="secondary" sx={{ fontWeight: "bold" }}>
+                  Add selected paper authors as Principal Investigators
+                </Typography>
+                <Typography variant="body2" color="secondary">
+                  Authors are never added automatically — tick only the ones
+                  who are PIs. Selected names are appended to the existing
+                  Principal Investigators.
+                </Typography>
+                {result.proposal.authors.map((author, index) => {
+                  const name = [author.firstName, author.middleName,
+                                author.lastName]
+                    .filter(Boolean)
+                    .join(" ");
+                  return (
+                    <FormControlLabel
+                      key={`${name}-${index}`}
+                      sx={{ display: "block", ml: 0 }}
+                      control={
+                        <Checkbox
+                          checked={Boolean(piSelection[index])}
+                          onChange={(event) =>
+                            setPiSelection((currentSel) => ({
+                              ...currentSel,
+                              [index]: event.target.checked,
+                            }))
+                          }
+                          slotProps={{
+                            input: {
+                              "aria-label":
+                                `add author ${name} as principal investigator`,
+                            },
+                          }}
+                        />
+                      }
+                      label={name}
+                    />
+                  );
+                })}
+              </Box>
+            ) : null}
             {(result.doi_candidates || []).length ? (
               <Typography variant="body2" color="secondary" sx={{ mt: 2 }}>
                 DOIs found in the bibliography (references, not necessarily

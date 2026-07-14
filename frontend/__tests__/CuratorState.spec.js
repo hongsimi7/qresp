@@ -221,8 +221,7 @@ describe("CuratorState draft persistence", () => {
     expect(screen.getByTestId("has-draft")).toHaveTextContent("no");
   });
 
-  it("migrates legacy drafts (referenceInfo-only) into publicationInfo on load", async () => {
-    // A pre-publicationInfo draft: its referenceInfo WAS the primary paper.
+  it("loads legacy drafts straight into the canonical referenceInfo", async () => {
     localStorage.setItem(
       "state",
       JSON.stringify({
@@ -230,13 +229,13 @@ describe("CuratorState draft persistence", () => {
         referenceInfo: { ...savedDraft.referenceInfo, title: "Old draft title" },
       })
     );
-    const MigrationProbe = () => {
-      const { publicationInfo, referenceInfo, resumeDraft } =
-        useContext(CuratorContext);
+    const ShapeProbe = () => {
+      const { referenceInfo, resumeDraft } = useContext(CuratorContext);
       return (
         <div>
-          <span data-testid="pub-title">{publicationInfo.title || "blank"}</span>
-          <span data-testid="cited-title">{referenceInfo.title || "blank"}</span>
+          <span data-testid="biblio-title">
+            {referenceInfo.title || "blank"}
+          </span>
           <button onClick={resumeDraft}>Resume</button>
         </div>
       );
@@ -244,34 +243,33 @@ describe("CuratorState draft persistence", () => {
     const user = userEvent.setup();
     render(
       <CuratorState>
-        <MigrationProbe />
+        <ShapeProbe />
       </CuratorState>
     );
     await user.click(screen.getByRole("button", { name: /resume/i }));
-    // Primary paper gets the legacy bibliography; the separate cited work
-    // stays empty (legacy drafts never had one).
-    expect(screen.getByTestId("pub-title")).toHaveTextContent(
+    expect(screen.getByTestId("biblio-title")).toHaveTextContent(
       "Old draft title"
     );
-    expect(screen.getByTestId("cited-title")).toHaveTextContent("blank");
   });
 
-  it("keeps new-shape drafts intact (publicationInfo and cited work separate)", async () => {
+  it("absorbs the intermediate publicationInfo draft shape back into referenceInfo", async () => {
+    // A short-lived branch shape stored the primary bibliography under
+    // publicationInfo; on load it must win and land in referenceInfo.
     localStorage.setItem(
       "state",
       JSON.stringify({
         ...savedDraft,
         publicationInfo: { ...savedDraft.referenceInfo, title: "Primary T" },
-        referenceInfo: { ...savedDraft.referenceInfo, title: "Cited T" },
+        referenceInfo: { ...savedDraft.referenceInfo, title: "Stale T" },
       })
     );
-    const MigrationProbe = () => {
-      const { publicationInfo, referenceInfo, resumeDraft } =
-        useContext(CuratorContext);
+    const ShapeProbe = () => {
+      const { referenceInfo, resumeDraft } = useContext(CuratorContext);
       return (
         <div>
-          <span data-testid="pub-title">{publicationInfo.title || "blank"}</span>
-          <span data-testid="cited-title">{referenceInfo.title || "blank"}</span>
+          <span data-testid="biblio-title">
+            {referenceInfo.title || "blank"}
+          </span>
           <button onClick={resumeDraft}>Resume</button>
         </div>
       );
@@ -279,12 +277,11 @@ describe("CuratorState draft persistence", () => {
     const user = userEvent.setup();
     render(
       <CuratorState>
-        <MigrationProbe />
+        <ShapeProbe />
       </CuratorState>
     );
     await user.click(screen.getByRole("button", { name: /resume/i }));
-    expect(screen.getByTestId("pub-title")).toHaveTextContent("Primary T");
-    expect(screen.getByTestId("cited-title")).toHaveTextContent("Cited T");
+    expect(screen.getByTestId("biblio-title")).toHaveTextContent("Primary T");
   });
 
   it("saves registered open-form values to account drafts before validation", async () => {

@@ -9,9 +9,8 @@ import SourceTreeContext from "../Context/SourceTree/SourceTreeContext";
 // (a raw paper loads collections: ["MICCOM"]), while this form edits them as
 // comma-separated strings. The missing join for collections made yup fail
 // with `collections must be a `string` type` and blocked saving.
-const renderForm = (paperInfoOverrides = {}, publicationOverrides = {}) => {
+const renderForm = (paperInfoOverrides = {}) => {
   const setPaperInfo = jest.fn();
-  const setPublicationInfo = jest.fn();
   const curator = {
     paperInfo: {
       PIs: "Giulia Galli",
@@ -21,19 +20,7 @@ const renderForm = (paperInfoOverrides = {}, publicationOverrides = {}) => {
       notebookPath: "",
       ...paperInfoOverrides,
     },
-    publicationInfo: {
-      kind: "",
-      doi: "",
-      authors: "",
-      title: "",
-      publication: "",
-      year: null,
-      url: "",
-      abstract: "",
-      ...publicationOverrides,
-    },
     setPaperInfo,
-    setPublicationInfo,
     setReferenceAuthors: jest.fn(),
     fileServerPath: "",
   };
@@ -49,22 +36,16 @@ const renderForm = (paperInfoOverrides = {}, publicationOverrides = {}) => {
       </SourceTreeContext.Provider>
     </CuratorContext.Provider>
   );
-  return { setPaperInfo, setPublicationInfo };
+  return { setPaperInfo };
 };
 
 describe("PaperInfoForm with array-backed state (edit mode)", () => {
-  it("hosts the primary-paper import area inside Add info about your paper", () => {
+  it("is pure Qresp curation info: PI/PaperStack/Keywords/notebook, no import, no bibliography", () => {
     renderForm();
     expect(
-      screen.getByText(/import information for this paper/i)
+      screen.getByText(/qresp curation information/i)
     ).toBeInTheDocument();
-    // Without an authenticated session the area explains sign-in instead of
-    // showing the controls (the controls themselves are covered in
-    // PaperImport.spec with an AuthContext provider).
-    expect(
-      screen.getByText(/sign in to import this paper/i)
-    ).toBeInTheDocument();
-    // The existing paper-info controls all remain.
+    // The curation fields are all here...
     expect(
       screen.getByPlaceholderText(/enter collection to which project belongs/i)
     ).toBeInTheDocument();
@@ -76,6 +57,18 @@ describe("PaperInfoForm with array-backed state (edit mode)", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByPlaceholderText("Enter first name").length)
       .toBeGreaterThan(0);
+    // ...and the primary-paper bibliography/import is NOT (it lives in
+    // Publication Information for This Paper).
+    expect(
+      screen.queryByText(/import information for this paper/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText(/enter the title of this paper/i)
+    ).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/enter abstract/i))
+      .not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/enter doi/i))
+      .not.toBeInTheDocument();
   });
 
   it("displays loaded collections and tags as comma-separated strings", () => {
@@ -112,47 +105,4 @@ describe("PaperInfoForm with array-backed state (edit mode)", () => {
     );
   });
 
-  it("shows the primary paper's bibliographic fields and saves them via setPublicationInfo", async () => {
-    const { setPaperInfo, setPublicationInfo } = renderForm(
-      {},
-      {
-        title: "Loaded Primary Title",
-        authors: "Ada Lovelace",
-        doi: "10.1/x",
-        year: 2016,
-      }
-    );
-    // Imported/loaded primary-paper fields render inside Paper Information.
-    expect(
-      screen.getByPlaceholderText(/enter the title of this paper/i)
-    ).toHaveValue("Loaded Primary Title");
-    expect(
-      screen.getByPlaceholderText(/enter authors, comma separated/i)
-    ).toHaveValue("Ada Lovelace");
-    expect(
-      screen.getByPlaceholderText(/enter doi \(e\.g\./i)
-    ).toHaveValue("10.1/x");
-    expect(
-      screen.getByPlaceholderText(/enter publication year/i)
-    ).toHaveValue("2016");
-
-    const user = userEvent.setup();
-    await user.type(
-      screen.getByPlaceholderText(/enter url of the paper/i),
-      "https://example.org/paper"
-    );
-    await user.click(screen.getByRole("button", { name: /^save$/i }));
-    await waitFor(() => expect(setPublicationInfo).toHaveBeenCalled());
-    expect(setPublicationInfo).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: "Loaded Primary Title",
-        year: 2016,
-        url: "https://example.org/paper",
-      })
-    );
-    // paperInfo keeps its own fields; publicationInfo values are not mixed in.
-    const paperArg = setPaperInfo.mock.calls[0][0];
-    expect(paperArg).not.toHaveProperty("publicationInfo");
-    expect(paperArg).not.toHaveProperty("title");
-  });
 });

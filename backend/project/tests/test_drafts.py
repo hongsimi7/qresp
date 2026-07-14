@@ -66,15 +66,19 @@ class TestDraftCrud(DraftTestBase):
         self.assertEqual(OWNER, body["owner_email"])
         self.assertTrue(body["id"])
 
-    def test_title_prefers_new_publication_info(self):
-        # New-shape drafts carry the primary paper's title in
-        # publicationInfo; legacy referenceInfo stays a fallback.
+    def test_title_prefers_canonical_reference_info(self):
+        # referenceInfo is the canonical primary-paper bibliography; the
+        # short-lived intermediate publicationInfo shape stays readable.
         self.login(OWNER)
         response = self.create_draft(
-            {"state": {"publicationInfo": {"title": "Primary title"},
-                       "referenceInfo": {"title": "Cited work"}}})
+            {"state": {"referenceInfo": {"title": "Primary title"}}})
         self.assertEqual(200, response.status_code, response.text)
         self.assertEqual("Primary title", response.json()["title"])
+
+        response = self.create_draft(
+            {"state": {"publicationInfo": {"title": "Intermediate title"}}})
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual("Intermediate title", response.json()["title"])
 
     def test_empty_state_gets_untitled_fallback(self):
         self.login(OWNER)

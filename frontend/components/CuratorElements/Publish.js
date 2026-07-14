@@ -18,9 +18,9 @@ import LoadingContext from "../../Context/Loading/loadingContext";
 
 const variableTotext = {
   curatorInfo: "Curator Information",
-  paperInfo: "Paper Information",
+  paperInfo: "Qresp Curation Information",
   fileServerPathInfo: "File Server Information",
-  referenceInfo: "Reference Information",
+  referenceInfo: "Publication Information for This Paper",
   documentationInfo: "Documentation Information",
   licenseInfo: "License Information",
   workflowInfo: "Workflow Graph",
@@ -39,11 +39,7 @@ const validate = (editing, metadata) => {
 
   const incomplete = Object.keys(editing)
     .map((el) => (editing[el] ? el : null))
-    // documentation is optional; referenceInfo is now the OPTIONAL separate
-    // cited work (the primary paper's bibliography lives in paperInfo's
-    // section as publicationInfo), so an untouched Reference form must not
-    // block publishing.
-    .filter((el) => el != null && el != "documentationInfo" && el != "referenceInfo");
+    .filter((el) => el != null && el != "documentationInfo");
 
   if (incomplete.length > 0) {
     errors.push(

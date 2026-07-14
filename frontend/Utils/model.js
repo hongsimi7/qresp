@@ -3,9 +3,7 @@ import { getServer, namesUtil, referenceUtil } from "./utils";
 const convertStateToViewSchema = (state, serverInformation) => {
   const schema = {
     ...state.curatorInfo,
-    // The preview shows the PRIMARY paper: its bibliography lives in
-    // publicationInfo (the separate cited work is not the previewed record).
-    ...state.publicationInfo,
+    ...state.referenceInfo,
     ...state.paperInfo,
     // PIs: state.paperInfo.PIs,
     // abstract: state.referenceInfo.abstract,
@@ -28,11 +26,9 @@ const convertStateToViewSchema = (state, serverInformation) => {
 
 const convertViewSchemaToState = (schema) => {};
 
-// One bibliographic state slice ({kind, doi, authors, title, publication,
-// year, url, abstract}) -> the stored reference-block shape. Used for the
-// PRIMARY paper (publicationInfo -> `reference`, the legacy block that
-// search/details/publish/dedup read) and for the separate cited work
-// (referenceInfo -> the optional `citedReference` block).
+// The bibliographic state slice ({kind, doi, authors, title, publication,
+// year, url, abstract}) -> the stored `reference` block shape — the ONE
+// canonical primary-paper record that search/details/publish/dedup read.
 const referenceBlockFromInfo = (info = {}) => {
   const block = { ...referenceUtil.get(info.publication) };
   block.journal = { fullName: block.journal };
@@ -45,19 +41,11 @@ const referenceBlockFromInfo = (info = {}) => {
   return block;
 };
 
-const hasBibliographicContent = (info = {}) =>
-  Boolean(
-    (info.title || "").trim() ||
-      (info.doi || "").trim() ||
-      (info.authors || "").trim() ||
-      (info.abstract || "").trim()
-  );
-
 const convertStatetoReqSchema = (state, servers) => {
-  const publication = state.publicationInfo || {};
+  const biblio = state.referenceInfo || {};
   const info = {
-    ProjectName: publication.doi,
-    doi: publication.doi,
+    ProjectName: biblio.doi,
+    doi: biblio.doi,
     timeStamp: new Date().toLocaleString().replace(",", ""),
     notebookFile: state.paperInfo.notebookFile,
     notebookPath: state.paperInfo.notebookPath,
@@ -67,7 +55,7 @@ const convertStatetoReqSchema = (state, servers) => {
     insertedBy: { ...state.curatorInfo },
   };
 
-  const reference = referenceBlockFromInfo(publication);
+  const reference = referenceBlockFromInfo(biblio);
 
   const schema = {
     PIs: namesUtil.get(state.paperInfo.PIs),
@@ -91,13 +79,6 @@ const convertStatetoReqSchema = (state, servers) => {
     info,
     reference,
   };
-
-  // The separate cited work travels in its OWN optional block so the primary
-  // record's `reference` is never overwritten by (or confused with) a
-  // citation. Omitted entirely when the Reference form holds nothing.
-  if (hasBibliographicContent(state.referenceInfo)) {
-    schema.citedReference = referenceBlockFromInfo(state.referenceInfo);
-  }
 
   return schema;
 };
@@ -129,23 +110,10 @@ const infoFromReferenceBlock = (block = {}) => ({
   abstract: block.publishedAbstract || "",
 });
 
-const EMPTY_BIBLIO = {
-  kind: "",
-  doi: "",
-  authors: "",
-  title: "",
-  publication: "",
-  year: null,
-  url: "",
-  abstract: "",
-};
-
 // Stored/request schema document -> curator state (the exact inverse of
 // convertStatetoReqSchema). Defensive about legacy records with missing
-// sections. The legacy `reference` block is the PRIMARY paper's bibliography
-// and loads into publicationInfo (read fallback for every existing record);
-// the separate cited work loads from the optional `citedReference` block and
-// is empty on legacy records, which never had one.
+// sections. The `reference` block IS the primary paper's bibliography and
+// loads into referenceInfo — every existing record reads unchanged.
 const convertReqSchematoState = (req) => {
   const info = req.info || {};
   const workflow = req.workflow || {};
@@ -168,10 +136,7 @@ const convertReqSchematoState = (req) => {
       notebookFile: info.notebookFile || "",
       notebookPath: info.notebookPath || "",
     },
-    publicationInfo: infoFromReferenceBlock(req.reference || {}),
-    referenceInfo: req.citedReference
-      ? infoFromReferenceBlock(req.citedReference)
-      : { ...EMPTY_BIBLIO },
+    referenceInfo: infoFromReferenceBlock(req.reference || {}),
     documentation: documentation.readme || "",
     charts: req.charts || [],
     tools: req.tools || [],

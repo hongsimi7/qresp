@@ -16,45 +16,19 @@ describe("convertReqSchematoState", () => {
     expect(state.curatorInfo.firstName).toBe("John");
   });
 
-  it("loads the legacy reference block into the PRIMARY paper's publicationInfo", () => {
-    expect(state.publicationInfo.publication).toContain(
+  it("loads the reference block into the canonical primary-paper referenceInfo", () => {
+    expect(state.referenceInfo.publication).toContain(
       "Journal of the American Chemical Society"
     );
-    expect(state.publicationInfo.publication).toContain("2016");
-    expect(state.publicationInfo.title).toBe(paperDoc.reference.title);
-    expect(state.publicationInfo.doi).toBe(paperDoc.reference.DOI);
-  });
-
-  it("leaves the separate cited work empty on legacy records (no citedReference block)", () => {
-    expect(state.referenceInfo.title).toBe("");
-    expect(state.referenceInfo.doi).toBe("");
-    expect(state.referenceInfo.authors).toBe("");
-  });
-
-  it("loads an explicit citedReference block into the Reference workflow", () => {
-    const withCitation = convertReqSchematoState({
-      ...paperDoc,
-      citedReference: {
-        kind: "journal",
-        title: "A Cited Work",
-        DOI: "10.9/cited",
-        authors: [{ firstName: "C", lastName: "Ited" }],
-        journal: { fullName: "Cited Journal" },
-        year: 2001,
-        page: "1",
-        volume: "2",
-      },
-    });
-    expect(withCitation.referenceInfo.title).toBe("A Cited Work");
-    expect(withCitation.referenceInfo.doi).toBe("10.9/cited");
-    // The primary paper is untouched by the citation.
-    expect(withCitation.publicationInfo.title).toBe(paperDoc.reference.title);
+    expect(state.referenceInfo.publication).toContain("2016");
+    expect(state.referenceInfo.title).toBe(paperDoc.reference.title);
+    expect(state.referenceInfo.doi).toBe(paperDoc.reference.DOI);
   });
 
   it("stringifies PI and author names", () => {
     expect(state.paperInfo.PIs).toContain("Giulia");
     expect(state.paperInfo.PIs).toContain("Galli");
-    expect(state.publicationInfo.authors).toContain("Gaiduk");
+    expect(state.referenceInfo.authors).toContain("Gaiduk");
   });
 
   it("keeps section lists and converts workflow edges to objects", () => {
@@ -75,7 +49,7 @@ describe("convertReqSchematoState", () => {
       collections: ["c"],
       tags: ["x"],
     });
-    expect(minimal.publicationInfo.title).toBe("t");
+    expect(minimal.referenceInfo.title).toBe("t");
     expect(minimal.charts).toEqual([]);
     expect(minimal.workflow).toEqual({ nodes: [], edges: [] });
     expect(minimal.documentation).toBe("");
@@ -121,35 +95,9 @@ describe("convertStateToUpdatePayload round trip", () => {
     );
   });
 
-  it("adds no citedReference block when the Reference form is empty (no duplicated data)", () => {
-    // Legacy record loaded and re-saved: the payload must not grow a
-    // duplicate bibliography.
+  it("never adds a citedReference block (one paper, one reference record)", () => {
     expect(payload).not.toHaveProperty("citedReference");
-  });
-
-  it("serializes a filled Reference form into the separate citedReference block", () => {
-    const withCitation = {
-      ...state,
-      referenceInfo: {
-        kind: "journal",
-        title: "A Cited Work",
-        doi: "10.9/cited",
-        authors: "C Ited",
-        publication: "Cited Journal 2001, 2 ,1",
-        year: 2001,
-        url: "",
-        abstract: "",
-      },
-    };
-    const withCitationPayload = convertStateToUpdatePayload(
-      withCitation,
-      paperDoc,
-      null
-    );
-    expect(withCitationPayload.citedReference.title).toBe("A Cited Work");
-    expect(withCitationPayload.citedReference.DOI).toBe("10.9/cited");
-    // The PRIMARY record's reference block is still the publicationInfo data.
-    expect(withCitationPayload.reference.title).toBe(paperDoc.reference.title);
+    expect(payload).not.toHaveProperty("publicationInfo");
   });
 
   it("never carries identity/server-owned fields", () => {

@@ -1,18 +1,18 @@
+import { namesUtil } from "./utils";
+
 // Primary-paper metadata adapter (Auto-Curation Lite).
 //
-// The PRIMARY paper's bibliography lives in the curator state's dedicated
-// `publicationInfo` slice, owned by the "Add info about your paper"
-// workflow (it serializes into the published document's legacy `reference`
-// block — see Utils/model.js — so search/details/publish keep working and
-// legacy records load via the same conversions). The separate
-// "Add Reference to your paper" workflow owns `referenceInfo` (a CITED
-// work, persisted as the optional `citedReference` block) and is never a
-// destination of this adapter.
+// The curator state's `referenceInfo` slice is the ONE canonical
+// primary-paper bibliography ("Publication Information for This Paper"):
+// it serializes into the published record's `reference` block, which
+// search/details/publish/dedup read. There is no separate cited-works
+// model. This adapter is the importer's only write path.
 
 // Bibliographic fields the primary-paper importer may propose. Everything
-// else (curator identity, collections/PaperStack, notebook, file server,
+// else (curator identity, PaperStack/collections, notebook, file server,
 // sections, workflow, license, documentation) is NOT reachable through this
-// adapter; PIs change ONLY via the explicit authorsAsPIs opt-in below.
+// adapter; Principal Investigators change ONLY via the explicit
+// selected-authors opt-in below.
 export const PRIMARY_PAPER_FIELDS = [
   "kind",
   "title",
@@ -25,36 +25,37 @@ export const PRIMARY_PAPER_FIELDS = [
 ];
 
 // Read the primary paper's current bibliographic values (plus tags, which
-// import may append to, and PIs for the optional authors-as-PIs opt-in).
-// Absent fields read as empty on any state shape.
+// import may append to, and PIs for the authors-as-PIs opt-in). Absent
+// fields read as empty on any state shape.
 export const primaryPaperFromState = (state = {}) => {
-  const publication = state.publicationInfo || {};
+  const biblio = state.referenceInfo || {};
   const paper = state.paperInfo || {};
   return {
-    kind: publication.kind || "",
-    title: publication.title || "",
-    authors: publication.authors || "",
-    doi: publication.doi || "",
-    publication: publication.publication || "",
-    year: publication.year != null ? publication.year : null,
-    url: publication.url || "",
-    abstract: publication.abstract || "",
+    kind: biblio.kind || "",
+    title: biblio.title || "",
+    authors: biblio.authors || "",
+    doi: biblio.doi || "",
+    publication: biblio.publication || "",
+    year: biblio.year != null ? biblio.year : null,
+    url: biblio.url || "",
+    abstract: biblio.abstract || "",
     tags: paper.tags || [],
     PIs: paper.PIs || "",
   };
 };
 
 // Return a NEW curator state with the selected primary-paper fields applied,
-// tag suggestions appended, and — only when the curator explicitly opted in —
-// the imported authors copied into the Principal Investigators field. Only
-// publicationInfo (whitelisted fields) and paperInfo.tags/PIs can change;
-// every other slice passes through untouched, so open-form values collected
-// before the call survive. referenceInfo (the cited work) is never touched.
+// tag suggestions appended, and — only for authors the curator explicitly
+// ticked — the selected authors APPENDED to the Principal Investigators
+// (never replacing existing PIs, skipping duplicates). Only referenceInfo
+// (whitelisted fields) and paperInfo.tags/PIs can change; every other slice
+// passes through untouched, so open-form values collected before the call
+// survive.
 export const applyPrimaryPaperToState = (
   state,
   updates = {},
   tags = [],
-  authorsAsPIs = ""
+  selectedAuthors = []
 ) => {
   const safeUpdates = {};
   PRIMARY_PAPER_FIELDS.forEach((field) => {
@@ -64,7 +65,7 @@ export const applyPrimaryPaperToState = (
   });
   const next = {
     ...state,
-    publicationInfo: { ...(state.publicationInfo || {}), ...safeUpdates },
+    referenceInfo: { ...(state.referenceInfo || {}), ...safeUpdates },
   };
   const paper = state.paperInfo || {};
   const nextPaper = { ...paper };
@@ -73,9 +74,29 @@ export const applyPrimaryPaperToState = (
     nextPaper.tags = [...(paper.tags || []), ...tags];
     paperChanged = true;
   }
-  if (authorsAsPIs) {
-    nextPaper.PIs = authorsAsPIs;
-    paperChanged = true;
+  if (selectedAuthors.length) {
+    const additions = namesUtil.set(selectedAuthors);
+    const existing = (paper.PIs || "").trim();
+    const existingNames = existing
+      .split(",")
+      .map((name) => name.replace(/\s+/g, " ").trim().toLowerCase())
+      .filter(Boolean);
+    const fresh = additions
+      .split(",")
+      .map((name) => name.trim())
+      .filter(
+        (name) =>
+          name &&
+          !existingNames.includes(
+            name.replace(/\s+/g, " ").trim().toLowerCase()
+          )
+      );
+    if (fresh.length) {
+      nextPaper.PIs = existing
+        ? `${existing}, ${fresh.join(", ")}`
+        : fresh.join(", ");
+      paperChanged = true;
+    }
   }
   if (paperChanged) {
     next.paperInfo = nextPaper;

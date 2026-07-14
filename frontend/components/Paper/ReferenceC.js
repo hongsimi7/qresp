@@ -10,7 +10,7 @@ const ReferenceC = ({ referenceInfo, editor, defaultOpen }) => {
 
   return (
     <Drawer
-      heading="Reference Information"
+      heading="Publication Information for This Paper"
       editor={editor}
       defaultOpen={defaultOpen}
     >
