@@ -239,6 +239,19 @@ class ExternalIdentity(Document):
     }
 
 
+class AssistUsage(Document):
+    """Per-user daily counter for AI-assist requests (keyword suggestions).
+    Persistent so one account cannot exhaust the provider quota; only the
+    session email, day, and a count are stored — never request content."""
+    email = StringField(required=True, max_length=254)
+    day = StringField(required=True, max_length=10)  # YYYY-MM-DD (UTC)
+    count = LongField(default=0)
+    meta = {
+        'collection': 'assist_usage',
+        'indexes': [{'fields': ['email', 'day'], 'unique': True}],
+    }
+
+
 def active_papers():
     """Queryset of records visible to the public: legacy records without the
     flag (field absent) and explicitly active ones. Only an explicit

@@ -694,6 +694,47 @@ paths:
           description: Unsupported, oversized, unsafe, or unparseable upload
         401:
           description: Authentication required
+  /assist/keywords:
+    post:
+      operationId: "project.assist.suggest_keywords"
+      tags:
+        - "Import"
+      summary: "Suggests up to 8 keywords via the configured AI provider (opt-in; suggestions only, never auto-applied)"
+      parameters:
+        - in: body
+          name: body
+          required: true
+          description: Allowlisted metadata (title/abstract/venue/doi) and,
+            with explicit user consent, a manuscript source file to analyze
+            in memory.
+          schema:
+            type: object
+            properties:
+              title:
+                type: string
+              abstract:
+                type: string
+              venue:
+                type: string
+              doi:
+                type: string
+              filename:
+                type: string
+              content_base64:
+                type: string
+      responses:
+        200:
+          description: Keyword suggestions returned (max 8, deduplicated)
+        400:
+          description: Nothing analyzable, oversized, or unsafe upload
+        401:
+          description: Authentication required
+        429:
+          description: Daily per-user AI suggestion limit reached
+        502:
+          description: AI provider failed or answered unreadably
+        503:
+          description: AI suggestions are not configured on this server
   /auth/cilogon:
     get:
       operationId: "project.auth.cilogon_login"
