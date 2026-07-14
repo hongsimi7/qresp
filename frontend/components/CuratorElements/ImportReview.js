@@ -27,20 +27,26 @@ import {
 // proposal until the curator explicitly applies selected fields; populated
 // fields are only replaced when checked; tags are append-only suggestions.
 
-// The publish-time requirements, as a readable checklist. Draft saving never
-// requires these — publish validation remains the only completeness gate.
+// What still needs MANUAL completion, as a readable checklist. Fields the
+// import can never provide (PaperStack, notebook) are called out explicitly.
+// Draft saving never requires any of these — publish validation remains the
+// only completeness gate.
 const missingForPublish = (state) => {
   const missing = [];
-  const ref = state.referenceInfo || {};
+  const publication = state.publicationInfo || {};
   const info = state.curatorInfo || {};
   const paper = state.paperInfo || {};
-  if (!(ref.title || "").trim()) missing.push("Reference title");
-  if (!(ref.authors || "").trim()) missing.push("Authors");
-  if (!(ref.publication || "").trim() || !ref.year)
+  if (!(publication.title || "").trim()) missing.push("Title");
+  if (!(publication.authors || "").trim()) missing.push("Authors");
+  if (!(publication.publication || "").trim() || !publication.year)
     missing.push("Publication and year");
+  if (!(paper.PIs || "").trim()) missing.push("Principal Investigators");
+  if (!(paper.collections || []).length)
+    missing.push("PaperStack / collections (manual)");
+  if (!(paper.notebookFile || "").trim())
+    missing.push("Main notebook file (manual)");
   if (!(info.firstName || "").trim() || !(info.emailId || "").trim())
     missing.push("Curator name and email");
-  if (!(paper.collections || []).length) missing.push("Collections");
   if (!(state.license || "").trim()) missing.push("License");
   if (!(state.charts || []).length) missing.push("At least one chart");
   if (!(state.datasets || []).length) missing.push("At least one dataset");
@@ -134,9 +140,24 @@ const buildRows = (result, currentPaper) => {
         applyValue: fresh,
         source: provenance.tags || "import",
         alternatives: [],
-        defaultSelected: true,
+        // Suggestions only: never applied unless explicitly selected.
+        defaultSelected: false,
       });
     }
+  }
+  if (proposal.authors && proposal.authors.length) {
+    // Authors are NOT automatically Principal Investigators — this is an
+    // explicit, default-unchecked opt-in.
+    rows.push({
+      key: "authorsAsPIs",
+      label: "Use imported authors as Principal Investigators",
+      proposedText: namesUtil.set(proposal.authors),
+      currentText: (currentPaper.PIs || "").trim(),
+      applyValue: namesUtil.set(proposal.authors),
+      source: "opt-in",
+      alternatives: [],
+      defaultSelected: false,
+    });
   }
   return rows;
 };
@@ -176,15 +197,19 @@ const ImportReview = ({ open, result, onClose }) => {
     const current = collectDraftState();
     const updates = {};
     let tags = [];
+    let authorsAsPIs = "";
     rows.forEach((row) => {
       if (!selected[row.key]) return;
       if (row.key === "tags") {
         tags = row.applyValue;
+      } else if (row.key === "authorsAsPIs") {
+        authorsAsPIs = row.applyValue;
       } else {
         updates[row.key] = row.applyValue;
       }
     });
-    const next = applyPrimaryPaperToState(current, updates, tags);
+    const next = applyPrimaryPaperToState(current, updates, tags,
+                                          authorsAsPIs);
     setAll(next);
     // Re-seed the always-mounted forms from the updated state.
     if (remountForms) remountForms();

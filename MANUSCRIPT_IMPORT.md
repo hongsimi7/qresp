@@ -11,12 +11,30 @@ the primary-paper adapter (`frontend/Utils/primaryPaper.js`) — the separate
 **Add Reference to your paper** form is never its destination, and the
 existing **Upload Metadata** (JSON) workflow is unchanged and unrelated.
 
-Storage note: the curator state's `referenceInfo` slice is the primary
-paper's bibliographic record of legacy standing — it persists as the
-published document's `reference` block (driving paper details, search,
-publish validation and dedup). The adapter reads/writes that same slot, so
-legacy records keep loading, editing and publishing unchanged with no
-migration.
+## Data flow (final)
+
+- **`publicationInfo`** (curator state) = the PRIMARY paper's bibliography
+  (kind/title/authors/doi/publication/year/url/abstract), edited inside
+  "Add info about your paper" and the only import destination. On
+  publish/update it serializes into the legacy **`reference`** block — the
+  field search, paper details, publish validation and dedup already read —
+  so nothing downstream changes and no records are migrated.
+- **`referenceInfo`** (curator state) = the separate CITED work behind
+  "Add Reference to your paper". It persists as the optional
+  **`citedReference`** block (omitted when empty; the publish schema allows
+  additional properties), and is NEVER touched by primary-paper import.
+- **Loading**: `reference` → `publicationInfo` (every legacy record reads
+  correctly); `citedReference` → `referenceInfo` (empty on legacy records,
+  which never had a separate citation). Legacy DRAFTS/metadata exports
+  (which stored the primary bibliography in `referenceInfo`) are migrated on
+  load: their data moves to `publicationInfo` and the cited-work slot starts
+  empty.
+- PIs, PaperStack/collections, keywords/tags, and the notebook file remain
+  manual Paper-Information fields: import appends tags only when explicitly
+  selected, copies authors into PIs only via the explicit
+  "Use imported authors as Principal Investigators" opt-in (default
+  unchecked), and can never write collections/notebook/file-server/sections/
+  workflow/license/documentation/curator identity.
 
 ## Supported inputs
 

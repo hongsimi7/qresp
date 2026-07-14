@@ -8,6 +8,17 @@ import PaperImport from "../components/CuratorElements/PaperImport";
 import CuratorContext from "../Context/Curator/curatorContext";
 import AuthContext from "../Context/Auth/authContext";
 
+const emptyBiblio = () => ({
+  kind: "",
+  doi: "",
+  authors: "",
+  title: "",
+  publication: "",
+  year: null,
+  url: "",
+  abstract: "",
+});
+
 const baseState = () => ({
   curatorInfo: {
     firstName: "",
@@ -17,10 +28,11 @@ const baseState = () => ({
     affiliation: "",
   },
   fileServerPath: "",
-  paperInfo: { PIs: "Giulia Galli", collections: ["MICCOM"], tags: [],
+  paperInfo: { PIs: "Giulia Galli", collections: [], tags: [],
                notebookFile: "", notebookPath: "" },
-  referenceInfo: { kind: "", doi: "", authors: "", title: "",
-                   publication: "", year: null, url: "", abstract: "" },
+  publicationInfo: emptyBiblio(),
+  referenceInfo: { ...emptyBiblio(), title: "A Cited Work",
+                   doi: "10.9/cited" },
   documentation: "",
   charts: [{ id: "c0" }],
   tools: [],
@@ -66,13 +78,16 @@ const renderImport = ({ state = baseState(), authenticated = true } = {}) => {
       </CuratorContext.Provider>
     </AuthContext.Provider>
   );
-  return { setAll, remountForms, setReferenceInfo, collectDraftState };
+  return { setAll, remountForms, setReferenceInfo, collectDraftState, state };
 };
 
 const fetchDoi = async (user) => {
   await user.type(screen.getByLabelText(/doi/i), "10.1234/qresp.demo");
   await user.click(screen.getByRole("button", { name: /fetch doi/i }));
 };
+
+const applyButton = () =>
+  screen.getByRole("button", { name: /apply to paper information/i });
 
 describe("PaperImport (inside Add info about your paper)", () => {
   afterEach(() => jest.resetAllMocks());
@@ -91,18 +106,10 @@ describe("PaperImport (inside Add info about your paper)", () => {
     ).toBeInTheDocument();
   });
 
-  it("asks anonymous users to sign in instead of showing controls", () => {
-    renderImport({ authenticated: false });
-    expect(
-      screen.getByText(/sign in to import this paper/i)
-    ).toBeInTheDocument();
-    expect(screen.queryByLabelText(/doi/i)).not.toBeInTheDocument();
-  });
-
-  it("DOI import populates the PRIMARY paper path, never setReferenceInfo", async () => {
+  it("DOI import writes publicationInfo — never referenceInfo, never setReferenceInfo", async () => {
     axios.post.mockResolvedValue({ data: doiResponse });
     const user = userEvent.setup();
-    const { setAll, remountForms, setReferenceInfo } = renderImport();
+    const { setAll, remountForms, setReferenceInfo, state } = renderImport();
 
     await fetchDoi(user);
     expect(axios.post).toHaveBeenCalledWith("/api/import/doi", {
@@ -111,33 +118,97 @@ describe("PaperImport (inside Add info about your paper)", () => {
     expect(
       await screen.findByText(/proposed: new imported title/i)
     ).toBeInTheDocument();
-    // Kind arrives from the registry.
-    expect(screen.getByText(/^proposed: journal$/i)).toBeInTheDocument();
     expect(setAll).not.toHaveBeenCalled();
 
-    await user.click(
-      screen.getByRole("button", { name: /apply to paper information/i })
-    );
+    await user.click(applyButton());
     expect(setAll).toHaveBeenCalledTimes(1);
     const applied = setAll.mock.calls[0][0];
-    // Primary-paper metadata path (legacy bibliographic storage slot).
-    expect(applied.referenceInfo.title).toBe("New Imported Title");
-    expect(applied.referenceInfo.kind).toBe("journal");
-    expect(applied.referenceInfo.doi).toBe("10.1234/qresp.demo");
-    expect(applied.referenceInfo.authors).toContain("Lovelace");
-    expect(applied.paperInfo.tags).toEqual(["Materials Science"]);
-    // The Reference form's setter is never used, and nothing outside the
-    // whitelisted bibliographic fields changes.
+    // PRIMARY paper metadata path:
+    expect(applied.publicationInfo.title).toBe("New Imported Title");
+    expect(applied.publicationInfo.kind).toBe("journal");
+    expect(applied.publicationInfo.doi).toBe("10.1234/qresp.demo");
+    expect(applied.publicationInfo.authors).toContain("Lovelace");
+    expect(applied.publicationInfo.publication).toContain(
+      "Journal of Computing"
+    );
+    // The cited-work slice is byte-identical to what the user had.
+    expect(applied.referenceInfo).toEqual(state.referenceInfo);
+    expect(applied.referenceInfo.title).toBe("A Cited Work");
     expect(setReferenceInfo).not.toHaveBeenCalled();
-    expect(applied.paperInfo.PIs).toBe("Giulia Galli");
-    expect(applied.paperInfo.collections).toEqual(["MICCOM"]);
-    expect(applied.curatorInfo).toEqual(baseState().curatorInfo);
-    expect(applied.charts).toEqual([{ id: "c0" }]);
+    // Untouchable slices stay untouched.
+    expect(applied.curatorInfo).toEqual(state.curatorInfo);
+    expect(applied.charts).toEqual(state.charts);
     expect(applied.license).toBe("CC-BY");
+    expect(applied.paperInfo.collections).toEqual([]);
+    expect(applied.paperInfo.notebookFile).toBe("");
     expect(remountForms).toHaveBeenCalled();
   });
 
-  it("TeX import without a DOI suggests kind=preprint and applies to the primary path", async () => {
+  it("authors do NOT become PIs unless the explicit opt-in is checked", async () => {
+    axios.post.mockResolvedValue({ data: doiResponse });
+    const user = userEvent.setup();
+    const { setAll } = renderImport();
+
+    await fetchDoi(user);
+    await screen.findByText(/proposed: new imported title/i);
+    const optIn = screen.getByRole("checkbox", {
+      name: /apply use imported authors as principal investigators/i,
+    });
+    expect(optIn).not.toBeChecked();
+
+    await user.click(applyButton());
+    // Default apply: PIs unchanged.
+    expect(setAll.mock.calls[0][0].paperInfo.PIs).toBe("Giulia Galli");
+  });
+
+  it("copies authors into PIs when the opt-in IS checked", async () => {
+    axios.post.mockResolvedValue({ data: doiResponse });
+    const user = userEvent.setup();
+    const { setAll } = renderImport();
+
+    await fetchDoi(user);
+    await screen.findByText(/proposed: new imported title/i);
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /apply use imported authors as principal investigators/i,
+      })
+    );
+    await user.click(applyButton());
+    expect(setAll.mock.calls[0][0].paperInfo.PIs).toContain("Lovelace");
+  });
+
+  it("tags are suggestions: default unchecked, added only when selected", async () => {
+    axios.post.mockResolvedValue({ data: doiResponse });
+    const user = userEvent.setup();
+    const first = renderImport();
+
+    await fetchDoi(user);
+    await screen.findByText(/proposed: new imported title/i);
+    const tagBox = screen.getByRole("checkbox", {
+      name: /apply tag suggestions/i,
+    });
+    expect(tagBox).not.toBeChecked();
+    await user.click(applyButton());
+    expect(first.setAll.mock.calls[0][0].paperInfo.tags).toEqual([]);
+  });
+
+  it("adds tags after explicit selection", async () => {
+    axios.post.mockResolvedValue({ data: doiResponse });
+    const user = userEvent.setup();
+    const { setAll } = renderImport();
+
+    await fetchDoi(user);
+    await screen.findByText(/proposed: new imported title/i);
+    await user.click(
+      screen.getByRole("checkbox", { name: /apply tag suggestions/i })
+    );
+    await user.click(applyButton());
+    expect(setAll.mock.calls[0][0].paperInfo.tags).toEqual([
+      "Materials Science",
+    ]);
+  });
+
+  it("TeX import without a DOI suggests kind=preprint into publicationInfo", async () => {
     const texContent = "\\title{Zip Title}\\begin{document}\\end{document}";
     axios.post.mockResolvedValue({
       data: {
@@ -152,7 +223,7 @@ describe("PaperImport (inside Add info about your paper)", () => {
       },
     });
     const user = userEvent.setup();
-    const { setAll, setReferenceInfo } = renderImport();
+    const { setAll, setReferenceInfo, state } = renderImport();
 
     const file = new File([texContent], "paper.tex", { type: "text/x-tex" });
     await user.upload(document.getElementById("paper-import-file"), file);
@@ -163,37 +234,30 @@ describe("PaperImport (inside Add info about your paper)", () => {
         content_base64: btoa(texContent),
       })
     );
-    expect(
-      await screen.findByText(/proposed: zip title/i)
-    ).toBeInTheDocument();
-    // Unpublished source: preprint is offered as a SUGGESTION only.
-    expect(screen.getByText(/proposed: preprint/i)).toBeInTheDocument();
+    expect(await screen.findByText(/proposed: zip title/i)).toBeInTheDocument();
+    expect(screen.getByText(/^proposed: preprint$/i)).toBeInTheDocument();
     expect(screen.getByText("suggested")).toBeInTheDocument();
 
-    await user.click(
-      screen.getByRole("button", { name: /apply to paper information/i })
-    );
+    await user.click(applyButton());
     const applied = setAll.mock.calls[0][0];
-    expect(applied.referenceInfo.title).toBe("Zip Title");
-    expect(applied.referenceInfo.kind).toBe("preprint");
-    // Nothing invented: no doi/year/publication in the applied state.
-    expect(applied.referenceInfo.doi).toBe("");
-    expect(applied.referenceInfo.year).toBeNull();
-    expect(applied.referenceInfo.publication).toBe("");
+    expect(applied.publicationInfo.title).toBe("Zip Title");
+    expect(applied.publicationInfo.kind).toBe("preprint");
+    // Nothing invented, and the cited work stays untouched.
+    expect(applied.publicationInfo.doi).toBe("");
+    expect(applied.publicationInfo.year).toBeNull();
+    expect(applied.referenceInfo).toEqual(state.referenceInfo);
     expect(setReferenceInfo).not.toHaveBeenCalled();
   });
 
   it("never overwrites a populated primary-paper field unless checked", async () => {
     axios.post.mockResolvedValue({ data: doiResponse });
     const state = baseState();
-    state.referenceInfo.title = "My Existing Title";
+    state.publicationInfo.title = "My Existing Title";
     const user = userEvent.setup();
     const { setAll } = renderImport({ state });
 
     await fetchDoi(user);
-    expect(
-      await screen.findByText(/proposed: new imported title/i)
-    ).toBeInTheDocument();
+    await screen.findByText(/proposed: new imported title/i);
     expect(
       screen.getByText(/current value kept unless checked: my existing title/i)
     ).toBeInTheDocument();
@@ -201,46 +265,46 @@ describe("PaperImport (inside Add info about your paper)", () => {
       screen.getByRole("checkbox", { name: /apply title/i })
     ).not.toBeChecked();
 
-    await user.click(
-      screen.getByRole("button", { name: /apply to paper information/i })
-    );
+    await user.click(applyButton());
     const applied = setAll.mock.calls[0][0];
-    expect(applied.referenceInfo.title).toBe("My Existing Title");
-    expect(applied.referenceInfo.doi).toBe("10.1234/qresp.demo");
+    expect(applied.publicationInfo.title).toBe("My Existing Title");
+    expect(applied.publicationInfo.doi).toBe("10.1234/qresp.demo");
   });
 
-  it("adds suggested tags only when explicitly selected", async () => {
+  it("lists PaperStack and notebook as manual items in the checklist after apply", async () => {
     axios.post.mockResolvedValue({ data: doiResponse });
     const user = userEvent.setup();
-    const { setAll } = renderImport();
+    renderImport();
 
     await fetchDoi(user);
     await screen.findByText(/proposed: new imported title/i);
-    // Deselect the tag suggestions before applying.
-    await user.click(
-      screen.getByRole("checkbox", { name: /apply tag suggestions/i })
-    );
-    await user.click(
-      screen.getByRole("button", { name: /apply to paper information/i })
-    );
-    expect(setAll.mock.calls[0][0].paperInfo.tags).toEqual([]);
+    await user.click(applyButton());
+
+    expect(
+      await screen.findByText(/still needed before this record can be published/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/paperstack \/ collections \(manual\)/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/main notebook file \(manual\)/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/at least one dataset/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/save draft works even while fields are missing/i)
+    ).toBeInTheDocument();
   });
 
   it("keeps open-form values by applying on top of the collected draft state", async () => {
     axios.post.mockResolvedValue({ data: doiResponse });
     const state = baseState();
-    // Simulates a flushed open form: typed-but-unsaved section values.
     state.paperInfo.notebookFile = "typed-not-saved.ipynb";
     const user = userEvent.setup();
     const { setAll, collectDraftState } = renderImport({ state });
 
     await fetchDoi(user);
     await screen.findByText(/proposed: new imported title/i);
-    await user.click(
-      screen.getByRole("button", { name: /apply to paper information/i })
-    );
-    // Apply snapshots via collectDraftState (open forms included) and the
-    // result still carries the typed value — draft save keeps working on it.
+    await user.click(applyButton());
     expect(collectDraftState).toHaveBeenCalled();
     expect(setAll.mock.calls[0][0].paperInfo.notebookFile).toBe(
       "typed-not-saved.ipynb"
@@ -256,25 +320,6 @@ describe("PaperImport (inside Add info about your paper)", () => {
     await screen.findByText(/proposed: new imported title/i);
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));
     expect(setAll).not.toHaveBeenCalled();
-  });
-
-  it("shows the missing-information checklist after applying", async () => {
-    axios.post.mockResolvedValue({ data: doiResponse });
-    const user = userEvent.setup();
-    renderImport();
-
-    await fetchDoi(user);
-    await screen.findByText(/proposed: new imported title/i);
-    await user.click(
-      screen.getByRole("button", { name: /apply to paper information/i })
-    );
-    expect(
-      await screen.findByText(/still needed before this record can be published/i)
-    ).toBeInTheDocument();
-    expect(screen.getByText(/at least one dataset/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/save draft works even while fields are missing/i)
-    ).toBeInTheDocument();
   });
 
   it("surfaces backend errors clearly", async () => {

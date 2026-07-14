@@ -1,24 +1,18 @@
 // Primary-paper metadata adapter (Auto-Curation Lite).
 //
-// What the legacy state actually stores: the curator state's `referenceInfo`
-// slice IS the PRIMARY paper's bibliographic record — it persists as the
-// published document's `reference` block, which drives paper details, search
-// results, publish validation and verify-time dedup. The "Add Reference to
-// your paper" form is the citation-of-record editor over that same slice
-// (PaperInfoForm already writes into it: saving PIs calls
-// setReferenceAuthors). There is no separate cited-works list in the schema.
-//
-// This adapter gives the "Add info about your paper" workflow a clearly
-// named, non-destructive read/write path over that legacy storage, so the
-// DOI/manuscript importer can target PRIMARY-paper metadata without being
-// hard-wired to `referenceInfo` semantics, without calling the Reference
-// form's setters, and without duplicating data or changing the persisted
-// schema. Legacy records keep loading/editing/publishing byte-identically.
+// The PRIMARY paper's bibliography lives in the curator state's dedicated
+// `publicationInfo` slice, owned by the "Add info about your paper"
+// workflow (it serializes into the published document's legacy `reference`
+// block — see Utils/model.js — so search/details/publish keep working and
+// legacy records load via the same conversions). The separate
+// "Add Reference to your paper" workflow owns `referenceInfo` (a CITED
+// work, persisted as the optional `citedReference` block) and is never a
+// destination of this adapter.
 
 // Bibliographic fields the primary-paper importer may propose. Everything
-// else (curator identity, PIs, collections, notebook, files, charts,
-// datasets, tools, scripts, workflow, license, documentation) is explicitly
-// NOT reachable through this adapter.
+// else (curator identity, collections/PaperStack, notebook, file server,
+// sections, workflow, license, documentation) is NOT reachable through this
+// adapter; PIs change ONLY via the explicit authorsAsPIs opt-in below.
 export const PRIMARY_PAPER_FIELDS = [
   "kind",
   "title",
@@ -31,29 +25,37 @@ export const PRIMARY_PAPER_FIELDS = [
 ];
 
 // Read the primary paper's current bibliographic values (plus tags, which
-// import may append to). Works on any curator state, including legacy
-// drafts/records — absent fields read as empty.
+// import may append to, and PIs for the optional authors-as-PIs opt-in).
+// Absent fields read as empty on any state shape.
 export const primaryPaperFromState = (state = {}) => {
-  const ref = state.referenceInfo || {};
+  const publication = state.publicationInfo || {};
   const paper = state.paperInfo || {};
   return {
-    kind: ref.kind || "",
-    title: ref.title || "",
-    authors: ref.authors || "",
-    doi: ref.doi || "",
-    publication: ref.publication || "",
-    year: ref.year != null ? ref.year : null,
-    url: ref.url || "",
-    abstract: ref.abstract || "",
+    kind: publication.kind || "",
+    title: publication.title || "",
+    authors: publication.authors || "",
+    doi: publication.doi || "",
+    publication: publication.publication || "",
+    year: publication.year != null ? publication.year : null,
+    url: publication.url || "",
+    abstract: publication.abstract || "",
     tags: paper.tags || [],
+    PIs: paper.PIs || "",
   };
 };
 
-// Return a NEW curator state with the selected primary-paper fields applied
-// and tag suggestions appended. Only the whitelisted bibliographic fields
-// and paperInfo.tags can change; every other slice is passed through
-// untouched, so open-form values collected before the call survive.
-export const applyPrimaryPaperToState = (state, updates = {}, tags = []) => {
+// Return a NEW curator state with the selected primary-paper fields applied,
+// tag suggestions appended, and — only when the curator explicitly opted in —
+// the imported authors copied into the Principal Investigators field. Only
+// publicationInfo (whitelisted fields) and paperInfo.tags/PIs can change;
+// every other slice passes through untouched, so open-form values collected
+// before the call survive. referenceInfo (the cited work) is never touched.
+export const applyPrimaryPaperToState = (
+  state,
+  updates = {},
+  tags = [],
+  authorsAsPIs = ""
+) => {
   const safeUpdates = {};
   PRIMARY_PAPER_FIELDS.forEach((field) => {
     if (updates[field] !== undefined) {
@@ -62,11 +64,21 @@ export const applyPrimaryPaperToState = (state, updates = {}, tags = []) => {
   });
   const next = {
     ...state,
-    referenceInfo: { ...(state.referenceInfo || {}), ...safeUpdates },
+    publicationInfo: { ...(state.publicationInfo || {}), ...safeUpdates },
   };
+  const paper = state.paperInfo || {};
+  const nextPaper = { ...paper };
+  let paperChanged = false;
   if (tags.length) {
-    const paper = state.paperInfo || {};
-    next.paperInfo = { ...paper, tags: [...(paper.tags || []), ...tags] };
+    nextPaper.tags = [...(paper.tags || []), ...tags];
+    paperChanged = true;
+  }
+  if (authorsAsPIs) {
+    nextPaper.PIs = authorsAsPIs;
+    paperChanged = true;
+  }
+  if (paperChanged) {
+    next.paperInfo = nextPaper;
   }
   return next;
 };
