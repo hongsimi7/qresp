@@ -66,6 +66,16 @@ class TestDraftCrud(DraftTestBase):
         self.assertEqual(OWNER, body["owner_email"])
         self.assertTrue(body["id"])
 
+    def test_title_prefers_new_publication_info(self):
+        # New-shape drafts carry the primary paper's title in
+        # publicationInfo; legacy referenceInfo stays a fallback.
+        self.login(OWNER)
+        response = self.create_draft(
+            {"state": {"publicationInfo": {"title": "Primary title"},
+                       "referenceInfo": {"title": "Cited work"}}})
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual("Primary title", response.json()["title"])
+
     def test_empty_state_gets_untitled_fallback(self):
         self.login(OWNER)
         response = self.create_draft({"state": {}})

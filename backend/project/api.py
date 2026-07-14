@@ -534,6 +534,10 @@ def _draft_display_title(state, given_title):
     if given_title and str(given_title).strip():
         return str(given_title).strip()
     state = state or {}
+    publication = state.get("publicationInfo") or {}
+    if publication.get("title"):
+        return publication["title"]
+    # Legacy drafts stored the primary paper's title in referenceInfo.
     reference = state.get("referenceInfo") or {}
     if reference.get("title"):
         return reference["title"]

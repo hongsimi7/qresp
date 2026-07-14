@@ -10,7 +10,7 @@ import {
 
 import { namesUtil } from "../../Utils/utils";
 
-import { TextInputField } from "../Form/InputFields";
+import { RadioInputField, TextInputField } from "../Form/InputFields";
 import { SubmitAndReset, FormInputLabel } from "../Form/Util";
 import NameInput from "../Form//NameInput";
 import Drawer from "../drawer";
@@ -27,7 +27,8 @@ const PaperInfoForm = ({ editor }) => {
   const {
     paperInfo,
     setPaperInfo,
-    setReferenceAuthors,
+    publicationInfo,
+    setPublicationInfo,
     fileServerPath,
     registerDraftFlusher,
   } = useContext(CuratorContext);
@@ -49,6 +50,9 @@ const PaperInfoForm = ({ editor }) => {
     collections: Yup.string().required("Required"),
     tags: Yup.string().required("Required"),
     notebookFile: Yup.string(),
+    // The primary paper's bibliography may be arbitrarily incomplete while
+    // drafting — publish validation is the completeness gate, not this form.
+    publicationInfo: Yup.object(),
   });
 
   const formattedNames = namesUtil.get(paperInfo.PIs);
@@ -63,6 +67,10 @@ const PaperInfoForm = ({ editor }) => {
       // mode loading ["MICCOM"] — failed yup's string check.
       tags: (paperInfo.tags || []).join(", "),
       collections: (paperInfo.collections || []).join(", "),
+      publicationInfo: {
+        ...publicationInfo,
+        year: publicationInfo.year != null ? String(publicationInfo.year) : "",
+      },
     },
   });
 
@@ -78,12 +86,13 @@ const PaperInfoForm = ({ editor }) => {
       .filter(Boolean);
 
   const toPaperInfo = (values) => {
+    const { publicationInfo: ignored, ...paperValues } = values;
     const next = {
       ...paperInfo,
-      ...values,
-      collections: splitList(values.collections),
-      tags: splitList(values.tags),
-      PIs: namesUtil.set(values.PIs || []),
+      ...paperValues,
+      collections: splitList(paperValues.collections),
+      tags: splitList(paperValues.tags),
+      PIs: namesUtil.set(paperValues.PIs || []),
     };
     if (next.notebookFile && next.notebookFile.length > 0) {
       next.notebookPath = fileServerPath + next.notebookFile;
@@ -91,17 +100,30 @@ const PaperInfoForm = ({ editor }) => {
     return next;
   };
 
+  const toPublicationInfo = (values) => {
+    const pub = values.publicationInfo || {};
+    const yearNumber = parseInt(pub.year, 10);
+    return {
+      ...publicationInfo,
+      ...pub,
+      year: Number.isNaN(yearNumber) ? null : yearNumber,
+    };
+  };
+
   useEffect(() => {
     if (!registerDraftFlusher) return undefined;
     return registerDraftFlusher("paperInfo", () => ({
       paperInfo: toPaperInfo(getValues()),
+      publicationInfo: toPublicationInfo(getValues()),
     }));
-  }, [getValues, registerDraftFlusher, toPaperInfo]);
+  }, [getValues, registerDraftFlusher, toPaperInfo, toPublicationInfo]);
 
   const onSubmit = (values) => {
-    const next = toPaperInfo(values);
-    setPaperInfo(next);
-    setReferenceAuthors(next.PIs);
+    // The primary paper's bibliography is owned by THIS section now; the
+    // separate cited-work ("Add Reference to your paper") state is never
+    // touched from here.
+    setPaperInfo(toPaperInfo(values));
+    setPublicationInfo(toPublicationInfo(values));
     editor();
   };
 
@@ -128,6 +150,106 @@ const PaperInfoForm = ({ editor }) => {
       <PaperImport />
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container direction="column" spacing={1}>
+          {/* The PRIMARY paper's bibliographic fields (import target). The
+              separate "Add Reference to your paper" section stays the
+              cited-work editor and is unrelated to these. */}
+          <Grid>
+            <RadioInputField
+              id="publicationKind"
+              name="publicationInfo.kind"
+              label="Kind"
+              helperText="Preprint, Journal or Dissertation"
+              options={[
+                { label: "Preprint", value: "preprint" },
+                { label: "Journal", value: "journal" },
+                { label: "Dissertation", value: "dissertation" },
+              ]}
+              row={true}
+              control={control}
+              defVal={publicationInfo.kind}
+            />
+          </Grid>
+          <Grid>
+            <TextInputField
+              id="publicationTitle"
+              placeholder="Enter the title of this paper"
+              name="publicationInfo.title"
+              helperText="Title of the paper being curated"
+              label="Title"
+              register={register}
+              defaultValue={publicationInfo.title}
+            />
+          </Grid>
+          <Grid>
+            <TextInputField
+              id="publicationAuthors"
+              placeholder="Enter authors, comma separated (e.g. Ada Lovelace, Charles Babbage)"
+              name="publicationInfo.authors"
+              helperText="Authors of the paper being curated"
+              label="Authors"
+              register={register}
+              defaultValue={publicationInfo.authors}
+            />
+          </Grid>
+          <Grid>
+            <TextInputField
+              id="publicationDoi"
+              placeholder="Enter DOI (e.g. 10.201/jacs.23wbn) if published"
+              name="publicationInfo.doi"
+              helperText="DOI of the paper being curated, if published"
+              label="DOI"
+              register={register}
+              defaultValue={publicationInfo.doi}
+            />
+          </Grid>
+          <Grid>
+            <TextInputField
+              id="publicationVenue"
+              placeholder="e.g. Journal of Chemical Physics 2016, 12 ,100-110"
+              name="publicationInfo.publication"
+              helperText="Publication venue as 'Journal YEAR, VOLUME ,PAGES'"
+              label="Publication / Venue"
+              register={register}
+              defaultValue={publicationInfo.publication}
+            />
+          </Grid>
+          <Grid>
+            <TextInputField
+              id="publicationYear"
+              placeholder="Enter publication year"
+              name="publicationInfo.year"
+              helperText="Year of publication"
+              label="Year"
+              register={register}
+              defaultValue={
+                publicationInfo.year != null ? String(publicationInfo.year) : ""
+              }
+            />
+          </Grid>
+          <Grid>
+            <TextInputField
+              id="publicationUrl"
+              placeholder="Enter URL of the paper"
+              name="publicationInfo.url"
+              helperText="Link to the paper, if available"
+              label="URL"
+              register={register}
+              defaultValue={publicationInfo.url}
+            />
+          </Grid>
+          <Grid>
+            <TextInputField
+              id="publicationAbstract"
+              placeholder="Enter abstract"
+              name="publicationInfo.abstract"
+              helperText="Abstract of the paper being curated"
+              label="Abstract"
+              register={register}
+              multiline
+              rows={4}
+              defaultValue={publicationInfo.abstract}
+            />
+          </Grid>
           <Grid>
             <Grid
               container

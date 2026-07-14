@@ -124,7 +124,7 @@ describe("EditModeController", () => {
     ).toBeInTheDocument();
     expect(setAll).toHaveBeenCalledWith(
       expect.objectContaining({
-        referenceInfo: expect.objectContaining({
+        publicationInfo: expect.objectContaining({
           title: paperDoc.reference.title,
         }),
       })

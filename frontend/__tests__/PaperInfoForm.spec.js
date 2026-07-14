@@ -9,8 +9,9 @@ import SourceTreeContext from "../Context/SourceTree/SourceTreeContext";
 // (a raw paper loads collections: ["MICCOM"]), while this form edits them as
 // comma-separated strings. The missing join for collections made yup fail
 // with `collections must be a `string` type` and blocked saving.
-const renderForm = (paperInfoOverrides = {}) => {
+const renderForm = (paperInfoOverrides = {}, publicationOverrides = {}) => {
   const setPaperInfo = jest.fn();
+  const setPublicationInfo = jest.fn();
   const curator = {
     paperInfo: {
       PIs: "Giulia Galli",
@@ -20,7 +21,19 @@ const renderForm = (paperInfoOverrides = {}) => {
       notebookPath: "",
       ...paperInfoOverrides,
     },
+    publicationInfo: {
+      kind: "",
+      doi: "",
+      authors: "",
+      title: "",
+      publication: "",
+      year: null,
+      url: "",
+      abstract: "",
+      ...publicationOverrides,
+    },
     setPaperInfo,
+    setPublicationInfo,
     setReferenceAuthors: jest.fn(),
     fileServerPath: "",
   };
@@ -36,7 +49,7 @@ const renderForm = (paperInfoOverrides = {}) => {
       </SourceTreeContext.Provider>
     </CuratorContext.Provider>
   );
-  return { setPaperInfo };
+  return { setPaperInfo, setPublicationInfo };
 };
 
 describe("PaperInfoForm with array-backed state (edit mode)", () => {
@@ -97,5 +110,49 @@ describe("PaperInfoForm with array-backed state (edit mode)", () => {
         tags: ["DFT"],
       })
     );
+  });
+
+  it("shows the primary paper's bibliographic fields and saves them via setPublicationInfo", async () => {
+    const { setPaperInfo, setPublicationInfo } = renderForm(
+      {},
+      {
+        title: "Loaded Primary Title",
+        authors: "Ada Lovelace",
+        doi: "10.1/x",
+        year: 2016,
+      }
+    );
+    // Imported/loaded primary-paper fields render inside Paper Information.
+    expect(
+      screen.getByPlaceholderText(/enter the title of this paper/i)
+    ).toHaveValue("Loaded Primary Title");
+    expect(
+      screen.getByPlaceholderText(/enter authors, comma separated/i)
+    ).toHaveValue("Ada Lovelace");
+    expect(
+      screen.getByPlaceholderText(/enter doi \(e\.g\./i)
+    ).toHaveValue("10.1/x");
+    expect(
+      screen.getByPlaceholderText(/enter publication year/i)
+    ).toHaveValue("2016");
+
+    const user = userEvent.setup();
+    await user.type(
+      screen.getByPlaceholderText(/enter url of the paper/i),
+      "https://example.org/paper"
+    );
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(setPublicationInfo).toHaveBeenCalled());
+    expect(setPublicationInfo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Loaded Primary Title",
+        year: 2016,
+        url: "https://example.org/paper",
+      })
+    );
+    // paperInfo keeps its own fields; publicationInfo values are not mixed in.
+    const paperArg = setPaperInfo.mock.calls[0][0];
+    expect(paperArg).not.toHaveProperty("publicationInfo");
+    expect(paperArg).not.toHaveProperty("title");
   });
 });

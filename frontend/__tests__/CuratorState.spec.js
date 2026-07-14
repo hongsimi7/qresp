@@ -221,6 +221,72 @@ describe("CuratorState draft persistence", () => {
     expect(screen.getByTestId("has-draft")).toHaveTextContent("no");
   });
 
+  it("migrates legacy drafts (referenceInfo-only) into publicationInfo on load", async () => {
+    // A pre-publicationInfo draft: its referenceInfo WAS the primary paper.
+    localStorage.setItem(
+      "state",
+      JSON.stringify({
+        ...savedDraft,
+        referenceInfo: { ...savedDraft.referenceInfo, title: "Old draft title" },
+      })
+    );
+    const MigrationProbe = () => {
+      const { publicationInfo, referenceInfo, resumeDraft } =
+        useContext(CuratorContext);
+      return (
+        <div>
+          <span data-testid="pub-title">{publicationInfo.title || "blank"}</span>
+          <span data-testid="cited-title">{referenceInfo.title || "blank"}</span>
+          <button onClick={resumeDraft}>Resume</button>
+        </div>
+      );
+    };
+    const user = userEvent.setup();
+    render(
+      <CuratorState>
+        <MigrationProbe />
+      </CuratorState>
+    );
+    await user.click(screen.getByRole("button", { name: /resume/i }));
+    // Primary paper gets the legacy bibliography; the separate cited work
+    // stays empty (legacy drafts never had one).
+    expect(screen.getByTestId("pub-title")).toHaveTextContent(
+      "Old draft title"
+    );
+    expect(screen.getByTestId("cited-title")).toHaveTextContent("blank");
+  });
+
+  it("keeps new-shape drafts intact (publicationInfo and cited work separate)", async () => {
+    localStorage.setItem(
+      "state",
+      JSON.stringify({
+        ...savedDraft,
+        publicationInfo: { ...savedDraft.referenceInfo, title: "Primary T" },
+        referenceInfo: { ...savedDraft.referenceInfo, title: "Cited T" },
+      })
+    );
+    const MigrationProbe = () => {
+      const { publicationInfo, referenceInfo, resumeDraft } =
+        useContext(CuratorContext);
+      return (
+        <div>
+          <span data-testid="pub-title">{publicationInfo.title || "blank"}</span>
+          <span data-testid="cited-title">{referenceInfo.title || "blank"}</span>
+          <button onClick={resumeDraft}>Resume</button>
+        </div>
+      );
+    };
+    const user = userEvent.setup();
+    render(
+      <CuratorState>
+        <MigrationProbe />
+      </CuratorState>
+    );
+    await user.click(screen.getByRole("button", { name: /resume/i }));
+    expect(screen.getByTestId("pub-title")).toHaveTextContent("Primary T");
+    expect(screen.getByTestId("cited-title")).toHaveTextContent("Cited T");
+  });
+
   it("saves registered open-form values to account drafts before validation", async () => {
     const user = userEvent.setup();
     render(

@@ -3,7 +3,9 @@ import { getServer, namesUtil, referenceUtil } from "./utils";
 const convertStateToViewSchema = (state, serverInformation) => {
   const schema = {
     ...state.curatorInfo,
-    ...state.referenceInfo,
+    // The preview shows the PRIMARY paper: its bibliography lives in
+    // publicationInfo (the separate cited work is not the previewed record).
+    ...state.publicationInfo,
     ...state.paperInfo,
     // PIs: state.paperInfo.PIs,
     // abstract: state.referenceInfo.abstract,
@@ -26,10 +28,36 @@ const convertStateToViewSchema = (state, serverInformation) => {
 
 const convertViewSchemaToState = (schema) => {};
 
+// One bibliographic state slice ({kind, doi, authors, title, publication,
+// year, url, abstract}) -> the stored reference-block shape. Used for the
+// PRIMARY paper (publicationInfo -> `reference`, the legacy block that
+// search/details/publish/dedup read) and for the separate cited work
+// (referenceInfo -> the optional `citedReference` block).
+const referenceBlockFromInfo = (info = {}) => {
+  const block = { ...referenceUtil.get(info.publication) };
+  block.journal = { fullName: block.journal };
+  block["DOI"] = info.doi;
+  block["URLs"] = info.url;
+  block["publishedAbstract"] = info.abstract;
+  block["kind"] = info.kind;
+  block["title"] = info.title;
+  block["authors"] = namesUtil.get(info.authors || "");
+  return block;
+};
+
+const hasBibliographicContent = (info = {}) =>
+  Boolean(
+    (info.title || "").trim() ||
+      (info.doi || "").trim() ||
+      (info.authors || "").trim() ||
+      (info.abstract || "").trim()
+  );
+
 const convertStatetoReqSchema = (state, servers) => {
+  const publication = state.publicationInfo || {};
   const info = {
-    ProjectName: state.referenceInfo.doi,
-    doi: state.referenceInfo.doi,
+    ProjectName: publication.doi,
+    doi: publication.doi,
     timeStamp: new Date().toLocaleString().replace(",", ""),
     notebookFile: state.paperInfo.notebookFile,
     notebookPath: state.paperInfo.notebookPath,
@@ -39,14 +67,7 @@ const convertStatetoReqSchema = (state, servers) => {
     insertedBy: { ...state.curatorInfo },
   };
 
-  const reference = { ...referenceUtil.get(state.referenceInfo.publication) };
-  reference.journal = { fullName: reference.journal };
-  reference["DOI"] = state.referenceInfo.doi;
-  reference["URLs"] = state.referenceInfo.url;
-  reference["publishedAbstract"] = state.referenceInfo.abstract;
-  reference["kind"] = state.referenceInfo.kind;
-  reference["title"] = state.referenceInfo.title;
-  reference["authors"] = namesUtil.get(state.referenceInfo.authors);
+  const reference = referenceBlockFromInfo(publication);
 
   const schema = {
     PIs: namesUtil.get(state.paperInfo.PIs),
@@ -71,6 +92,13 @@ const convertStatetoReqSchema = (state, servers) => {
     reference,
   };
 
+  // The separate cited work travels in its OWN optional block so the primary
+  // record's `reference` is never overwritten by (or confused with) a
+  // citation. Omitted entirely when the Reference form holds nothing.
+  if (hasBibliographicContent(state.referenceInfo)) {
+    schema.citedReference = referenceBlockFromInfo(state.referenceInfo);
+  }
+
   return schema;
 };
 
@@ -82,22 +110,46 @@ const cleanName = (name) => ({
   lastName: (name && name.lastName) || "",
 });
 
+// Stored reference-block shape -> one bibliographic state slice (the exact
+// inverse of referenceBlockFromInfo). Unwraps journal.fullName for the
+// publication string (referenceUtil.set takes a single object).
+const infoFromReferenceBlock = (block = {}) => ({
+  kind: block.kind || "",
+  doi: block.DOI || "",
+  authors: namesUtil.set((block.authors || []).map(cleanName)),
+  title: block.title || "",
+  publication: referenceUtil.set({
+    journal: (block.journal && block.journal.fullName) || "",
+    year: block.year != null ? block.year : "",
+    page: block.page || "",
+    volume: block.volume != null ? block.volume : "",
+  }),
+  year: block.year != null ? block.year : null,
+  url: block.URLs || "",
+  abstract: block.publishedAbstract || "",
+});
+
+const EMPTY_BIBLIO = {
+  kind: "",
+  doi: "",
+  authors: "",
+  title: "",
+  publication: "",
+  year: null,
+  url: "",
+  abstract: "",
+};
+
 // Stored/request schema document -> curator state (the exact inverse of
 // convertStatetoReqSchema). Defensive about legacy records with missing
-// sections, and unwraps journal.fullName for the publication string
-// (referenceUtil.set takes a single object).
+// sections. The legacy `reference` block is the PRIMARY paper's bibliography
+// and loads into publicationInfo (read fallback for every existing record);
+// the separate cited work loads from the optional `citedReference` block and
+// is empty on legacy records, which never had one.
 const convertReqSchematoState = (req) => {
-  const reference = req.reference || {};
   const info = req.info || {};
   const workflow = req.workflow || {};
   const documentation = req.documentation || {};
-
-  const publication = referenceUtil.set({
-    journal: (reference.journal && reference.journal.fullName) || "",
-    year: reference.year != null ? reference.year : "",
-    page: reference.page || "",
-    volume: reference.volume != null ? reference.volume : "",
-  });
 
   const state = {
     curatorInfo: {
@@ -116,16 +168,10 @@ const convertReqSchematoState = (req) => {
       notebookFile: info.notebookFile || "",
       notebookPath: info.notebookPath || "",
     },
-    referenceInfo: {
-      kind: reference.kind || "",
-      doi: reference.DOI || "",
-      authors: namesUtil.set((reference.authors || []).map(cleanName)),
-      title: reference.title || "",
-      publication: publication,
-      year: reference.year != null ? reference.year : null,
-      url: reference.URLs || "",
-      abstract: reference.publishedAbstract || "",
-    },
+    publicationInfo: infoFromReferenceBlock(req.reference || {}),
+    referenceInfo: req.citedReference
+      ? infoFromReferenceBlock(req.citedReference)
+      : { ...EMPTY_BIBLIO },
     documentation: documentation.readme || "",
     charts: req.charts || [],
     tools: req.tools || [],

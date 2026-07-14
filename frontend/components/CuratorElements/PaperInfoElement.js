@@ -8,7 +8,7 @@ import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperCont
 import SwitchFade from "../switchFade";
 
 const FileServerElement = () => {
-  const { paperInfo } = useContext(CuratorContext);
+  const { paperInfo, publicationInfo } = useContext(CuratorContext);
   const { editing, setEditing } = useContext(CuratorHelperContext);
 
   useEffect(() => {
@@ -24,6 +24,7 @@ const FileServerElement = () => {
       display={
         <PaperInfo
           paperInfo={paperInfo}
+          publicationInfo={publicationInfo}
           editor={() => setEditing("paperInfo", true)}
           defaultOpen={true}
         />

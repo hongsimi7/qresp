@@ -39,7 +39,11 @@ const validate = (editing, metadata) => {
 
   const incomplete = Object.keys(editing)
     .map((el) => (editing[el] ? el : null))
-    .filter((el) => el != null && el != "documentationInfo");
+    // documentation is optional; referenceInfo is now the OPTIONAL separate
+    // cited work (the primary paper's bibliography lives in paperInfo's
+    // section as publicationInfo), so an untouched Reference form must not
+    // block publishing.
+    .filter((el) => el != null && el != "documentationInfo" && el != "referenceInfo");
 
   if (incomplete.length > 0) {
     errors.push(

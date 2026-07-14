@@ -17,6 +17,8 @@ const hasBrowserDraft = () => Boolean(getBrowserDraft());
 const summarizeBrowserDraft = (draft = getBrowserDraft()) => {
   if (!draft || typeof draft !== "object") return null;
   const title =
+    (draft.publicationInfo && draft.publicationInfo.title) ||
+    // Legacy drafts stored the primary paper's title in referenceInfo.
     (draft.referenceInfo && draft.referenceInfo.title) ||
     (draft.paperInfo &&
       draft.paperInfo.tags &&

@@ -13,6 +13,7 @@ import {
   SET_PAPERINFO,
   SET_REFERENCE_AUTHORS,
   SET_REFERENCEINFO,
+  SET_PUBLICATIONINFO,
   SET_DOCUMENTATION,
   SET_LICENSE,
   SET,
@@ -60,6 +61,22 @@ const CuratorState = (props) => {
       notebookFile: "",
       notebookPath: "",
     },
+    // The PRIMARY paper's bibliographic metadata, owned by the "Add info
+    // about your paper" workflow. Serialized into the published document's
+    // legacy `reference` block (which drives search/details/publish).
+    publicationInfo: {
+      kind: "",
+      doi: "",
+      authors: "",
+      title: "",
+      publication: "",
+      year: null,
+      url: "",
+      abstract: "",
+    },
+    // A separate CITED/reference work ("Add Reference to your paper").
+    // Persisted as the optional `citedReference` block — never the primary
+    // record.
     referenceInfo: {
       kind: "",
       doi: "",
@@ -169,9 +186,21 @@ const CuratorState = (props) => {
       ...initialState.paperInfo,
       ...(data.paperInfo || {}),
     },
+    // Legacy drafts/metadata exports predate publicationInfo: their
+    // referenceInfo WAS the primary paper's bibliography. Migrate it on load
+    // so publishing keeps working, and leave the cited-work slot empty
+    // (legacy data had no separate citation).
+    publicationInfo: {
+      ...initialState.publicationInfo,
+      ...(data.publicationInfo !== undefined
+        ? data.publicationInfo || {}
+        : data.referenceInfo || {}),
+    },
     referenceInfo: {
       ...initialState.referenceInfo,
-      ...(data.referenceInfo || {}),
+      ...(data.publicationInfo !== undefined
+        ? data.referenceInfo || {}
+        : {}),
     },
     workflow: {
       ...initialState.workflow,
@@ -333,6 +362,9 @@ const CuratorState = (props) => {
   const setReferenceInfo = (data) =>
     dispatch({ type: SET_REFERENCEINFO, payload: data });
 
+  const setPublicationInfo = (data) =>
+    dispatch({ type: SET_PUBLICATIONINFO, payload: data });
+
   const setDocumentation = (data) =>
     dispatch({ type: SET_DOCUMENTATION, payload: data });
 
@@ -364,6 +396,7 @@ const CuratorState = (props) => {
         fileServerPath: state.fileServerPath,
         paperInfo: state.paperInfo,
         referenceInfo: state.referenceInfo,
+        publicationInfo: state.publicationInfo,
         documentation: state.documentation,
         charts: state.charts,
         tools: state.tools,
@@ -397,6 +430,7 @@ const CuratorState = (props) => {
         setPaperInfo,
         setReferenceAuthors,
         setReferenceInfo,
+        setPublicationInfo,
         setDocumentation,
         set,
         add,
