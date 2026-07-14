@@ -261,6 +261,104 @@ describe("PaperImport (Publication Information for This Paper)", () => {
     expect(setReferenceInfo).not.toHaveBeenCalled();
   });
 
+  it("manuscript AI consent defaults OFF and gates the suggestion fetch", async () => {
+    const texContent = "\\title{Zip Title}\\begin{document}body\\end{document}";
+    axios.post.mockResolvedValueOnce({
+      data: {
+        proposal: { title: "Zip Title" },
+        provenance: { title: "manuscript" },
+        alternatives: {},
+        warnings: [],
+        main_file: "paper.tex",
+        main_candidates: ["paper.tex"],
+        included_files: [],
+        doi_candidates: [],
+      },
+    });
+    const user = userEvent.setup();
+    const { setAll } = renderImport();
+
+    const file = new File([texContent], "paper.tex", { type: "text/x-tex" });
+    await user.upload(document.getElementById("paper-import-file"), file);
+    await screen.findByText(/proposed: zip title/i);
+
+    const consent = screen.getByRole("checkbox", {
+      name: /analyze extracted manuscript text with ai/i,
+    });
+    expect(consent).not.toBeChecked();
+    const fetchButton = screen.getByRole("button", {
+      name: /get ai keyword suggestions/i,
+    });
+    expect(fetchButton).toBeDisabled();
+    // No consent, no request: only the import call has happened.
+    expect(axios.post).toHaveBeenCalledTimes(1);
+
+    // With consent, the manuscript is sent to the assist endpoint and the
+    // suggestions arrive unchecked, applied only on explicit selection.
+    axios.post.mockResolvedValueOnce({
+      data: { keywords: ["Ice Nucleation", "Simulation"], warnings: [] },
+    });
+    await user.click(consent);
+    await user.click(fetchButton);
+    await waitFor(() =>
+      expect(axios.post).toHaveBeenLastCalledWith("/api/assist/keywords", {
+        title: "Zip Title",
+        abstract: "",
+        filename: "paper.tex",
+        content_base64: btoa(texContent),
+      })
+    );
+    const aiBox = await screen.findByRole("checkbox", {
+      name: /apply ai keyword ice nucleation/i,
+    });
+    expect(aiBox).not.toBeChecked();
+    await user.click(aiBox);
+    await user.click(applyButton());
+    expect(setAll.mock.calls[0][0].paperInfo.tags).toEqual([
+      "Ice Nucleation",
+    ]);
+  });
+
+  it("shows the unconfigured-AI message clearly inside the review", async () => {
+    const texContent = "\\title{Zip Title}\\begin{document}body\\end{document}";
+    axios.post.mockResolvedValueOnce({
+      data: {
+        proposal: { title: "Zip Title" },
+        provenance: { title: "manuscript" },
+        alternatives: {},
+        warnings: [],
+        main_file: "paper.tex",
+        main_candidates: ["paper.tex"],
+        included_files: [],
+        doi_candidates: [],
+      },
+    });
+    axios.post.mockRejectedValueOnce({
+      response: {
+        status: 503,
+        data: {
+          error: "AI keyword suggestions are not configured on this server.",
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderImport();
+    const file = new File([texContent], "paper.tex", { type: "text/x-tex" });
+    await user.upload(document.getElementById("paper-import-file"), file);
+    await screen.findByText(/proposed: zip title/i);
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /analyze extracted manuscript text with ai/i,
+      })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /get ai keyword suggestions/i })
+    );
+    expect(
+      await screen.findByText(/not configured on this server/i)
+    ).toBeInTheDocument();
+  });
+
   it("never overwrites a populated primary-paper field unless checked", async () => {
     axios.post.mockResolvedValue({ data: doiResponse });
     const state = baseState();

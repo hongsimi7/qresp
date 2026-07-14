@@ -66,7 +66,13 @@ const PaperImport = () => {
           content_base64: base64,
         })
         .then((res) =>
-          setResult({ ...res.data, importSource: "manuscript" }))
+          setResult({
+            ...res.data,
+            importSource: "manuscript",
+            // Kept in memory only, for the OPT-IN AI keyword analysis in the
+            // review dialog (sent again only after explicit consent).
+            manuscriptFile: { filename: file.name, content_base64: base64 },
+          }))
         .catch((err) =>
           fail(err, "The manuscript could not be imported, please try again."))
         .finally(() => setLoading(false));
