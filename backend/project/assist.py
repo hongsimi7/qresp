@@ -20,13 +20,13 @@ Privacy/safety model:
 - A persistent per-user daily request limit protects the shared quota.
 """
 import json
+import os
 import re
 from datetime import datetime
 
 import requests
 
 from project.auth import csrf_protect, get_current_user
-from project.config import Config
 from project.manuscript import (
     MAX_UPLOAD_BYTES,
     ImportError_,
@@ -37,7 +37,9 @@ from project.manuscript import (
 # ---- configuration (environment only) --------------------------------------
 
 QWEN_DEFAULT_TIMEOUT = 15
+QWEN_MAX_TIMEOUT = 60
 QWEN_DEFAULT_MAX_MANUSCRIPT_CHARS = 60000
+QWEN_MAX_MANUSCRIPT_CHARS_CEILING = 200000
 QWEN_DEFAULT_DAILY_LIMIT = 20
 
 # Bounded chunking for long manuscripts: candidates are aggregated across
@@ -68,26 +70,39 @@ def _truthy(value):
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
 
 
-def _int_setting(key, default):
-    raw = Config.get_setting("QWEN", key)
+def _env(key):
+    # ENVIRONMENT ONLY, deliberately not Config.get_setting: that helper
+    # falls back to config.ini, and Qwen credentials/switches must never be
+    # configurable (or accidentally committed) there.
+    return os.environ.get("QRESP_" + key)
+
+
+def _int_env(key, default, ceiling=None):
     try:
-        value = int(str(raw).strip())
-        return value if value > 0 else default
+        value = int(str(_env(key)).strip())
     except (TypeError, ValueError):
         return default
+    if value <= 0:
+        return default
+    if ceiling is not None:
+        return min(value, ceiling)
+    return value
 
 
 def _qwen_config():
     cfg = {
-        "ENABLED": _truthy(Config.get_setting("QWEN", "QWEN_ENABLED")),
-        "API_KEY": (Config.get_setting("QWEN", "QWEN_API_KEY") or "").strip(),
-        "BASE_URL": (Config.get_setting("QWEN", "QWEN_BASE_URL") or "")
-        .strip().rstrip("/"),
-        "MODEL": (Config.get_setting("QWEN", "QWEN_MODEL") or "").strip(),
-        "TIMEOUT": _int_setting("QWEN_TIMEOUT_SECONDS", QWEN_DEFAULT_TIMEOUT),
-        "MAX_MANUSCRIPT_CHARS": _int_setting(
-            "QWEN_MAX_MANUSCRIPT_CHARS", QWEN_DEFAULT_MAX_MANUSCRIPT_CHARS),
-        "DAILY_LIMIT": _int_setting(
+        "ENABLED": _truthy(_env("QWEN_ENABLED")),
+        "API_KEY": (_env("QWEN_API_KEY") or "").strip(),
+        "BASE_URL": (_env("QWEN_BASE_URL") or "").strip().rstrip("/"),
+        "MODEL": (_env("QWEN_MODEL") or "").strip(),
+        # Bounded even against misconfiguration: a worker must never hang on
+        # the provider for minutes.
+        "TIMEOUT": _int_env("QWEN_TIMEOUT_SECONDS", QWEN_DEFAULT_TIMEOUT,
+                            ceiling=QWEN_MAX_TIMEOUT),
+        "MAX_MANUSCRIPT_CHARS": _int_env(
+            "QWEN_MAX_MANUSCRIPT_CHARS", QWEN_DEFAULT_MAX_MANUSCRIPT_CHARS,
+            ceiling=QWEN_MAX_MANUSCRIPT_CHARS_CEILING),
+        "DAILY_LIMIT": _int_env(
             "QWEN_MAX_REQUESTS_PER_USER_PER_DAY", QWEN_DEFAULT_DAILY_LIMIT),
     }
     return cfg
@@ -100,16 +115,21 @@ def _qwen_ready(cfg):
 
 # ---- per-user daily limit (persistent) --------------------------------------
 
-def _consume_daily_request(email, limit):
-    """Atomically count this request against the user's daily quota.
-    Returns True when the request is allowed. Only email/day/count are ever
-    stored — no request content."""
+def _consume_daily_quota(email, limit, amount):
+    """Count `amount` PROVIDER CALLS against the user's daily quota (a
+    chunked manuscript costs one unit per chunk, so multi-call requests
+    cannot bypass the intended cost limit). Returns True when allowed; a
+    rejected request is compensated back so it does not burn quota. Only
+    email/day/count are ever stored — no request content."""
     from project.models import AssistUsage
     day = datetime.utcnow().strftime("%Y-%m-%d")
     AssistUsage.objects(email=email, day=day).update_one(
-        inc__count=1, upsert=True)
+        inc__count=amount, upsert=True)
     usage = AssistUsage.objects(email=email, day=day).first()
-    return usage is not None and usage.count <= limit
+    if usage is not None and usage.count <= limit:
+        return True
+    AssistUsage.objects(email=email, day=day).update_one(inc__count=-amount)
+    return False
 
 
 # ---- manuscript text preparation --------------------------------------------
@@ -252,17 +272,6 @@ def suggest_keywords(body):
         return {"error": "AI keyword suggestions are not configured on this "
                          "server."}, 503
 
-    email = (user.get("email") or "").strip().lower()
-    try:
-        allowed = _consume_daily_request(email, cfg["DAILY_LIMIT"])
-    except Exception as e:
-        print("AI assist usage counter failed: %s" % type(e).__name__)
-        return {"error": "AI keyword suggestions are temporarily "
-                         "unavailable."}, 503
-    if not allowed:
-        return {"error": "You have reached today's AI suggestion limit; "
-                         "please try again tomorrow."}, 429
-
     body = body or {}
     metadata = {
         "title": _clip(body.get("title"), MAX_TITLE_CHARS),
@@ -310,9 +319,23 @@ def suggest_keywords(body):
         return {"error": "Nothing to analyze: provide a title/abstract or a "
                          "manuscript file."}, 400
 
+    # Quota is consumed only AFTER the request validated, and in units of
+    # planned PROVIDER CALLS (one per chunk), so invalid input costs nothing
+    # and chunked manuscripts cannot multiply past the configured limit.
+    calls = chunks if chunks else [None]
+    email = (user.get("email") or "").strip().lower()
+    try:
+        allowed = _consume_daily_quota(email, cfg["DAILY_LIMIT"], len(calls))
+    except Exception as e:
+        print("AI assist usage counter failed: %s" % type(e).__name__)
+        return {"error": "AI keyword suggestions are temporarily "
+                         "unavailable."}, 503
+    if not allowed:
+        return {"error": "You have reached today's AI suggestion limit; "
+                         "please try again tomorrow."}, 429
+
     candidates = []
     warnings = []
-    calls = chunks if chunks else [None]
     for chunk in calls:
         payload = dict(metadata)
         if chunk:

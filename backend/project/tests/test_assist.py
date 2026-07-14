@@ -209,10 +209,87 @@ class TestAssistSuggestions(AssistTestBase):
         response, requests_mock = self.suggest({"title": "T"})
         self.assertEqual(429, response.status_code)
         requests_mock.post.assert_not_called()
-        # Only email/day/count are persisted — no content.
+        # Only email/day/count are persisted — no content — and the REJECTED
+        # attempt did not burn quota (compensated back to the limit).
         usage = AssistUsage.objects.first()
         self.assertEqual("curator@example.com", usage.email)
+        self.assertEqual(2, usage.count)
         self.assertNotIn("title", usage.to_mongo().to_dict())
+
+    def test_configuration_is_environment_only_never_config_ini(self):
+        # Config.get_setting falls back to config.ini; assist must NEVER use
+        # it for Qwen. Even if config.ini could supply every QWEN key, the
+        # endpoint must stay unconfigured while the env vars are unset.
+        for key in QWEN_ENV:
+            os.environ.pop(key, None)
+        self.login()
+        with mock.patch("project.config.Config.get_setting",
+                        return_value="1"):
+            response, requests_mock = self.suggest({"title": "T"})
+        self.assertEqual(503, response.status_code)
+        requests_mock.post.assert_not_called()
+
+    def test_timeout_is_bounded_even_when_misconfigured(self):
+        from project import assist
+        os.environ["QRESP_QWEN_TIMEOUT_SECONDS"] = "99999"
+        try:
+            self.assertEqual(assist.QWEN_MAX_TIMEOUT,
+                             assist._qwen_config()["TIMEOUT"])
+        finally:
+            os.environ.pop("QRESP_QWEN_TIMEOUT_SECONDS", None)
+
+    def test_invalid_input_consumes_no_quota(self):
+        self.login()
+        # Nothing to analyze -> 400 before any quota bookkeeping.
+        response, _ = self.suggest({})
+        self.assertEqual(400, response.status_code)
+        # Unsafe zip -> 400 before any quota bookkeeping.
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("../evil.tex", "\\documentclass{article}")
+        response, _ = self.suggest({
+            "filename": "project.zip",
+            "content_base64": b64(buffer.getvalue()),
+        })
+        self.assertEqual(400, response.status_code)
+        self.assertEqual(0, AssistUsage.objects.count())
+
+    def test_quota_counts_provider_calls_not_ui_requests(self):
+        # A 3-chunk manuscript = 3 provider calls = 3 quota units.
+        os.environ["QRESP_QWEN_MAX_REQUESTS_PER_USER_PER_DAY"] = "3"
+        self.login()
+        body = "ice nucleation " * 5000  # ~75k chars -> 3 chunks
+        tex = ("\\documentclass{article}\\begin{document}%s\\end{document}"
+               % body)
+        responses = [MockResponse(qwen_reply(["Ice"])),
+                     MockResponse(qwen_reply(["Nucleation"])),
+                     MockResponse(qwen_reply(["Simulation"]))]
+        response, requests_mock = self.suggest(
+            {"filename": "paper.tex", "content_base64": b64(tex)},
+            responses=responses)
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(3, requests_mock.post.call_count)
+        self.assertEqual(3, AssistUsage.objects.first().count)
+        # The quota is now exhausted: even a cheap 1-call request is denied
+        # WITHOUT touching the provider, and without burning further quota.
+        response, requests_mock = self.suggest({"title": "T"})
+        self.assertEqual(429, response.status_code)
+        requests_mock.post.assert_not_called()
+        self.assertEqual(3, AssistUsage.objects.first().count)
+
+    def test_multi_chunk_request_cannot_bypass_a_smaller_limit(self):
+        os.environ["QRESP_QWEN_MAX_REQUESTS_PER_USER_PER_DAY"] = "2"
+        self.login()
+        body = "ice nucleation " * 5000
+        tex = ("\\documentclass{article}\\begin{document}%s\\end{document}"
+               % body)
+        response, requests_mock = self.suggest(
+            {"filename": "paper.tex", "content_base64": b64(tex)})
+        # 3 planned calls > limit 2: rejected BEFORE any provider call, and
+        # the attempt is compensated so nothing was burned.
+        self.assertEqual(429, response.status_code)
+        requests_mock.post.assert_not_called()
+        self.assertEqual(0, AssistUsage.objects.first().count)
 
     def test_no_tags_are_persisted_anywhere(self):
         self.login()
