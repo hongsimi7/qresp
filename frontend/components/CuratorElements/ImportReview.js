@@ -1,37 +1,34 @@
-import { Fragment, useContext, useState } from "react";
+import { Fragment, useContext, useEffect, useState } from "react";
 import PropTypes from "prop-types";
 
-import axios from "axios";
 import {
   Box,
-  Button,
   Checkbox,
   Chip,
-  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
-  Divider,
-  TextField,
   Typography,
 } from "@mui/material";
 
 import { RegularStyledButton } from "../button";
 import CuratorContext from "../../Context/Curator/curatorContext";
 import { namesUtil, referenceUtil } from "../../Utils/utils";
+import {
+  applyPrimaryPaperToState,
+  primaryPaperFromState,
+} from "../../Utils/primaryPaper";
 
-// Auto-Curation Lite phase 1: propose draft metadata from a DOI or a
-// manuscript source file (.tex / Overleaf .zip). Everything here is a
-// PROPOSAL — the user reviews each field, conflicts show both values, and
-// nothing is applied (let alone published) without the explicit Apply
-// action. Populated form values are never overwritten unless the user
-// checks that field. Separate from (and unrelated to) Upload Metadata JSON.
-
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+// Review-and-apply dialog for PRIMARY-paper metadata proposals (DOI lookup
+// or manuscript source). The destination is the primary-paper adapter owned
+// by the "Add info about your paper" workflow — never the Reference form's
+// setters, and never any non-bibliographic slice. Everything remains a
+// proposal until the curator explicitly applies selected fields; populated
+// fields are only replaced when checked; tags are append-only suggestions.
 
 // The publish-time requirements, as a readable checklist. Draft saving never
-// requires these — publish validation remains the only gate.
+// requires these — publish validation remains the only completeness gate.
 const missingForPublish = (state) => {
   const missing = [];
   const ref = state.referenceInfo || {};
@@ -50,6 +47,9 @@ const missingForPublish = (state) => {
   return missing;
 };
 
+const KIND_LABELS = { preprint: "Preprint", journal: "Journal",
+                      dissertation: "Dissertation" };
+
 const displayValue = (value) => {
   if (value == null) return "";
   if (Array.isArray(value)) {
@@ -61,16 +61,15 @@ const displayValue = (value) => {
   return String(value);
 };
 
-// Turn an import result into reviewable rows against the CURRENT draft.
-const buildRows = (result, current) => {
+// Turn an import result into reviewable rows against the CURRENT
+// primary-paper values (open-form values included via collectDraftState).
+const buildRows = (result, currentPaper) => {
   const proposal = result.proposal || {};
   const provenance = result.provenance || {};
   const alternatives = result.alternatives || {};
-  const ref = current.referenceInfo || {};
-  const paper = current.paperInfo || {};
 
   const rows = [];
-  const push = (key, label, proposed, currentValue, applyValue) => {
+  const push = (key, label, proposed, currentValue, applyValue, source) => {
     if (proposed == null || proposed === "") return;
     const currentText = (currentValue || "").toString().trim();
     rows.push({
@@ -79,7 +78,7 @@ const buildRows = (result, current) => {
       proposedText: displayValue(proposed),
       currentText,
       applyValue,
-      source: provenance[key] || provenance[rows.length] || "import",
+      source: source || provenance[key] || "import",
       alternatives: alternatives[key] || [],
       // Empty fields default to applying; a populated field is NEVER
       // overwritten unless the user explicitly checks it.
@@ -87,16 +86,31 @@ const buildRows = (result, current) => {
     });
   };
 
-  push("title", "Title", proposal.title, ref.title, proposal.title);
+  // Kind: from the registry when known; for a manuscript without a DOI,
+  // suggest "preprint" — a client-side suggestion only, nothing invented
+  // beyond the default kind for unpublished sources.
+  let kind = proposal.kind;
+  let kindSource;
+  if (!kind && result.importSource === "manuscript" && !proposal.doi) {
+    kind = "preprint";
+    kindSource = "suggested";
+  }
+  if (kind) {
+    push("kind", "Kind", KIND_LABELS[kind] || kind,
+         KIND_LABELS[currentPaper.kind] || currentPaper.kind, kind,
+         kindSource);
+  }
+
+  push("title", "Title", proposal.title, currentPaper.title, proposal.title);
   if (proposal.authors && proposal.authors.length) {
     const authors = namesUtil.set(proposal.authors);
-    push("authors", "Authors", authors, ref.authors, authors);
+    push("authors", "Authors", authors, currentPaper.authors, authors);
   }
-  push("abstract", "Abstract", proposal.abstract, ref.abstract,
+  push("abstract", "Abstract", proposal.abstract, currentPaper.abstract,
        proposal.abstract);
-  push("doi", "DOI", proposal.doi, ref.doi, proposal.doi);
-  push("year", "Year", proposal.year, ref.year, proposal.year);
-  push("url", "URL", proposal.url, ref.url, proposal.url);
+  push("doi", "DOI", proposal.doi, currentPaper.doi, proposal.doi);
+  push("year", "Year", proposal.year, currentPaper.year, proposal.year);
+  push("url", "URL", proposal.url, currentPaper.url, proposal.url);
   if (proposal.journal) {
     const publication = referenceUtil.set({
       journal: proposal.journal,
@@ -104,11 +118,11 @@ const buildRows = (result, current) => {
       volume: proposal.volume || "",
       page: proposal.pages || "",
     });
-    push("publication", "Publication", publication, ref.publication,
-         publication);
+    push("publication", "Publication", publication,
+         currentPaper.publication, publication);
   }
   if (proposal.tags && proposal.tags.length) {
-    const existing = (paper.tags || []).map((t) => t.toLowerCase());
+    const existing = (currentPaper.tags || []).map((t) => t.toLowerCase());
     const fresh = proposal.tags.filter(
       (t) => !existing.includes(t.toLowerCase()));
     if (fresh.length) {
@@ -116,7 +130,7 @@ const buildRows = (result, current) => {
         key: "tags",
         label: "Tag suggestions (added to your tags, never replacing them)",
         proposedText: fresh.join(", "),
-        currentText: (paper.tags || []).join(", "),
+        currentText: (currentPaper.tags || []).join(", "),
         applyValue: fresh,
         source: provenance.tags || "import",
         alternatives: [],
@@ -127,37 +141,23 @@ const buildRows = (result, current) => {
   return rows;
 };
 
-const ImportManuscript = ({ open, onClose }) => {
+const ImportReview = ({ open, result, onClose }) => {
   const { collectDraftState, setAll, remountForms } =
     useContext(CuratorContext);
 
-  const [doi, setDoi] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [result, setResult] = useState(null);
   const [rows, setRows] = useState([]);
   const [selected, setSelected] = useState({});
   const [applied, setApplied] = useState(null); // missing-info checklist
 
-  const reset = () => {
-    setDoi("");
-    setLoading(false);
-    setError("");
-    setResult(null);
-    setRows([]);
-    setSelected({});
-    setApplied(null);
-  };
-
-  const close = () => {
-    reset();
-    onClose();
-  };
-
-  const showResult = (data) => {
-    const current = collectDraftState();
-    const nextRows = buildRows(data, current);
-    setResult(data);
+  useEffect(() => {
+    if (!open || !result) {
+      setRows([]);
+      setSelected({});
+      setApplied(null);
+      return;
+    }
+    const currentPaper = primaryPaperFromState(collectDraftState());
+    const nextRows = buildRows(result, currentPaper);
     setRows(nextRows);
     setSelected(
       nextRows.reduce((acc, row) => {
@@ -165,67 +165,26 @@ const ImportManuscript = ({ open, onClose }) => {
         return acc;
       }, {})
     );
-  };
-
-  const fail = (err, fallback) => {
-    const res = err && err.response;
-    setError((res && res.data && res.data.error) || fallback);
-  };
-
-  const lookupDoi = () => {
-    setLoading(true);
-    setError("");
-    axios
-      .post("/api/import/doi", { doi })
-      .then((res) => showResult(res.data))
-      .catch((err) =>
-        fail(err, "The DOI could not be looked up, please try again."))
-      .finally(() => setLoading(false));
-  };
-
-  const onFile = (event) => {
-    const file = event.target.files && event.target.files[0];
-    event.target.value = "";
-    if (!file) return;
-    if (file.size > MAX_UPLOAD_BYTES) {
-      setError("The file is too large to import (limit 10 MB).");
-      return;
-    }
-    setLoading(true);
-    setError("");
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = String(reader.result).split(",")[1] || "";
-      axios
-        .post("/api/import/manuscript", {
-          filename: file.name,
-          content_base64: base64,
-        })
-        .then((res) => showResult(res.data))
-        .catch((err) =>
-          fail(err, "The manuscript could not be imported, please try again."))
-        .finally(() => setLoading(false));
-    };
-    reader.onerror = () => {
-      setLoading(false);
-      setError("The file could not be read.");
-    };
-    reader.readAsDataURL(file);
-  };
+    setApplied(null);
+    // collectDraftState is stable enough for this open-time snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, result]);
 
   const apply = () => {
+    // Snapshot INCLUDING open-form values so nothing typed is lost, then
+    // write only the whitelisted primary-paper fields through the adapter.
     const current = collectDraftState();
-    const ref = { ...current.referenceInfo };
-    const paper = { ...current.paperInfo };
+    const updates = {};
+    let tags = [];
     rows.forEach((row) => {
       if (!selected[row.key]) return;
       if (row.key === "tags") {
-        paper.tags = [...(paper.tags || []), ...row.applyValue];
+        tags = row.applyValue;
       } else {
-        ref[row.key] = row.applyValue;
+        updates[row.key] = row.applyValue;
       }
     });
-    const next = { ...current, referenceInfo: ref, paperInfo: paper };
+    const next = applyPrimaryPaperToState(current, updates, tags);
     setAll(next);
     // Re-seed the always-mounted forms from the updated state.
     if (remountForms) remountForms();
@@ -235,14 +194,15 @@ const ImportManuscript = ({ open, onClose }) => {
   const anySelected = rows.some((row) => selected[row.key]);
 
   return (
-    <Dialog open={open} onClose={close} maxWidth="md" fullWidth>
-      <DialogTitle>Import manuscript source</DialogTitle>
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle>Import information for this paper</DialogTitle>
       <DialogContent dividers>
         {applied ? (
           <Fragment>
             <Typography color="secondary" gutterBottom>
-              The selected proposals were applied to your draft. You can keep
-              editing, and Save Draft works even while fields are missing.
+              The selected proposals were applied to this paper&rsquo;s
+              information. You can keep editing, and Save Draft works even
+              while fields are missing.
             </Typography>
             {applied.length > 0 ? (
               <Fragment>
@@ -269,9 +229,11 @@ const ImportManuscript = ({ open, onClose }) => {
         ) : result ? (
           <Fragment>
             <Typography variant="body2" color="secondary" gutterBottom>
-              Review the proposed values. Fields that already have a value in
-              your draft are unchecked — checking one replaces your current
-              value. Nothing is published by this step.
+              Review the proposed values for the paper you are curating.
+              Fields that already have a value are unchecked — checking one
+              replaces your current value. This never touches the separate
+              &ldquo;Add Reference to your paper&rdquo; form, and nothing is
+              published by this step.
             </Typography>
             {(result.warnings || []).map((warning) => (
               <Typography key={warning} variant="body2" color="error">
@@ -348,83 +310,28 @@ const ImportManuscript = ({ open, onClose }) => {
               </Typography>
             ) : null}
           </Fragment>
-        ) : (
-          <Fragment>
-            <Typography variant="body2" color="secondary" gutterBottom>
-              Propose draft metadata from a published DOI or from your
-              manuscript source. Your file is inspected in memory only — it is
-              never stored, compiled, or sent to third parties — and nothing
-              is applied to the draft without your review.
-            </Typography>
-            <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 2 }}>
-              <TextField
-                label="DOI"
-                placeholder="10.1234/abcd or https://doi.org/10.1234/abcd"
-                value={doi}
-                onChange={(event) => setDoi(event.target.value)}
-                fullWidth
-                size="small"
-                variant="outlined"
-              />
-              <RegularStyledButton
-                onClick={lookupDoi}
-                disabled={loading || !doi.trim()}
-              >
-                Look up DOI
-              </RegularStyledButton>
-            </Box>
-            <Divider sx={{ my: 2 }} />
-            <input
-              accept=".tex,.zip"
-              id="import-manuscript-file"
-              type="file"
-              style={{ display: "none" }}
-              onChange={onFile}
-            />
-            <label htmlFor="import-manuscript-file">
-              <RegularStyledButton component="span" disabled={loading}>
-                Choose .tex or Overleaf .zip
-              </RegularStyledButton>
-            </label>
-            <Typography variant="body2" color="secondary" sx={{ mt: 1 }}>
-              Direct .tex files and .zip exports from Overleaf are supported
-              (10 MB limit). PDF import is not supported yet.
-            </Typography>
-          </Fragment>
-        )}
-        {loading ? (
-          <Box sx={{ display: "flex", justifyContent: "center", mt: 2 }}>
-            <CircularProgress size={28} />
-          </Box>
-        ) : null}
-        {error ? (
-          <Typography variant="body2" color="error" sx={{ mt: 2 }}>
-            {error}
-          </Typography>
         ) : null}
       </DialogContent>
       <DialogActions>
         {applied ? (
-          <RegularStyledButton onClick={close}>Close</RegularStyledButton>
-        ) : result ? (
+          <RegularStyledButton onClick={onClose}>Close</RegularStyledButton>
+        ) : (
           <Fragment>
-            <RegularStyledButton onClick={close}>Cancel</RegularStyledButton>
-            <RegularStyledButton onClick={reset}>Back</RegularStyledButton>
+            <RegularStyledButton onClick={onClose}>Cancel</RegularStyledButton>
             <RegularStyledButton onClick={apply} disabled={!anySelected}>
-              Apply to draft
+              Apply to paper information
             </RegularStyledButton>
           </Fragment>
-        ) : (
-          <RegularStyledButton onClick={close}>Cancel</RegularStyledButton>
         )}
       </DialogActions>
     </Dialog>
   );
 };
 
-ImportManuscript.propTypes = {
+ImportReview.propTypes = {
   open: PropTypes.bool.isRequired,
+  result: PropTypes.object,
   onClose: PropTypes.func.isRequired,
 };
 
-export default ImportManuscript;
+export default ImportReview;

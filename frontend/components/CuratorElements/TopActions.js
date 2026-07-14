@@ -26,7 +26,6 @@ import CuratorContext from "../../Context/Curator/curatorContext";
 import AlertContext from "../../Context/Alert/alertContext";
 import ServerContext from "../../Context/Servers/serverContext";
 import AuthContext from "../../Context/Auth/authContext";
-import ImportManuscript from "./ImportManuscript";
 
 const preview = (metadata, setAlert, router) => {
   axios
@@ -62,7 +61,6 @@ const TopActions = () => {
   const { authenticated } = useContext(AuthContext);
   const [mdata, setMdata] = useState("");
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
   const [draftDialog, setDraftDialog] = useState({
     open: false,
     mode: "save",
@@ -129,18 +127,6 @@ const TopActions = () => {
     resume: () => {
       setResumeDialogOpen(true);
     },
-    importSource: () => {
-      // The import APIs are session-gated; explain instead of a raw 401.
-      if (!authenticated) {
-        setAlert(
-          "Sign in required",
-          "Sign in to import from a DOI or manuscript source. The import only proposes values for your review — nothing is published.",
-          null
-        );
-        return;
-      }
-      setImportOpen(true);
-    },
     scratch: () => {
       const hasCurrentWork = hasMeaningfulDraft ? hasMeaningfulDraft() : false;
       const discardAndReset = () => {
@@ -195,16 +181,6 @@ const TopActions = () => {
       <StyledTooltip title="Continue with an existing metadata file (json)">
         <RegularStyledButton fullWidth={fullWidth} onClick={onClicks.resume}>
           Upload Metadata
-        </RegularStyledButton>
-      </StyledTooltip>
-    ),
-    importSource: (fullWidth = false) => (
-      <StyledTooltip title="Propose draft fields from a DOI or a .tex/Overleaf zip manuscript">
-        <RegularStyledButton
-          fullWidth={fullWidth}
-          onClick={onClicks.importSource}
-        >
-          Import Manuscript Source
         </RegularStyledButton>
       </StyledTooltip>
     ),
@@ -270,10 +246,6 @@ const TopActions = () => {
 
   return (
     <Fragment>
-      <ImportManuscript
-        open={importOpen}
-        onClose={() => setImportOpen(false)}
-      />
       <Grid container direction="row" spacing={1}>
         {/* MUI v6+ removed <Hidden>; responsive display lives on each item so
             the Grid container keeps its direct Grid children. */}
@@ -285,9 +257,6 @@ const TopActions = () => {
             {buttons.resume()}
           </Grid>
           <Grid sx={{ display: { xs: "none", sm: "block" } }}>
-            {buttons.importSource()}
-          </Grid>
-          <Grid sx={{ display: { xs: "none", sm: "block" } }}>
             {buttons.scratch()}
           </Grid>
           <Grid sx={{ display: { xs: "block", sm: "none" } }} size={12}>
@@ -297,9 +266,6 @@ const TopActions = () => {
             {buttons.resume(true)}
           </Grid>
           <Grid sx={{ display: { xs: "block", sm: "none" } }} size={7}>
-            {buttons.importSource(true)}
-          </Grid>
-          <Grid sx={{ display: { xs: "block", sm: "none" } }} size={12}>
             {buttons.scratch(true)}
           </Grid>
         </Grid>

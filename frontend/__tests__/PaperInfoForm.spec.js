@@ -40,6 +40,31 @@ const renderForm = (paperInfoOverrides = {}) => {
 };
 
 describe("PaperInfoForm with array-backed state (edit mode)", () => {
+  it("hosts the primary-paper import area inside Add info about your paper", () => {
+    renderForm();
+    expect(
+      screen.getByText(/import information for this paper/i)
+    ).toBeInTheDocument();
+    // Without an authenticated session the area explains sign-in instead of
+    // showing the controls (the controls themselves are covered in
+    // PaperImport.spec with an AuthContext provider).
+    expect(
+      screen.getByText(/sign in to import this paper/i)
+    ).toBeInTheDocument();
+    // The existing paper-info controls all remain.
+    expect(
+      screen.getByPlaceholderText(/enter collection to which project belongs/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText(/ener tags for the project/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText(/enter main notebook filename/i)
+    ).toBeInTheDocument();
+    expect(screen.getAllByPlaceholderText("Enter first name").length)
+      .toBeGreaterThan(0);
+  });
+
   it("displays loaded collections and tags as comma-separated strings", () => {
     renderForm({ collections: ["MICCOM", "PARADIM"] });
     // The legacy TextInput overrides InputProps.id, which breaks the MUI

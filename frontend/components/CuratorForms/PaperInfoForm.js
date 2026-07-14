@@ -21,6 +21,7 @@ import * as Yup from "yup";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
 import SourceTreeContext from "../../Context/SourceTree/SourceTreeContext";
+import PaperImport from "../CuratorElements/PaperImport";
 
 const PaperInfoForm = ({ editor }) => {
   const {
@@ -121,6 +122,10 @@ const PaperInfoForm = ({ editor }) => {
 
   return (
     <Drawer heading="Add info about your paper" defaultOpen={true}>
+      {/* Primary-paper metadata import (DOI / manuscript source) belongs to
+          THIS section; the separate "Add Reference to your paper" workflow
+          is never its destination. */}
+      <PaperImport />
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container direction="column" spacing={1}>
           <Grid>

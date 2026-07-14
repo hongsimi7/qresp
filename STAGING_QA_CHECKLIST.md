@@ -122,11 +122,15 @@ environment variables on the staging backend container.
 
 ## Manuscript import (Auto-Curation Lite phase 1)
 
-- [ ] Signed in, /curator → "Import Manuscript Source" → dialog opens
-      (anonymous users get a sign-in explanation instead)
-- [ ] Paste a real DOI → Look up DOI → proposed fields with provenance;
-      Apply fills only empty fields; a pre-filled title stays unless its
-      checkbox is checked (both values shown)
+- [ ] Signed in, /curator → "Add info about your paper" →
+      "Import information for this paper" area shows DOI + Fetch DOI +
+      Import manuscript source (anonymous users see a sign-in hint; the
+      GLOBAL toolbar no longer has an import button)
+- [ ] Paste a real DOI → Fetch DOI → proposed fields with provenance (kind
+      mapped from the registry); Apply fills only empty fields; a pre-filled
+      title stays unless its checkbox is checked (both values shown); the
+      "Add Reference to your paper" form is not the destination
+- [ ] A .tex without DOI proposes kind=Preprint chipped "suggested"
 - [ ] Upload a .tex with \title/\author/abstract → proposals appear;
       Apply → forms show the values; missing-for-publish checklist lists
       charts/datasets/license etc.; Save Draft still works while incomplete

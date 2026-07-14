@@ -61,36 +61,36 @@ const renderTopActions = ({ hasDraft = true, authenticated = true } = {}) => {
   return { setAlert, unsetAlert, resetAll, saveDraftToServer };
 };
 
-describe("TopActions manuscript import", () => {
-  it("offers Import Manuscript Source alongside the unchanged Upload Metadata", () => {
+describe("TopActions toolbar contents", () => {
+  it("no longer offers Import Manuscript Source; the five toolbar controls remain", () => {
     renderTopActions();
+    // Import moved INTO "Add info about your paper" (PaperImport); the
+    // global toolbar must not show it anymore.
     expect(
-      screen.getAllByRole("button", {
-        name: /propose draft fields from a doi or a \.tex\/overleaf zip/i,
+      screen.queryByRole("button", { name: /import manuscript source/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: /propose draft fields from a doi/i,
+      })
+    ).not.toBeInTheDocument();
+    // The remaining toolbar controls are unchanged (tooltip names; Export
+    // renders as a download link, the rest as buttons).
+    [
+      /save this work as a draft in your account/i,
+      /continue with an existing metadata file \(json\)/i,
+      /clear the session and start afresh/i,
+      /preview the curated paper/i,
+    ].forEach((name) => {
+      expect(
+        screen.getAllByRole("button", { name }).length
+      ).toBeGreaterThan(0);
+    });
+    expect(
+      screen.getAllByRole("link", {
+        name: /export metadata of the paper being curated/i,
       }).length
     ).toBeGreaterThan(0);
-    // The existing JSON metadata workflow is untouched.
-    expect(
-      screen.getAllByRole("button", {
-        name: /continue with an existing metadata file \(json\)/i,
-      }).length
-    ).toBeGreaterThan(0);
-  });
-
-  it("asks anonymous users to sign in instead of opening the import dialog", async () => {
-    const user = userEvent.setup();
-    const { setAlert } = renderTopActions({ authenticated: false });
-    await user.click(
-      screen.getAllByRole("button", {
-        name: /propose draft fields from a doi or a \.tex\/overleaf zip/i,
-      })[0]
-    );
-    expect(setAlert).toHaveBeenCalledWith(
-      "Sign in required",
-      expect.stringContaining("proposes values"),
-      null
-    );
-    expect(screen.queryByLabelText(/^doi$/i)).not.toBeInTheDocument();
   });
 });
 

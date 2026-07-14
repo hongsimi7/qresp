@@ -1,11 +1,22 @@
 # Auto-Curation Lite (Phase 1) — DOI Lookup & Manuscript Source Import
 
-The curator's **Import Manuscript Source** action proposes draft metadata
-from either a pasted **DOI** or an uploaded **manuscript source** (a `.tex`
-file or a `.zip` exported from Overleaf). It is a *proposal* tool: every
-value goes through a review dialog, the user picks which fields to apply,
-and nothing is ever published or overwritten automatically. The existing
-**Upload Metadata** (JSON) workflow is unchanged and unrelated.
+The **Import information for this paper** area inside the curator's
+**Add info about your paper** section proposes metadata for the PRIMARY
+paper being curated, from either a pasted **DOI** ("Fetch DOI") or an
+uploaded **manuscript source** ("Import manuscript source": a `.tex` file or
+a `.zip` exported from Overleaf). It is a *proposal* tool: every value goes
+through a review dialog, the user picks which fields to apply, and nothing
+is ever published or overwritten automatically. The import writes through
+the primary-paper adapter (`frontend/Utils/primaryPaper.js`) — the separate
+**Add Reference to your paper** form is never its destination, and the
+existing **Upload Metadata** (JSON) workflow is unchanged and unrelated.
+
+Storage note: the curator state's `referenceInfo` slice is the primary
+paper's bibliographic record of legacy standing — it persists as the
+published document's `reference` block (driving paper details, search,
+publish validation and dedup). The adapter reads/writes that same slot, so
+legacy records keep loading, editing and publishing unchanged with no
+migration.
 
 ## Supported inputs
 
@@ -24,9 +35,13 @@ and nothing is ever published or overwritten automatically. The existing
   environment, `\keywords{}`/`\keyword{}`, a `\doi{}` command or in-text
   DOI/doi.org pattern. Ordinary markup (`\textbf`, `\emph`, `\thanks`,
   comments, math wrappers) is cleaned, not interpreted.
-- From the DOI registry (Crossref, short timeout): title, authors, journal,
-  year, volume, issue, pages, abstract, DOI, URL, and subject keywords.
-  Missing optional metadata never fails the lookup.
+- From the DOI registry (Crossref, short timeout): kind (work type mapped to
+  preprint/journal/dissertation; unmapped types propose nothing), title,
+  authors, journal, year, volume, issue, pages, abstract, DOI, URL, and
+  subject keywords. Missing optional metadata never fails the lookup.
+- For a `.tex`/Overleaf source WITHOUT a DOI, kind defaults to
+  **preprint as a suggestion only** (client-side, clearly chipped
+  "suggested"); DOI, year, venue and authors are never invented.
 - If the manuscript itself contains a DOI, the registry is queried and
   results are merged: **manuscript title/authors/abstract win**, registry
   fills the bibliographic gaps, and disagreements are shown as per-field
