@@ -38,6 +38,29 @@ const renderForm = (referenceInfo, editor = jest.fn()) => {
 };
 
 describe("ReferenceInfoForm", () => {
+  it("renders exactly ONE primary-paper DOI input (the canonical field with Fetch)", () => {
+    renderForm(filledReference);
+    // The section heading says what it is, and hosts the manuscript import.
+    expect(
+      screen.getByText(/publication information for this paper/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/^import manuscript source$/i)
+    ).toBeInTheDocument();
+    // One canonical DOI input with its Fetch button...
+    expect(
+      screen.getAllByPlaceholderText(/enter doi of the paper/i)
+    ).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /^fetch$/i })).toBeInTheDocument();
+    // ...and no duplicate DOI entry point in the import card.
+    expect(
+      screen.queryByPlaceholderText(/10\.1234\/abcd/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /fetch doi/i })
+    ).not.toBeInTheDocument();
+  });
+
   it("saves a prefilled reference without retyping anything", async () => {
     const { setReferenceInfo, editor } = renderForm(filledReference);
     const user = userEvent.setup();

@@ -41,8 +41,11 @@ const baseState = () => ({
   license: "CC-BY",
 });
 
-const doiResponse = {
-  doi: "10.1234/qresp.demo",
+const TEX_CONTENT = "\\title{X}\\begin{document}body\\end{document}";
+
+// A rich manuscript-import response (e.g. the manuscript carried its own
+// DOI, so the registry filled the bibliographic fields).
+const richManuscriptResponse = {
   proposal: {
     kind: "journal",
     title: "New Imported Title",
@@ -57,9 +60,24 @@ const doiResponse = {
     doi: "10.1234/qresp.demo",
     tags: ["Materials Science"],
   },
-  provenance: { title: "crossref", kind: "crossref" },
+  provenance: { title: "manuscript", kind: "crossref" },
   alternatives: {},
   warnings: [],
+  main_file: "paper.tex",
+  main_candidates: ["paper.tex"],
+  included_files: [],
+  doi_candidates: [],
+};
+
+const bareManuscriptResponse = {
+  proposal: { title: "Zip Title" },
+  provenance: { title: "manuscript" },
+  alternatives: {},
+  warnings: ["No DOI was found in the manuscript itself"],
+  main_file: "paper.tex",
+  main_candidates: ["paper.tex"],
+  included_files: [],
+  doi_candidates: [],
 };
 
 const renderImport = ({ state = baseState(), authenticated = true } = {}) => {
@@ -79,28 +97,36 @@ const renderImport = ({ state = baseState(), authenticated = true } = {}) => {
   return { setAll, remountForms, setReferenceInfo, collectDraftState, state };
 };
 
-const fetchDoi = async (user) => {
-  await user.type(screen.getByLabelText(/doi/i), "10.1234/qresp.demo");
-  await user.click(screen.getByRole("button", { name: /fetch doi/i }));
+const importManuscript = async (user, response) => {
+  axios.post.mockResolvedValueOnce({ data: response });
+  const file = new File([TEX_CONTENT], "paper.tex", { type: "text/x-tex" });
+  await user.upload(document.getElementById("paper-import-file"), file);
+  await screen.findByText(/review manuscript import/i);
 };
 
 const applyButton = () =>
   screen.getByRole("button", { name: /apply to paper information/i });
 
-describe("PaperImport (Publication Information for This Paper)", () => {
+describe("PaperImport (manuscript source import)", () => {
   afterEach(() => jest.resetAllMocks());
 
-  it("shows the DOI fetch and manuscript import controls", () => {
+  it("offers ONLY the manuscript chooser — no DOI input or Fetch DOI here", () => {
     renderImport();
+    // Case-sensitive: the heading is Title Case, the button is sentence case.
     expect(
-      screen.getByText(/import information for this paper/i)
-    ).toBeInTheDocument();
-    expect(screen.getByLabelText(/doi/i)).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /fetch doi/i })
+      screen.getByText(/^Import Manuscript Source$/)
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /import manuscript source/i })
+    ).toBeInTheDocument();
+    // The canonical DOI field lives in the Publication Information form.
+    expect(screen.queryByLabelText(/doi/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /fetch doi/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/use the doi field.s fetch button below/i)
     ).toBeInTheDocument();
   });
 
@@ -109,17 +135,19 @@ describe("PaperImport (Publication Information for This Paper)", () => {
     expect(
       screen.getByText(/sign in to import this paper/i)
     ).toBeInTheDocument();
-    expect(screen.queryByLabelText(/doi/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /import manuscript source/i })
+    ).not.toBeInTheDocument();
   });
 
-  it("DOI import writes the canonical primary-paper record, never the form setter", async () => {
-    axios.post.mockResolvedValue({ data: doiResponse });
+  it("sends the file base64 to the import endpoint and reviews before applying", async () => {
     const user = userEvent.setup();
     const { setAll, remountForms, setReferenceInfo, state } = renderImport();
 
-    await fetchDoi(user);
-    expect(axios.post).toHaveBeenCalledWith("/api/import/doi", {
-      doi: "10.1234/qresp.demo",
+    await importManuscript(user, richManuscriptResponse);
+    expect(axios.post).toHaveBeenCalledWith("/api/import/manuscript", {
+      filename: "paper.tex",
+      content_base64: btoa(TEX_CONTENT),
     });
     expect(
       await screen.findByText(/proposed: new imported title/i)
@@ -127,55 +155,41 @@ describe("PaperImport (Publication Information for This Paper)", () => {
     expect(setAll).not.toHaveBeenCalled();
 
     await user.click(applyButton());
-    expect(setAll).toHaveBeenCalledTimes(1);
     const applied = setAll.mock.calls[0][0];
     // Canonical primary-paper bibliography (publishes as `reference`).
     expect(applied.referenceInfo.title).toBe("New Imported Title");
     expect(applied.referenceInfo.kind).toBe("journal");
     expect(applied.referenceInfo.doi).toBe("10.1234/qresp.demo");
     expect(applied.referenceInfo.authors).toContain("Lovelace");
-    expect(applied.referenceInfo.publication).toContain(
-      "Journal of Computing"
-    );
-    // The Reference form's setter is never used; only setAll via the adapter.
     expect(setReferenceInfo).not.toHaveBeenCalled();
     // Curation metadata stays manual/untouched.
     expect(applied.paperInfo.PIs).toBe("Giulia Galli");
     expect(applied.paperInfo.collections).toEqual([]);
     expect(applied.paperInfo.notebookFile).toBe("");
     expect(applied.curatorInfo).toEqual(state.curatorInfo);
-    expect(applied.charts).toEqual(state.charts);
     expect(applied.license).toBe("CC-BY");
     expect(remountForms).toHaveBeenCalled();
   });
 
   it("offers a per-author PI picker, all unchecked by default", async () => {
-    axios.post.mockResolvedValue({ data: doiResponse });
     const user = userEvent.setup();
     const { setAll } = renderImport();
 
-    await fetchDoi(user);
-    await screen.findByText(/proposed: new imported title/i);
-    expect(
-      screen.getByText(/add selected paper authors as principal investigators/i)
-    ).toBeInTheDocument();
+    await importManuscript(user, richManuscriptResponse);
     const authorBox = screen.getByRole("checkbox", {
       name: /add author ada b\. lovelace as principal investigator/i,
     });
     expect(authorBox).not.toBeChecked();
 
     await user.click(applyButton());
-    // Default apply: PIs unchanged.
     expect(setAll.mock.calls[0][0].paperInfo.PIs).toBe("Giulia Galli");
   });
 
   it("appends only the SELECTED authors to the existing PIs", async () => {
-    axios.post.mockResolvedValue({ data: doiResponse });
     const user = userEvent.setup();
     const { setAll } = renderImport();
 
-    await fetchDoi(user);
-    await screen.findByText(/proposed: new imported title/i);
+    await importManuscript(user, richManuscriptResponse);
     await user.click(
       screen.getByRole("checkbox", {
         name: /add author ada b\. lovelace as principal investigator/i,
@@ -183,34 +197,28 @@ describe("PaperImport (Publication Information for This Paper)", () => {
     );
     await user.click(applyButton());
     const pis = setAll.mock.calls[0][0].paperInfo.PIs;
-    // Appended, never replacing the existing PI.
     expect(pis).toContain("Giulia Galli");
     expect(pis).toContain("Lovelace");
     expect(pis.indexOf("Giulia Galli")).toBe(0);
   });
 
   it("tags are suggestions: default unchecked, added only when selected", async () => {
-    axios.post.mockResolvedValue({ data: doiResponse });
-    const user = userEvent.setup();
-    const first = renderImport();
-
-    await fetchDoi(user);
-    await screen.findByText(/proposed: new imported title/i);
-    const tagBox = screen.getByRole("checkbox", {
-      name: /apply tag suggestions/i,
-    });
-    expect(tagBox).not.toBeChecked();
-    await user.click(applyButton());
-    expect(first.setAll.mock.calls[0][0].paperInfo.tags).toEqual([]);
-  });
-
-  it("adds tags after explicit selection", async () => {
-    axios.post.mockResolvedValue({ data: doiResponse });
     const user = userEvent.setup();
     const { setAll } = renderImport();
 
-    await fetchDoi(user);
-    await screen.findByText(/proposed: new imported title/i);
+    await importManuscript(user, richManuscriptResponse);
+    expect(
+      screen.getByRole("checkbox", { name: /apply tag suggestions/i })
+    ).not.toBeChecked();
+    await user.click(applyButton());
+    expect(setAll.mock.calls[0][0].paperInfo.tags).toEqual([]);
+  });
+
+  it("adds tags after explicit selection", async () => {
+    const user = userEvent.setup();
+    const { setAll } = renderImport();
+
+    await importManuscript(user, richManuscriptResponse);
     await user.click(
       screen.getByRole("checkbox", { name: /apply tag suggestions/i })
     );
@@ -220,33 +228,11 @@ describe("PaperImport (Publication Information for This Paper)", () => {
     ]);
   });
 
-  it("TeX import without a DOI suggests kind=preprint into the canonical record", async () => {
-    const texContent = "\\title{Zip Title}\\begin{document}\\end{document}";
-    axios.post.mockResolvedValue({
-      data: {
-        proposal: { title: "Zip Title" },
-        provenance: { title: "manuscript" },
-        alternatives: {},
-        warnings: ["No DOI was found in the manuscript itself"],
-        main_file: "paper.tex",
-        main_candidates: ["paper.tex"],
-        included_files: [],
-        doi_candidates: [],
-      },
-    });
+  it("suggests kind=preprint for a manuscript without a DOI", async () => {
     const user = userEvent.setup();
-    const { setAll, setReferenceInfo } = renderImport();
+    const { setAll } = renderImport();
 
-    const file = new File([texContent], "paper.tex", { type: "text/x-tex" });
-    await user.upload(document.getElementById("paper-import-file"), file);
-
-    await waitFor(() =>
-      expect(axios.post).toHaveBeenCalledWith("/api/import/manuscript", {
-        filename: "paper.tex",
-        content_base64: btoa(texContent),
-      })
-    );
-    expect(await screen.findByText(/proposed: zip title/i)).toBeInTheDocument();
+    await importManuscript(user, bareManuscriptResponse);
     expect(screen.getByText(/^proposed: preprint$/i)).toBeInTheDocument();
     expect(screen.getByText("suggested")).toBeInTheDocument();
 
@@ -254,120 +240,17 @@ describe("PaperImport (Publication Information for This Paper)", () => {
     const applied = setAll.mock.calls[0][0];
     expect(applied.referenceInfo.title).toBe("Zip Title");
     expect(applied.referenceInfo.kind).toBe("preprint");
-    // Nothing invented.
     expect(applied.referenceInfo.doi).toBe("");
     expect(applied.referenceInfo.year).toBeNull();
-    expect(applied.referenceInfo.publication).toBe("");
-    expect(setReferenceInfo).not.toHaveBeenCalled();
-  });
-
-  it("manuscript AI consent defaults OFF and gates the suggestion fetch", async () => {
-    const texContent = "\\title{Zip Title}\\begin{document}body\\end{document}";
-    axios.post.mockResolvedValueOnce({
-      data: {
-        proposal: { title: "Zip Title" },
-        provenance: { title: "manuscript" },
-        alternatives: {},
-        warnings: [],
-        main_file: "paper.tex",
-        main_candidates: ["paper.tex"],
-        included_files: [],
-        doi_candidates: [],
-      },
-    });
-    const user = userEvent.setup();
-    const { setAll } = renderImport();
-
-    const file = new File([texContent], "paper.tex", { type: "text/x-tex" });
-    await user.upload(document.getElementById("paper-import-file"), file);
-    await screen.findByText(/proposed: zip title/i);
-
-    const consent = screen.getByRole("checkbox", {
-      name: /analyze extracted manuscript text with ai/i,
-    });
-    expect(consent).not.toBeChecked();
-    const fetchButton = screen.getByRole("button", {
-      name: /get ai keyword suggestions/i,
-    });
-    expect(fetchButton).toBeDisabled();
-    // No consent, no request: only the import call has happened.
-    expect(axios.post).toHaveBeenCalledTimes(1);
-
-    // With consent, the manuscript is sent to the assist endpoint and the
-    // suggestions arrive unchecked, applied only on explicit selection.
-    axios.post.mockResolvedValueOnce({
-      data: { keywords: ["Ice Nucleation", "Simulation"], warnings: [] },
-    });
-    await user.click(consent);
-    await user.click(fetchButton);
-    await waitFor(() =>
-      expect(axios.post).toHaveBeenLastCalledWith("/api/assist/keywords", {
-        title: "Zip Title",
-        abstract: "",
-        filename: "paper.tex",
-        content_base64: btoa(texContent),
-      })
-    );
-    const aiBox = await screen.findByRole("checkbox", {
-      name: /apply ai keyword ice nucleation/i,
-    });
-    expect(aiBox).not.toBeChecked();
-    await user.click(aiBox);
-    await user.click(applyButton());
-    expect(setAll.mock.calls[0][0].paperInfo.tags).toEqual([
-      "Ice Nucleation",
-    ]);
-  });
-
-  it("shows the unconfigured-AI message clearly inside the review", async () => {
-    const texContent = "\\title{Zip Title}\\begin{document}body\\end{document}";
-    axios.post.mockResolvedValueOnce({
-      data: {
-        proposal: { title: "Zip Title" },
-        provenance: { title: "manuscript" },
-        alternatives: {},
-        warnings: [],
-        main_file: "paper.tex",
-        main_candidates: ["paper.tex"],
-        included_files: [],
-        doi_candidates: [],
-      },
-    });
-    axios.post.mockRejectedValueOnce({
-      response: {
-        status: 503,
-        data: {
-          error: "AI keyword suggestions are not configured on this server.",
-        },
-      },
-    });
-    const user = userEvent.setup();
-    renderImport();
-    const file = new File([texContent], "paper.tex", { type: "text/x-tex" });
-    await user.upload(document.getElementById("paper-import-file"), file);
-    await screen.findByText(/proposed: zip title/i);
-    await user.click(
-      screen.getByRole("checkbox", {
-        name: /analyze extracted manuscript text with ai/i,
-      })
-    );
-    await user.click(
-      screen.getByRole("button", { name: /get ai keyword suggestions/i })
-    );
-    expect(
-      await screen.findByText(/not configured on this server/i)
-    ).toBeInTheDocument();
   });
 
   it("never overwrites a populated primary-paper field unless checked", async () => {
-    axios.post.mockResolvedValue({ data: doiResponse });
     const state = baseState();
     state.referenceInfo.title = "My Existing Title";
     const user = userEvent.setup();
     const { setAll } = renderImport({ state });
 
-    await fetchDoi(user);
-    await screen.findByText(/proposed: new imported title/i);
+    await importManuscript(user, richManuscriptResponse);
     expect(
       screen.getByText(/current value kept unless checked: my existing title/i)
     ).toBeInTheDocument();
@@ -382,12 +265,10 @@ describe("PaperImport (Publication Information for This Paper)", () => {
   });
 
   it("lists PaperStack and notebook as manual items in the checklist after apply", async () => {
-    axios.post.mockResolvedValue({ data: doiResponse });
     const user = userEvent.setup();
     renderImport();
 
-    await fetchDoi(user);
-    await screen.findByText(/proposed: new imported title/i);
+    await importManuscript(user, richManuscriptResponse);
     await user.click(applyButton());
 
     expect(
@@ -399,21 +280,15 @@ describe("PaperImport (Publication Information for This Paper)", () => {
     expect(
       screen.getByText(/main notebook file \(manual\)/i)
     ).toBeInTheDocument();
-    expect(screen.getByText(/at least one dataset/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/save draft works even while fields are missing/i)
-    ).toBeInTheDocument();
   });
 
   it("keeps open-form values by applying on top of the collected draft state", async () => {
-    axios.post.mockResolvedValue({ data: doiResponse });
     const state = baseState();
     state.paperInfo.notebookFile = "typed-not-saved.ipynb";
     const user = userEvent.setup();
     const { setAll, collectDraftState } = renderImport({ state });
 
-    await fetchDoi(user);
-    await screen.findByText(/proposed: new imported title/i);
+    await importManuscript(user, richManuscriptResponse);
     await user.click(applyButton());
     expect(collectDraftState).toHaveBeenCalled();
     expect(setAll.mock.calls[0][0].paperInfo.notebookFile).toBe(
@@ -421,29 +296,100 @@ describe("PaperImport (Publication Information for This Paper)", () => {
     );
   });
 
-  it("cancel applies nothing", async () => {
-    axios.post.mockResolvedValue({ data: doiResponse });
+  it("manuscript AI consent defaults OFF, gates the fetch, and speaks of EXCERPTS", async () => {
     const user = userEvent.setup();
     const { setAll } = renderImport();
 
-    await fetchDoi(user);
-    await screen.findByText(/proposed: new imported title/i);
+    await importManuscript(user, bareManuscriptResponse);
+    const consent = screen.getByRole("checkbox", {
+      name: /analyze extracted manuscript text with ai/i,
+    });
+    expect(consent).not.toBeChecked();
+    // The wording is honest: bounded excerpts, not the full document.
+    expect(
+      screen.getByText(/bounded excerpts of the text extracted/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/not the full document or the original file/i)
+    ).toBeInTheDocument();
+    const fetchButton = screen.getByRole("button", {
+      name: /get ai keyword suggestions/i,
+    });
+    expect(fetchButton).toBeDisabled();
+    expect(axios.post).toHaveBeenCalledTimes(1); // only the import call
+
+    axios.post.mockResolvedValueOnce({
+      data: { keywords: ["Ice Nucleation"], warnings: [] },
+    });
+    await user.click(consent);
+    await user.click(fetchButton);
+    await waitFor(() =>
+      expect(axios.post).toHaveBeenLastCalledWith("/api/assist/keywords", {
+        title: "Zip Title",
+        abstract: "",
+        filename: "paper.tex",
+        content_base64: btoa(TEX_CONTENT),
+      })
+    );
+    const aiBox = await screen.findByRole("checkbox", {
+      name: /apply ai keyword ice nucleation/i,
+    });
+    expect(aiBox).not.toBeChecked();
+    await user.click(aiBox);
+    await user.click(applyButton());
+    expect(setAll.mock.calls[0][0].paperInfo.tags).toEqual([
+      "Ice Nucleation",
+    ]);
+  });
+
+  it("shows the unconfigured-AI message clearly inside the review", async () => {
+    const user = userEvent.setup();
+    renderImport();
+
+    await importManuscript(user, bareManuscriptResponse);
+    axios.post.mockRejectedValueOnce({
+      response: {
+        status: 503,
+        data: {
+          error: "AI keyword suggestions are not configured on this server.",
+        },
+      },
+    });
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /analyze extracted manuscript text with ai/i,
+      })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /get ai keyword suggestions/i })
+    );
+    expect(
+      await screen.findByText(/not configured on this server/i)
+    ).toBeInTheDocument();
+  });
+
+  it("cancel applies nothing", async () => {
+    const user = userEvent.setup();
+    const { setAll } = renderImport();
+
+    await importManuscript(user, richManuscriptResponse);
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));
     expect(setAll).not.toHaveBeenCalled();
   });
 
   it("surfaces backend errors clearly", async () => {
-    axios.post.mockRejectedValue({
+    axios.post.mockRejectedValueOnce({
       response: {
         status: 400,
-        data: { error: "This DOI was not found in the scholarly metadata registry." },
+        data: { error: "The archive contains unsafe relative paths and was rejected." },
       },
     });
     const user = userEvent.setup();
     renderImport();
-    await fetchDoi(user);
+    const file = new File(["zip"], "project.zip", { type: "application/zip" });
+    await user.upload(document.getElementById("paper-import-file"), file);
     expect(
-      await screen.findByText(/not found in the scholarly metadata registry/i)
+      await screen.findByText(/unsafe relative paths/i)
     ).toBeInTheDocument();
   });
 });

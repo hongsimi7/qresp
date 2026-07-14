@@ -276,7 +276,7 @@ const ImportReview = ({ open, result, onClose }) => {
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
-      <DialogTitle>Import information for this paper</DialogTitle>
+      <DialogTitle>Review manuscript import</DialogTitle>
       <DialogContent dividers>
         {applied ? (
           <Fragment>
@@ -312,9 +312,9 @@ const ImportReview = ({ open, result, onClose }) => {
             <Typography variant="body2" color="secondary" gutterBottom>
               Review the proposed values for the paper you are curating.
               Fields that already have a value are unchecked — checking one
-              replaces your current value. This never touches the separate
-              &ldquo;Add Reference to your paper&rdquo; form, and nothing is
-              published by this step.
+              replaces your current value. Applied values go into Publication
+              Information for This Paper only, and nothing is published by
+              this step.
             </Typography>
             {(result.warnings || []).map((warning) => (
               <Typography key={warning} variant="body2" color="error">
@@ -448,10 +448,12 @@ const ImportReview = ({ open, result, onClose }) => {
                   label="Analyze extracted manuscript text with AI to suggest keywords."
                 />
                 <Typography variant="body2" color="secondary">
-                  If you continue, the manuscript text extracted from your
-                  upload will be sent to the configured AI provider to
-                  generate keyword suggestions. Nothing is sent without this
-                  consent, and suggestions are never applied automatically.
+                  If you continue, bounded excerpts of the text extracted
+                  from your upload (bibliography removed — not the full
+                  document or the original file) are sent to the configured
+                  AI provider to generate keyword suggestions. Nothing is
+                  sent without this consent, and suggestions are never
+                  applied automatically.
                 </Typography>
                 <RegularStyledButton
                   sx={{ mt: 1 }}
