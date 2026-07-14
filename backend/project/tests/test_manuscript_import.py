@@ -15,6 +15,7 @@ from unittest import mock
 from project import connexionapp
 
 CROSSREF_MESSAGE = {
+    "type": "journal-article",
     "title": ["Registry Title"],
     "author": [
         {"given": "Ada B.", "family": "Lovelace"},
@@ -170,6 +171,8 @@ class TestDoiLookup(ImportTestBase):
         self.assertEqual("10.1234/qresp.demo", proposal["doi"])
         self.assertEqual(["Materials Science", "Computing"],
                          proposal["tags"])
+        # Crossref work type maps to the curator's kind radio values.
+        self.assertEqual("journal", proposal["kind"])
         self.assertEqual("crossref", body["provenance"]["title"])
 
     def test_doi_is_normalized_from_url_and_prefix_forms(self):
@@ -262,6 +265,10 @@ class TestTexImport(ImportTestBase):
         body = response.json()
         self.assertEqual("Unpublished Manuscript", body["proposal"]["title"])
         self.assertNotIn("journal", body["proposal"])
+        # The backend never invents kind/year/venue for unpublished sources;
+        # the frontend may SUGGEST kind=preprint, but that stays client-side.
+        self.assertNotIn("kind", body["proposal"])
+        self.assertNotIn("year", body["proposal"])
         self.assertTrue(any("No DOI" in w for w in body["warnings"]))
         requests_mock.get.assert_not_called()
 

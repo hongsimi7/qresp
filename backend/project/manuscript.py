@@ -99,10 +99,24 @@ def _strip_jats(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
+# Crossref work types -> the curator's reference "kind" radio values.
+# Unmapped types simply propose no kind — nothing is invented.
+CROSSREF_KIND_MAP = {
+    "journal-article": "journal",
+    "proceedings-article": "journal",
+    "posted-content": "preprint",
+    "dissertation": "dissertation",
+}
+
+
 def _crossref_fields(message):
     """Map a Crossref work message onto proposal fields. Optional metadata
     may be missing — never fail because of it."""
     fields = {}
+    kind = CROSSREF_KIND_MAP.get(
+        (message.get("type") or "").strip().lower())
+    if kind:
+        fields["kind"] = kind
     titles = message.get("title") or []
     if titles and str(titles[0]).strip():
         fields["title"] = re.sub(r"\s+", " ", str(titles[0])).strip()
