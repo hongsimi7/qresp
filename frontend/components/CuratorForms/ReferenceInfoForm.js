@@ -22,8 +22,8 @@ import LoadingContext from "../../Context/Loading/loadingContext";
 import PaperImport from "../CuratorElements/PaperImport";
 
 const ReferenceInfoForm = ({ editor }) => {
-  const { referenceInfo, setReferenceInfo, registerDraftFlusher } =
-    useContext(CuratorContext);
+  const { referenceInfo, setReferenceInfo, registerDraftFlusher,
+          reportLiveBiblio } = useContext(CuratorContext);
   const { setAlert } = useContext(AlertContext);
   const { showLoader, hideLoader } = useContext(LoadingContext);
 
@@ -84,6 +84,7 @@ const ReferenceInfoForm = ({ editor }) => {
     control,
     getValues,
     setValue,
+    watch,
     formState,
   } = useForm({
     resolver: yupResolver(schema),
@@ -91,6 +92,17 @@ const ReferenceInfoForm = ({ editor }) => {
       ...defaults,
     },
   });
+
+  // Signal the CURRENTLY TYPED title/abstract (before Save) so features like
+  // "Suggest Keywords with AI" can enable immediately. Signal only — saving
+  // still happens exclusively through this form's Save button, and snapshots
+  // still come from the registered draft flusher below.
+  const watchedTitle = watch("title");
+  const watchedAbstract = watch("abstract");
+  useEffect(() => {
+    if (!reportLiveBiblio) return;
+    reportLiveBiblio({ title: watchedTitle, abstract: watchedAbstract });
+  }, [watchedTitle, watchedAbstract, reportLiveBiblio]);
   // react-hook-form v7: errors moved onto formState.
   const { errors } = formState;
 

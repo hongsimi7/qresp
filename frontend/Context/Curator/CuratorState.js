@@ -37,6 +37,12 @@ const CuratorState = (props) => {
   // reset so uncontrolled RHF inputs actually blank.
   const [activeDraftId, setActiveDraftId] = useState(null);
   const [activeDraftTitle, setActiveDraftTitle] = useState("");
+  // LIVE mirror of the publication form's currently TYPED title/abstract
+  // (reported via react-hook-form watch, before the section is saved). This
+  // is an availability SIGNAL only — never a second source of truth: the
+  // canonical bibliography stays referenceInfo, and snapshots for
+  // saving/importing/AI still go through collectDraftState's flushers.
+  const [liveBiblio, setLiveBiblio] = useState({ title: "", abstract: "" });
   const [draftDirty, setDraftDirty] = useState(false);
   const [resetVersion, setResetVersion] = useState(0);
   const firstDirtyCheck = useRef(true);
@@ -196,6 +202,16 @@ const CuratorState = (props) => {
   const setAll = (data) =>
     dispatch({ type: SET_CURATOR_STATE, payload: normalizeState(data) });
 
+  const reportLiveBiblio = useCallback((next = {}) => {
+    const title = next.title || "";
+    const abstract = next.abstract || "";
+    setLiveBiblio((current) =>
+      current.title === title && current.abstract === abstract
+        ? current
+        : { title, abstract }
+    );
+  }, []);
+
   const registerDraftFlusher = useCallback((key, flusher) => {
     if (!key || typeof flusher !== "function") {
       return () => {};
@@ -261,6 +277,8 @@ const CuratorState = (props) => {
     setActiveDraftId(null);
     setActiveDraftTitle("");
     setDraftDirty(false);
+    // A fresh form must not keep signalling typed-title availability.
+    setLiveBiblio({ title: "", abstract: "" });
     // Remount the form tree: context reset alone leaves stale values in the
     // always-mounted uncontrolled form inputs.
     setResetVersion((version) => version + 1);
@@ -397,6 +415,8 @@ const CuratorState = (props) => {
         collectDraftState,
         getDraftTitle,
         registerDraftFlusher,
+        liveBiblio,
+        reportLiveBiblio,
         saveDraftToServer,
         applyServerDraft,
         applyLoadedRecord,

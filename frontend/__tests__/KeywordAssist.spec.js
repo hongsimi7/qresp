@@ -17,12 +17,16 @@ const state = () => ({
   paperInfo: { tags: ["existing"] },
 });
 
-const renderAssist = (draftState = state()) => {
+const renderAssist = (draftState = state(), overrides = {}) => {
   const onApply = jest.fn();
   const collectDraftState = jest.fn(() => draftState);
   render(
     <CuratorContext.Provider
-      value={{ collectDraftState, referenceInfo: draftState.referenceInfo }}
+      value={{
+        collectDraftState,
+        referenceInfo: draftState.referenceInfo,
+        ...overrides,
+      }}
     >
       <KeywordAssist onApply={onApply} />
     </CuratorContext.Provider>
@@ -73,6 +77,38 @@ describe("KeywordAssist (Suggest Keywords with AI)", () => {
     expect(
       screen.queryByText(/add a title or abstract/i)
     ).not.toBeInTheDocument();
+  });
+
+  it("enables from the LIVE typed signal even when nothing is saved yet", () => {
+    const empty = state();
+    empty.referenceInfo = { ...empty.referenceInfo, title: "", abstract: "" };
+    renderAssist(empty, { liveBiblio: { title: "Typed, not saved", abstract: "" } });
+    expect(
+      screen.getByRole("button", { name: /suggest keywords with ai/i })
+    ).toBeEnabled();
+  });
+
+  it("newer typed values win over stale saved ones in the request", async () => {
+    // Saved (stale) title differs from what the user has typed since; the
+    // flushed draft snapshot carries the newer value and that is what goes
+    // to the provider.
+    const typed = state();
+    typed.referenceInfo = {
+      ...typed.referenceInfo,
+      title: "Newer typed title",
+    };
+    const staleSaved = { ...typed.referenceInfo, title: "Old saved title" };
+    axios.post.mockResolvedValue({ data: { keywords: [], warnings: [] } });
+    const user = userEvent.setup();
+    renderAssist(typed, {
+      referenceInfo: staleSaved,
+      liveBiblio: { title: "Newer typed title", abstract: "" },
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: /suggest keywords with ai/i })
+    );
+    expect(axios.post.mock.calls[0][1].title).toBe("Newer typed title");
   });
 
   it("becomes available with an abstract only (e.g. DOI-fetched or imported)", () => {

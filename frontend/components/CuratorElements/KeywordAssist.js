@@ -27,16 +27,21 @@ import CuratorContext from "../../Context/Curator/curatorContext";
 // selected tags are handed to the host form, which APPENDS them to Keywords.
 
 const KeywordAssist = ({ onApply }) => {
-  const { collectDraftState, referenceInfo } =
+  const { collectDraftState, referenceInfo, liveBiblio } =
     useContext(CuratorContext) || {};
 
   // Conservative eligibility: suggestions need SOME useful primary-paper
-  // metadata. A manually entered (and saved) title or abstract is enough;
-  // fetching a DOI or importing a manuscript source populates them too.
-  // While ineligible the action is disabled and no request is ever made.
-  const biblio = referenceInfo || {};
+  // metadata. A title or abstract CURRENTLY TYPED in the publication form
+  // (liveBiblio, reported via the form's watch — no Save needed) counts,
+  // as does a saved/fetched/imported one. While ineligible the action is
+  // disabled and no request is ever made.
+  const saved = referenceInfo || {};
+  const live = liveBiblio || {};
   const eligible = Boolean(
-    (biblio.title || "").trim() || (biblio.abstract || "").trim()
+    (live.title || "").trim() ||
+      (live.abstract || "").trim() ||
+      (saved.title || "").trim() ||
+      (saved.abstract || "").trim()
   );
 
   const [open, setOpen] = useState(false);
