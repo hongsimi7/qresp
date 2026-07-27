@@ -123,13 +123,29 @@ describe("Analyze RCC Folder", () => {
     axios.post.mockResolvedValue({ data: analysis });
   });
 
-  it("is unavailable until a file server path is saved, and sends nothing", () => {
+  it("is unavailable until a folder is selected, and sends nothing", () => {
     renderWith({ fileServerPath: "" });
     const button = analyzeButton();
     expect(button).toBeDisabled();
     expect(
-      screen.getByText(/search for a file server folder and save it first/i)
+      screen.getByText(/pick a file server folder first/i)
     ).toBeInTheDocument();
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it("an explicit empty path wins over a saved one (nothing picked yet)", () => {
+    // The File Server form passes its own selection, so a stale saved path
+    // can never be analyzed behind the curator's back.
+    render(
+      <AlertContext.Provider value={{ setAlert: jest.fn() }}>
+        <CuratorContext.Provider
+          value={{ fileServerPath: FOLDER, addMany: jest.fn() }}
+        >
+          <FolderAnalysis path="" />
+        </CuratorContext.Provider>
+      </AlertContext.Provider>
+    );
+    expect(analyzeButton()).toBeDisabled();
     expect(axios.post).not.toHaveBeenCalled();
   });
 

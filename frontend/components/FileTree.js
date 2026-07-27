@@ -49,6 +49,7 @@ const FileTree = () => {
     title,
     multiple,
     save,
+    confirmLabel,
     setChildren,
   } = useContext(SourceTreeContext);
 
@@ -93,7 +94,7 @@ const FileTree = () => {
                   }}
                   disabled={checked.length == 0}
                 >
-                  Save
+                  {confirmLabel || "Save"}
                 </RegularStyledButton>
               </Grid>
               <Grid size={6}>

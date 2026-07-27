@@ -1,4 +1,5 @@
 import { Fragment, useContext, useMemo, useState } from "react";
+import PropTypes from "prop-types";
 
 import axios from "axios";
 import {
@@ -142,9 +143,15 @@ const FIELD_LABELS = {
   URLs: "URLs (comma separated)",
 };
 
-const FolderAnalysis = () => {
+const FolderAnalysis = ({ path }) => {
   const { fileServerPath, addMany } = useContext(CuratorContext) || {};
   const { setAlert } = useContext(AlertContext) || {};
+
+  // The folder to analyze. An explicit `path` wins even when it is empty —
+  // that is the File Server form telling us "nothing is selected yet" — while
+  // omitting it (the saved display card) falls back to Curator state. The
+  // backend still validates whatever is sent against its own allowed roots.
+  const target = (path === undefined ? fileServerPath : path) || "";
 
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -162,7 +169,7 @@ const FolderAnalysis = () => {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiNotice, setAiNotice] = useState("");
 
-  const ready = Boolean((fileServerPath || "").trim());
+  const ready = Boolean(target.trim());
 
   const close = () => {
     setOpen(false);
@@ -185,7 +192,7 @@ const FolderAnalysis = () => {
     setAnalysis(null);
     try {
       const response = await axios.post("/api/curation/analyze-folder", {
-        path: fileServerPath,
+        path: target,
       });
       const data = response.data || {};
       const initial = {};
@@ -404,11 +411,11 @@ const FolderAnalysis = () => {
         </RegularStyledButton>
         <Typography variant="caption" display="block" sx={{ mt: 1 }}>
           {ready
-            ? "Inspects the saved folder and proposes charts, datasets, " +
+            ? "Inspects the selected folder and proposes charts, datasets, " +
               "scripts and tools for you to review. Nothing is saved or " +
               "published."
-            : "Search for a file server folder and save it first — the " +
-              "analysis reads the folder you already selected."}
+            : "Pick a file server folder first — the analysis reads the " +
+              "folder you selected."}
         </Typography>
       </Box>
 
@@ -546,6 +553,12 @@ const FolderAnalysis = () => {
       </Dialog>
     </Fragment>
   );
+};
+
+FolderAnalysis.propTypes = {
+  // Omit to analyze the saved fileServerPath; pass explicitly (even "") to
+  // analyze a selection that has not been committed yet.
+  path: PropTypes.string,
 };
 
 export default FolderAnalysis;

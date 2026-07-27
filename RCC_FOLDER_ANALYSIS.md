@@ -7,16 +7,29 @@ silently written.
 
 ## Where it lives
 
-`Where is the paper` → File Server Information → **Analyze RCC Folder**.
+**Analyze RCC Folder** appears in both states of the File Server section, and
+only one of them is mounted at a time, so there is never a duplicate button:
 
-The action is disabled until a File Server path has been saved, and it reuses
-that saved `fileServerPath`. There is deliberately **no second URL input**: the
-browser never supplies a fetchable location.
+- while editing (`Where is the paper`), it analyzes the folder currently
+  **selected** in the form — even before that selection is committed;
+- on the saved **File Server Information** card, it analyzes the saved
+  `fileServerPath`, so analysing an already-saved folder never requires
+  clicking the pencil first.
+
+Selecting and saving are deliberately separate steps. Confirming a folder in
+the file tree ("Use selected folder") only records the choice — it does not
+write Curator state and does not close the section. **Save File Server** is
+the only action that calls `setFileServerPath`. A search that is cancelled or
+fails leaves an existing saved path and the current selection untouched.
+
+There is deliberately **no second URL input** in either state: the browser
+never supplies a fetchable location, and the backend validates whatever is
+sent against its own allowed roots regardless.
 
 ## Data flow
 
 ```
-saved fileServerPath
+selected (or saved) file server folder
   → POST /api/curation/analyze-folder   (authenticated, CSRF-protected)
       → path validated against the server's OWN allowed roots
       → bounded recursive autoindex listing

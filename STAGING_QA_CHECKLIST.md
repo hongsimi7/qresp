@@ -273,14 +273,29 @@ QRESP_FILESERVER_ROOTS=https://notebook.rcc.uchicago.edu/files
 QRESP_FILESERVER_INSECURE_TLS_HOSTS=notebook.rcc.uchicago.edu
 ```
 
-Availability and scope:
+Selection vs. saving (these are separate steps on purpose):
 
 - [ ] Signed in, /curator → "Where is the paper": **Analyze RCC Folder** is
-      DISABLED before a File Server path is saved, with the "search for a
-      file server folder and save it first" hint
-- [ ] Search the RCC server, pick the DOI folder, Save → the button enables
-- [ ] There is NO second URL box: the analysis uses the saved path only
-      (DevTools → Network: the POST body is `{"path": "<the saved path>"}`)
+      DISABLED with the "pick a file server folder first" hint, and
+      "Selected folder" reads "None yet"
+- [ ] Choose the RCC root → Search → the file tree opens; its confirmation
+      button reads **Use selected folder**
+- [ ] Pick the DOI folder and confirm → the dialog closes, the form STAYS
+      OPEN, "Selected folder" shows the full path, and nothing was committed
+      (the section did NOT collapse to the display card)
+- [ ] Analyze RCC Folder is now enabled and analyzes that UNSAVED folder
+- [ ] Search again / cancel the tree → the previous selection is still shown
+- [ ] With a folder already saved, click the pencil → the form opens with the
+      saved path already in "Selected folder" (not empty); a search that
+      fails (bad URL → error alert) does NOT erase it
+- [ ] **Save File Server** is the only thing that commits: after clicking it
+      the section switches to the display card with the saved path
+- [ ] The saved display card itself offers **Analyze RCC Folder** — no pencil
+      click needed — and exactly one such button is visible in either state
+- [ ] There is NO second URL box in either state (DevTools → Network: the
+      POST body is `{"path": "<the selected or saved path>"}`)
+- [ ] Chart / dataset / script / tool / notebook pickers are unchanged: their
+      file tree confirmation still reads **Save** and still fills their field
 
 Deterministic results on the fixture folder:
 
