@@ -8,6 +8,7 @@ import {
   SET_LICENSE,
   SET,
   ADD,
+  ADD_MANY,
   EDIT,
   DELETE,
   ADD_EDGE,
@@ -53,6 +54,27 @@ export default (state, action) => {
           action.payload.value,
         ],
       };
+
+    // Batch append (folder analysis "Add selected items"). Ids are minted
+    // HERE, against the list as it exists at dispatch time, so a batch can
+    // never collide with an existing record the way a caller-computed
+    // `${prefix}${list.length}` would once several items are added at once.
+    case ADD_MANY: {
+      const existing = state[action.payload.type] || [];
+      const idPrefix = action.payload.type.charAt(0);
+      const taken = new Set(existing.map((el) => el.id));
+      let next = existing.length;
+      const added = (action.payload.values || []).map((value) => {
+        while (taken.has(`${idPrefix}${next}`)) {
+          next += 1;
+        }
+        const id = `${idPrefix}${next}`;
+        taken.add(id);
+        next += 1;
+        return { ...value, id };
+      });
+      return { ...state, [action.payload.type]: [...existing, ...added] };
+    }
 
     case DELETE:
       const prefix = action.payload.type.charAt(0);

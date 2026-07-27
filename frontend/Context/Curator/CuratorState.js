@@ -17,6 +17,7 @@ import {
   SET_LICENSE,
   SET,
   ADD,
+  ADD_MANY,
   EDIT,
   DELETE,
   ADD_EDGE,
@@ -388,6 +389,11 @@ const CuratorState = (props) => {
   const add = (type, value) =>
     dispatch({ type: ADD, payload: { type: type + "s", value } });
 
+  // Append several records of one type in a single dispatch, letting the
+  // reducer mint collision-safe ids. Existing records are never touched.
+  const addMany = (type, values) =>
+    dispatch({ type: ADD_MANY, payload: { type: type + "s", values } });
+
   const edit = (type, value) =>
     dispatch({ type: EDIT, payload: { type: type + "s", value } });
 
@@ -448,6 +454,7 @@ const CuratorState = (props) => {
         setDocumentation,
         set,
         add,
+        addMany,
         edit,
         del,
         setNodes,

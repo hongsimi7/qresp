@@ -43,6 +43,7 @@ export const SET_LICENSE = "SET_LICENSE";
 // Curator Multi Type Actions
 export const SET = "SET";
 export const ADD = "ADD";
+export const ADD_MANY = "ADD_MANY";
 export const EDIT = "EDIT";
 export const DELETE = "DELETE";
 

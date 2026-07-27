@@ -4,6 +4,7 @@ import { useContext, useEffect } from "react";
 import { Grid } from "@mui/material";
 
 import Drawer from "../drawer";
+import FolderAnalysis from "../CuratorElements/FolderAnalysis";
 import RadioInput from "../Form/RadioInput";
 import { SelectInputField, TextInputField } from "../Form/InputFields";
 import { SubmitAndReset } from "../Form/Util";
@@ -139,6 +140,10 @@ const FileServerInfoForm = ({ editor }) => {
           </Grid>
         </Grid>
       </form>
+      {/* Assisted curation over the folder the curator already saved above.
+          It reuses fileServerPath — there is deliberately no second URL box,
+          so no browser-supplied location can be fetched. */}
+      <FolderAnalysis />
     </Drawer>
   );
 };
