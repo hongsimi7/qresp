@@ -43,6 +43,14 @@ published or overwritten automatically. The existing **Upload Metadata**
   `\input`/`\include` files are read (bounded depth/count); `.bib` files are
   scanned for DOI **candidates** (these are references, not necessarily this
   work's DOI, so they are listed for the user rather than auto-used).
+- A `.pdf` of the manuscript, **text layer only** (same 10 MB upload cap; at
+  most 100 pages and 1 M characters of extracted text). It is parsed in
+  memory with pypdf — encrypted PDFs are refused, a single unreadable page
+  degrades rather than failing the import, and a scan with no text layer is
+  rejected with a message saying so. **There is no OCR**, and Qresp never
+  downloads a PDF for you: nothing is fetched from a DOI link, a publisher
+  page, `referenceInfo.url`, `fileServerPath`, `downloadPath`, or any other
+  URL. The curator selects a local file.
 
 ## What is extracted / proposed
 
@@ -55,6 +63,11 @@ published or overwritten automatically. The existing **Upload Metadata**
   preprint/journal/dissertation; unmapped types propose nothing), title,
   authors, journal, year, volume, issue, pages, abstract, DOI, URL, and
   subject keywords. Missing optional metadata never fails the lookup.
+- From a `.pdf`, **only a DOI that is actually printed in the document** is
+  proposed. A PDF's text layer gives no reliable structure, so Qresp does not
+  guess the title, authors, or abstract from it and says so in the review
+  dialog. Extract the metadata by fetching that DOI; the PDF's value is as an
+  AI source (below).
 - For a `.tex`/Overleaf source WITHOUT a DOI, kind defaults to
   **preprint as a suggestion only** (client-side, clearly chipped
   "suggested"); DOI, year, venue and authors are never invented.
@@ -146,6 +159,15 @@ URL Context, or Code Execution.
   uploaded file re-sent to the backend, re-extracted in memory, stripped of
   its bibliography (so cited works don't dominate), bounded, chunked (max 3
   chunks) and sent to the provider.
+- **Manuscript source lifecycle.** A selected `.tex`/`.zip`/`.pdf` is held as
+  a runtime-only `File` handle in the page session (`sourceFile` in Curator
+  state). It is deliberately outside the serialized draft: it never reaches
+  localStorage, an account draft, MongoDB, or disk, and it is dropped on
+  reset or when the tab closes. Each consented request re-reads the file and
+  re-extracts it in memory on the backend; neither the bytes nor the
+  extracted text are persisted or logged anywhere. Consent is per request —
+  the box is unchecked every time the dialog opens, and "Get suggestions from
+  metadata" stays available without it.
 - **What can leave the server:** at most the clipped
   title/abstract/venue/DOI and bounded manuscript-body excerpts, inside a
   fixed prompt that marks them as untrusted data and requests JSON keyword
@@ -158,7 +180,9 @@ URL Context, or Code Execution.
 
 ## Not supported yet (future phases)
 
-- PDF import / OCR.
+- OCR for scanned PDFs (a PDF without a text layer is refused, not imaged).
 - Dataset ZIP inventory (auto-listing charts/datasets from an archive).
+  Folder-based inventory over a file server is covered separately in
+  `RCC_FOLDER_ANALYSIS.md`.
 - LLM-assisted extraction, workflow generation, and any auto-publication —
   explicitly out of scope.

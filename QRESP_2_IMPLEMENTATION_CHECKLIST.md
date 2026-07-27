@@ -42,9 +42,24 @@ Direction change 2026-07-03: curation-assistant/AI-workflow-automation work is *
   never stored/logged/echoed). Curator "Import Manuscript Source" dialog with
   review/provenance/conflict handling, explicit Apply, append-only tag
   suggestions, and a missing-for-publish checklist; drafts stay saveable
-  while incomplete. Docs: `MANUSCRIPT_IMPORT.md`. Out of scope (future
-  phases): PDF/OCR, dataset ZIP inventory, LLM extraction, workflow
-  generation, auto-publication.
+  while incomplete. Docs: `MANUSCRIPT_IMPORT.md`. PDF sources were added
+  later (text layer only, printed DOI proposed, no OCR, never downloaded by
+  Qresp). Out of scope (future phases): OCR, dataset ZIP inventory, LLM
+  extraction, workflow generation, auto-publication.
+
+### 4c. RCC folder analysis — ✅ done (2026-07-27)
+- `POST /api/curation/analyze-folder` (authenticated, CSRF-protected,
+  read-only) inventories the file-server folder the curator already saved and
+  proposes Charts/Datasets/Scripts/Tools candidates; the review dialog in
+  "Where is the paper" applies selected, edited candidates to Curator state
+  only — never a save or publish. Host/root allowlist with traversal and
+  scheme/credential/query rejection, bounded crawl with explicit truncation,
+  TLS verified by default plus an environment-only, default-off, per-host
+  opt-in for the expired RCC certificate. Tools come only from pinned
+  manifests; Python imports are a hint; no Experiment is ever inferred.
+  Optional consented Gemini descriptions reuse the existing provider config
+  and quota. Docs: `RCC_FOLDER_ANALYSIS.md`. Out of scope: Zenodo folders,
+  file sizes/mtimes, notebook content parsing.
 
 ### 5. Agentic literature explorer — ⛔ out of scope (paused)
 - Paused with the curation-assistant/AI direction (see header, 2026-07-03). No `/related` endpoint, no external scholarly API, no LLM calls in this MVP. Kept here only to record the deferral; do not implement without an explicit new decision.

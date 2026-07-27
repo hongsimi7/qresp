@@ -137,6 +137,27 @@ environment variables on the staging backend container.
       picker starts all-unchecked; ticking one APPENDS that author to PIs
 - [ ] Post-apply checklist marks PaperStack / notebook as "(manual)"
 
+## PDF manuscript source
+
+- [ ] The Import Manuscript Source picker accepts `.tex,.zip,.pdf`
+- [ ] Select a normal text-layer PDF → import succeeds; the review dialog
+      proposes ONLY a printed DOI (if any) and states plainly that Qresp does
+      not guess title/authors/abstract from a PDF
+- [ ] A scanned/image-only PDF → refused with a message naming the missing
+      text layer (NOT a generic parse error); no OCR is attempted
+- [ ] An encrypted/password-protected PDF → refused cleanly
+- [ ] A >100-page or >10 MB PDF → refused with a size/page message (nginx is
+      at 15M, the importer at 10M — the app-level message must win)
+- [ ] After selecting a source: "Selected source: `<name>` — kept in this
+      browser tab only, never saved to a draft." with a working Clear button
+- [ ] Save Draft, then reload and resume it → the source is GONE (runtime
+      only) while all typed metadata survives
+- [ ] DevTools → Application → Local Storage: the `state` entry contains no
+      file name, no `sourceFile` key, and no PDF bytes
+- [ ] Qresp never downloads a PDF by itself: no request is made to the DOI
+      link, publisher page, `referenceInfo.url`, `fileServerPath`, or
+      `downloadPath` at any point
+
 ## AI keyword suggestions (Gemini) — pending provider configuration
 
 Provider: Google Gemini, native `generateContent` REST with structured JSON
@@ -236,6 +257,89 @@ the key):
       included files listed, bib DOIs shown as reference candidates only
 - [ ] A zip with a traversal path / >200 files → clear error, nothing applied
 - [ ] "Upload Metadata" (JSON) still works exactly as before
+
+## RCC folder analysis (assisted curation)
+
+Fixture folder (read-only, the design reference):
+`https://notebook.rcc.uchicago.edu/files/10.1021.acs.jpcc.5c01077/` —
+`data/{SE-RSH,VDOS,dipoles,short_traj/*.xyz,vlocal}`, `figures/*.png`,
+`scripts/*.py`. See `RCC_FOLDER_ANALYSIS.md`.
+
+Staging environment for this section:
+
+```sh
+QRESP_FILESERVER_ROOTS=https://notebook.rcc.uchicago.edu/files
+# ONLY while the RCC certificate is expired; unset once it is renewed:
+QRESP_FILESERVER_INSECURE_TLS_HOSTS=notebook.rcc.uchicago.edu
+```
+
+Availability and scope:
+
+- [ ] Signed in, /curator → "Where is the paper": **Analyze RCC Folder** is
+      DISABLED before a File Server path is saved, with the "search for a
+      file server folder and save it first" hint
+- [ ] Search the RCC server, pick the DOI folder, Save → the button enables
+- [ ] There is NO second URL box: the analysis uses the saved path only
+      (DevTools → Network: the POST body is `{"path": "<the saved path>"}`)
+
+Deterministic results on the fixture folder:
+
+- [ ] Charts tab lists `figures/*.png`; each shows confidence, evidence, and
+      a "Needs your input: caption, number" chip; caption is blank
+- [ ] The proposed `number` is a 1..N sequence and is flagged as needing
+      input (it is NOT claimed to be the paper's figure number)
+- [ ] No chart has Extra Fields, and `notebookFile` is empty (no `.ipynb`)
+- [ ] Datasets tab groups by directory — `data/short_traj` holds both
+      `.xyz` files with the generic "Files from data/short_traj" description
+      and NO invented URL
+- [ ] Scripts tab: a `.py` with a module docstring uses that docstring; one
+      without falls back to "Script `<filename>`" flagged as needing input
+- [ ] Tools tab: entries appear ONLY for pinned manifest lines
+      (`numpy==1.26.4`); an unpinned `scipy>=1.10` produces no Tool; imports
+      appear only as the "possible dependencies … not added as tools" note
+- [ ] No Experiment record is proposed anywhere
+- [ ] `README.md` (or anything unmatched) appears under Unclassified
+
+Review, apply, and non-destructiveness:
+
+- [ ] Everything starts UNCHECKED and "Add selected items to Curator" is
+      disabled until something is selected
+- [ ] Edit a caption/description in the dialog → the edited value is what
+      gets added
+- [ ] Remove a candidate → its tab count drops and it cannot be added
+- [ ] Add a chart by hand FIRST, then apply two analyzed charts → the manual
+      chart is untouched and the ids are distinct (`c0`, `c1`, `c2` — no
+      duplicate `c1`)
+- [ ] Applied items appear in the normal Charts/Datasets/Scripts/Tools lists
+      and are still editable with the existing Edit forms
+- [ ] Applying makes NO save/publish request (Network shows only the
+      analyze call) and the record is not published
+- [ ] Manual FileTree selection, Add and Edit forms all still work unchanged
+- [ ] Cancel applies nothing
+
+Path safety (expect a clear 400 and NO outbound request):
+
+- [ ] Temporarily point the saved path at another host / a parent path
+      (`…/files/…/../../etc`) / an encoded traversal (`%2e%2e`) / an
+      `http://` downgrade → "outside the file server roots" or the matching
+      refusal, and the server log shows no listing attempt
+- [ ] A very large or deep folder → the dialog shows "Only part of the
+      folder was inspected" plus the specific cap warning (never a silent
+      partial result)
+- [ ] Server log for a successful run contains counts only — no file names,
+      no directory contents, no manifest text
+
+Optional AI descriptions (only with Gemini configured):
+
+- [ ] The consent box is UNCHECKED on every open; the AI button is disabled
+      without both consent and a selection
+- [ ] With consent + selection → descriptions fill the editable fields;
+      nothing is applied to the form and nothing is saved
+- [ ] Network: the request body carries only `id/kind/name/paths/context`;
+      no file contents, no image bytes, no email/account fields, and every
+      path is relative
+- [ ] With Gemini NOT configured → the folder analysis still completes in
+      full and only the AI action reports "not configured on this server"
 
 ## Soft-deactivate published records (owner/admin)
 
