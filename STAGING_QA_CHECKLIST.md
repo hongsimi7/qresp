@@ -137,12 +137,20 @@ environment variables on the staging backend container.
       picker starts all-unchecked; ticking one APPENDS that author to PIs
 - [ ] Post-apply checklist marks PaperStack / notebook as "(manual)"
 
-## AI keyword suggestions (Kimi) — pending provider configuration
+## AI keyword suggestions (Gemini) — pending provider configuration
 
-Provider: Kimi (Moonshot). The endpoint
-`https://api.moonshot.cn/v1/chat/completions` is fixed in code; only the
-variables below are configurable, and only through the environment (never
-config.ini). The retired `QRESP_QWEN_*` variables have no effect.
+Provider: Google Gemini, native `generateContent` REST with structured JSON
+output. The API host
+`https://generativelanguage.googleapis.com/v1beta/models` is fixed in code;
+only the variables below are configurable, and only through the environment
+(never config.ini). The retired `QRESP_KIMI_*` / `QRESP_QWEN_*` variables
+have no effect.
+
+**The credential is NOT the Google sign-in secret.** Create a separate
+**Google AI Studio / Gemini API key** for this. `QRESP_GOOGLE_CLIENT_ID` and
+`QRESP_GOOGLE_CLIENT_SECRET` (the OAuth login client) are never read by this
+feature and must not be reused here — mixing them would hand a login
+credential to a content API.
 
 **Staging secret handling — do this, nothing looser:**
 
@@ -158,15 +166,28 @@ config.ini). The retired `QRESP_QWEN_*` variables have no effect.
 - Restart the backend container after editing the env file (bind-mounted
   code, so restart — not rebuild).
 
+**Budget / rate-limit before enabling (paid API):**
+
+- In Google AI Studio / Cloud console, put this key on its own project with
+  a **hard billing budget alert at a small monthly cap** and, if available,
+  a per-minute request quota — the key should be able to do nothing except
+  cheap `generateContent` calls.
+- Keep `QRESP_GEMINI_MAX_REQUESTS_PER_USER_PER_DAY` low (start at 5–10 while
+  testing) and leave `QRESP_GEMINI_MAX_OUTPUT_TOKENS` at 256. Qresp never
+  retries a failed call, so one user action costs at most one provider call
+  per manuscript chunk.
+- Rotate/revoke the staging key when testing is finished.
+
 Env template (placeholders only — never commit real values):
 
 ```ini
-QRESP_KIMI_ENABLED=1
-QRESP_KIMI_API_KEY=<paste-staging-key-here>
-QRESP_KIMI_MODEL=kimi-k3
-QRESP_KIMI_TIMEOUT_SECONDS=15
-QRESP_KIMI_MAX_MANUSCRIPT_CHARS=60000
-QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY=20
+QRESP_GEMINI_ENABLED=1
+QRESP_GEMINI_API_KEY=<paste-ai-studio-key-here>
+QRESP_GEMINI_MODEL=gemini-3.6-flash
+QRESP_GEMINI_TIMEOUT_SECONDS=15
+QRESP_GEMINI_MAX_MANUSCRIPT_CHARS=60000
+QRESP_GEMINI_MAX_REQUESTS_PER_USER_PER_DAY=10
+QRESP_GEMINI_MAX_OUTPUT_TOKENS=256
 ```
 
 - [ ] Without a title/abstract the "Suggest Keywords with AI" button is
@@ -180,14 +201,16 @@ QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY=20
       round trip before any manuscript excerpt is ever sent
 - [ ] Configured: metadata-only suggestions return ≤8 deduplicated keywords,
       all unchecked; Apply appends only the selected ones to Keywords
-- [ ] The dialog names Kimi as the destination before anything is sent
+- [ ] The dialog names Gemini as the destination before anything is sent
 - [ ] Manuscript import review (only after the public-data test passes):
       consent checkbox defaults OFF and the fetch button stays disabled
-      until ticked; after fetching, "AI suggestions (Kimi)" appear as a
+      until ticked; after fetching, "AI suggestions (Gemini)" appear as a
       separate unchecked group
 - [ ] Per-user daily limit returns a clear message once exceeded (429)
-- [ ] Backend logs contain no API key, Authorization header, provider error
-      body, or manuscript text after these runs
+- [ ] Upstream rate limiting (429) surfaces a generic "rate limited" message
+      with no quota/project details
+- [ ] Backend logs contain no API key, x-goog-api-key header, provider error
+      body, block reason, prompt, or manuscript text after these runs
 - [ ] Upload a .tex with \title/\author/abstract → proposals appear;
       Apply → forms show the values; missing-for-publish checklist lists
       charts/datasets/license etc.; Save Draft still works while incomplete

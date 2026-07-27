@@ -313,7 +313,7 @@ describe("PaperImport (manuscript source import)", () => {
     expect(
       screen.getByText(/not the full document and never the original file/i)
     ).toBeInTheDocument();
-    expect(screen.getByText(/are sent to Kimi/i)).toBeInTheDocument();
+    expect(screen.getByText(/are sent to Gemini/i)).toBeInTheDocument();
     const fetchButton = screen.getByRole("button", {
       name: /get ai keyword suggestions/i,
     });

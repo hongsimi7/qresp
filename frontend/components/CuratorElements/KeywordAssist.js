@@ -21,7 +21,7 @@ import CuratorContext from "../../Context/Curator/curatorContext";
 // "Suggest Keywords with AI" — opt-in keyword suggestions inside the Qresp
 // Curation Information section. Sends ONLY the primary paper's bibliographic
 // metadata (title/abstract/venue/DOI) to the BACKEND assist endpoint, which
-// is the only thing that ever talks to the provider (Kimi) — no key, no
+// is the only thing that ever talks to the provider (Gemini) — no key, no
 // endpoint, no provider config exists client-side. The manuscript-excerpt
 // variant lives in the import review behind its own consent checkbox. Every
 // suggestion starts UNCHECKED and nothing is applied until the curator
@@ -135,14 +135,14 @@ const KeywordAssist = ({ onApply }) => {
         <DialogContent dividers>
           <Typography variant="body2" color="secondary" gutterBottom>
             Continuing sends this paper&rsquo;s title, abstract, venue and DOI
-            — and nothing else — to Kimi, the configured AI provider, to
+            — and nothing else — to Gemini, the configured AI provider, to
             generate suggestions. They are only suggestions: nothing is added
             until you select keywords and click Apply, and applied keywords
             are appended to your existing ones — never replacing them.
           </Typography>
           <Typography variant="body2" color="secondary" gutterBottom>
             For richer suggestions, import a .tex file or Overleaf .zip from
-            Publication Information. Manuscript excerpts are sent to Kimi
+            Publication Information. Manuscript excerpts are sent to Gemini
             only after explicit consent there — this action never sends them.
           </Typography>
           {loading ? (

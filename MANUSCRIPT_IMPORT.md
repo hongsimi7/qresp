@@ -105,24 +105,39 @@ bounding requests. The effective end-user file limit remains 10 MB —
 enforced in the backend both on the encoded length and the decoded bytes;
 nothing else about extraction, persistence, or limits changed.
 
-## Optional AI keyword suggestions (Kimi, opt-in)
+## Optional AI keyword suggestions (Gemini, opt-in)
 
-Kimi (Moonshot) is the single selected provider — this is deliberately not a
-multi-provider framework, and the endpoint
-`https://api.moonshot.cn/v1/chat/completions` is fixed in code so no
-environment mistake can redirect the prompt elsewhere.
+Google Gemini is the single selected provider — deliberately not a
+multi-provider framework. The API host
+`https://generativelanguage.googleapis.com/v1beta/models` is fixed in code
+so no environment mistake can redirect the prompt elsewhere; only the model
+name is configurable, and it is sanitized (plain model tokens only) before
+it enters the request path. Calls use the native
+`POST {host}/{model}:generateContent` endpoint with structured JSON output
+(`responseMimeType: application/json` plus a narrow `responseSchema`), never
+the OpenAI-compatibility mode, and never Files, Google Search, Grounding,
+URL Context, or Code Execution.
 
 - **Disabled by default.** Enabled only when the server sets BOTH
-  `QRESP_KIMI_ENABLED=1` and `QRESP_KIMI_API_KEY`. Optional tuning:
-  `QRESP_KIMI_MODEL` (default `kimi-k3`),
-  `QRESP_KIMI_TIMEOUT_SECONDS` (default 15, hard ceiling 60),
-  `QRESP_KIMI_MAX_MANUSCRIPT_CHARS` (default 60000),
-  `QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY` (default 20; a persistent
+  `QRESP_GEMINI_ENABLED=1` and `QRESP_GEMINI_API_KEY`. Optional tuning:
+  `QRESP_GEMINI_MODEL` (default `gemini-3.6-flash`),
+  `QRESP_GEMINI_TIMEOUT_SECONDS` (default 15, hard ceiling 60),
+  `QRESP_GEMINI_MAX_MANUSCRIPT_CHARS` (default 60000),
+  `QRESP_GEMINI_MAX_REQUESTS_PER_USER_PER_DAY` (default 20; a persistent
   per-user daily counter enforces it, counted per PROVIDER CALL so a
-  chunked manuscript cannot bypass the limit). Environment variables only —
-  never config.ini; the retired `QRESP_QWEN_*` variables have no effect and
-  no aliases. Only the backend ever contacts Kimi: no key, endpoint, or
-  provider configuration exists in frontend code.
+  chunked manuscript cannot bypass the limit),
+  `QRESP_GEMINI_MAX_OUTPUT_TOKENS` (default and ceiling 256). Environment
+  variables only — never config.ini; the retired `QRESP_KIMI_*` (and older
+  `QRESP_QWEN_*`) variables have no effect and no aliases.
+- **The key is a dedicated Google AI Studio / Gemini API key — NOT the
+  Google OAuth client secret** used by "Sign in with Google". The assist
+  module never reads `QRESP_GOOGLE_*`, and no user OAuth token, Drive or
+  Gmail scope is ever involved. The key travels only in the
+  `x-goog-api-key` request header (never a `?key=` query string, which would
+  leak into proxy logs).
+- Only the backend ever contacts Gemini: no key, endpoint, or provider
+  configuration exists in frontend code. Failed calls are **never retried** —
+  a retried paid request is accidental spend.
 - **Two entry points, both suggestion-only:** "Suggest Keywords with AI" in
   Qresp Curation Information sends only the paper's title/abstract/venue/DOI;
   manuscript imports additionally offer a default-OFF consent checkbox
@@ -137,7 +152,7 @@ environment mistake can redirect the prompt elsewhere.
   candidates only (no tools, no instruction-following). Datasets, scripts,
   credentials, file paths, emails, workflow data and profiles are never sent.
 - **Results:** strictly parsed, normalized, deduplicated, capped at 8, shown
-  as a separate "AI suggestions (Kimi)" group with every suggestion
+  as a separate "AI suggestions (Gemini)" group with every suggestion
   unchecked; selected ones are appended to Keywords on Apply — nothing is
   ever auto-written, and manuscript text is never stored or logged anywhere.
 
