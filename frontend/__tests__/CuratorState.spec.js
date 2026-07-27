@@ -284,6 +284,64 @@ describe("CuratorState draft persistence", () => {
     expect(screen.getByTestId("biblio-title")).toHaveTextContent("Primary T");
   });
 
+  it("keeps the manuscript source in runtime state only — never in a draft", async () => {
+    // The selected .tex/.zip/.pdf is a page-session File handle for the AI
+    // assist; it must never reach localStorage or an account draft.
+    const SourceProbe = () => {
+      const { sourceFile, setSourceFile, setCuratorInfo, saveDraft } =
+        useContext(CuratorContext);
+      return (
+        <div>
+          <span data-testid="source-name">
+            {sourceFile ? sourceFile.name : "none"}
+          </span>
+          <button
+            onClick={() =>
+              setSourceFile(new File(["%PDF-1.4 body"], "secret-paper.pdf"))
+            }
+          >
+            Pick source
+          </button>
+          <button
+            onClick={() =>
+              setCuratorInfo({
+                firstName: "Ada",
+                middleName: "",
+                lastName: "L",
+                emailId: "ada@example.com",
+                affiliation: "",
+              })
+            }
+          >
+            Touch form
+          </button>
+          <button onClick={saveDraft}>Save draft</button>
+        </div>
+      );
+    };
+    const user = userEvent.setup();
+    render(
+      <CuratorState>
+        <SourceProbe />
+      </CuratorState>
+    );
+
+    await user.click(screen.getByRole("button", { name: /pick source/i }));
+    expect(screen.getByTestId("source-name")).toHaveTextContent(
+      "secret-paper.pdf"
+    );
+
+    await user.click(screen.getByRole("button", { name: /touch form/i }));
+    await user.click(screen.getByRole("button", { name: /save draft/i }));
+
+    const stored = localStorage.getItem("state") || "";
+    expect(stored).not.toBe("");
+    expect(stored).not.toContain("secret-paper.pdf");
+    expect(stored).not.toContain("sourceFile");
+    expect(stored).not.toContain("%PDF");
+    expect(JSON.parse(stored)).not.toHaveProperty("sourceFile");
+  });
+
   it("saves registered open-form values to account drafts before validation", async () => {
     const user = userEvent.setup();
     render(

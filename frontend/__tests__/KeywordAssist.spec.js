@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 jest.mock("axios");
@@ -108,6 +108,9 @@ describe("KeywordAssist (Suggest Keywords with AI)", () => {
     await user.click(
       screen.getByRole("button", { name: /suggest keywords with ai/i })
     );
+    await user.click(
+      screen.getByRole("button", { name: /get suggestions from metadata/i })
+    );
     expect(axios.post.mock.calls[0][1].title).toBe("Newer typed title");
   });
 
@@ -125,18 +128,23 @@ describe("KeywordAssist (Suggest Keywords with AI)", () => {
   });
 
   it("explains the richer manuscript path with honest EXCERPT wording", async () => {
-    axios.post.mockResolvedValue({ data: { keywords: [], warnings: [] } });
     const user = userEvent.setup();
-    renderAssist();
+    renderAssist(state(), {
+      sourceFile: { name: "paper.pdf", size: 4, file: new File(["x"], "paper.pdf") },
+    });
     await user.click(
       screen.getByRole("button", { name: /suggest keywords with ai/i })
     );
     expect(
-      await screen.findByText(/import a \.tex file or overleaf \.zip from publication information/i)
+      await screen.findByText(/metadata-only analysis/i)
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/manuscript excerpts are sent to gemini only after explicit consent there/i)
+      screen.getByText(/bounded excerpts of the extracted text/i)
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/not the full document, and never the file itself/i)
+    ).toBeInTheDocument();
+    expect(axios.post).not.toHaveBeenCalled();
   });
 
   it("sends only the primary paper's bibliographic metadata", async () => {
@@ -146,6 +154,9 @@ describe("KeywordAssist (Suggest Keywords with AI)", () => {
 
     await user.click(
       screen.getByRole("button", { name: /suggest keywords with ai/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /get suggestions from metadata/i })
     );
     expect(axios.post).toHaveBeenCalledWith("/api/assist/keywords", {
       title: "Ice nucleation",
@@ -168,7 +179,7 @@ describe("KeywordAssist (Suggest Keywords with AI)", () => {
     ).toBeInTheDocument();
     // Manuscript excerpts are explicitly NOT part of this action.
     expect(
-      screen.getByText(/manuscript excerpts are sent to gemini only after explicit consent there/i)
+      screen.getByText(/no manuscript source is selected/i)
     ).toBeInTheDocument();
     // The provider is named only in the dialog copy — the trigger button
     // itself stays generic (asserted in the eligibility tests above, where
@@ -176,6 +187,8 @@ describe("KeywordAssist (Suggest Keywords with AI)", () => {
     expect(
       screen.queryByText(/googleapis|api key|x-goog|oauth|client secret/i)
     ).toBeNull();
+    // Opening the dialog is not a request: nothing has been sent yet.
+    expect(axios.post).not.toHaveBeenCalled();
   });
 
   it("shows an intelligible message when the provider is not configured", async () => {
@@ -191,6 +204,9 @@ describe("KeywordAssist (Suggest Keywords with AI)", () => {
     renderAssist();
     await user.click(
       screen.getByRole("button", { name: /suggest keywords with ai/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /get suggestions from metadata/i })
     );
     expect(
       await screen.findByText(/not configured on this server/i)
@@ -209,6 +225,9 @@ describe("KeywordAssist (Suggest Keywords with AI)", () => {
 
     await user.click(
       screen.getByRole("button", { name: /suggest keywords with ai/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /get suggestions from metadata/i })
     );
     const first = await screen.findByRole("checkbox", {
       name: /apply keyword molecular dynamics/i,
@@ -230,6 +249,94 @@ describe("KeywordAssist (Suggest Keywords with AI)", () => {
     expect(onApply).toHaveBeenCalledWith(["Molecular Dynamics"]);
   });
 
+  it("is eligible from a SELECTED SOURCE alone, but sends nothing without consent", async () => {
+    const empty = state();
+    empty.referenceInfo = { ...empty.referenceInfo, title: "", abstract: "" };
+    const user = userEvent.setup();
+    renderAssist(empty, {
+      sourceFile: { name: "paper.pdf", size: 1234, file: new File(["x"], "paper.pdf") },
+    });
+
+    // A source alone enables the action...
+    const trigger = screen.getByRole("button", {
+      name: /suggest keywords with ai/i,
+    });
+    expect(trigger).toBeEnabled();
+    expect(screen.getByText(/manuscript source selected: paper\.pdf/i))
+      .toBeInTheDocument();
+
+    await user.click(trigger);
+    // ...but with no title/abstract the request needs the consent box.
+    const consent = screen.getByRole("checkbox", {
+      name: /analyze the selected manuscript source with ai/i,
+    });
+    expect(consent).not.toBeChecked();
+    expect(
+      screen.getByRole("button", { name: /get suggestions from metadata/i })
+    ).toBeDisabled();
+    expect(
+      screen.getByText(/tick full-source analysis to request suggestions/i)
+    ).toBeInTheDocument();
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it("sends the source only after consent, alongside the metadata", async () => {
+    axios.post.mockResolvedValue({ data: { keywords: ["Water"], warnings: [] } });
+    const user = userEvent.setup();
+    renderAssist(state(), {
+      sourceFile: {
+        name: "paper.pdf",
+        size: 4,
+        file: new File(["pdf-bytes"], "paper.pdf", { type: "application/pdf" }),
+      },
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: /suggest keywords with ai/i })
+    );
+    // Metadata-only is available without touching the consent box.
+    expect(
+      screen.getByRole("button", { name: /get suggestions from metadata$/i })
+    ).toBeEnabled();
+
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /analyze the selected manuscript source with ai/i,
+      })
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: /get suggestions from metadata \+ source/i,
+      })
+    );
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalled());
+    const body = axios.post.mock.calls[0][1];
+    expect(body.filename).toBe("paper.pdf");
+    expect(typeof body.content_base64).toBe("string");
+    expect(body.content_base64.length).toBeGreaterThan(0);
+    expect(body.title).toBe("Ice nucleation");
+  });
+
+  it("stays metadata-only when a source exists but consent is not given", async () => {
+    axios.post.mockResolvedValue({ data: { keywords: ["Water"], warnings: [] } });
+    const user = userEvent.setup();
+    renderAssist(state(), {
+      sourceFile: { name: "paper.pdf", size: 4, file: new File(["x"], "paper.pdf") },
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: /suggest keywords with ai/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /get suggestions from metadata$/i })
+    );
+    await waitFor(() => expect(axios.post).toHaveBeenCalled());
+    const body = axios.post.mock.calls[0][1];
+    expect(body).not.toHaveProperty("filename");
+    expect(body).not.toHaveProperty("content_base64");
+  });
+
   it("cancel applies nothing", async () => {
     axios.post.mockResolvedValue({
       data: { keywords: ["Water"], warnings: [] },
@@ -239,6 +346,9 @@ describe("KeywordAssist (Suggest Keywords with AI)", () => {
 
     await user.click(
       screen.getByRole("button", { name: /suggest keywords with ai/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /get suggestions from metadata/i })
     );
     await screen.findByRole("checkbox", { name: /apply keyword water/i });
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));

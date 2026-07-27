@@ -9,6 +9,7 @@ import {
 
 import { RegularStyledButton } from "../button";
 import AuthContext from "../../Context/Auth/authContext";
+import CuratorContext from "../../Context/Curator/curatorContext";
 import ImportReview from "./ImportReview";
 
 // "Import Manuscript Source" — the compact manuscript-import area inside
@@ -18,6 +19,12 @@ import ImportReview from "./ImportReview";
 // dialog, whose destination is the canonical primary-paper bibliography.
 // There is deliberately NO DOI input here: the section's single canonical
 // DOI field (with its Fetch button) lives in the form right below.
+//
+// The chosen file is also remembered as the session's manuscript SOURCE
+// (runtime React state only — never a draft, never localStorage), so the AI
+// keyword assist can re-read it later IF the curator consents there. Only
+// files the user picks locally are ever read: Qresp never downloads a PDF
+// from a DOI, a publisher page, or any stored URL.
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
@@ -25,6 +32,8 @@ const PaperImport = () => {
   // Defensive default: this renders inside PaperInfoForm, which some tests
   // mount without an AuthContext provider.
   const { authenticated } = useContext(AuthContext) || {};
+  const { sourceFile, setSourceFile, clearSourceFile } =
+    useContext(CuratorContext) || {};
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -43,6 +52,8 @@ const PaperImport = () => {
       setError("The file is too large to import (limit 10 MB).");
       return;
     }
+    // Remember the pick for the (separately consented) AI source analysis.
+    if (setSourceFile) setSourceFile(file);
     setLoading(true);
     setError("");
     const reader = new FileReader();
@@ -88,11 +99,13 @@ const PaperImport = () => {
       {authenticated ? (
         <Fragment>
           <Typography variant="body2" color="secondary" gutterBottom>
-            Propose this paper&rsquo;s fields from your manuscript source
-            (.tex or an Overleaf .zip, 10 MB limit). Everything is reviewed
+            Propose this paper&rsquo;s fields from your manuscript source —
+            a <strong>.tex</strong> file, an Overleaf <strong>.zip</strong>,
+            or a <strong>.pdf</strong> (10 MB limit). Everything is reviewed
             before anything is applied; nothing is published or overwritten
             silently. To fill fields from a published DOI instead, use the
-            DOI field&rsquo;s Fetch button below.
+            DOI field&rsquo;s Fetch button below. A PDF is read for text only
+            (no OCR) and is never downloaded from a DOI or publisher.
           </Typography>
           <Box
             sx={{
@@ -104,7 +117,7 @@ const PaperImport = () => {
             }}
           >
             <input
-              accept=".tex,.zip"
+              accept=".tex,.zip,.pdf"
               id="paper-import-file"
               type="file"
               style={{ display: "none" }}
@@ -117,6 +130,22 @@ const PaperImport = () => {
             </label>
             {loading ? <CircularProgress size={24} /> : null}
           </Box>
+          {sourceFile ? (
+            <Box
+              sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}
+            >
+              <Typography variant="body2" color="secondary">
+                Selected source: {sourceFile.name} — kept in this browser tab
+                only, never saved to a draft.
+              </Typography>
+              <RegularStyledButton
+                size="small"
+                onClick={() => clearSourceFile && clearSourceFile()}
+              >
+                Clear
+              </RegularStyledButton>
+            </Box>
+          ) : null}
           {error ? (
             <Typography variant="body2" color="error" sx={{ mt: 1 }}>
               {error}
@@ -130,8 +159,8 @@ const PaperImport = () => {
         </Fragment>
       ) : (
         <Typography variant="body2" color="secondary">
-          Sign in to import this paper&rsquo;s metadata from a .tex/Overleaf
-          manuscript source.
+          Sign in to import this paper&rsquo;s metadata from a .tex, Overleaf
+          .zip, or .pdf manuscript source.
         </Typography>
       )}
     </Box>

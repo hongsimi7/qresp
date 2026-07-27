@@ -42,6 +42,10 @@ const renderLive = () => {
   return { onApply };
 };
 
+// Heavy integration render (real CuratorState + full publication form)
+// plus per-keystroke re-renders: the default 5s is too tight.
+jest.setTimeout(30000);
+
 const assistButton = () =>
   screen.getByRole("button", { name: /suggest keywords with ai/i });
 
@@ -70,6 +74,9 @@ describe("KeywordAssist live form integration", () => {
     await waitFor(() => expect(assistButton()).toBeEnabled());
 
     await user.click(assistButton());
+    await user.click(
+      screen.getByRole("button", { name: /get suggestions from metadata/i })
+    );
     await waitFor(() => expect(axios.post).toHaveBeenCalled());
     const payload = axios.post.mock.calls[0][1];
     expect(payload.title).toBe("Typed live title");
@@ -91,6 +98,9 @@ describe("KeywordAssist live form integration", () => {
     await waitFor(() => expect(assistButton()).toBeEnabled());
 
     await user.click(assistButton());
+    await user.click(
+      screen.getByRole("button", { name: /get suggestions from metadata/i })
+    );
     await waitFor(() => expect(axios.post).toHaveBeenCalled());
     expect(axios.post.mock.calls[0][1].abstract).toBe("Typed live abstract.");
     expect(axios.post.mock.calls[0][1].title).toBe("");
@@ -107,6 +117,9 @@ describe("KeywordAssist live form integration", () => {
     );
     await waitFor(() => expect(assistButton()).toBeEnabled());
     await user.click(assistButton());
+    await user.click(
+      screen.getByRole("button", { name: /get suggestions from metadata/i })
+    );
     await waitFor(() => expect(axios.post).toHaveBeenCalled());
 
     // The canonical saved state is still untouched: only the form's Save
@@ -127,6 +140,9 @@ describe("KeywordAssist live form integration", () => {
     );
     await waitFor(() => expect(assistButton()).toBeEnabled());
     await user.click(assistButton());
+    await user.click(
+      screen.getByRole("button", { name: /get suggestions from metadata/i })
+    );
 
     const box = await screen.findByRole("checkbox", {
       name: /apply keyword molecular dynamics/i,
