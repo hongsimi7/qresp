@@ -8,7 +8,7 @@ import { RegularStyledButton } from "../button";
 import { TextInputField, RadioInputField } from "../Form/InputFields";
 import { SubmitAndReset, FormInputLabel } from "../Form/Util";
 import { namesUtil, referenceUtil } from "../../Utils/utils";
-import { doiUtil } from "../../Utils/doi";
+import { doiUtil, DOI_PATTERN } from "../../Utils/doi";
 import NameInput from "../Form//NameInput";
 import Drawer from "../drawer";
 
@@ -29,14 +29,17 @@ const ReferenceInfoForm = ({ editor }) => {
 
   const schema = Yup.object({
     kind: Yup.string().required("Required"),
-    // Optional field: an empty string (registered via defaultValues below)
-    // must not fail the format check.
+    // Optional field. Accepted DOI shapes (bare, `doi:`-labelled, or a
+    // doi.org/dx.doi.org resolver URL) are normalized to the bare DOI BEFORE
+    // the format check, so a pasted resolver URL is no longer rejected; an
+    // empty value (registered via defaultValues below) skips the check, and
+    // non-DOI input still fails it.
     doi: Yup.string()
-      .transform((value, original) => (original === "" ? undefined : value))
-      .matches(
-      /^(10[.][0-9]{4,}(?:[.][0-9]+)*\/(?:(?!["&\'<>])\S)+)$/,
-      "Please enter a valid DOI"
-    ),
+      .transform((value, original) => {
+        const normalized = doiUtil.normalize(original);
+        return normalized === "" ? undefined : normalized;
+      })
+      .matches(DOI_PATTERN, "Please enter a valid DOI"),
     authors: Yup.array()
       .of(
         Yup.object().shape({
@@ -112,26 +115,26 @@ const ReferenceInfoForm = ({ editor }) => {
   });
 
   const fetchFromDOI = () => {
+    // Resolve whatever shape was pasted down to the bare DOI first: the
+    // registry is queried with it, and the field is rewritten to it so what
+    // the curator sees matches what will be saved.
+    const normalizedDoi = doiUtil.normalize(getValues("doi"));
+    if (!DOI_PATTERN.test(normalizedDoi)) {
+      setAlert("Error", "Please enter a valid doi", null);
+      return;
+    }
+    setValue("doi", normalizedDoi);
     showLoader();
-    const currentDoi = getValues("doi");
-    schema
-      .validateAt("doi", currentDoi)
-      .then(() =>
-        doiUtil
-          .get(currentDoi)
-          .then((res) => doiUtil.set(res, setValue))
-          .catch((err) => {
-            console.error(err);
-            setAlert(
-              "Error",
-              "There was an error getting data usig the doi, please contact the admin if problems persist",
-              null
-            );
-          })
-      )
+    doiUtil
+      .get(normalizedDoi)
+      .then((res) => doiUtil.set(res, setValue))
       .catch((err) => {
         console.error(err);
-        setAlert("Error", "Please enter a valid doi", null);
+        setAlert(
+          "Error",
+          "There was an error getting data usig the doi, please contact the admin if problems persist",
+          null
+        );
       })
       .finally(() => hideLoader());
   };
@@ -150,7 +153,8 @@ const ReferenceInfoForm = ({ editor }) => {
             page: values.page || "",
           })
         : "",
-      doi: values.doi,
+      // Store ONE normalized bare DOI regardless of the shape pasted.
+      doi: doiUtil.normalize(values.doi),
       kind: values.kind,
       title: values.title,
       year: values.year,
