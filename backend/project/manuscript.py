@@ -50,6 +50,10 @@ MAX_INCLUDE_DEPTH = 3
 MAX_BIB_FILES = 10
 MAX_TAGS = 15
 MAX_DOI_CANDIDATES = 25
+# PDF: text extraction only. Conservative bounds keep a hostile or simply
+# enormous file from turning into unbounded work.
+MAX_PDF_PAGES = 100
+MAX_PDF_TEXT_CHARS = 1000000
 
 
 class ImportError_(Exception):
@@ -517,6 +521,117 @@ def _process_zip(data):
     }
 
 
+# ------------------------------------------------------------- PDF handling
+
+def _process_pdf(data):
+    """Extract TEXT from a PDF, in memory only.
+
+    Text is all Qresp ever takes: pages are never rendered, and embedded
+    JavaScript, attachments, embedded files and annotations are never opened
+    or executed. There is no OCR, so an image-only (scanned) PDF is rejected
+    rather than silently yielding nothing.
+    """
+    try:
+        from pypdf import PdfReader
+    except Exception as e:  # pragma: no cover - deployment misconfiguration
+        print("PDF support unavailable: %s" % type(e).__name__)
+        raise ImportError_("PDF support is not available on this server.")
+
+    try:
+        reader = PdfReader(io.BytesIO(data))
+    except Exception:
+        raise ImportError_("This file is not a readable PDF.")
+
+    # Password-protected/encrypted files are refused outright rather than
+    # attempting an empty-password decrypt.
+    try:
+        encrypted = bool(reader.is_encrypted)
+    except Exception:
+        encrypted = False
+    if encrypted:
+        raise ImportError_(
+            "This PDF is password-protected or encrypted. Remove the "
+            "protection and upload it again, or use the .tex source.")
+
+    try:
+        page_count = len(reader.pages)
+    except Exception:
+        raise ImportError_("This file is not a readable PDF.")
+    if page_count < 1:
+        raise ImportError_("This PDF has no pages.")
+    if page_count > MAX_PDF_PAGES:
+        raise ImportError_(
+            "This PDF has too many pages to inspect safely (%d; limit %d)."
+            % (page_count, MAX_PDF_PAGES))
+
+    chunks = []
+    total = 0
+    unreadable_pages = 0
+    for index in range(page_count):
+        try:
+            page_text = reader.pages[index].extract_text() or ""
+        except Exception:
+            # One malformed page must not fail the whole upload.
+            unreadable_pages += 1
+            continue
+        if not page_text:
+            continue
+        remaining = MAX_PDF_TEXT_CHARS - total
+        if remaining <= 0:
+            break
+        chunks.append(page_text[:remaining])
+        total += min(len(page_text), remaining)
+
+    text = re.sub(r"[ \t]+", " ", "\n".join(chunks)).strip()
+    if not text:
+        raise ImportError_(
+            "No text could be extracted from this PDF. Scanned or image-only "
+            "PDFs are not supported yet (Qresp does not run OCR) — upload a "
+            "text-based PDF or the .tex source instead.")
+
+    return text, {
+        "source_kind": "pdf",
+        "pages": page_count,
+        "unreadable_pages": unreadable_pages,
+        "main_candidates": [],
+        "included_files": [],
+        "bib_files": 0,
+        "doi_candidates": [],
+    }
+
+
+def extract_source_text(filename, data):
+    """Manuscript SOURCE upload -> plain text, in memory only.
+
+    The single entry point shared by the import proposals endpoint and the
+    AI keyword assist, so both honour identical type/size/safety rules.
+    Returns (text, details); raises ImportError_ with a user-safe message.
+    """
+    lower = (filename or "").lower()
+    if lower.endswith(".tex"):
+        text = data.decode("utf-8", errors="replace")
+        if len(text) > MAX_TEX_CHARS:
+            raise ImportError_("The TeX file is too large to inspect safely.")
+        return text, {
+            "source_kind": "tex",
+            "main_file": filename,
+            "main_candidates": [filename],
+            "included_files": [],
+            "bib_files": 0,
+            "doi_candidates": [],
+        }
+    if lower.endswith(".zip"):
+        text, details = _process_zip(data)
+        details["source_kind"] = "zip"
+        return text, details
+    if lower.endswith(".pdf"):
+        text, details = _process_pdf(data)
+        details["main_file"] = filename
+        return text, details
+    raise ImportError_("Unsupported file type: upload a .tex file, an "
+                       "Overleaf .zip export, or a .pdf.")
+
+
 # --------------------------------------------------------------- the merge
 
 # Fields where the manuscript's own text wins over registry metadata.
@@ -578,27 +693,34 @@ def import_manuscript(body):
         return {"error": "The file is too large to import (limit %d MB)."
                          % (MAX_UPLOAD_BYTES // (1024 * 1024))}, 400
 
-    lower = filename.lower()
-    details = {"main_file": filename, "main_candidates": [filename],
-               "included_files": [], "bib_files": 0, "doi_candidates": []}
     try:
-        if lower.endswith(".tex"):
-            combined = data.decode("utf-8", errors="replace")
-            if len(combined) > MAX_TEX_CHARS:
-                return {"error": "The TeX file is too large to inspect "
-                                 "safely."}, 400
-        elif lower.endswith(".zip"):
-            combined, details = _process_zip(data)
+        combined, details = extract_source_text(filename, data)
+        if details.get("source_kind") == "pdf":
+            # A PDF has no reliable \title/\author/abstract markup, so nothing
+            # is guessed from its layout. The one deterministic signal is a
+            # printed DOI; when present the registry lookup below fills the
+            # bibliography properly. The PDF's real value is as an AI
+            # keyword-suggestion source.
+            fields = {}
+            doi = None
+            in_text = DOI_IN_TEXT_RE.search(combined)
+            if in_text:
+                doi = normalize_doi(in_text.group(1))
+            if doi:
+                fields["doi"] = doi
         else:
-            return {"error": "Unsupported file type: upload a .tex file or "
-                             "an Overleaf .zip export."}, 400
-        fields = _extract_from_tex(combined)
+            fields = _extract_from_tex(combined)
     except ImportError_ as e:
         return {"error": str(e)}, 400
     except Exception as e:
         # Never echo manuscript content or parser internals to the client.
         print("Manuscript import failed: %s" % type(e).__name__)
         return {"error": "The manuscript could not be parsed."}, 400
+    details.setdefault("main_file", filename)
+    details.setdefault("main_candidates", [filename])
+    details.setdefault("included_files", [])
+    details.setdefault("bib_files", 0)
+    details.setdefault("doi_candidates", [])
 
     warnings = []
     provenance = {key: "manuscript" for key in fields}
@@ -620,8 +742,15 @@ def import_manuscript(body):
                         "bibliographic fields.")
 
     if not fields:
-        warnings.append("Nothing recognizable was found: no \\title, "
-                        "\\author, abstract, keywords, or DOI patterns.")
+        if details.get("source_kind") == "pdf":
+            warnings.append("No DOI was found in this PDF, and Qresp does not "
+                            "guess bibliographic fields from a PDF's layout. "
+                            "Paste the DOI above to fill them — the PDF can "
+                            "still be used as a source for AI keyword "
+                            "suggestions.")
+        else:
+            warnings.append("Nothing recognizable was found: no \\title, "
+                            "\\author, abstract, keywords, or DOI patterns.")
 
     # Bib DOIs belong to REFERENCES, not this manuscript — offered only as
     # candidates for the user to look up deliberately.
@@ -637,5 +766,6 @@ def import_manuscript(body):
         "main_candidates": details["main_candidates"],
         "included_files": details["included_files"],
         "bib_files": details["bib_files"],
+        "source_kind": details.get("source_kind"),
         "warnings": warnings,
     }, 200

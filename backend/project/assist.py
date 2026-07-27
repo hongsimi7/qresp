@@ -39,8 +39,8 @@ from project.auth import csrf_protect, get_current_user
 from project.manuscript import (
     MAX_UPLOAD_BYTES,
     ImportError_,
-    _process_zip,
     _strip_comments,
+    extract_source_text,
 )
 
 # ---- configuration (environment only) --------------------------------------
@@ -193,15 +193,38 @@ _BIBLIOGRAPHY_RE = re.compile(
 _BIBITEM_TAIL_RE = re.compile(r"\\bibitem\b.*", re.DOTALL)
 _BIB_COMMANDS_RE = re.compile(
     r"\\(bibliography|bibliographystyle|printbibliography)\b[^\n]*")
+# A rendered reference list (typical of PDF text) starts at a heading of its
+# own. Only a heading in the LAST part of the document is treated as the start
+# of the bibliography, so a mid-paper mention of "references" is not a cut.
+_REFERENCES_HEADING_RE = re.compile(
+    r"\n[^\S\n]{0,8}(?:\d+[.)]?[^\S\n]*)?"
+    r"(?:references|bibliography|works\s+cited|literature\s+cited)"
+    r"[^\S\n]*:?[^\S\n]*\n", re.IGNORECASE)
+_REFERENCES_MIN_POSITION = 0.4
 
 
-def _prepare_manuscript_text(tex, max_chars):
-    """Reduce raw TeX to a bounded plain-ish excerpt for keyword suggestion.
-    The bibliography is dropped FIRST so cited works do not dominate the
-    candidates; comments go next; whitespace is collapsed."""
-    text = _BIBLIOGRAPHY_RE.sub(" ", tex or "")
+def _strip_reference_section(text):
+    """Drop a trailing reference list so cited works cannot dominate the
+    keyword candidates. Conservative: only the LAST heading, and only when it
+    sits in the final stretch of the document."""
+    if not text:
+        return text
+    cut = None
+    for match in _REFERENCES_HEADING_RE.finditer(text):
+        if match.start() >= len(text) * _REFERENCES_MIN_POSITION:
+            cut = match.start()
+    return text[:cut] if cut else text
+
+
+def _prepare_manuscript_text(source_text, max_chars):
+    """Reduce raw source text (TeX or PDF-extracted) to a bounded excerpt for
+    keyword suggestion. Bibliographies are dropped FIRST — both the TeX
+    environments/commands and a rendered reference section — so cited works do
+    not dominate the candidates; TeX comments go next; whitespace collapses."""
+    text = _BIBLIOGRAPHY_RE.sub(" ", source_text or "")
     text = _BIBITEM_TAIL_RE.sub(" ", text)
     text = _BIB_COMMANDS_RE.sub(" ", text)
+    text = _strip_reference_section(text)
     text = _strip_comments(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:max_chars]
@@ -444,15 +467,11 @@ def suggest_keywords(body):
             return {"error": "The upload could not be decoded."}, 400
         if len(data) > MAX_UPLOAD_BYTES:
             return {"error": "The file is too large to analyze."}, 400
-        lower = filename.lower()
         try:
-            if lower.endswith(".tex"):
-                combined = data.decode("utf-8", errors="replace")
-            elif lower.endswith(".zip"):
-                combined, _details = _process_zip(data)
-            else:
-                return {"error": "Unsupported file type: upload a .tex file "
-                                 "or an Overleaf .zip export."}, 400
+            # Same hardened extractor as the import endpoint (.tex/.zip/.pdf),
+            # in memory only: the upload is never written anywhere, and only
+            # the sanitized text below can reach the provider.
+            combined, _details = extract_source_text(filename, data)
         except ImportError_ as e:
             return {"error": str(e)}, 400
         except Exception as e:

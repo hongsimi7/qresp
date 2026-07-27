@@ -30,6 +30,11 @@ requests_oauthlib
 # OIDC ID-token validation for institutional login (CILogon): maintained JWT
 # library with RS256/JWKS support — never hand-roll token verification.
 PyJWT[crypto]
+# In-memory PDF TEXT extraction for the optional manuscript-source import.
+# pypdf is pure Python (no binary wheels, so it follows CPython promptly),
+# maintained, and text-only: Qresp never renders, executes, or opens embedded
+# JavaScript/attachments, and never performs OCR.
+pypdf
 WTForms
 lxml
 gunicorn

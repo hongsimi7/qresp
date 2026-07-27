@@ -404,7 +404,7 @@ class TestZipImport(ImportTestBase):
 class TestUploadValidation(ImportTestBase):
     def test_unsupported_extension_rejected(self):
         self.login()
-        response, _ = self.import_source("paper.pdf", b"%PDF-1.4")
+        response, _ = self.import_source("paper.docx", b"PK\x03\x04word")
         self.assertEqual(400, response.status_code)
         self.assertIn("Unsupported file type", response.json()["error"])
 
