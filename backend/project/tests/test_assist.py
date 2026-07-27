@@ -307,7 +307,72 @@ class TestAssistSuggestions(AssistTestBase):
             self.assertNotIn("project 12345", sink)
             self.assertNotIn("Quota exceeded", sink)
 
-    def test_blocked_or_empty_completion_is_reported_safely(self):
+    def test_requests_minimal_thinking_without_thought_summaries(self):
+        self.login()
+        response, requests_mock = self.suggest({"title": "T"})
+        self.assertEqual(200, response.status_code, response.text)
+        config = requests_mock.post.call_args.kwargs["json"]["generationConfig"]
+        # Keyword extraction needs no deliberation, and thinking tokens share
+        # the output budget with the answer.
+        self.assertEqual({"thinkingLevel": "minimal"},
+                         config["thinkingConfig"])
+        # Thought summaries stay off.
+        self.assertNotIn("includeThoughts", config["thinkingConfig"])
+
+    def test_parses_a_thought_part_followed_by_the_answer(self):
+        # THE STAGING BUG: a thinking model emits reasoning parts before the
+        # structured answer. Concatenating them produced invalid JSON.
+        self.login()
+        response, _ = self.suggest(
+            {"title": "T"},
+            reply=MockResponse({"candidates": [{
+                "content": {"parts": [
+                    {"thought": True,
+                     "text": "Let me consider the abstract... the topic is "
+                             "clearly ice nucleation."},
+                    {"thoughtSignature": "Ct8BQ2hvb3NlIGtleXdvcmRz"},
+                    {"text": json.dumps({"keywords": ["Ice Nucleation",
+                                                      "DFT"]})},
+                ]},
+                "finishReason": "STOP",
+            }]}))
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(["Ice Nucleation", "DFT"],
+                         response.json()["keywords"])
+        # Reasoning text and thought signatures never surface.
+        self.assertNotIn("Let me consider", response.text)
+        self.assertNotIn("thoughtSignature", response.text)
+        self.assertNotIn("Ct8BQ2hvb3Nl", response.text)
+
+    def test_parses_a_markdown_fenced_json_answer(self):
+        self.login()
+        fenced = "```json\n%s\n```" % json.dumps({"keywords": ["Water"]})
+        response, _ = self.suggest(
+            {"title": "T"},
+            reply=MockResponse({"candidates": [{
+                "content": {"parts": [{"text": fenced}]},
+                "finishReason": "STOP",
+            }]}))
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(["Water"], response.json()["keywords"])
+
+    def test_parses_an_answer_split_across_text_parts(self):
+        self.login()
+        payload = json.dumps({"keywords": ["Phase Diagrams"]})
+        response, _ = self.suggest(
+            {"title": "T"},
+            reply=MockResponse({"candidates": [{
+                "content": {"parts": [
+                    {"thought": True, "text": "reasoning"},
+                    {"text": payload[:10]},
+                    {"text": payload[10:]},
+                ]},
+                "finishReason": "STOP",
+            }]}))
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(["Phase Diagrams"], response.json()["keywords"])
+
+    def test_prompt_block_is_reported_as_a_declined_request(self):
         self.login()
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -319,11 +384,93 @@ class TestAssistSuggestions(AssistTestBase):
                         "safetyRatings": [{"category": "HARM_CATEGORY_X"}],
                     }}))
         self.assertEqual(502, response.status_code)
+        self.assertIn("declined this request", response.json()["error"])
+        # The client never sees provider category labels or raw output...
+        self.assertNotIn("SAFETY", response.text)
+        self.assertNotIn("HARM_CATEGORY", response.text)
+        # ...while the server keeps a sanitized breadcrumb (labels only).
+        self.assertIn("block=SAFETY", stdout.getvalue())
+        self.assertNotIn("HARM_CATEGORY", stdout.getvalue())
+
+    def test_safety_finish_reason_is_reported_as_a_declined_request(self):
+        self.login()
+        response, _ = self.suggest(
+            {"title": "T"},
+            reply=MockResponse({"candidates": [{
+                "content": {"parts": []},
+                "finishReason": "PROHIBITED_CONTENT",
+                "safetyRatings": [{"category": "HARM_CATEGORY_Y"}],
+            }]}))
+        self.assertEqual(502, response.status_code)
+        self.assertIn("declined this request", response.json()["error"])
+        self.assertNotIn("PROHIBITED_CONTENT", response.text)
+
+    def test_no_candidates_is_distinct_from_a_malformed_answer(self):
+        self.login()
+        response, _ = self.suggest(
+            {"title": "T"}, reply=MockResponse({"candidates": []}))
+        self.assertEqual(502, response.status_code)
         self.assertIn("did not return suggestions", response.json()["error"])
-        # The block reason can quote the prompt: never echo it.
+
+    def test_truncated_answer_without_text_is_not_called_unreadable(self):
+        # The output budget was spent before the answer: no usable candidate,
+        # not a parsing failure.
+        self.login()
+        response, _ = self.suggest(
+            {"title": "T"},
+            reply=MockResponse({"candidates": [{
+                "content": {"parts": [{"thought": True, "text": "thinking"}]},
+                "finishReason": "MAX_TOKENS",
+            }]}))
+        self.assertEqual(502, response.status_code)
+        self.assertIn("did not return suggestions", response.json()["error"])
+        self.assertNotIn("thinking", response.text)
+
+    def test_malformed_answer_text_is_reported_as_unreadable(self):
+        self.login()
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            response, _ = self.suggest(
+                {"title": "T"},
+                reply=MockResponse({"candidates": [{
+                    "content": {"parts": [
+                        {"text": "Sure! Here are some keywords: DFT, water"}]},
+                    "finishReason": "STOP",
+                }]}))
+        self.assertEqual(502, response.status_code)
+        self.assertIn("unreadable", response.json()["error"])
+        # The raw model output never reaches the client or the logs.
         for sink in (response.text, stdout.getvalue()):
-            self.assertNotIn("SAFETY", sink)
-            self.assertNotIn("HARM_CATEGORY", sink)
+            self.assertNotIn("Sure! Here are", sink)
+
+    def test_missing_keywords_array_is_reported_as_unreadable(self):
+        self.login()
+        response, _ = self.suggest(
+            {"title": "T"},
+            reply=MockResponse({"candidates": [{
+                "content": {"parts": [
+                    {"text": json.dumps({"topics": ["DFT"]})}]},
+                "finishReason": "STOP",
+            }]}))
+        self.assertEqual(502, response.status_code)
+        self.assertIn("unreadable", response.json()["error"])
+
+    def test_manuscript_text_never_leaks_through_a_parse_failure(self):
+        self.login()
+        stdout = io.StringIO()
+        tex = ("\\documentclass{article}\\begin{document}"
+               "SECRET_MANUSCRIPT_TOKEN nucleation\\end{document}")
+        with contextlib.redirect_stdout(stdout):
+            response, _ = self.suggest(
+                {"filename": "paper.tex", "content_base64": b64(tex)},
+                reply=MockResponse({"candidates": [{
+                    "content": {"parts": [{"text": "not json at all"}]},
+                    "finishReason": "STOP",
+                }]}))
+        self.assertEqual(502, response.status_code)
+        for sink in (response.text, stdout.getvalue()):
+            self.assertNotIn("SECRET_MANUSCRIPT_TOKEN", sink)
+            self.assertNotIn("not json at all", sink)
 
     def test_prompt_is_fixed_and_body_fields_are_allowlisted(self):
         self.login()

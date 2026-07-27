@@ -209,6 +209,24 @@ QRESP_GEMINI_MAX_OUTPUT_TOKENS=256
 - [ ] Per-user daily limit returns a clear message once exceeded (429)
 - [ ] Upstream rate limiting (429) surfaces a generic "rate limited" message
       with no quota/project details
+
+What the four distinct AI error messages mean (all safe to show a curator;
+none of them ever contains model output, prompt, manuscript text, headers or
+the key):
+
+| Message | Meaning | Where to look |
+| --- | --- | --- |
+| "…could not be reached." / "…returned an error." / "…is rate limited…" | Upstream HTTP failure (network, non-200, 429) | Backend log line `AI assist provider …` with the HTTP status |
+| "…declined this request. Try again with different text." | The provider blocked the prompt (`promptFeedback.blockReason`) or terminated the candidate on a safety/policy rule (`finishReason` SAFETY/BLOCKLIST/PROHIBITED_CONTENT/SPII/RECITATION) | `AI assist response: … finish=… block=…` |
+| "…did not return suggestions." | A 200 with no usable answer: no candidate, or a candidate whose only parts were reasoning/thought parts (e.g. `finishReason=MAX_TOKENS` spent the budget before the answer) | Same line, `answer_part=False` |
+| "…returned an unreadable answer." | Answer text existed but was not the agreed `{"keywords": [...]}` payload (prose, or a schema mismatch) | `AI assist response unparseable payload: …` |
+
+- [ ] Suggestions still work when the model emits reasoning before the
+      answer (thinking parts are skipped, not concatenated) — this was the
+      staging "unreadable answer" failure
+- [ ] Server logs show only sanitized diagnostics (status, candidate count,
+      finish reason, block reason, whether an answer part existed) — never
+      response text, prompt, or manuscript content
 - [ ] Backend logs contain no API key, x-goog-api-key header, provider error
       body, block reason, prompt, or manuscript text after these runs
 - [ ] Upload a .tex with \title/\author/abstract → proposals appear;

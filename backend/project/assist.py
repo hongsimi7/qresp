@@ -228,17 +228,52 @@ def _chunk_text(text):
 
 # ---- provider call -----------------------------------------------------------
 
+# One outer Markdown fence is tolerated: models sometimes wrap structured
+# output even when application/json was requested.
+_JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
+
+# Candidate terminations that mean "the model refused / was cut off", as
+# opposed to a normal STOP with a payload.
+_BLOCKING_FINISH_REASONS = {
+    "SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "RECITATION",
+}
+
+
 def _parse_keywords(content):
-    """Strictly parse the provider's JSON keyword response. Returns a list of
-    raw keyword strings or raises ValueError."""
+    """Strictly parse the structured keyword payload. Returns a list of raw
+    keyword strings or raises ValueError/JSONDecodeError."""
     text = (content or "").strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
+    fenced = _JSON_FENCE_RE.match(text)
+    if fenced:
+        text = fenced.group(1).strip()
     data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError("payload is not a JSON object")
     keywords = data.get("keywords")
     if not isinstance(keywords, list):
         raise ValueError("keywords missing")
     return [str(k) for k in keywords if isinstance(k, (str, int, float))]
+
+
+def _answer_text_from_parts(parts):
+    """Concatenate ONLY the answer text of a candidate.
+
+    Gemini 3.x thinking models may emit reasoning parts before the answer:
+    parts flagged `thought: true`, and parts carrying only a
+    `thoughtSignature`. Those are never part of the structured answer — glueing
+    them in front of the JSON is exactly what broke parsing — so they are
+    skipped here and never returned, logged, or surfaced.
+    """
+    chunks = []
+    for part in parts or []:
+        if not isinstance(part, dict):
+            continue
+        if part.get("thought"):
+            continue
+        text = part.get("text")
+        if isinstance(text, str) and text.strip():
+            chunks.append(text)
+    return "".join(chunks).strip()
 
 
 def _ask_gemini(cfg, payload):
@@ -272,6 +307,10 @@ def _ask_gemini(cfg, payload):
                     "responseMimeType": "application/json",
                     "responseSchema": GEMINI_RESPONSE_SCHEMA,
                     "maxOutputTokens": cfg["MAX_OUTPUT_TOKENS"],
+                    # Keyword extraction needs no deliberation, and thinking
+                    # tokens share the output budget — minimal keeps the
+                    # answer inside the cap. Thought summaries stay OFF.
+                    "thinkingConfig": {"thinkingLevel": "minimal"},
                     # No temperature/top_p/top_k: deprecated for this model
                     # generation, and defaults are fine for keywording.
                 },
@@ -290,22 +329,47 @@ def _ask_gemini(cfg, payload):
         return None, "The AI suggestion service returned an error."
     try:
         data = response.json()
+        if not isinstance(data, dict):
+            raise ValueError("body is not an object")
     except Exception as e:
-        print("AI assist response unparseable: %s" % type(e).__name__)
+        print("AI assist response unparseable envelope: %s" % type(e).__name__)
         return None, "The AI suggestion service returned an unreadable answer."
 
-    # A safety block (or any empty completion) arrives as a 200 with no usable
-    # candidate; never echo the reason, which can quote the prompt.
+    # Sanitized diagnostics only: shapes and category labels, never response
+    # text, prompt text, manuscript content, or credentials.
+    feedback = data.get("promptFeedback") or {}
+    block_reason = feedback.get("blockReason")
     candidates = data.get("candidates") or []
+    first = candidates[0] if candidates and isinstance(candidates[0], dict) \
+        else {}
+    finish_reason = first.get("finishReason")
+    parts = (first.get("content") or {}).get("parts") or []
+    answer_text = _answer_text_from_parts(parts)
+    print("AI assist response: status=%s candidates=%d finish=%s block=%s "
+          "answer_part=%s"
+          % (response.status_code, len(candidates), finish_reason or "-",
+             block_reason or "-", bool(answer_text)))
+
+    # 1. The prompt itself was blocked upstream.
+    if block_reason:
+        return None, ("The AI suggestion service declined this request. Try "
+                      "again with different text.")
+    # 2. Nothing usable came back (no candidate at all).
     if not candidates:
-        print("AI assist response withheld by the provider")
         return None, "The AI suggestion service did not return suggestions."
+    # 3. The candidate was terminated by a safety/policy rule.
+    if finish_reason and str(finish_reason).upper() in _BLOCKING_FINISH_REASONS:
+        return None, ("The AI suggestion service declined this request. Try "
+                      "again with different text.")
+    # 4. A candidate exists but carries no answer text (e.g. the output budget
+    #    was spent before the answer, or only reasoning parts came back).
+    if not answer_text:
+        return None, "The AI suggestion service did not return suggestions."
+    # 5. Text exists but is not the agreed structured payload.
     try:
-        parts = (candidates[0].get("content") or {}).get("parts") or []
-        text = "".join(part.get("text") or "" for part in parts)
-        return _parse_keywords(text), None
+        return _parse_keywords(answer_text), None
     except Exception as e:
-        print("AI assist response unparseable: %s" % type(e).__name__)
+        print("AI assist response unparseable payload: %s" % type(e).__name__)
         return None, "The AI suggestion service returned an unreadable answer."
 
 
