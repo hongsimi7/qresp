@@ -1,3 +1,4 @@
+import json
 import os
 import unittest
 from unittest import mock
@@ -445,6 +446,256 @@ class TestAnalyzeFolderResponse(CurationTestBase):
                 "/api/curation/analyze-folder", json={"path": FOLDER},
                 headers={"X-CSRF-Token": self.csrf})
         self.assertEqual(404, response.status_code)
+
+
+GEMINI_ENV = {
+    "QRESP_GEMINI_ENABLED": "1",
+    "QRESP_GEMINI_API_KEY": "test-gemini-super-secret",
+    "QRESP_GEMINI_MODEL": "gemini-test",
+}
+
+AI_ITEMS = [
+    {
+        "id": "script-0",
+        "kind": "script",
+        "name": "scripts/plot_vdos.py",
+        "paths": ["scripts/plot_vdos.py"],
+        "context": "Plot the vibrational density of states.",
+    },
+]
+
+
+def gemini_reply(items):
+    return {"candidates": [{"content": {"parts": [
+        {"text": json.dumps({"items": items})}]}}]}
+
+
+class MockResponse:
+    def __init__(self, payload, status_code=200, text=""):
+        self._payload = payload
+        self.status_code = status_code
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+class DescribeCandidatesBase(CurationTestBase):
+    def setUp(self):
+        super().setUp()
+        for key, value in GEMINI_ENV.items():
+            os.environ[key] = value
+
+    def tearDown(self):
+        for key in GEMINI_ENV:
+            os.environ.pop(key, None)
+        from project.models import AssistUsage
+        AssistUsage.drop_collection()
+        super().tearDown()
+
+    def describe(self, payload, reply=None, csrf=True):
+        headers = {}
+        if csrf and getattr(self, "csrf", None):
+            headers["X-CSRF-Token"] = self.csrf
+        with mock.patch("project.assist.requests") as requests_mock:
+            requests_mock.post.return_value = (
+                reply if reply is not None
+                else MockResponse(gemini_reply([
+                    {"id": "script-0", "description": "Plots the VDOS.",
+                     "keywords": ["VDOS"]}])))
+            response = self.client.post(
+                "/api/curation/describe-candidates", json=payload,
+                headers=headers)
+        return response, requests_mock
+
+
+class TestDescribeCandidatesGating(DescribeCandidatesBase):
+    def test_anonymous_rejected(self):
+        response, requests_mock = self.describe(
+            {"consent": True, "items": AI_ITEMS}, csrf=False)
+        self.assertEqual(401, response.status_code)
+        requests_mock.post.assert_not_called()
+
+    def test_missing_csrf_rejected(self):
+        self.login()
+        response, requests_mock = self.describe(
+            {"consent": True, "items": AI_ITEMS}, csrf=False)
+        self.assertEqual(403, response.status_code)
+        requests_mock.post.assert_not_called()
+
+    def test_consent_is_required(self):
+        # Omitting it never reaches the handler: the spec marks it required.
+        self.login()
+        response, requests_mock = self.describe({"items": AI_ITEMS})
+        self.assertEqual(400, response.status_code)
+        requests_mock.post.assert_not_called()
+
+    def test_consent_false_is_not_consent(self):
+        self.login()
+        response, requests_mock = self.describe(
+            {"consent": False, "items": AI_ITEMS})
+        self.assertEqual(400, response.status_code)
+        self.assertIn("Confirm", response.json()["error"])
+        requests_mock.post.assert_not_called()
+
+    def test_unconfigured_provider_reports_503_without_calling_out(self):
+        for key in GEMINI_ENV:
+            os.environ.pop(key, None)
+        self.login()
+        response, requests_mock = self.describe(
+            {"consent": True, "items": AI_ITEMS})
+        self.assertEqual(503, response.status_code)
+        self.assertIn("not configured", response.json()["error"])
+        requests_mock.post.assert_not_called()
+
+    def test_folder_analysis_still_works_without_gemini(self):
+        # The deterministic path must never depend on the AI provider.
+        for key in GEMINI_ENV:
+            os.environ.pop(key, None)
+        self.login()
+        response, _, _ = self.analyze()
+        self.assertEqual(200, response.status_code)
+        self.assertTrue(response.json()["candidates"]["charts"])
+
+    def test_quota_is_enforced(self):
+        os.environ["QRESP_GEMINI_MAX_REQUESTS_PER_USER_PER_DAY"] = "1"
+        try:
+            self.login()
+            first, _ = self.describe({"consent": True, "items": AI_ITEMS})
+            self.assertEqual(200, first.status_code)
+            second, requests_mock = self.describe(
+                {"consent": True, "items": AI_ITEMS})
+            self.assertEqual(429, second.status_code)
+            requests_mock.post.assert_not_called()
+        finally:
+            os.environ.pop("QRESP_GEMINI_MAX_REQUESTS_PER_USER_PER_DAY", None)
+
+
+class TestDescribeCandidatesPayload(DescribeCandidatesBase):
+    def sent_payload(self, items):
+        self.login()
+        _, requests_mock = self.describe({"consent": True, "items": items})
+        body = requests_mock.post.call_args.kwargs["json"]
+        return json.loads(body["contents"][0]["parts"][0]["text"]), body
+
+    def test_only_allowlisted_fields_travel(self):
+        payload, _ = self.sent_payload([dict(
+            AI_ITEMS[0],
+            email="curator@example.com",
+            owner="someone",
+            absolute_path="/etc/passwd",
+            file_bytes="\x00\x01binary",
+            api_key="secret",
+        )])
+        for item in payload["items"]:
+            self.assertEqual(set(curation.AI_ALLOWED_KEYS), set(item))
+        serialized = json.dumps(payload)
+        self.assertNotIn("curator@example.com", serialized)
+        self.assertNotIn("someone", serialized)
+        self.assertNotIn("/etc/passwd", serialized)
+        self.assertNotIn("binary", serialized)
+        self.assertNotIn("secret", serialized)
+
+    def test_absolute_and_external_paths_are_dropped(self):
+        payload, _ = self.sent_payload([dict(
+            AI_ITEMS[0],
+            paths=["scripts/ok.py", "/etc/shadow", "https://evil.com/x"])])
+        self.assertEqual(["scripts/ok.py"], payload["items"][0]["paths"])
+
+    def test_context_is_bounded(self):
+        payload, _ = self.sent_payload([dict(AI_ITEMS[0], context="x" * 99999)])
+        self.assertEqual(curation.MAX_AI_CONTEXT_CHARS,
+                         len(payload["items"][0]["context"]))
+
+    def test_item_count_is_bounded(self):
+        payload, _ = self.sent_payload([
+            dict(AI_ITEMS[0], id="script-%d" % i) for i in range(50)])
+        self.assertEqual(curation.MAX_AI_ITEMS, len(payload["items"]))
+
+    def test_unknown_kinds_are_refused(self):
+        self.login()
+        response, requests_mock = self.describe(
+            {"consent": True,
+             "items": [dict(AI_ITEMS[0], kind="experiment")]})
+        self.assertEqual(400, response.status_code)
+        requests_mock.post.assert_not_called()
+
+    def test_structured_output_and_header_auth(self):
+        _, body = self.sent_payload(AI_ITEMS)
+        self.assertEqual(curation.AI_RESPONSE_SCHEMA,
+                         body["generationConfig"]["responseSchema"])
+        self.assertEqual("application/json",
+                         body["generationConfig"]["responseMimeType"])
+        # No tools/grounding/search/code execution are ever requested.
+        for forbidden in ("tools", "toolConfig", "safetySettings"):
+            self.assertNotIn(forbidden, body)
+
+
+class TestDescribeCandidatesResponse(DescribeCandidatesBase):
+    def test_suggestions_are_returned_for_review(self):
+        self.login()
+        response, _ = self.describe({"consent": True, "items": AI_ITEMS})
+        self.assertEqual(200, response.status_code)
+        suggestions = response.json()["suggestions"]
+        self.assertEqual("Plots the VDOS.",
+                         suggestions["script-0"]["description"])
+        self.assertEqual(["VDOS"], suggestions["script-0"]["keywords"])
+
+    def test_ids_that_were_never_sent_are_discarded(self):
+        self.login()
+        response, _ = self.describe(
+            {"consent": True, "items": AI_ITEMS},
+            reply=MockResponse(gemini_reply([
+                {"id": "script-0", "description": "ok", "keywords": []},
+                {"id": "smuggled", "description": "not requested",
+                 "keywords": []}])))
+        self.assertEqual(["script-0"], list(response.json()["suggestions"]))
+
+    def test_malformed_provider_answer_is_a_clean_502(self):
+        self.login()
+        response, _ = self.describe(
+            {"consent": True, "items": AI_ITEMS},
+            reply=MockResponse({"candidates": [{"content": {"parts": [
+                {"text": "I am not JSON at all"}]}}]}))
+        self.assertEqual(502, response.status_code)
+        self.assertIn("unreadable", response.json()["error"])
+
+    def test_provider_error_details_never_leak(self):
+        self.login()
+        response, _ = self.describe(
+            {"consent": True, "items": AI_ITEMS},
+            reply=MockResponse({"error": {"message": "invalid api key abc123"}},
+                               status_code=403, text="invalid api key abc123"))
+        self.assertEqual(502, response.status_code)
+        self.assertNotIn("abc123", response.text)
+        self.assertNotIn("api key", response.text.lower())
+
+    def test_the_api_key_never_appears_in_a_response_or_log(self):
+        self.login()
+        with mock.patch("builtins.print") as printed:
+            response, _ = self.describe({"consent": True, "items": AI_ITEMS})
+        logged = " ".join(str(call.args[0]) for call in printed.call_args_list
+                          if call.args)
+        self.assertNotIn("test-gemini-super-secret", logged)
+        self.assertNotIn("test-gemini-super-secret", response.text)
+
+    def test_descriptions_are_bounded(self):
+        self.login()
+        response, _ = self.describe(
+            {"consent": True, "items": AI_ITEMS},
+            reply=MockResponse(gemini_reply([
+                {"id": "script-0", "description": "y" * 9999,
+                 "keywords": ["k"] * 99}])))
+        suggestion = response.json()["suggestions"]["script-0"]
+        self.assertEqual(curation.MAX_AI_DESCRIPTION_CHARS,
+                         len(suggestion["description"]))
+        self.assertLessEqual(len(suggestion["keywords"]), 8)
+
+    def test_nothing_is_persisted_beyond_the_usage_counter(self):
+        self.login()
+        before = Paper.objects.count()
+        self.describe({"consent": True, "items": AI_ITEMS})
+        self.assertEqual(before, Paper.objects.count())
 
 
 if __name__ == "__main__":

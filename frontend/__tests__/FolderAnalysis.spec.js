@@ -371,6 +371,143 @@ describe("Analyze RCC Folder", () => {
   });
 });
 
+describe("Analyze RCC Folder — optional AI descriptions", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: analysis });
+  });
+
+  const aiButton = () =>
+    screen.getByRole("button", {
+      name: /generate descriptions and keywords with ai/i,
+    });
+
+  const consentBox = () =>
+    screen.getByRole("checkbox", {
+      name: /send the selected file and folder names to the ai service/i,
+    });
+
+  it("requires consent AND a selection before anything is sent", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    expect(consentBox()).not.toBeChecked();
+    expect(aiButton()).toBeDisabled();
+    expect(
+      screen.getByText(/select the candidates you want described first/i)
+    ).toBeInTheDocument();
+
+    // A selection alone is not consent.
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figures\/figure1\.png/i })
+    );
+    expect(aiButton()).toBeDisabled();
+
+    // Consent alone, with nothing selected, is not a request either.
+    expect(axios.post.mock.calls).toHaveLength(1);
+  });
+
+  it("sends only allowlisted, relative, locally-extracted context", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
+    await user.click(
+      screen.getByRole("checkbox", { name: /select scripts\/plot_vdos\.py/i })
+    );
+    await user.click(consentBox());
+
+    axios.post.mockResolvedValue({
+      data: {
+        suggestions: {
+          "script-0": { description: "Plots the VDOS.", keywords: ["VDOS"] },
+        },
+      },
+    });
+    await user.click(aiButton());
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+
+    const [url, body] = axios.post.mock.calls[1];
+    expect(url).toBe("/api/curation/describe-candidates");
+    expect(body.consent).toBe(true);
+    expect(body.items).toHaveLength(1);
+    const item = body.items[0];
+    expect(Object.keys(item).sort()).toEqual([
+      "context",
+      "id",
+      "kind",
+      "name",
+      "paths",
+    ]);
+    item.paths.forEach((path) => {
+      expect(path.startsWith("/")).toBe(false);
+      expect(path).not.toContain("://");
+    });
+    // Only the text Qresp already read locally travels as context.
+    expect(item.context).toContain("Plot the vibrational density of states.");
+  });
+
+  it("fills the editable description field, applying nothing by itself", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await openAnalysis(user);
+    await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
+    await user.click(
+      screen.getByRole("checkbox", { name: /select scripts\/plot_vdos\.py/i })
+    );
+    await user.click(consentBox());
+
+    axios.post.mockResolvedValue({
+      data: {
+        suggestions: {
+          "script-0": { description: "AI text", keywords: ["VDOS"] },
+        },
+      },
+    });
+    await user.click(aiButton());
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^description$/i)).toHaveValue("AI text")
+    );
+    expect(addMany).not.toHaveBeenCalled();
+    // Still editable afterwards.
+    await user.clear(screen.getByLabelText(/^description$/i));
+    await user.type(screen.getByLabelText(/^description$/i), "Mine");
+    expect(screen.getByLabelText(/^description$/i)).toHaveValue("Mine");
+  });
+
+  it("is non-blocking when Gemini is not configured", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    // The deterministic candidates are there regardless.
+    expect(
+      screen.getByRole("checkbox", { name: /select figures\/figure1\.png/i })
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figures\/figure1\.png/i })
+    );
+    await user.click(consentBox());
+    axios.post.mockRejectedValue({
+      response: {
+        status: 503,
+        data: { error: "AI descriptions are not configured on this server." },
+      },
+    });
+    await user.click(aiButton());
+
+    expect(
+      await screen.findByText(/not configured on this server/i)
+    ).toBeInTheDocument();
+    // The whole folder analysis is unaffected and still appliable.
+    expect(
+      screen.getByRole("button", { name: /add selected items to curator/i })
+    ).toBeEnabled();
+  });
+});
+
 // Seeds the saved file server path in real CuratorState.
 const Seed = () => {
   const { setFileServerPath } = useContext(CuratorContext);

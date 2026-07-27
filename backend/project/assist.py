@@ -299,13 +299,18 @@ def _answer_text_from_parts(parts):
     return "".join(chunks).strip()
 
 
-def _ask_gemini(cfg, payload):
+def call_gemini(cfg, payload, system_prompt, schema, max_output_tokens=None):
     """ONE native Gemini generateContent call — no SDK, no retry (a retried
     paid call is accidental spend), no tools/grounding/search/URL-context/
     code-execution/file uploads, and no OAuth. Structured output is requested
     with a narrow JSON schema and a hard output-token cap. Returns
-    (keywords, None) or (None, error_message); the API key, request headers,
-    prompt and provider body never leave this function."""
+    (answer_text, None) or (None, error_message); the API key, request headers,
+    prompt and provider body never leave this function.
+
+    This is the single provider transport: every AI-assisted feature reuses it
+    so the configuration, quota, hardening and error vocabulary stay in one
+    place. Callers supply their own system prompt and response schema and
+    parse the returned answer text themselves."""
     try:
         response = requests.post(
             _gemini_url(cfg),
@@ -317,7 +322,7 @@ def _ask_gemini(cfg, payload):
             },
             json={
                 "system_instruction": {
-                    "parts": [{"text": _FIXED_SYSTEM_PROMPT}],
+                    "parts": [{"text": system_prompt}],
                 },
                 # The manuscript-derived data rides as a JSON string so it
                 # stays data, not conversational instructions.
@@ -328,8 +333,9 @@ def _ask_gemini(cfg, payload):
                 }],
                 "generationConfig": {
                     "responseMimeType": "application/json",
-                    "responseSchema": GEMINI_RESPONSE_SCHEMA,
-                    "maxOutputTokens": cfg["MAX_OUTPUT_TOKENS"],
+                    "responseSchema": schema,
+                    "maxOutputTokens": max_output_tokens
+                    or cfg["MAX_OUTPUT_TOKENS"],
                     # Keyword extraction needs no deliberation, and thinking
                     # tokens share the output budget — minimal keeps the
                     # answer inside the cap. Thought summaries stay OFF.
@@ -388,7 +394,17 @@ def _ask_gemini(cfg, payload):
     #    was spent before the answer, or only reasoning parts came back).
     if not answer_text:
         return None, "The AI suggestion service did not return suggestions."
-    # 5. Text exists but is not the agreed structured payload.
+    return answer_text, None
+
+
+def _ask_gemini(cfg, payload):
+    """The keyword-suggestion call: shared transport, keyword schema/prompt,
+    strict structured parsing. Returns (keywords, None) or (None, error)."""
+    answer_text, error = call_gemini(
+        cfg, payload, _FIXED_SYSTEM_PROMPT, GEMINI_RESPONSE_SCHEMA)
+    if error:
+        return None, error
+    # Text exists but may not be the agreed structured payload.
     try:
         return _parse_keywords(answer_text), None
     except Exception as e:

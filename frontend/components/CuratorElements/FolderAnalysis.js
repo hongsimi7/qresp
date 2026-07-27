@@ -13,6 +13,7 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  FormControlLabel,
   Grid,
   Tab,
   Tabs,
@@ -153,6 +154,13 @@ const FolderAnalysis = () => {
   const [selected, setSelected] = useState({});
   const [removed, setRemoved] = useState({});
   const [tab, setTab] = useState(0);
+  // Optional AI enrichment: a SEPARATE action over the candidates already
+  // selected, behind its own always-unchecked consent box. Selecting
+  // candidates never sends anything by itself, and the deterministic analysis
+  // above works whether or not the provider is configured.
+  const [aiConsent, setAiConsent] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiNotice, setAiNotice] = useState("");
 
   const ready = Boolean((fileServerPath || "").trim());
 
@@ -165,6 +173,9 @@ const FolderAnalysis = () => {
     setSelected({});
     setRemoved({});
     setTab(0);
+    setAiConsent(false);
+    setAiLoading(false);
+    setAiNotice("");
   };
 
   const analyze = async () => {
@@ -205,6 +216,74 @@ const FolderAnalysis = () => {
     () => Object.values(selected).filter(Boolean).length,
     [selected]
   );
+
+  // Everything the AI action may see, built here so the allowlist is visible:
+  // the candidate's id/kind, its display name, its RELATIVE paths, and the
+  // text Qresp already extracted locally (docstrings, manifest lines,
+  // evidence). No file contents, no image bytes, no credentials, no profile
+  // or ownership data, nothing outside the selected folder.
+  const aiItems = () => {
+    const items = [];
+    GROUPS.forEach(({ key, type }) => {
+      if (!type) return;
+      candidatesFor(key)
+        .filter((candidate) => selected[candidate.id])
+        .forEach((candidate) => {
+          const draft = drafts[candidate.id] || {};
+          items.push({
+            id: candidate.id,
+            kind: type,
+            name: titleOf(candidate),
+            paths: candidate.paths || [],
+            context: [draft.readme, draft.description]
+              .concat(candidate.evidence || [])
+              .filter(Boolean)
+              .join(" "),
+          });
+        });
+    });
+    return items;
+  };
+
+  const describeWithAI = async () => {
+    setAiLoading(true);
+    setAiNotice("");
+    try {
+      const response = await axios.post("/api/curation/describe-candidates", {
+        consent: true,
+        items: aiItems(),
+      });
+      const suggestions = (response.data || {}).suggestions || {};
+      const applied = Object.keys(suggestions).length;
+      setDrafts((current) => {
+        const next = { ...current };
+        Object.keys(suggestions).forEach((id) => {
+          if (!next[id]) return;
+          const text = suggestions[id].description || "";
+          if (!text) return;
+          // Suggestions fill the description field the curator can still
+          // edit; nothing else is touched and nothing is saved.
+          next[id] = Object.prototype.hasOwnProperty.call(next[id], "readme")
+            ? { ...next[id], readme: text }
+            : { ...next[id], description: text };
+        });
+        return next;
+      });
+      setAiNotice(
+        applied
+          ? `AI filled in ${applied} description(s) — review and edit them ` +
+            "before adding anything."
+          : "The AI service returned no usable suggestions."
+      );
+    } catch (err) {
+      setAiNotice(
+        (err && err.response && err.response.data && err.response.data.error) ||
+          "AI descriptions could not be generated."
+      );
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const apply = () => {
     let total = 0;
@@ -412,6 +491,48 @@ const FolderAnalysis = () => {
             </Fragment>
           )}
         </DialogContent>
+        {analysis && (
+          <Box sx={{ px: 3, py: 2, borderTop: 1, borderColor: "divider" }}>
+            {aiNotice && (
+              <Alert severity="info" sx={{ mb: 1 }}>
+                {aiNotice}
+              </Alert>
+            )}
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={aiConsent}
+                  onChange={(event) => setAiConsent(event.target.checked)}
+                  slotProps={{
+                    input: {
+                      "aria-label":
+                        "Send the selected file and folder names to the AI service",
+                    },
+                  }}
+                />
+              }
+              label={
+                "Send the selected items' file names, folder names and the " +
+                "comments Qresp already read from them to Gemini. No file " +
+                "contents, images, or account details are sent."
+              }
+            />
+            <Box sx={{ display: "flex", gap: 2, alignItems: "center" }}>
+              <Button
+                onClick={describeWithAI}
+                disabled={!aiConsent || selectedCount === 0 || aiLoading}
+              >
+                Generate descriptions and keywords with AI
+              </Button>
+              {aiLoading && <CircularProgress size={18} />}
+              {selectedCount === 0 && (
+                <Typography variant="caption">
+                  Select the candidates you want described first.
+                </Typography>
+              )}
+            </Box>
+          </Box>
+        )}
         <DialogActions>
           <Button onClick={close}>Cancel</Button>
           <Button
