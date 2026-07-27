@@ -10,26 +10,28 @@ from unittest import mock
 import mongoengine
 import mongomock
 
-# Opt-in AI keyword suggestions (Kimi), through the real ASGI middleware with
-# the provider fully mocked — NO external call is ever made. These tests pin
-# the security posture: disabled-by-default 503, auth/CSRF, per-user daily
-# limit, strict JSON parsing, allowlisted request fields, the exact provider
-# contract (endpoint/Bearer/model), and no manuscript/secret leakage.
+# Opt-in AI keyword suggestions (Gemini), through the real ASGI middleware
+# with the provider fully mocked — NO external call is ever made. These tests
+# pin the security posture: disabled-by-default 503, auth/CSRF, per-user daily
+# limit, strict structured-output parsing, allowlisted request fields, the
+# exact native provider contract (endpoint/x-goog-api-key/model/schema/token
+# cap), and no manuscript/secret leakage.
 from project import assist
 from project import connexionapp
 from project.models import AssistUsage
 
 # Synthetic, obviously-fake credentials: never a real key.
-KIMI_ENV = {
-    "QRESP_KIMI_ENABLED": "1",
-    "QRESP_KIMI_API_KEY": "sk-test-super-secret",
-    "QRESP_KIMI_MODEL": "kimi-test",
+GEMINI_ENV = {
+    "QRESP_GEMINI_ENABLED": "1",
+    "QRESP_GEMINI_API_KEY": "test-gemini-super-secret",
+    "QRESP_GEMINI_MODEL": "gemini-test",
 }
 
 
-def kimi_reply(keywords):
-    return {"choices": [{"message": {"content": json.dumps(
-        {"keywords": keywords})}}]}
+def gemini_reply(keywords):
+    """A native generateContent success body carrying structured JSON."""
+    return {"candidates": [{"content": {"parts": [
+        {"text": json.dumps({"keywords": keywords})}]}}]}
 
 
 class MockResponse:
@@ -52,7 +54,7 @@ class AssistTestBase(unittest.TestCase):
     def setUp(self):
         self.client = connexionapp.test_client()
         os.environ["QRESP_ENABLE_DEV_LOGIN"] = "1"
-        for key, value in KIMI_ENV.items():
+        for key, value in GEMINI_ENV.items():
             os.environ[key] = value
         mongoengine.disconnect_all()
         mongoengine.connect('mongoenginetest',
@@ -60,9 +62,9 @@ class AssistTestBase(unittest.TestCase):
 
     def tearDown(self):
         os.environ.pop("QRESP_ENABLE_DEV_LOGIN", None)
-        for key in KIMI_ENV:
+        for key in GEMINI_ENV:
             os.environ.pop(key, None)
-        os.environ.pop("QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY", None)
+        os.environ.pop("QRESP_GEMINI_MAX_REQUESTS_PER_USER_PER_DAY", None)
         AssistUsage.drop_collection()
         mongoengine.disconnect_all()
 
@@ -82,7 +84,7 @@ class AssistTestBase(unittest.TestCase):
             else:
                 requests_mock.post.return_value = (
                     reply if reply is not None
-                    else MockResponse(kimi_reply(["DFT"])))
+                    else MockResponse(gemini_reply(["DFT"])))
             response = self.client.post(
                 "/api/assist/keywords", json=payload, headers=headers)
         return response, requests_mock
@@ -90,7 +92,7 @@ class AssistTestBase(unittest.TestCase):
 
 class TestAssistGating(AssistTestBase):
     def test_disabled_by_default_returns_503(self):
-        for key in KIMI_ENV:
+        for key in GEMINI_ENV:
             os.environ.pop(key, None)
         self.login()
         response, requests_mock = self.suggest({"title": "T"})
@@ -99,7 +101,7 @@ class TestAssistGating(AssistTestBase):
         requests_mock.post.assert_not_called()
 
     def test_missing_key_is_still_unconfigured(self):
-        os.environ.pop("QRESP_KIMI_API_KEY", None)
+        os.environ.pop("QRESP_GEMINI_API_KEY", None)
         self.login()
         response, requests_mock = self.suggest({"title": "T"})
         self.assertEqual(503, response.status_code)
@@ -116,16 +118,21 @@ class TestAssistGating(AssistTestBase):
         self.assertEqual(403, response.status_code)
         requests_mock.post.assert_not_called()
 
-    def test_legacy_qwen_variables_alone_do_not_enable_the_feature(self):
-        # The provider rename is clean: the retired QRESP_QWEN_* variables
-        # have NO effect and cannot resurrect the integration.
-        for key in KIMI_ENV:
+    def test_legacy_provider_variables_alone_do_not_enable_the_feature(self):
+        # The provider swap is clean: the retired QRESP_KIMI_* (and older
+        # QRESP_QWEN_*) variables have NO effect and cannot resurrect the
+        # integration.
+        for key in GEMINI_ENV:
             os.environ.pop(key, None)
         legacy = {
+            "QRESP_KIMI_ENABLED": "1",
+            "QRESP_KIMI_API_KEY": "sk-legacy-should-be-ignored",
+            "QRESP_KIMI_MODEL": "kimi-k3",
+            "QRESP_KIMI_TIMEOUT_SECONDS": "30",
+            "QRESP_KIMI_MAX_MANUSCRIPT_CHARS": "1000",
+            "QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY": "99",
             "QRESP_QWEN_ENABLED": "1",
-            "QRESP_QWEN_API_KEY": "sk-legacy-should-be-ignored",
-            "QRESP_QWEN_BASE_URL": "https://qwen.example/v1",
-            "QRESP_QWEN_MODEL": "qwen-test",
+            "QRESP_QWEN_API_KEY": "sk-older-legacy-ignored",
         }
         os.environ.update(legacy)
         try:
@@ -140,7 +147,7 @@ class TestAssistGating(AssistTestBase):
                 os.environ.pop(key, None)
 
     def test_enabled_without_api_key_stays_unconfigured(self):
-        os.environ.pop("QRESP_KIMI_API_KEY", None)
+        os.environ.pop("QRESP_GEMINI_API_KEY", None)
         self.login()
         response, requests_mock = self.suggest({"title": "T"})
         self.assertEqual(503, response.status_code)
@@ -158,7 +165,7 @@ class TestAssistSuggestions(AssistTestBase):
         self.login()
         response, requests_mock = self.suggest(
             {"title": "Ice nucleation", "abstract": "We simulate water."},
-            reply=MockResponse(kimi_reply([
+            reply=MockResponse(gemini_reply([
                 "  DFT ", "dft", "Molecular Dynamics", "water", "Water",
                 "ice nucleation", "a", "x" * 80, "phase diagrams",
                 "free energy", "nucleation", "simulation", "supercooling",
@@ -174,34 +181,98 @@ class TestAssistSuggestions(AssistTestBase):
                               if k.lower() == "water"]), 1)
         requests_mock.post.assert_called_once()
 
-    def test_calls_the_kimi_endpoint_with_bearer_auth_and_model(self):
+    def test_calls_the_native_gemini_endpoint_with_header_auth(self):
         self.login()
         response, requests_mock = self.suggest({"title": "T"})
         self.assertEqual(200, response.status_code, response.text)
         args, kwargs = requests_mock.post.call_args
-        # Fixed Moonshot/Kimi endpoint (positional URL), never configurable.
+        url = args[0]
+        # Exact official native endpoint, model in the path.
         self.assertEqual(
-            "https://api.moonshot.cn/v1/chat/completions", args[0])
-        self.assertEqual(assist.KIMI_API_URL, args[0])
-        self.assertEqual("Bearer sk-test-super-secret",
-                         kwargs["headers"]["Authorization"])
-        self.assertEqual("kimi-test", kwargs["json"]["model"])
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-test:generateContent", url)
+        self.assertTrue(url.startswith(assist.GEMINI_API_BASE))
+        # Header auth ONLY — the key must never ride in the query string.
+        self.assertEqual("test-gemini-super-secret",
+                         kwargs["headers"]["x-goog-api-key"])
+        self.assertNotIn("key=", url)
+        self.assertNotIn("test-gemini-super-secret", url)
+        self.assertNotIn("Authorization", kwargs["headers"])
         # Bounded timeout is always passed.
-        self.assertTrue(0 < kwargs["timeout"] <= assist.KIMI_MAX_TIMEOUT)
-        # No tool calling / web search / file APIs are ever requested.
-        for forbidden in ("tools", "tool_choice", "functions", "files",
-                          "web_search"):
-            self.assertNotIn(forbidden, kwargs["json"])
+        self.assertTrue(0 < kwargs["timeout"] <= assist.GEMINI_MAX_TIMEOUT)
 
-    def test_model_falls_back_to_the_default_when_unset(self):
-        os.environ.pop("QRESP_KIMI_MODEL", None)
+    def test_requests_structured_json_output_with_a_capped_token_budget(self):
         self.login()
         response, requests_mock = self.suggest({"title": "T"})
         self.assertEqual(200, response.status_code, response.text)
-        self.assertEqual("kimi-k3",
-                         requests_mock.post.call_args.kwargs["json"]["model"])
-        self.assertEqual(assist.KIMI_DEFAULT_MODEL,
-                         requests_mock.post.call_args.kwargs["json"]["model"])
+        body = requests_mock.post.call_args.kwargs["json"]
+        config = body["generationConfig"]
+        self.assertEqual("application/json", config["responseMimeType"])
+        self.assertEqual(assist.GEMINI_RESPONSE_SCHEMA,
+                         config["responseSchema"])
+        # Narrow schema: only a bounded keyword list is accepted back.
+        self.assertEqual(
+            ["keywords"], list(config["responseSchema"]["properties"]))
+        self.assertEqual(
+            8, config["responseSchema"]["properties"]["keywords"]["maxItems"])
+        self.assertLessEqual(config["maxOutputTokens"],
+                             assist.GEMINI_MAX_OUTPUT_TOKENS_CEILING)
+        # Deprecated sampling knobs are deliberately absent.
+        for forbidden in ("temperature", "topP", "topK", "top_p", "top_k"):
+            self.assertNotIn(forbidden, config)
+        # Native content shape, fixed system instruction, no tools/grounding.
+        self.assertIn("system_instruction", body)
+        self.assertEqual("user", body["contents"][0]["role"])
+        for forbidden in ("tools", "toolConfig", "tool_config",
+                          "safetySettings", "cachedContent"):
+            self.assertNotIn(forbidden, body)
+
+    def test_model_falls_back_to_the_default_when_unset(self):
+        os.environ.pop("QRESP_GEMINI_MODEL", None)
+        self.login()
+        response, requests_mock = self.suggest({"title": "T"})
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertIn("/gemini-3.6-flash:generateContent",
+                      requests_mock.post.call_args[0][0])
+        self.assertEqual("gemini-3.6-flash", assist.GEMINI_DEFAULT_MODEL)
+
+    def test_malformed_model_name_cannot_escape_the_url_path(self):
+        # A bad env value must not inject a path segment or query string.
+        os.environ["QRESP_GEMINI_MODEL"] = "../../evil?key=leak"
+        self.login()
+        response, requests_mock = self.suggest({"title": "T"})
+        self.assertEqual(200, response.status_code, response.text)
+        url = requests_mock.post.call_args[0][0]
+        self.assertEqual(
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-3.6-flash:generateContent", url)
+        self.assertNotIn("evil", url)
+
+    def test_never_reuses_the_google_oauth_login_credentials(self):
+        # The sign-in client id/secret must not enable or feed this feature.
+        os.environ.pop("QRESP_GEMINI_API_KEY", None)
+        os.environ["QRESP_GOOGLE_CLIENT_ID"] = "oauth-client-id"
+        os.environ["QRESP_GOOGLE_CLIENT_SECRET"] = "oauth-client-secret"
+        try:
+            self.login()
+            response, requests_mock = self.suggest({"title": "T"})
+            self.assertEqual(503, response.status_code)
+            requests_mock.post.assert_not_called()
+
+            # Even when Gemini IS configured, no OAuth value travels.
+            os.environ["QRESP_GEMINI_API_KEY"] = "test-gemini-super-secret"
+            response, requests_mock = self.suggest({"title": "T"})
+            self.assertEqual(200, response.status_code, response.text)
+            sent = json.dumps({
+                "url": requests_mock.post.call_args[0][0],
+                "headers": requests_mock.post.call_args.kwargs["headers"],
+                "json": requests_mock.post.call_args.kwargs["json"],
+            })
+            self.assertNotIn("oauth-client-id", sent)
+            self.assertNotIn("oauth-client-secret", sent)
+        finally:
+            os.environ.pop("QRESP_GOOGLE_CLIENT_ID", None)
+            os.environ.pop("QRESP_GOOGLE_CLIENT_SECRET", None)
 
     def test_api_key_never_reaches_the_client_or_the_logs(self):
         self.login()
@@ -209,13 +280,50 @@ class TestAssistSuggestions(AssistTestBase):
         with contextlib.redirect_stdout(stdout):
             response, _ = self.suggest(
                 {"title": "T"},
-                reply=MockResponse({}, status_code=401,
-                                   text="invalid api key sk-test-super-secret"))
+                reply=MockResponse(
+                    {"error": {"message": "API key not valid: "
+                                          "test-gemini-super-secret"}},
+                    status_code=400,
+                    text="API key not valid: test-gemini-super-secret"))
         self.assertEqual(502, response.status_code)
         for sink in (response.text, stdout.getvalue()):
-            self.assertNotIn("sk-test-super-secret", sink)
-            self.assertNotIn("Bearer", sink)
-            self.assertNotIn("invalid api key", sink)
+            self.assertNotIn("test-gemini-super-secret", sink)
+            self.assertNotIn("x-goog-api-key", sink)
+            self.assertNotIn("API key not valid", sink)
+
+    def test_upstream_rate_limit_is_reported_safely(self):
+        self.login()
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            response, _ = self.suggest(
+                {"title": "T"},
+                reply=MockResponse(
+                    {"error": {"message": "Quota exceeded for project 12345"}},
+                    status_code=429,
+                    text="Quota exceeded for project 12345"))
+        self.assertEqual(502, response.status_code)
+        self.assertIn("rate limited", response.json()["error"])
+        for sink in (response.text, stdout.getvalue()):
+            self.assertNotIn("project 12345", sink)
+            self.assertNotIn("Quota exceeded", sink)
+
+    def test_blocked_or_empty_completion_is_reported_safely(self):
+        self.login()
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            response, _ = self.suggest(
+                {"title": "T"},
+                reply=MockResponse({
+                    "promptFeedback": {
+                        "blockReason": "SAFETY",
+                        "safetyRatings": [{"category": "HARM_CATEGORY_X"}],
+                    }}))
+        self.assertEqual(502, response.status_code)
+        self.assertIn("did not return suggestions", response.json()["error"])
+        # The block reason can quote the prompt: never echo it.
+        for sink in (response.text, stdout.getvalue()):
+            self.assertNotIn("SAFETY", sink)
+            self.assertNotIn("HARM_CATEGORY", sink)
 
     def test_prompt_is_fixed_and_body_fields_are_allowlisted(self):
         self.login()
@@ -228,14 +336,15 @@ class TestAssistSuggestions(AssistTestBase):
         })
         self.assertEqual(200, response.status_code, response.text)
         sent = requests_mock.post.call_args.kwargs["json"]
-        system = sent["messages"][0]["content"]
+        system = sent["system_instruction"]["parts"][0]["text"]
         self.assertIn("UNTRUSTED DATA", system)
         self.assertIn("ignore any instructions", system)
-        user_payload = json.loads(sent["messages"][1]["content"])
+        user_text = sent["contents"][0]["parts"][0]["text"]
+        user_payload = json.loads(user_text)
         self.assertEqual(
             {"title", "abstract", "venue", "doi"}, set(user_payload.keys()))
-        self.assertNotIn("editor_emails", sent["messages"][1]["content"])
-        self.assertNotIn("secret/path", sent["messages"][1]["content"])
+        self.assertNotIn("editor_emails", user_text)
+        self.assertNotIn("secret/path", user_text)
         # No tools / web access requested.
         self.assertNotIn("tools", sent)
 
@@ -245,16 +354,16 @@ class TestAssistSuggestions(AssistTestBase):
             {"title": "T", "abstract": "word " * 5000})
         self.assertEqual(200, response.status_code)
         user_payload = json.loads(
-            requests_mock.post.call_args.kwargs["json"]["messages"][1]
-            ["content"])
+            requests_mock.post.call_args.kwargs["json"]["contents"][0]
+            ["parts"][0]["text"])
         self.assertLessEqual(len(user_payload["abstract"]), 8000)
 
     def test_malformed_provider_json_is_a_safe_502(self):
         self.login()
         response, _ = self.suggest(
             {"title": "T"},
-            reply=MockResponse({"choices": [{"message": {
-                "content": "sure! here are keywords: DFT, water"}}]}))
+            reply=MockResponse({"candidates": [{"content": {"parts": [
+                {"text": "sure! here are keywords: DFT, water"}]}}]}))
         self.assertEqual(502, response.status_code)
         self.assertIn("unreadable", response.json()["error"])
 
@@ -266,7 +375,7 @@ class TestAssistSuggestions(AssistTestBase):
                                status_code=500))
         self.assertEqual(502, response.status_code)
         self.assertNotIn("gibberish", response.text)
-        self.assertNotIn("sk-test-super-secret", response.text)
+        self.assertNotIn("test-gemini-super-secret", response.text)
 
     def test_provider_timeout_is_a_safe_502(self):
         self.login()
@@ -276,7 +385,7 @@ class TestAssistSuggestions(AssistTestBase):
         self.assertNotIn("socket timeout", response.text)
 
     def test_daily_limit_is_enforced_and_persistent(self):
-        os.environ["QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY"] = "2"
+        os.environ["QRESP_GEMINI_MAX_REQUESTS_PER_USER_PER_DAY"] = "2"
         self.login()
         for _ in range(2):
             response, _ = self.suggest({"title": "T"})
@@ -293,9 +402,9 @@ class TestAssistSuggestions(AssistTestBase):
 
     def test_configuration_is_environment_only_never_config_ini(self):
         # Config.get_setting falls back to config.ini; assist must NEVER use
-        # it for Kimi. Even if config.ini could supply every KIMI key, the
+        # it for Gemini. Even if config.ini could supply every GEMINI key, the
         # endpoint must stay unconfigured while the env vars are unset.
-        for key in KIMI_ENV:
+        for key in GEMINI_ENV:
             os.environ.pop(key, None)
         self.login()
         with mock.patch("project.config.Config.get_setting",
@@ -305,12 +414,12 @@ class TestAssistSuggestions(AssistTestBase):
         requests_mock.post.assert_not_called()
 
     def test_timeout_is_bounded_even_when_misconfigured(self):
-        os.environ["QRESP_KIMI_TIMEOUT_SECONDS"] = "99999"
+        os.environ["QRESP_GEMINI_TIMEOUT_SECONDS"] = "99999"
         try:
-            self.assertEqual(assist.KIMI_MAX_TIMEOUT,
-                             assist._kimi_config()["TIMEOUT"])
+            self.assertEqual(assist.GEMINI_MAX_TIMEOUT,
+                             assist._gemini_config()["TIMEOUT"])
         finally:
-            os.environ.pop("QRESP_KIMI_TIMEOUT_SECONDS", None)
+            os.environ.pop("QRESP_GEMINI_TIMEOUT_SECONDS", None)
 
     def test_invalid_input_consumes_no_quota(self):
         self.login()
@@ -330,14 +439,14 @@ class TestAssistSuggestions(AssistTestBase):
 
     def test_quota_counts_provider_calls_not_ui_requests(self):
         # A 3-chunk manuscript = 3 provider calls = 3 quota units.
-        os.environ["QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY"] = "3"
+        os.environ["QRESP_GEMINI_MAX_REQUESTS_PER_USER_PER_DAY"] = "3"
         self.login()
         body = "ice nucleation " * 5000  # ~75k chars -> 3 chunks
         tex = ("\\documentclass{article}\\begin{document}%s\\end{document}"
                % body)
-        responses = [MockResponse(kimi_reply(["Ice"])),
-                     MockResponse(kimi_reply(["Nucleation"])),
-                     MockResponse(kimi_reply(["Simulation"]))]
+        responses = [MockResponse(gemini_reply(["Ice"])),
+                     MockResponse(gemini_reply(["Nucleation"])),
+                     MockResponse(gemini_reply(["Simulation"]))]
         response, requests_mock = self.suggest(
             {"filename": "paper.tex", "content_base64": b64(tex)},
             responses=responses)
@@ -352,7 +461,7 @@ class TestAssistSuggestions(AssistTestBase):
         self.assertEqual(3, AssistUsage.objects.first().count)
 
     def test_multi_chunk_request_cannot_bypass_a_smaller_limit(self):
-        os.environ["QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY"] = "2"
+        os.environ["QRESP_GEMINI_MAX_REQUESTS_PER_USER_PER_DAY"] = "2"
         self.login()
         body = "ice nucleation " * 5000
         tex = ("\\documentclass{article}\\begin{document}%s\\end{document}"
@@ -389,10 +498,10 @@ class TestAssistManuscript(AssistTestBase):
                 "title": "T",
                 "filename": "paper.tex",
                 "content_base64": b64(self.TEX),
-            }, reply=MockResponse(kimi_reply(["ice nucleation"])))
+            }, reply=MockResponse(gemini_reply(["ice nucleation"])))
         self.assertEqual(200, response.status_code, response.text)
         sent = requests_mock.post.call_args.kwargs["json"]
-        user_payload = json.loads(sent["messages"][1]["content"])
+        user_payload = json.loads(sent["contents"][0]["parts"][0]["text"])
         # The manuscript body goes to the provider (with consent)...
         self.assertIn("SECRET_BODY_TOKEN", user_payload["manuscript_excerpt"])
         # ...but the bibliography is stripped so cited works cannot dominate.
@@ -407,9 +516,9 @@ class TestAssistManuscript(AssistTestBase):
         body = "ice nucleation " * 5000  # ~75k chars -> capped, 3 chunks
         tex = "\\documentclass{article}\\begin{document}%s\\end{document}" % body
         responses = [
-            MockResponse(kimi_reply(["Ice"])),
-            MockResponse(kimi_reply(["Nucleation", "ice"])),
-            MockResponse(kimi_reply(["Simulation"])),
+            MockResponse(gemini_reply(["Ice"])),
+            MockResponse(gemini_reply(["Nucleation", "ice"])),
+            MockResponse(gemini_reply(["Simulation"])),
         ]
         response, requests_mock = self.suggest({
             "filename": "paper.tex",

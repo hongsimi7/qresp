@@ -1,4 +1,4 @@
-"""Opt-in AI keyword suggestions (Auto-Curation Lite, Kimi).
+"""Opt-in AI keyword suggestions (Auto-Curation Lite, Gemini).
 
 One endpoint (wired through swagger.yml):
 - POST /api/assist/keywords   suggest up to 8 Keywords/tags for the paper
@@ -6,10 +6,16 @@ One endpoint (wired through swagger.yml):
 Strictly suggestion-only: nothing is ever written to a record, draft, or tag
 list here — the curator reviews and explicitly applies suggestions in the
 frontend. Disabled by default; configured EXCLUSIVELY via environment
-variables (QRESP_KIMI_*) — never config.ini. Kimi (Moonshot) is the single
+variables (QRESP_GEMINI_*) — never config.ini. Google Gemini is the single
 selected provider: this is deliberately NOT a multi-provider framework, and
-the endpoint below is fixed in code so no configuration can redirect
+the API host below is fixed in code so no configuration can redirect
 manuscript-derived text somewhere else.
+
+The credential is a dedicated Google AI Studio / Gemini API key sent in the
+x-goog-api-key header. It is completely separate from the Google OAuth
+sign-in client (QRESP_GOOGLE_*), which this module never reads: no OAuth
+token, user credential, Drive/Gmail scope, grounding, search, URL context,
+code execution, or file upload is involved.
 
 Privacy/safety model:
 - Only allowlisted fields are accepted (title/abstract/venue/doi and, with
@@ -39,15 +45,21 @@ from project.manuscript import (
 
 # ---- configuration (environment only) --------------------------------------
 
-# Fixed provider endpoint: never configurable, so no environment mistake can
-# point the prompt (and any consented manuscript excerpt) at another host.
-KIMI_API_URL = "https://api.moonshot.cn/v1/chat/completions"
-KIMI_DEFAULT_MODEL = "kimi-k3"
-KIMI_DEFAULT_TIMEOUT = 15
-KIMI_MAX_TIMEOUT = 60
-KIMI_DEFAULT_MAX_MANUSCRIPT_CHARS = 60000
-KIMI_MAX_MANUSCRIPT_CHARS_CEILING = 200000
-KIMI_DEFAULT_DAILY_LIMIT = 20
+# Fixed provider host: never configurable, so no environment mistake can point
+# the prompt (and any consented manuscript excerpt) at another host. Only the
+# model name is configurable, and it is sanitized before entering the path.
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+GEMINI_DEFAULT_MODEL = "gemini-3.6-flash"
+# The model lands in the request URL path: allow only plain model tokens so a
+# malformed value cannot inject a path segment or query string.
+GEMINI_MODEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+GEMINI_DEFAULT_TIMEOUT = 15
+GEMINI_MAX_TIMEOUT = 60
+GEMINI_DEFAULT_MAX_MANUSCRIPT_CHARS = 60000
+GEMINI_MAX_MANUSCRIPT_CHARS_CEILING = 200000
+GEMINI_DEFAULT_DAILY_LIMIT = 20
+GEMINI_DEFAULT_MAX_OUTPUT_TOKENS = 256
+GEMINI_MAX_OUTPUT_TOKENS_CEILING = 256
 
 # Bounded chunking for long manuscripts: candidates are aggregated across
 # chunks and capped afterwards.
@@ -60,6 +72,20 @@ MAX_DOI_CHARS = 200
 MAX_ABSTRACT_CHARS = 8000
 
 MAX_SUGGESTIONS = 8
+
+# Narrow structured-output schema (Gemini responseSchema): the ONLY shape we
+# accept back, so a chatty or injected answer cannot smuggle other fields.
+GEMINI_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "keywords": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": MAX_SUGGESTIONS,
+        },
+    },
+    "required": ["keywords"],
+}
 
 _FIXED_SYSTEM_PROMPT = (
     "You suggest concise scientific keywords for a research-paper metadata "
@@ -79,7 +105,7 @@ def _truthy(value):
 
 def _env(key):
     # ENVIRONMENT ONLY, deliberately not Config.get_setting: that helper
-    # falls back to config.ini, and Kimi credentials/switches must never be
+    # falls back to config.ini, and Gemini credentials/switches must never be
     # configurable (or accidentally committed) there.
     return os.environ.get("QRESP_" + key)
 
@@ -96,30 +122,49 @@ def _int_env(key, default, ceiling=None):
     return value
 
 
-def _kimi_config():
+def _gemini_config():
+    # The model name is the only provider knob; it falls back to the default
+    # once the feature is enabled, and anything that is not a plain model
+    # token is refused (it would otherwise land in the request URL path).
+    model = (_env("GEMINI_MODEL") or "").strip()
+    if not model or not GEMINI_MODEL_RE.match(model):
+        model = GEMINI_DEFAULT_MODEL
     cfg = {
-        "ENABLED": _truthy(_env("KIMI_ENABLED")),
-        "API_KEY": (_env("KIMI_API_KEY") or "").strip(),
-        # The model name is the only provider knob; it falls back to the
-        # default only once the feature is explicitly enabled.
-        "MODEL": (_env("KIMI_MODEL") or "").strip() or KIMI_DEFAULT_MODEL,
+        "ENABLED": _truthy(_env("GEMINI_ENABLED")),
+        # A dedicated Google AI Studio / Gemini API key. Deliberately NOT the
+        # Google OAuth client secret used by the sign-in flow: this
+        # integration never reads QRESP_GOOGLE_* and never touches OAuth.
+        "API_KEY": (_env("GEMINI_API_KEY") or "").strip(),
+        "MODEL": model,
         # Bounded even against misconfiguration: a worker must never hang on
         # the provider for minutes.
-        "TIMEOUT": _int_env("KIMI_TIMEOUT_SECONDS", KIMI_DEFAULT_TIMEOUT,
-                            ceiling=KIMI_MAX_TIMEOUT),
+        "TIMEOUT": _int_env("GEMINI_TIMEOUT_SECONDS", GEMINI_DEFAULT_TIMEOUT,
+                            ceiling=GEMINI_MAX_TIMEOUT),
         "MAX_MANUSCRIPT_CHARS": _int_env(
-            "KIMI_MAX_MANUSCRIPT_CHARS", KIMI_DEFAULT_MAX_MANUSCRIPT_CHARS,
-            ceiling=KIMI_MAX_MANUSCRIPT_CHARS_CEILING),
+            "GEMINI_MAX_MANUSCRIPT_CHARS",
+            GEMINI_DEFAULT_MAX_MANUSCRIPT_CHARS,
+            ceiling=GEMINI_MAX_MANUSCRIPT_CHARS_CEILING),
         "DAILY_LIMIT": _int_env(
-            "KIMI_MAX_REQUESTS_PER_USER_PER_DAY", KIMI_DEFAULT_DAILY_LIMIT),
+            "GEMINI_MAX_REQUESTS_PER_USER_PER_DAY",
+            GEMINI_DEFAULT_DAILY_LIMIT),
+        # Keyword lists are tiny; the cap bounds spend per call.
+        "MAX_OUTPUT_TOKENS": _int_env(
+            "GEMINI_MAX_OUTPUT_TOKENS", GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
+            ceiling=GEMINI_MAX_OUTPUT_TOKENS_CEILING),
     }
     return cfg
 
 
-def _kimi_ready(cfg):
+def _gemini_ready(cfg):
     # Both required settings must be present; everything else has a safe
     # default. Anything missing keeps the feature off (503).
     return bool(cfg["ENABLED"] and cfg["API_KEY"])
+
+
+def _gemini_url(cfg):
+    """Native generateContent endpoint for the configured model. The API key
+    is NEVER placed in the URL — it rides in the x-goog-api-key header."""
+    return "%s/%s:generateContent" % (GEMINI_API_BASE, cfg["MODEL"])
 
 
 # ---- per-user daily limit (persistent) --------------------------------------
@@ -196,41 +241,69 @@ def _parse_keywords(content):
     return [str(k) for k in keywords if isinstance(k, (str, int, float))]
 
 
-def _ask_kimi(cfg, payload):
-    """One Kimi chat-completions call (plain OpenAI-compatible HTTP, no
-    provider SDK, no tool calling / web search / file upload). Returns
-    (keywords, None) or (None, error_message). Provider error bodies, the
-    Authorization header, and the API key never leave this function."""
+def _ask_gemini(cfg, payload):
+    """ONE native Gemini generateContent call — no SDK, no retry (a retried
+    paid call is accidental spend), no tools/grounding/search/URL-context/
+    code-execution/file uploads, and no OAuth. Structured output is requested
+    with a narrow JSON schema and a hard output-token cap. Returns
+    (keywords, None) or (None, error_message); the API key, request headers,
+    prompt and provider body never leave this function."""
     try:
         response = requests.post(
-            KIMI_API_URL,
+            _gemini_url(cfg),
             headers={
-                "Authorization": "Bearer %s" % cfg["API_KEY"],
+                # Header auth only: never a ?key= query string, which would
+                # leak the credential into proxy/access logs.
+                "x-goog-api-key": cfg["API_KEY"],
                 "Content-Type": "application/json",
             },
             json={
-                "model": cfg["MODEL"],
-                "messages": [
-                    {"role": "system", "content": _FIXED_SYSTEM_PROMPT},
-                    # The manuscript-derived data rides as a JSON string so
-                    # it stays data, not conversational instructions.
-                    {"role": "user",
-                     "content": json.dumps(payload, ensure_ascii=False)},
-                ],
-                "temperature": 0.2,
-                "max_tokens": 256,
+                "system_instruction": {
+                    "parts": [{"text": _FIXED_SYSTEM_PROMPT}],
+                },
+                # The manuscript-derived data rides as a JSON string so it
+                # stays data, not conversational instructions.
+                "contents": [{
+                    "role": "user",
+                    "parts": [{"text": json.dumps(payload,
+                                                  ensure_ascii=False)}],
+                }],
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "responseSchema": GEMINI_RESPONSE_SCHEMA,
+                    "maxOutputTokens": cfg["MAX_OUTPUT_TOKENS"],
+                    # No temperature/top_p/top_k: deprecated for this model
+                    # generation, and defaults are fine for keywording.
+                },
             },
             timeout=cfg["TIMEOUT"],
         )
     except Exception as e:
         print("AI assist provider unreachable: %s" % type(e).__name__)
         return None, "The AI suggestion service could not be reached."
+    if response.status_code == 429:
+        print("AI assist provider rate limited")
+        return None, ("The AI suggestion service is rate limited right now, "
+                      "please try again later.")
     if response.status_code != 200:
         print("AI assist provider error: HTTP %s" % response.status_code)
         return None, "The AI suggestion service returned an error."
     try:
-        content = response.json()["choices"][0]["message"]["content"]
-        return _parse_keywords(content), None
+        data = response.json()
+    except Exception as e:
+        print("AI assist response unparseable: %s" % type(e).__name__)
+        return None, "The AI suggestion service returned an unreadable answer."
+
+    # A safety block (or any empty completion) arrives as a 200 with no usable
+    # candidate; never echo the reason, which can quote the prompt.
+    candidates = data.get("candidates") or []
+    if not candidates:
+        print("AI assist response withheld by the provider")
+        return None, "The AI suggestion service did not return suggestions."
+    try:
+        parts = (candidates[0].get("content") or {}).get("parts") or []
+        text = "".join(part.get("text") or "" for part in parts)
+        return _parse_keywords(text), None
     except Exception as e:
         print("AI assist response unparseable: %s" % type(e).__name__)
         return None, "The AI suggestion service returned an unreadable answer."
@@ -277,8 +350,8 @@ def suggest_keywords(body):
     if not user:
         return {"error": "authentication required"}, 401
 
-    cfg = _kimi_config()
-    if not _kimi_ready(cfg):
+    cfg = _gemini_config()
+    if not _gemini_ready(cfg):
         return {"error": "AI keyword suggestions are not configured on this "
                          "server."}, 503
 
@@ -350,7 +423,7 @@ def suggest_keywords(body):
         payload = dict(metadata)
         if chunk:
             payload["manuscript_excerpt"] = chunk
-        keywords, error = _ask_kimi(cfg, payload)
+        keywords, error = _ask_gemini(cfg, payload)
         if error:
             warnings.append(error)
             continue
