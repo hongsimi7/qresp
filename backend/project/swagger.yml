@@ -735,6 +735,40 @@ paths:
           description: AI provider failed or answered unreadably
         503:
           description: AI suggestions are not configured on this server
+  /curation/analyze-folder:
+    post:
+      operationId: "project.curation.analyze_folder"
+      tags:
+        - "Import"
+      summary: "Inventories and classifies a file-server folder into reviewable
+        curation candidates (read-only; nothing is saved or published)"
+      parameters:
+        - in: body
+          name: body
+          required: true
+          description: The already-saved file server folder to inspect. It must
+            resolve inside a file-server root configured on this server; no
+            other host, scheme, or parent path is fetchable.
+          schema:
+            type: object
+            required:
+              - path
+            properties:
+              path:
+                type: string
+      responses:
+        200:
+          description: Deterministic candidates returned for curator review
+        400:
+          description: Missing, malformed, or out-of-root folder path
+        401:
+          description: Authentication required
+        403:
+          description: CSRF token missing or invalid
+        404:
+          description: The folder is empty
+        502:
+          description: The file server could not be read
   /auth/cilogon:
     get:
       operationId: "project.auth.cilogon_login"
