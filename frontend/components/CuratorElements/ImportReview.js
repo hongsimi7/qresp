@@ -448,12 +448,13 @@ const ImportReview = ({ open, result, onClose }) => {
                   label="Analyze extracted manuscript text with AI to suggest keywords."
                 />
                 <Typography variant="body2" color="secondary">
-                  If you continue, bounded excerpts of the text extracted
-                  from your upload (bibliography removed — not the full
-                  document or the original file) are sent to the configured
-                  AI provider to generate keyword suggestions. Nothing is
-                  sent without this consent, and suggestions are never
-                  applied automatically.
+                  If you continue, the selected paper metadata plus bounded
+                  excerpts of the text extracted from your upload
+                  (bibliography removed — not the full document and never the
+                  original file) are sent to Kimi, the configured AI
+                  provider, to generate keyword suggestions. Nothing is sent
+                  without this consent, and suggestions are never applied
+                  automatically.
                 </Typography>
                 <RegularStyledButton
                   sx={{ mt: 1 }}
@@ -480,7 +481,7 @@ const ImportReview = ({ open, result, onClose }) => {
                 {(aiSuggestions || []).length ? (
                   <Box sx={{ mt: 1 }}>
                     <Typography variant="body2" color="secondary">
-                      AI suggestions (Qwen) — separate from the Crossref/TeX
+                      AI suggestions (Kimi) — separate from the Crossref/TeX
                       keyword suggestions above; selected ones are appended to
                       your Keywords on Apply:
                     </Typography>

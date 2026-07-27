@@ -137,21 +137,57 @@ environment variables on the staging backend container.
       picker starts all-unchecked; ticking one APPENDS that author to PIs
 - [ ] Post-apply checklist marks PaperStack / notebook as "(manual)"
 
-## AI keyword suggestions (Qwen) — pending provider configuration
+## AI keyword suggestions (Kimi) — pending provider configuration
+
+Provider: Kimi (Moonshot). The endpoint
+`https://api.moonshot.cn/v1/chat/completions` is fixed in code; only the
+variables below are configurable, and only through the environment (never
+config.ini). The retired `QRESP_QWEN_*` variables have no effect.
+
+**Staging secret handling — do this, nothing looser:**
+
+- Put the key in the EXISTING private, git-ignored backend env file on the
+  staging host (the same mechanism the other `QRESP_*` secrets already use),
+  then `chmod 600` it and keep it owned by the deploying user.
+- **Do NOT add a second `env_file:` key to a compose service** — YAML keeps
+  only the last duplicate key, which silently drops every previously
+  referenced env file. Add the variables to the env file that service
+  already references.
+- Never put the key in `config.ini`, a committed compose file, a Dockerfile,
+  a shell history line, or this checklist.
+- Restart the backend container after editing the env file (bind-mounted
+  code, so restart — not rebuild).
+
+Env template (placeholders only — never commit real values):
+
+```ini
+QRESP_KIMI_ENABLED=1
+QRESP_KIMI_API_KEY=<paste-staging-key-here>
+QRESP_KIMI_MODEL=kimi-k3
+QRESP_KIMI_TIMEOUT_SECONDS=15
+QRESP_KIMI_MAX_MANUSCRIPT_CHARS=60000
+QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY=20
+```
 
 - [ ] Without a title/abstract the "Suggest Keywords with AI" button is
       DISABLED with the local "Add a title or abstract, fetch a DOI, or
-      import a manuscript source" reason (no request is made); after adding
-      a title it enables
+      import a manuscript source" reason (no request is made); after typing
+      a title it enables immediately (no section Save needed)
 - [ ] Unconfigured: an ELIGIBLE click shows "not configured on this server";
       import-review AI fetch says the same; nothing else breaks
-- [ ] Configured (QRESP_QWEN_* env on the backend): metadata-only suggestions
-      return ≤8 deduplicated keywords, all unchecked; Apply appends only the
-      selected ones to Keywords
-- [ ] Manuscript import review: consent checkbox defaults OFF and the fetch
-      button stays disabled until ticked; after fetching, "AI suggestions
-      (Qwen)" appear as a separate unchecked group
+- [ ] **First configured test uses PUBLIC data only** — a published paper's
+      title/abstract, never unpublished manuscript content — to confirm the
+      round trip before any manuscript excerpt is ever sent
+- [ ] Configured: metadata-only suggestions return ≤8 deduplicated keywords,
+      all unchecked; Apply appends only the selected ones to Keywords
+- [ ] The dialog names Kimi as the destination before anything is sent
+- [ ] Manuscript import review (only after the public-data test passes):
+      consent checkbox defaults OFF and the fetch button stays disabled
+      until ticked; after fetching, "AI suggestions (Kimi)" appear as a
+      separate unchecked group
 - [ ] Per-user daily limit returns a clear message once exceeded (429)
+- [ ] Backend logs contain no API key, Authorization header, provider error
+      body, or manuscript text after these runs
 - [ ] Upload a .tex with \title/\author/abstract → proposals appear;
       Apply → forms show the values; missing-for-publish checklist lists
       charts/datasets/license etc.; Save Draft still works while incomplete

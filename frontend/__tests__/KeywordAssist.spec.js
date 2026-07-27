@@ -135,7 +135,7 @@ describe("KeywordAssist (Suggest Keywords with AI)", () => {
       await screen.findByText(/import a \.tex file or overleaf \.zip from publication information/i)
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/manuscript excerpts are sent to the ai provider only after explicit consent/i)
+      screen.getByText(/manuscript excerpts are sent to kimi only after explicit consent there/i)
     ).toBeInTheDocument();
   });
 
@@ -155,7 +155,28 @@ describe("KeywordAssist (Suggest Keywords with AI)", () => {
     });
   });
 
-  it("shows an intelligible message when Qwen is not configured", async () => {
+  it("names Kimi as the destination before anything is sent", async () => {
+    axios.post.mockResolvedValue({ data: { keywords: [], warnings: [] } });
+    const user = userEvent.setup();
+    renderAssist();
+    await user.click(
+      screen.getByRole("button", { name: /suggest keywords with ai/i })
+    );
+    // The dialog states the provider and the exact fields that travel.
+    expect(
+      await screen.findByText(/title, abstract, venue and doi .* to kimi/i)
+    ).toBeInTheDocument();
+    // Manuscript excerpts are explicitly NOT part of this action.
+    expect(
+      screen.getByText(/manuscript excerpts are sent to kimi only after explicit consent there/i)
+    ).toBeInTheDocument();
+    // The provider is named only in the dialog copy — the trigger button
+    // itself stays generic (asserted in the eligibility tests above, where
+    // the dialog is closed and the button is queryable).
+    expect(screen.queryByText(/moonshot|api key|bearer/i)).toBeNull();
+  });
+
+  it("shows an intelligible message when the provider is not configured", async () => {
     axios.post.mockRejectedValue({
       response: {
         status: 503,

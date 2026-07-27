@@ -105,16 +105,24 @@ bounding requests. The effective end-user file limit remains 10 MB —
 enforced in the backend both on the encoded length and the decoded bytes;
 nothing else about extraction, persistence, or limits changed.
 
-## Optional AI keyword suggestions (Qwen, opt-in)
+## Optional AI keyword suggestions (Kimi, opt-in)
 
-- **Disabled by default.** Enabled only when the server sets ALL of:
-  `QRESP_QWEN_ENABLED=1`, `QRESP_QWEN_API_KEY`, `QRESP_QWEN_BASE_URL`
-  (OpenAI-compatible endpoint), `QRESP_QWEN_MODEL`. Optional tuning:
-  `QRESP_QWEN_TIMEOUT_SECONDS` (default 15),
-  `QRESP_QWEN_MAX_MANUSCRIPT_CHARS` (default 60000),
-  `QRESP_QWEN_MAX_REQUESTS_PER_USER_PER_DAY` (default 20; a persistent
-  per-user daily counter enforces it). Environment variables only — never
-  config.ini; no key or provider URL ever reaches the browser.
+Kimi (Moonshot) is the single selected provider — this is deliberately not a
+multi-provider framework, and the endpoint
+`https://api.moonshot.cn/v1/chat/completions` is fixed in code so no
+environment mistake can redirect the prompt elsewhere.
+
+- **Disabled by default.** Enabled only when the server sets BOTH
+  `QRESP_KIMI_ENABLED=1` and `QRESP_KIMI_API_KEY`. Optional tuning:
+  `QRESP_KIMI_MODEL` (default `kimi-k3`),
+  `QRESP_KIMI_TIMEOUT_SECONDS` (default 15, hard ceiling 60),
+  `QRESP_KIMI_MAX_MANUSCRIPT_CHARS` (default 60000),
+  `QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY` (default 20; a persistent
+  per-user daily counter enforces it, counted per PROVIDER CALL so a
+  chunked manuscript cannot bypass the limit). Environment variables only —
+  never config.ini; the retired `QRESP_QWEN_*` variables have no effect and
+  no aliases. Only the backend ever contacts Kimi: no key, endpoint, or
+  provider configuration exists in frontend code.
 - **Two entry points, both suggestion-only:** "Suggest Keywords with AI" in
   Qresp Curation Information sends only the paper's title/abstract/venue/DOI;
   manuscript imports additionally offer a default-OFF consent checkbox
@@ -129,7 +137,7 @@ nothing else about extraction, persistence, or limits changed.
   candidates only (no tools, no instruction-following). Datasets, scripts,
   credentials, file paths, emails, workflow data and profiles are never sent.
 - **Results:** strictly parsed, normalized, deduplicated, capped at 8, shown
-  as a separate "AI suggestions (Qwen)" group with every suggestion
+  as a separate "AI suggestions (Kimi)" group with every suggestion
   unchecked; selected ones are appended to Keywords on Apply — nothing is
   ever auto-written, and manuscript text is never stored or logged anywhere.
 

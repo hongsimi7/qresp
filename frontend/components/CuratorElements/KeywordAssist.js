@@ -18,13 +18,15 @@ import {
 import { RegularStyledButton } from "../button";
 import CuratorContext from "../../Context/Curator/curatorContext";
 
-// "Suggest Keywords with AI" — opt-in Qwen keyword suggestions inside the
-// Qresp Curation Information section. Sends ONLY the primary paper's
-// bibliographic metadata (title/abstract/venue/DOI) to the backend assist
-// endpoint; the manuscript-text variant lives in the import review behind
-// its own explicit consent checkbox. Every suggestion starts UNCHECKED and
-// nothing is applied until the curator selects tags and clicks Apply —
-// selected tags are handed to the host form, which APPENDS them to Keywords.
+// "Suggest Keywords with AI" — opt-in keyword suggestions inside the Qresp
+// Curation Information section. Sends ONLY the primary paper's bibliographic
+// metadata (title/abstract/venue/DOI) to the BACKEND assist endpoint, which
+// is the only thing that ever talks to the provider (Kimi) — no key, no
+// endpoint, no provider config exists client-side. The manuscript-excerpt
+// variant lives in the import review behind its own consent checkbox. Every
+// suggestion starts UNCHECKED and nothing is applied until the curator
+// selects tags and clicks Apply — selected tags are handed to the host form,
+// which APPENDS them to Keywords.
 
 const KeywordAssist = ({ onApply }) => {
   const { collectDraftState, referenceInfo, liveBiblio } =
@@ -132,16 +134,16 @@ const KeywordAssist = ({ onApply }) => {
         <DialogTitle>Suggest Keywords with AI</DialogTitle>
         <DialogContent dividers>
           <Typography variant="body2" color="secondary" gutterBottom>
-            Suggestions are generated from this paper&rsquo;s title, abstract,
-            venue and DOI by the configured AI provider. They are only
-            suggestions: nothing is added until you select keywords and click
-            Apply, and applied keywords are appended to your existing ones —
-            never replacing them.
+            Continuing sends this paper&rsquo;s title, abstract, venue and DOI
+            — and nothing else — to Kimi, the configured AI provider, to
+            generate suggestions. They are only suggestions: nothing is added
+            until you select keywords and click Apply, and applied keywords
+            are appended to your existing ones — never replacing them.
           </Typography>
           <Typography variant="body2" color="secondary" gutterBottom>
             For richer suggestions, import a .tex file or Overleaf .zip from
-            Publication Information. Manuscript excerpts are sent to the AI
-            provider only after explicit consent.
+            Publication Information. Manuscript excerpts are sent to Kimi
+            only after explicit consent there — this action never sends them.
           </Typography>
           {loading ? (
             <Box sx={{ display: "flex", justifyContent: "center", my: 2 }}>

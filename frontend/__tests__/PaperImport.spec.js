@@ -305,13 +305,15 @@ describe("PaperImport (manuscript source import)", () => {
       name: /analyze extracted manuscript text with ai/i,
     });
     expect(consent).not.toBeChecked();
-    // The wording is honest: bounded excerpts, not the full document.
+    // The wording is honest and names the provider: selected metadata plus
+    // bounded excerpts, not the full document, never the original file.
     expect(
       screen.getByText(/bounded excerpts of the text extracted/i)
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/not the full document or the original file/i)
+      screen.getByText(/not the full document and never the original file/i)
     ).toBeInTheDocument();
+    expect(screen.getByText(/are sent to Kimi/i)).toBeInTheDocument();
     const fetchButton = screen.getByRole("button", {
       name: /get ai keyword suggestions/i,
     });
