@@ -612,6 +612,9 @@ class TestDescribeCandidatesPayload(DescribeCandidatesBase):
             dict(AI_ITEMS[0], id="script-%d" % i) for i in range(50)])
         self.assertEqual(curation.MAX_AI_ITEMS, len(payload["items"]))
 
+    def test_batch_cap_is_ten(self):
+        self.assertEqual(10, curation.MAX_AI_ITEMS)
+
     def test_unknown_kinds_are_refused(self):
         self.login()
         response, requests_mock = self.describe(
@@ -650,6 +653,46 @@ class TestDescribeCandidatesResponse(DescribeCandidatesBase):
                 {"id": "smuggled", "description": "not requested",
                  "keywords": []}])))
         self.assertEqual(["script-0"], list(response.json()["suggestions"]))
+
+    def test_tools_get_a_description_but_never_keywords(self):
+        # Qresp has no keyword field on a Tool, so shipping keywords for one
+        # would only invite the UI to invent a home for them.
+        self.login()
+        response, _ = self.describe(
+            {"consent": True,
+             "items": [dict(AI_ITEMS[0], id="tool-0", kind="tool",
+                            name="numpy 1.26.4")]},
+            reply=MockResponse(gemini_reply([
+                {"id": "tool-0", "description": "Array library.",
+                 "keywords": ["arrays", "numerics"]}])))
+        suggestion = response.json()["suggestions"]["tool-0"]
+        self.assertEqual("Array library.", suggestion["description"])
+        self.assertEqual([], suggestion["keywords"])
+
+    def test_only_descriptive_fields_can_come_back(self):
+        # The schema has no room for factual fields, so a model that tries to
+        # set one cannot reach the curator.
+        properties = curation.AI_RESPONSE_SCHEMA["properties"]["items"]
+        self.assertEqual({"id", "description", "keywords"},
+                         set(properties["items"]["properties"]))
+        self.login()
+        response, _ = self.describe(
+            {"consent": True, "items": AI_ITEMS},
+            reply=MockResponse(gemini_reply([
+                {"id": "script-0", "description": "ok", "keywords": [],
+                 "files": ["invented.py"], "packageName": "fake",
+                 "version": "9.9", "number": 3, "imageFile": "fake.png"}])))
+        self.assertEqual({"description", "keywords"},
+                         set(response.json()["suggestions"]["script-0"]))
+
+    def test_insufficient_evidence_yields_a_blank_description(self):
+        self.login()
+        response, _ = self.describe(
+            {"consent": True, "items": AI_ITEMS},
+            reply=MockResponse(gemini_reply([
+                {"id": "script-0", "description": "", "keywords": []}])))
+        self.assertEqual("",
+                         response.json()["suggestions"]["script-0"]["description"])
 
     def test_malformed_provider_answer_is_a_clean_502(self):
         self.login()

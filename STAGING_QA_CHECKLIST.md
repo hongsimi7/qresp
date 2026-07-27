@@ -279,7 +279,7 @@ Selection vs. saving (these are separate steps on purpose):
       DISABLED with the "pick a file server folder first" hint, and
       "Selected folder" reads "None yet"
 - [ ] Choose the RCC root → Search → the file tree opens; its confirmation
-      button reads **Use selected folder**
+      button reads **Use Folder**
 - [ ] Pick the DOI folder and confirm → the dialog closes, the form STAYS
       OPEN, "Selected folder" shows the full path, and nothing was committed
       (the section did NOT collapse to the display card)

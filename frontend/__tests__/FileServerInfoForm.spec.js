@@ -137,8 +137,34 @@ describe("FileServerInfoForm", () => {
       screen.getByRole("button", { name: /save file server/i })
     ).toBeDisabled();
     expect(
-      screen.getByText(/pick a folder before saving the file server path/i)
+      screen.getByText(/search above, then pick one folder/i)
     ).toBeInTheDocument();
+  });
+
+  it("keeps the full URL readable in a compact preview, not inline prose", () => {
+    renderForm({ fileServerPath: FOLDER });
+    const preview = screen.getByTestId("selected-folder");
+    // The exact URL is preserved verbatim as selectable text...
+    expect(preview).toHaveTextContent(FOLDER);
+    expect(preview.textContent).toBe(FOLDER);
+    // ...and it is the ONLY thing in that area — no explanatory sentence.
+    expect(preview.textContent).not.toMatch(/analyze|save|search/i);
+  });
+
+  it("puts both actions in one row with the explanation below it", () => {
+    renderForm({ fileServerPath: FOLDER });
+    const analyze = screen.getByRole("button", {
+      name: /analyze rcc folder/i,
+    });
+    const save = screen.getByRole("button", { name: /save file server/i });
+    // Same action row.
+    const row = screen.getByTestId("fileserver-actions");
+    expect(row).toContainElement(analyze);
+    expect(row).toContainElement(save);
+    // The long copy is a separate muted caption, not a sibling of the button.
+    const caption = screen.getByText(/analyze proposes charts, datasets/i);
+    expect(row).not.toContainElement(caption);
+    expect(caption).toHaveClass("MuiTypography-caption");
   });
 
   it("analyzes the UNSAVED selected folder without committing it", async () => {
@@ -221,7 +247,7 @@ describe("FileServerInfoForm", () => {
     const setConfirmLabel = jest.fn();
     const handles = renderForm({}, { setConfirmLabel });
     await searchAndGetPicker(user, handles);
-    expect(setConfirmLabel).toHaveBeenCalledWith("Use selected folder");
+    expect(setConfirmLabel).toHaveBeenCalledWith("Use Folder");
   });
 });
 
@@ -237,9 +263,9 @@ describe("file tree confirmation label", () => {
         type: SET_SAVE_BUTTON_ACTION,
         payload: jest.fn(),
       }),
-      { type: SET_CONFIRM_LABEL, payload: "Use selected folder" }
+      { type: SET_CONFIRM_LABEL, payload: "Use Folder" }
     );
-    expect(forFileServer.confirmLabel).toBe("Use selected folder");
+    expect(forFileServer.confirmLabel).toBe("Use Folder");
 
     const forChart = sourceTreeReducer(forFileServer, {
       type: SET_SAVE_BUTTON_ACTION,

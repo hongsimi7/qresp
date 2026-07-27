@@ -9,6 +9,7 @@ import {
   Checkbox,
   Chip,
   CircularProgress,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -19,6 +20,7 @@ import {
   Tab,
   Tabs,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 
@@ -26,21 +28,36 @@ import { RegularStyledButton } from "../button";
 import CuratorContext from "../../Context/Curator/curatorContext";
 import AlertContext from "../../Context/Alert/alertContext";
 
-// "Analyze RCC Folder" — reads the file-server folder the curator ALREADY
-// saved and proposes Charts/Datasets/Scripts/Tools for review. The backend
-// does the fetching (it is the only side that knows which roots are
-// readable), returns an analysis and stores nothing. Here every candidate
-// starts UNCHECKED and stays editable; "Add selected items to Curator"
-// appends to Curator state only — it never saves a draft, never publishes,
-// and never touches records the curator already created.
+// "Analyze RCC Folder" — reads the selected (or saved) file-server folder and
+// proposes Charts/Datasets/Scripts/Tools for review. The backend does the
+// fetching (it is the only side that knows which roots are readable), returns
+// an analysis and stores nothing. Here every candidate starts UNCHECKED and
+// stays editable; "Add selected items to Curator" appends to Curator state
+// only — it never saves a draft, never publishes, and never touches records
+// the curator already created.
 
 const GROUPS = [
   { key: "charts", type: "chart", label: "Charts" },
   { key: "datasets", type: "dataset", label: "Datasets" },
   { key: "scripts", type: "script", label: "Scripts" },
   { key: "tools", type: "tool", label: "Tools" },
-  { key: "unclassified", type: null, label: "Unclassified" },
+  { key: "unclassified", type: null, label: "Unclassified", secondary: true },
 ];
+
+// One AI request covers at most this many selected candidates, so a large
+// selection cannot silently turn into an oversized (and expensive) call.
+const MAX_AI_BATCH = 10;
+
+// Where an accepted AI proposal is allowed to land, per kind. Anything not
+// listed here — image files, figure numbers, file lists, package names,
+// versions, executables, patches, facilities, measurements — is factual and
+// is never touched by AI.
+const AI_TARGETS = {
+  chart: { description: "caption", keywords: "properties" },
+  dataset: { description: "readme", keywords: null },
+  script: { description: "readme", keywords: null },
+  tool: { description: "description", keywords: null },
+};
 
 const list = (value) => (Array.isArray(value) ? value.join(", ") : value || "");
 
@@ -49,6 +66,13 @@ const split = (value) =>
     .split(",")
     .map((el) => el.trim())
     .filter(Boolean);
+
+const basename = (path) => String(path || "").split("/").filter(Boolean).pop() || "";
+
+const dirname = (path) => {
+  const value = String(path || "");
+  return value.includes("/") ? value.slice(0, value.lastIndexOf("/")) : "";
+};
 
 // The proposal as the curator edits it: arrays become comma-separated text so
 // the fields behave like the manual Add forms.
@@ -113,17 +137,37 @@ const toRecord = (kind, draft) => {
   };
 };
 
-const titleOf = (candidate) => {
+// A short, scannable label. The exact relative paths stay in the candidate
+// data (and in the applied record) — they live under Details, not in the
+// card header, so a folder of forty files is still readable.
+const labelOf = (candidate) => {
   const p = candidate.proposal || {};
-  if (candidate.kind === "chart") return p.imageFile;
-  if (candidate.kind === "tool")
-    return `${p.packageName} ${p.version}`.trim();
-  if (candidate.kind === "script") return (p.files || [])[0];
-  const first = (p.files || [])[0] || "";
-  const directory = first.includes("/")
-    ? first.slice(0, first.lastIndexOf("/"))
-    : "folder root";
-  return `${directory} (${(p.files || []).length} files)`;
+  if (candidate.kind === "chart") {
+    const path = p.imageFile || "";
+    const parent = basename(dirname(path));
+    return {
+      primary: parent ? `${parent} / ${basename(path)}` : basename(path),
+      secondary: "",
+    };
+  }
+  if (candidate.kind === "script") {
+    const path = (p.files || [])[0] || "";
+    return { primary: basename(path), secondary: dirname(path) };
+  }
+  if (candidate.kind === "tool") {
+    return {
+      primary: `${p.packageName || ""} ${p.version || ""}`.trim(),
+      secondary: "",
+    };
+  }
+  const directory = dirname((p.files || [])[0] || "");
+  const count = (p.files || []).length;
+  return {
+    primary: `${directory ? basename(directory) : "folder root"} · ${count} file${
+      count === 1 ? "" : "s"
+    }`,
+    secondary: directory,
+  };
 };
 
 const FIELD_LABELS = {
@@ -160,14 +204,20 @@ const FolderAnalysis = ({ path }) => {
   const [drafts, setDrafts] = useState({});
   const [selected, setSelected] = useState({});
   const [removed, setRemoved] = useState({});
+  const [detailsOpen, setDetailsOpen] = useState({});
+  const [editOpen, setEditOpen] = useState({});
+  const [showUnclassified, setShowUnclassified] = useState(false);
   const [tab, setTab] = useState(0);
   // Optional AI enrichment: a SEPARATE action over the candidates already
   // selected, behind its own always-unchecked consent box. Selecting
-  // candidates never sends anything by itself, and the deterministic analysis
-  // above works whether or not the provider is configured.
+  // candidates never sends anything by itself, the deterministic analysis
+  // works whether or not the provider is configured, and a returned proposal
+  // is only ever a SUGGESTION — it is parked here until the curator accepts
+  // it into a field.
   const [aiConsent, setAiConsent] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiNotice, setAiNotice] = useState("");
+  const [aiSuggestions, setAiSuggestions] = useState({});
 
   const ready = Boolean(target.trim());
 
@@ -179,10 +229,14 @@ const FolderAnalysis = ({ path }) => {
     setDrafts({});
     setSelected({});
     setRemoved({});
+    setDetailsOpen({});
+    setEditOpen({});
+    setShowUnclassified(false);
     setTab(0);
     setAiConsent(false);
     setAiLoading(false);
     setAiNotice("");
+    setAiSuggestions({});
   };
 
   const analyze = async () => {
@@ -225,10 +279,10 @@ const FolderAnalysis = ({ path }) => {
   );
 
   // Everything the AI action may see, built here so the allowlist is visible:
-  // the candidate's id/kind, its display name, its RELATIVE paths, and the
-  // text Qresp already extracted locally (docstrings, manifest lines,
-  // evidence). No file contents, no image bytes, no credentials, no profile
-  // or ownership data, nothing outside the selected folder.
+  // the SELECTED candidate's id/kind, its display name, its RELATIVE paths,
+  // and the text Qresp already extracted locally (docstrings, manifest lines,
+  // evidence). No unselected candidate, no file contents, no image bytes, no
+  // credentials, no profile or ownership data, nothing outside the folder.
   const aiItems = () => {
     const items = [];
     GROUPS.forEach(({ key, type }) => {
@@ -240,7 +294,7 @@ const FolderAnalysis = ({ path }) => {
           items.push({
             id: candidate.id,
             kind: type,
-            name: titleOf(candidate),
+            name: labelOf(candidate).primary,
             paths: candidate.paths || [],
             context: [draft.readme, draft.description]
               .concat(candidate.evidence || [])
@@ -253,33 +307,31 @@ const FolderAnalysis = ({ path }) => {
   };
 
   const describeWithAI = async () => {
+    const items = aiItems();
+    if (items.length > MAX_AI_BATCH) {
+      // Refused locally: no request is made at all.
+      setAiNotice(
+        `One AI request covers at most ${MAX_AI_BATCH} candidates — you have ` +
+          `${items.length} selected. Uncheck some and try again.`
+      );
+      return;
+    }
     setAiLoading(true);
     setAiNotice("");
     try {
       const response = await axios.post("/api/curation/describe-candidates", {
         consent: true,
-        items: aiItems(),
+        items,
       });
       const suggestions = (response.data || {}).suggestions || {};
-      const applied = Object.keys(suggestions).length;
-      setDrafts((current) => {
-        const next = { ...current };
-        Object.keys(suggestions).forEach((id) => {
-          if (!next[id]) return;
-          const text = suggestions[id].description || "";
-          if (!text) return;
-          // Suggestions fill the description field the curator can still
-          // edit; nothing else is touched and nothing is saved.
-          next[id] = Object.prototype.hasOwnProperty.call(next[id], "readme")
-            ? { ...next[id], readme: text }
-            : { ...next[id], description: text };
-        });
-        return next;
-      });
+      const count = Object.keys(suggestions).length;
+      // Parked as proposals ONLY. Nothing the curator typed is touched, and
+      // no field is filled until they accept it below.
+      setAiSuggestions((current) => ({ ...current, ...suggestions }));
       setAiNotice(
-        applied
-          ? `AI filled in ${applied} description(s) — review and edit them ` +
-            "before adding anything."
+        count
+          ? `AI proposed text for ${count} item(s). Nothing has been filled in ` +
+            "— review each proposal and accept the ones you want."
           : "The AI service returned no usable suggestions."
       );
     } catch (err) {
@@ -321,52 +373,138 @@ const FolderAnalysis = ({ path }) => {
       [id]: { ...current[id], [field]: value },
     }));
 
+  const toggle = (setter, id) =>
+    setter((current) => ({ ...current, [id]: !current[id] }));
+
+  const renderAiProposal = (candidate) => {
+    const suggestion = aiSuggestions[candidate.id];
+    if (!suggestion) return null;
+    const targets = AI_TARGETS[candidate.kind] || {};
+    const draft = drafts[candidate.id] || {};
+    const description = suggestion.description || "";
+    const keywords = suggestion.keywords || [];
+    const descriptionField = targets.description;
+    const keywordField = targets.keywords;
+
+    return (
+      <Box
+        sx={{
+          mt: 1,
+          p: 1.5,
+          borderRadius: 1,
+          border: 1,
+          borderColor: "info.light",
+          bgcolor: "action.hover",
+        }}
+      >
+        <Typography variant="caption" color="text.secondary" display="block">
+          AI proposal — not applied
+        </Typography>
+        {description ? (
+          <Fragment>
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              {description}
+            </Typography>
+            <Button
+              size="small"
+              onClick={() =>
+                setField(candidate.id, descriptionField, description)
+              }
+            >
+              {`Use as ${FIELD_LABELS[descriptionField] || descriptionField}`}
+            </Button>
+            {draft[descriptionField] ? (
+              <Typography variant="caption" color="text.secondary">
+                replaces what you typed
+              </Typography>
+            ) : null}
+          </Fragment>
+        ) : (
+          <Typography variant="body2" sx={{ mt: 0.5 }}>
+            The AI had too little evidence to describe this one — the field
+            stays blank for you to fill in.
+          </Typography>
+        )}
+        {keywords.length > 0 && (
+          <Box sx={{ mt: 1, display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+            {keywords.map((keyword) => (
+              <Chip key={keyword} size="small" variant="outlined" label={keyword} />
+            ))}
+            {keywordField ? (
+              <Button
+                size="small"
+                onClick={() =>
+                  setField(candidate.id, keywordField, keywords.join(", "))
+                }
+              >
+                {`Use as ${FIELD_LABELS[keywordField] || keywordField}`}
+              </Button>
+            ) : (
+              <Typography variant="caption" color="text.secondary">
+                suggested keywords — this record type has no keyword field
+              </Typography>
+            )}
+          </Box>
+        )}
+      </Box>
+    );
+  };
+
   const renderCandidate = (candidate) => {
     const draft = drafts[candidate.id] || {};
     const needs = candidate.needs_input || [];
+    const { primary, secondary } = labelOf(candidate);
+    const isSelected = Boolean(selected[candidate.id]);
+    // Fields appear once the candidate matters: it is selected, or the
+    // curator explicitly opened it. An unselected card stays a single line.
+    const fieldsVisible = isSelected || Boolean(editOpen[candidate.id]);
+
     return (
       <Box
         key={candidate.id}
-        sx={{ border: 1, borderColor: "divider", borderRadius: 1, p: 2, mb: 2 }}
+        sx={{ border: 1, borderColor: "divider", borderRadius: 1, p: 1.5, mb: 1.5 }}
       >
-        <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <Checkbox
-            checked={Boolean(selected[candidate.id])}
+            size="small"
+            checked={isSelected}
             onChange={(event) =>
               setSelected((current) => ({
                 ...current,
                 [candidate.id]: event.target.checked,
               }))
             }
-            slotProps={{
-              input: { "aria-label": `Select ${titleOf(candidate)}` },
-            }}
+            slotProps={{ input: { "aria-label": `Select ${primary}` } }}
           />
-          <Box sx={{ flexGrow: 1 }}>
-            <Typography variant="subtitle2">{titleOf(candidate)}</Typography>
-            <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", my: 0.5 }}>
-              <Chip
-                size="small"
-                label={`${candidate.confidence} confidence`}
-                data-testid={`confidence-${candidate.id}`}
-              />
-              {needs.length > 0 && (
-                <Chip
-                  size="small"
-                  color="warning"
-                  label={`Needs your input: ${needs.join(", ")}`}
-                />
-              )}
-            </Box>
-            {(candidate.evidence || []).map((line) => (
-              <Typography key={line} variant="caption" display="block">
-                {line}
-              </Typography>
-            ))}
-            <Typography variant="caption" color="text.secondary" display="block">
-              Files: {(candidate.paths || []).join(", ")}
+          <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+            <Typography variant="subtitle2" noWrap title={primary}>
+              {primary}
             </Typography>
+            {secondary ? (
+              <Typography variant="caption" color="text.secondary" noWrap
+                display="block">
+                {secondary}
+              </Typography>
+            ) : null}
           </Box>
+          <Chip
+            size="small"
+            label={candidate.confidence}
+            data-testid={`confidence-${candidate.id}`}
+          />
+          {needs.length > 0 && (
+            <Tooltip title={`Needs your input: ${needs.join(", ")}`}>
+              <Chip size="small" color="warning" label="needs input" />
+            </Tooltip>
+          )}
+          <Button size="small" onClick={() => toggle(setDetailsOpen, candidate.id)}>
+            Details
+          </Button>
+          {!isSelected && (
+            <Button size="small" onClick={() => toggle(setEditOpen, candidate.id)}>
+              Edit proposal
+            </Button>
+          )}
           <Button
             size="small"
             onClick={() =>
@@ -376,48 +514,74 @@ const FolderAnalysis = ({ path }) => {
             Remove
           </Button>
         </Box>
-        <Grid container spacing={1} sx={{ mt: 1 }}>
-          {Object.keys(draft).map((field) => (
-            <Grid key={field} size={{ xs: 12, sm: 6 }}>
-              <TextField
-                fullWidth
-                size="small"
-                label={FIELD_LABELS[field] || field}
-                value={draft[field]}
-                onChange={(event) =>
-                  setField(candidate.id, field, event.target.value)
-                }
-                helperText={
-                  needs.includes(field)
-                    ? "Qresp could not determine this — please fill it in."
-                    : " "
-                }
-              />
-            </Grid>
-          ))}
-        </Grid>
+
+        <Collapse in={Boolean(detailsOpen[candidate.id])} unmountOnExit>
+          <Box sx={{ pl: 5, pt: 1 }}>
+            {(candidate.evidence || []).map((line) => (
+              <Typography key={line} variant="caption" display="block">
+                {line}
+              </Typography>
+            ))}
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              display="block"
+              sx={{ wordBreak: "break-all" }}
+            >
+              Files: {(candidate.paths || []).join(", ")}
+            </Typography>
+          </Box>
+        </Collapse>
+
+        {renderAiProposal(candidate)}
+
+        <Collapse in={fieldsVisible} unmountOnExit>
+          <Grid container spacing={1} sx={{ mt: 0.5, pl: 5 }}>
+            {Object.keys(draft).map((field) => (
+              <Grid key={field} size={{ xs: 12, sm: 6 }}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label={FIELD_LABELS[field] || field}
+                  value={draft[field]}
+                  onChange={(event) =>
+                    setField(candidate.id, field, event.target.value)
+                  }
+                  helperText={
+                    needs.includes(field)
+                      ? "Qresp could not determine this — please fill it in."
+                      : " "
+                  }
+                />
+              </Grid>
+            ))}
+          </Grid>
+        </Collapse>
       </Box>
     );
   };
 
   const activeGroup = GROUPS[tab];
   const hints = ((analysis || {}).candidates || {}).possible_dependencies || [];
+  const unclassified = ((analysis || {}).candidates || {}).unclassified || [];
 
   return (
     <Fragment>
-      <Box sx={{ mt: 2 }}>
-        <RegularStyledButton onClick={analyze} disabled={!ready}>
-          Analyze RCC Folder
-        </RegularStyledButton>
-        <Typography variant="caption" display="block" sx={{ mt: 1 }}>
-          {ready
-            ? "Inspects the selected folder and proposes charts, datasets, " +
-              "scripts and tools for you to review. Nothing is saved or " +
-              "published."
-            : "Pick a file server folder first — the analysis reads the " +
-              "folder you selected."}
-        </Typography>
-      </Box>
+      {/* Trigger only — the surrounding form owns the explanatory copy so the
+          button can sit in a tight action row. */}
+      <Tooltip
+        title={
+          ready
+            ? "Propose charts, datasets, scripts and tools from this folder"
+            : "Pick a file server folder first"
+        }
+      >
+        <Box component="span" sx={{ display: "inline-flex" }}>
+          <RegularStyledButton onClick={analyze} disabled={!ready}>
+            Analyze RCC Folder
+          </RegularStyledButton>
+        </Box>
+      </Tooltip>
 
       <Dialog open={open} onClose={close} maxWidth="md" fullWidth>
         <DialogTitle>Folder analysis</DialogTitle>
@@ -452,12 +616,13 @@ const FolderAnalysis = ({ path }) => {
                 onChange={(event, next) => setTab(next)}
                 variant="scrollable"
               >
-                {GROUPS.map(({ key, label }) => (
+                {GROUPS.map(({ key, label, secondary }) => (
                   <Tab
                     key={key}
+                    sx={secondary ? { color: "text.secondary" } : undefined}
                     label={`${label} (${
                       key === "unclassified"
-                        ? ((analysis.candidates || {}).unclassified || []).length
+                        ? unclassified.length
                         : candidatesFor(key).length
                     })`}
                   />
@@ -482,16 +647,35 @@ const FolderAnalysis = ({ path }) => {
                 </Fragment>
               ) : (
                 <Fragment>
-                  <Typography variant="body2" gutterBottom>
-                    Qresp did not classify these files. Add them by hand if
-                    they belong to the paper.
+                  <Typography variant="body2" color="text.secondary" gutterBottom>
+                    {unclassified.length} file(s) were not classified. Add them
+                    by hand if they belong to the paper.
                   </Typography>
-                  {((analysis.candidates || {}).unclassified || []).map(
-                    (path) => (
-                      <Typography key={path} variant="caption" display="block">
-                        {path}
-                      </Typography>
-                    )
+                  {unclassified.length > 0 && (
+                    <Fragment>
+                      <Button
+                        size="small"
+                        onClick={() => setShowUnclassified((value) => !value)}
+                      >
+                        {showUnclassified
+                          ? "Hide file names"
+                          : "Show file names"}
+                      </Button>
+                      <Collapse in={showUnclassified} unmountOnExit>
+                        <Box sx={{ mt: 1, maxHeight: 240, overflowY: "auto" }}>
+                          {unclassified.map((file) => (
+                            <Typography
+                              key={file}
+                              variant="caption"
+                              display="block"
+                              sx={{ wordBreak: "break-all" }}
+                            >
+                              {file}
+                            </Typography>
+                          ))}
+                        </Box>
+                      </Collapse>
+                    </Fragment>
                   )}
                 </Fragment>
               )}

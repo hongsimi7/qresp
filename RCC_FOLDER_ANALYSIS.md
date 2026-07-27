@@ -17,7 +17,7 @@ only one of them is mounted at a time, so there is never a duplicate button:
   clicking the pencil first.
 
 Selecting and saving are deliberately separate steps. Confirming a folder in
-the file tree ("Use selected folder") only records the choice — it does not
+the file tree ("Use Folder") only records the choice — it does not
 write Curator state and does not close the section. **Save File Server** is
 the only action that calls `setFileServerPath`. A search that is cancelled or
 fails leaves an existing saved path and the current selection untouched.
@@ -43,10 +43,11 @@ selected (or saved) file server folder
 Optional, separate, consented:
 
 ```
-selected candidates
+selected candidates (max 10)
   → POST /api/curation/describe-candidates
       → allowlisted names/paths/local text → Gemini
-  → suggested descriptions fill EDITABLE fields (nothing applied)
+  → proposals shown per candidate, NOT applied
+  → curator accepts one into an editable field, or ignores it
 ```
 
 ## Endpoints
@@ -103,9 +104,28 @@ exactly and stay fully editable.
 - **No Experiment records are inferred** from folder names, titles, or AI.
 - Files that match nothing land in **Unclassified** for manual handling.
 
-The AI action can only fill the *description* field of candidates the curator
-already selected. It never creates candidates, never changes paths, and never
-applies anything.
+### What the optional AI may and may not propose
+
+The AI action runs only over candidates the curator has **selected**, and it
+proposes **descriptive text only** — it never creates candidates, never
+changes paths, and never fills a field by itself. Each proposal is shown on
+its candidate card marked "not applied"; a field changes only when the curator
+clicks to accept it, so nothing they typed is ever overwritten behind their
+back.
+
+| Kind | AI may propose | Accepted into |
+| --- | --- | --- |
+| Chart | description, keywords | `caption`, `properties` |
+| Dataset | description, keywords | `readme` (keywords are informational — a dataset record has no keyword field) |
+| Script | description, keywords | `readme` (same) |
+| Tool | description only | `description` (keywords are dropped server-side) |
+
+**Never touched by AI**, on any kind: `imageFile`, chart `number`, `files`,
+`notebookFile`, `packageName`, `version`, `executableName`, `patches`, `urls`,
+and any experiment facility or measurement. These are factual and the schema
+sent back has no room for them. When the evidence is too thin the model is
+instructed to return an empty description, and the candidate keeps its
+`needs_input` flag rather than receiving a guess.
 
 ## Security limits
 
@@ -169,7 +189,8 @@ unchecked every time the dialog opens:
 
 Never sent: binary datasets, raw `.xyz`/`.h5`/`.csv` contents, image bytes,
 credentials/`.env`/keys, user profile, email or ownership data, and anything
-outside the selected folder. At most 12 items per request.
+outside the selected folder. At most 10 items per request, and only
+candidates the curator has SELECTED.
 
 The response is schema-constrained (`{"items":[{"id","description",
 "keywords"}]}`), re-clipped server-side, and ids that were never sent are

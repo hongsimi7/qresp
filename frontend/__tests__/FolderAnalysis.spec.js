@@ -127,8 +127,10 @@ describe("Analyze RCC Folder", () => {
     renderWith({ fileServerPath: "" });
     const button = analyzeButton();
     expect(button).toBeDisabled();
+    // The reason rides on the trigger as a tooltip, so the button can sit in
+    // a tight action row without a sentence beside it.
     expect(
-      screen.getByText(/pick a file server folder first/i)
+      screen.getByLabelText(/pick a file server folder first/i)
     ).toBeInTheDocument();
     expect(axios.post).not.toHaveBeenCalled();
   });
@@ -161,7 +163,7 @@ describe("Analyze RCC Folder", () => {
     });
   });
 
-  it("renders each kind in its own group with confidence and evidence", async () => {
+  it("renders each kind in its own group with a compact summary", async () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
@@ -173,18 +175,101 @@ describe("Analyze RCC Folder", () => {
       screen.getByRole("tab", { name: /unclassified \(1\)/i })
     ).toBeInTheDocument();
 
-    expect(screen.getByTestId("confidence-chart-0")).toHaveTextContent(
-      "high confidence"
-    );
+    expect(screen.getByTestId("confidence-chart-0")).toHaveTextContent("high");
     expect(
-      screen.getByText(/figures\/figure1\.png is a \.png image/i)
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
     ).toBeInTheDocument();
-    // "Needs human input" is explicit, on the chip and on the field itself.
-    expect(screen.getByText(/needs your input: caption, number/i))
-      .toBeInTheDocument();
+    // The needs-input chip is a short badge; the field list is its tooltip.
+    expect(screen.getByText(/^needs input$/i)).toBeInTheDocument();
+  });
+
+  it("uses compact labels per kind and keeps full paths under Details", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    // Chart: parent folder / image file — not the whole relative path.
+    expect(screen.getByText("figures / figure1.png")).toBeInTheDocument();
+    expect(screen.queryByText(/figure1\.png is a \.png image/i)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /^details$/i }));
+    // The exact relative path and the evidence live here.
+    expect(
+      await screen.findByText(/figures\/figure1\.png is a \.png image/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Files: figures\/figure1\.png/i)
+    ).toBeInTheDocument();
+  });
+
+  it("labels scripts, datasets and tools compactly too", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
+    // Basename first, parent directory as secondary text.
+    expect(screen.getByText("plot_vdos.py")).toBeInTheDocument();
+    expect(screen.getByText("scripts")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /datasets \(1\)/i }));
+    expect(screen.getByText("short_traj · 2 files")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /tools \(1\)/i }));
+    expect(screen.getByText("numpy 1.26.4")).toBeInTheDocument();
+  });
+
+  it("does not render editable fields for unselected candidates", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    // A compact card: no six empty inputs sitting there by default.
+    expect(screen.queryByLabelText(/^caption$/i)).toBeNull();
+    expect(screen.queryByLabelText(/^image file$/i)).toBeNull();
+    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
+
+    // Selecting reveals them...
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+    );
+    expect(await screen.findByLabelText(/^caption$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^image file$/i)).toBeInTheDocument();
     expect(
       screen.getAllByText(/qresp could not determine this/i).length
     ).toBeGreaterThan(0);
+  });
+
+  it("Edit proposal opens the fields without selecting the candidate", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    await user.click(screen.getByRole("button", { name: /edit proposal/i }));
+
+    expect(await screen.findByLabelText(/^caption$/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+    ).not.toBeChecked();
+    expect(
+      screen.getByRole("button", { name: /add selected items to curator/i })
+    ).toBeDisabled();
+  });
+
+  it("keeps Unclassified secondary and collapsed by default", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    await user.click(screen.getByRole("tab", { name: /unclassified \(1\)/i }));
+    expect(
+      screen.getByText(/1 file\(s\) were not classified/i)
+    ).toBeInTheDocument();
+    // The names are behind an explicit expansion, not dumped by default.
+    expect(screen.queryByText("README.md")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /show file names/i }));
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
   });
 
   it("selects nothing by default and cannot apply until something is checked", async () => {
@@ -193,7 +278,7 @@ describe("Analyze RCC Folder", () => {
     await openAnalysis(user);
 
     const box = screen.getByRole("checkbox", {
-      name: /select figures\/figure1\.png/i,
+      name: /select figures \/ figure1\.png/i,
     });
     expect(box).not.toBeChecked();
     const apply = screen.getByRole("button", {
@@ -209,7 +294,7 @@ describe("Analyze RCC Folder", () => {
     await openAnalysis(user);
 
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures\/figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
     );
     await user.type(screen.getByLabelText(/^caption$/i), "Density of states");
     await user.click(
@@ -238,7 +323,7 @@ describe("Analyze RCC Folder", () => {
     await openAnalysis(user);
 
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures\/figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
     );
     await user.click(screen.getByRole("button", { name: /^remove$/i }));
     expect(screen.getByRole("tab", { name: /charts \(0\)/i })).toBeInTheDocument();
@@ -287,7 +372,7 @@ describe("Analyze RCC Folder", () => {
     await openAnalysis(user);
     await user.click(screen.getByRole("tab", { name: /datasets \(1\)/i }));
     await user.click(
-      screen.getByRole("checkbox", { name: /select data\/short_traj/i })
+      screen.getByRole("checkbox", { name: /select short_traj/i })
     );
     await user.click(
       screen.getByRole("button", { name: /add selected items to curator/i })
@@ -309,7 +394,7 @@ describe("Analyze RCC Folder", () => {
     renderWith();
     await openAnalysis(user);
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures\/figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
     );
     await user.click(
       screen.getByRole("button", { name: /add selected items to curator/i })
@@ -325,7 +410,7 @@ describe("Analyze RCC Folder", () => {
     const { addMany } = renderWith();
     await openAnalysis(user);
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures\/figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
     );
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));
     expect(addMany).not.toHaveBeenCalled();
@@ -416,7 +501,7 @@ describe("Analyze RCC Folder — optional AI descriptions", () => {
 
     // A selection alone is not consent.
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures\/figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
     );
     expect(aiButton()).toBeDisabled();
 
@@ -430,7 +515,7 @@ describe("Analyze RCC Folder — optional AI descriptions", () => {
     await openAnalysis(user);
     await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
     await user.click(
-      screen.getByRole("checkbox", { name: /select scripts\/plot_vdos\.py/i })
+      screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
     );
     await user.click(consentBox());
 
@@ -464,14 +549,18 @@ describe("Analyze RCC Folder — optional AI descriptions", () => {
     expect(item.context).toContain("Plot the vibrational density of states.");
   });
 
-  it("fills the editable description field, applying nothing by itself", async () => {
+  it("parks proposals for review and NEVER overwrites what the curator typed", async () => {
     const user = userEvent.setup();
     const { addMany } = renderWith();
     await openAnalysis(user);
     await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
     await user.click(
-      screen.getByRole("checkbox", { name: /select scripts\/plot_vdos\.py/i })
+      screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
     );
+
+    // The curator writes their own description first.
+    await user.clear(screen.getByLabelText(/^description$/i));
+    await user.type(screen.getByLabelText(/^description$/i), "Mine");
     await user.click(consentBox());
 
     axios.post.mockResolvedValue({
@@ -483,14 +572,178 @@ describe("Analyze RCC Folder — optional AI descriptions", () => {
     });
     await user.click(aiButton());
 
-    await waitFor(() =>
-      expect(screen.getByLabelText(/^description$/i)).toHaveValue("AI text")
-    );
-    expect(addMany).not.toHaveBeenCalled();
-    // Still editable afterwards.
-    await user.clear(screen.getByLabelText(/^description$/i));
-    await user.type(screen.getByLabelText(/^description$/i), "Mine");
+    // The proposal is visible and clearly not applied; the typed value stands.
+    expect(await screen.findByText(/AI proposal — not applied/i)).toBeInTheDocument();
+    expect(screen.getByText("AI text")).toBeInTheDocument();
     expect(screen.getByLabelText(/^description$/i)).toHaveValue("Mine");
+    expect(screen.getByText(/nothing has been filled in/i)).toBeInTheDocument();
+    expect(addMany).not.toHaveBeenCalled();
+
+    // Only an explicit accept moves it into the field.
+    await user.click(screen.getByRole("button", { name: /use as description/i }));
+    expect(screen.getByLabelText(/^description$/i)).toHaveValue("AI text");
+    // Still editable afterwards, and still nothing added or saved.
+    await user.clear(screen.getByLabelText(/^description$/i));
+    await user.type(screen.getByLabelText(/^description$/i), "Final");
+    expect(screen.getByLabelText(/^description$/i)).toHaveValue("Final");
+    expect(addMany).not.toHaveBeenCalled();
+  });
+
+  it("leaves factual fields untouched by AI", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+    );
+    await user.click(consentBox());
+
+    axios.post.mockResolvedValue({
+      data: {
+        suggestions: {
+          "chart-0": { description: "A nice figure", keywords: ["dft"] },
+        },
+      },
+    });
+    await user.click(aiButton());
+    await screen.findByText(/AI proposal — not applied/i);
+
+    // Charts accept caption/properties only — never the factual fields.
+    expect(screen.getByLabelText(/^image file$/i)).toHaveValue(
+      "figures/figure1.png"
+    );
+    expect(screen.getByLabelText(/figure number/i)).toHaveValue("1");
+    expect(screen.getByLabelText(/^notebook file$/i)).toHaveValue("");
+    expect(screen.getByLabelText(/^caption$/i)).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: /use as caption/i }));
+    expect(screen.getByLabelText(/^caption$/i)).toHaveValue("A nice figure");
+    // Accepting the caption did not disturb anything factual.
+    expect(screen.getByLabelText(/^image file$/i)).toHaveValue(
+      "figures/figure1.png"
+    );
+    expect(screen.getByLabelText(/figure number/i)).toHaveValue("1");
+
+    // Keywords land in properties for charts, and only on request.
+    expect(screen.getByLabelText(/^properties/i)).toHaveValue("figure");
+    await user.click(screen.getByRole("button", { name: /use as properties/i }));
+    expect(screen.getByLabelText(/^properties/i)).toHaveValue("dft");
+  });
+
+  it("offers no keyword target where the record type has no keyword field", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
+    await user.click(
+      screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
+    );
+    await user.click(consentBox());
+
+    axios.post.mockResolvedValue({
+      data: {
+        suggestions: {
+          "script-0": { description: "d", keywords: ["md", "water"] },
+        },
+      },
+    });
+    await user.click(aiButton());
+    await screen.findByText(/AI proposal — not applied/i);
+
+    expect(screen.getByText("md")).toBeInTheDocument();
+    expect(
+      screen.getByText(/this record type has no keyword field/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /use as properties/i })
+    ).toBeNull();
+  });
+
+  it("sends only the SELECTED candidates, never the rest", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+    );
+    await user.click(consentBox());
+
+    axios.post.mockResolvedValue({ data: { suggestions: {} } });
+    await user.click(aiButton());
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+
+    const { items } = axios.post.mock.calls[1][1];
+    expect(items.map((item) => item.id)).toEqual(["chart-0"]);
+    const serialized = JSON.stringify(items);
+    expect(serialized).not.toContain("dataset-0");
+    expect(serialized).not.toContain("script-0");
+    expect(serialized).not.toContain("tool-0");
+    expect(serialized).not.toContain("README.md");
+  });
+
+  it("refuses an oversized batch locally, without any request", async () => {
+    const many = {
+      ...analysis,
+      candidates: {
+        ...analysis.candidates,
+        charts: Array.from({ length: 11 }, (unused, index) => ({
+          ...analysis.candidates.charts[0],
+          id: `chart-${index}`,
+          paths: [`figures/figure${index}.png`],
+          proposal: {
+            ...analysis.candidates.charts[0].proposal,
+            imageFile: `figures/figure${index}.png`,
+          },
+        })),
+      },
+    };
+    axios.post.mockResolvedValue({ data: many });
+    const user = userEvent.setup();
+    renderWith();
+    await user.click(analyzeButton());
+    await screen.findByRole("tab", { name: /charts \(11\)/i });
+
+    for (let index = 0; index < 11; index += 1) {
+      await user.click(
+        screen.getByRole("checkbox", {
+          name: new RegExp(`select figures / figure${index}\\.png`, "i"),
+        })
+      );
+    }
+    await user.click(consentBox());
+    await user.click(aiButton());
+
+    expect(
+      await screen.findByText(/at most 10 candidates — you have 11 selected/i)
+    ).toBeInTheDocument();
+    // The analyze call is the only request that was ever made.
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    // Ticking eleven boxes one by one is slower than the 5s default.
+  }, 30000);
+
+  it("an AI response never adds, saves, or publishes on its own", async () => {
+    const user = userEvent.setup();
+    const { addMany, setAlert } = renderWith();
+    await openAnalysis(user);
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+    );
+    await user.click(consentBox());
+
+    axios.post.mockResolvedValue({
+      data: { suggestions: { "chart-0": { description: "x", keywords: [] } } },
+    });
+    await user.click(aiButton());
+    await screen.findByText(/AI proposal — not applied/i);
+
+    expect(addMany).not.toHaveBeenCalled();
+    expect(setAlert).not.toHaveBeenCalled();
+    expect(axios.put).not.toHaveBeenCalled();
+    const posted = axios.post.mock.calls.map((call) => call[0]);
+    expect(posted).toEqual([
+      "/api/curation/analyze-folder",
+      "/api/curation/describe-candidates",
+    ]);
   });
 
   it("is non-blocking when Gemini is not configured", async () => {
@@ -499,11 +752,11 @@ describe("Analyze RCC Folder — optional AI descriptions", () => {
     await openAnalysis(user);
     // The deterministic candidates are there regardless.
     expect(
-      screen.getByRole("checkbox", { name: /select figures\/figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
     ).toBeInTheDocument();
 
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures\/figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
     );
     await user.click(consentBox());
     axios.post.mockRejectedValue({
@@ -605,10 +858,10 @@ describe("Analyze RCC Folder applied into real Curator state", () => {
     await user.click(analyzeButton());
     await screen.findByRole("tab", { name: /charts \(2\)/i });
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures\/figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
     );
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures\/figure2\.png/i })
+      screen.getByRole("checkbox", { name: /select figures \/ figure2\.png/i })
     );
     await user.click(
       screen.getByRole("button", { name: /add selected items to curator/i })

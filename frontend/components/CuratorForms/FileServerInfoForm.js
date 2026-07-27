@@ -79,7 +79,8 @@ const FileServerInfoForm = ({ editor }) => {
   const onSubmit = (values) => {
     setSaveMethod(selectFolder);
     if (setConfirmLabel) {
-      setConfirmLabel("Use selected folder");
+      // Short enough to stay on one line in the selector's narrow header.
+      setConfirmLabel("Use Folder");
     }
     showLoader();
     // Deliberately NOT clearing fileServerPath or the current selection: a
@@ -181,21 +182,51 @@ const FileServerInfoForm = ({ editor }) => {
         </Grid>
       </form>
 
+      {/* Compact read-only preview. The exact URL stays selectable and
+          copyable, but it is confined to its own scrollable strip instead of
+          running across the section. */}
       <Box sx={{ mt: 2 }}>
-        <Typography variant="subtitle2">Selected folder</Typography>
-        <Typography variant="body2" data-testid="selected-folder">
-          {selectedFolder ||
-            "None yet — search above, then pick one folder in the file tree."}
+        <Typography variant="overline" color="text.secondary" component="div">
+          Selected folder
         </Typography>
+        <Box
+          sx={{
+            border: 1,
+            borderColor: "divider",
+            borderRadius: 1,
+            px: 1.5,
+            py: 1,
+            bgcolor: "action.hover",
+            maxWidth: "100%",
+            overflowX: "auto",
+          }}
+        >
+          <Typography
+            variant="body2"
+            component="div"
+            data-testid="selected-folder"
+            color={selectedFolder ? "text.primary" : "text.secondary"}
+            sx={{
+              fontFamily: "monospace",
+              whiteSpace: "nowrap",
+              fontStyle: selectedFolder ? "normal" : "italic",
+            }}
+          >
+            {selectedFolder || "None yet"}
+          </Typography>
+        </Box>
       </Box>
 
-      {/* Assisted curation over the folder that is currently selected — it
-          works before the selection is committed, and adds nothing on its
-          own. There is deliberately no second URL box, so no
-          browser-supplied location can be fetched. */}
-      <FolderAnalysis path={selectedFolder} />
-
-      <Box sx={{ mt: 2 }}>
+      {/* Deliberate action row: the two things a curator does with a
+          selection, side by side and nothing else. Assisted curation runs on
+          the CURRENT selection, before it is committed, and adds nothing on
+          its own; there is no second URL box, so no browser-supplied location
+          can be fetched. */}
+      <Box
+        data-testid="fileserver-actions"
+        sx={{ mt: 2, display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}
+      >
+        <FolderAnalysis path={selectedFolder} />
         <RegularStyledButton
           type="button"
           onClick={saveFileServer}
@@ -203,12 +234,21 @@ const FileServerInfoForm = ({ editor }) => {
         >
           Save File Server
         </RegularStyledButton>
-        {!selectedFolder && (
-          <Typography variant="caption" display="block" sx={{ mt: 1 }}>
-            Pick a folder before saving the file server path.
-          </Typography>
-        )}
       </Box>
+
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        display="block"
+        sx={{ mt: 1 }}
+      >
+        {selectedFolder
+          ? "Analyze proposes charts, datasets, scripts and tools for you to " +
+            "review — nothing is saved or published. Save File Server commits " +
+            "this path to the paper."
+          : "Search above, then pick one folder in the file tree to analyze or " +
+            "save it."}
+      </Typography>
     </Drawer>
   );
 };
