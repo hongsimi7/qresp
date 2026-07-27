@@ -10,22 +10,24 @@ from unittest import mock
 import mongoengine
 import mongomock
 
-# Opt-in AI keyword suggestions, through the real ASGI middleware with the
-# provider fully mocked — no external calls. These tests pin the security
-# posture: disabled-by-default 503, auth/CSRF, per-user daily limit, strict
-# JSON parsing, allowlisted request fields, and no manuscript/secret leakage.
+# Opt-in AI keyword suggestions (Kimi), through the real ASGI middleware with
+# the provider fully mocked — NO external call is ever made. These tests pin
+# the security posture: disabled-by-default 503, auth/CSRF, per-user daily
+# limit, strict JSON parsing, allowlisted request fields, the exact provider
+# contract (endpoint/Bearer/model), and no manuscript/secret leakage.
+from project import assist
 from project import connexionapp
 from project.models import AssistUsage
 
-QWEN_ENV = {
-    "QRESP_QWEN_ENABLED": "1",
-    "QRESP_QWEN_API_KEY": "sk-test-super-secret",
-    "QRESP_QWEN_BASE_URL": "https://qwen.example/v1",
-    "QRESP_QWEN_MODEL": "qwen-test",
+# Synthetic, obviously-fake credentials: never a real key.
+KIMI_ENV = {
+    "QRESP_KIMI_ENABLED": "1",
+    "QRESP_KIMI_API_KEY": "sk-test-super-secret",
+    "QRESP_KIMI_MODEL": "kimi-test",
 }
 
 
-def qwen_reply(keywords):
+def kimi_reply(keywords):
     return {"choices": [{"message": {"content": json.dumps(
         {"keywords": keywords})}}]}
 
@@ -50,7 +52,7 @@ class AssistTestBase(unittest.TestCase):
     def setUp(self):
         self.client = connexionapp.test_client()
         os.environ["QRESP_ENABLE_DEV_LOGIN"] = "1"
-        for key, value in QWEN_ENV.items():
+        for key, value in KIMI_ENV.items():
             os.environ[key] = value
         mongoengine.disconnect_all()
         mongoengine.connect('mongoenginetest',
@@ -58,9 +60,9 @@ class AssistTestBase(unittest.TestCase):
 
     def tearDown(self):
         os.environ.pop("QRESP_ENABLE_DEV_LOGIN", None)
-        for key in QWEN_ENV:
+        for key in KIMI_ENV:
             os.environ.pop(key, None)
-        os.environ.pop("QRESP_QWEN_MAX_REQUESTS_PER_USER_PER_DAY", None)
+        os.environ.pop("QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY", None)
         AssistUsage.drop_collection()
         mongoengine.disconnect_all()
 
@@ -80,7 +82,7 @@ class AssistTestBase(unittest.TestCase):
             else:
                 requests_mock.post.return_value = (
                     reply if reply is not None
-                    else MockResponse(qwen_reply(["DFT"])))
+                    else MockResponse(kimi_reply(["DFT"])))
             response = self.client.post(
                 "/api/assist/keywords", json=payload, headers=headers)
         return response, requests_mock
@@ -88,7 +90,7 @@ class AssistTestBase(unittest.TestCase):
 
 class TestAssistGating(AssistTestBase):
     def test_disabled_by_default_returns_503(self):
-        for key in QWEN_ENV:
+        for key in KIMI_ENV:
             os.environ.pop(key, None)
         self.login()
         response, requests_mock = self.suggest({"title": "T"})
@@ -97,7 +99,7 @@ class TestAssistGating(AssistTestBase):
         requests_mock.post.assert_not_called()
 
     def test_missing_key_is_still_unconfigured(self):
-        os.environ.pop("QRESP_QWEN_API_KEY", None)
+        os.environ.pop("QRESP_KIMI_API_KEY", None)
         self.login()
         response, requests_mock = self.suggest({"title": "T"})
         self.assertEqual(503, response.status_code)
@@ -114,6 +116,36 @@ class TestAssistGating(AssistTestBase):
         self.assertEqual(403, response.status_code)
         requests_mock.post.assert_not_called()
 
+    def test_legacy_qwen_variables_alone_do_not_enable_the_feature(self):
+        # The provider rename is clean: the retired QRESP_QWEN_* variables
+        # have NO effect and cannot resurrect the integration.
+        for key in KIMI_ENV:
+            os.environ.pop(key, None)
+        legacy = {
+            "QRESP_QWEN_ENABLED": "1",
+            "QRESP_QWEN_API_KEY": "sk-legacy-should-be-ignored",
+            "QRESP_QWEN_BASE_URL": "https://qwen.example/v1",
+            "QRESP_QWEN_MODEL": "qwen-test",
+        }
+        os.environ.update(legacy)
+        try:
+            self.login()
+            response, requests_mock = self.suggest({"title": "T"})
+            self.assertEqual(503, response.status_code)
+            self.assertIn("not configured", response.json()["error"])
+            requests_mock.post.assert_not_called()
+            self.assertNotIn("legacy", response.text)
+        finally:
+            for key in legacy:
+                os.environ.pop(key, None)
+
+    def test_enabled_without_api_key_stays_unconfigured(self):
+        os.environ.pop("QRESP_KIMI_API_KEY", None)
+        self.login()
+        response, requests_mock = self.suggest({"title": "T"})
+        self.assertEqual(503, response.status_code)
+        requests_mock.post.assert_not_called()
+
     def test_nothing_to_analyze_rejected(self):
         self.login()
         response, requests_mock = self.suggest({})
@@ -126,7 +158,7 @@ class TestAssistSuggestions(AssistTestBase):
         self.login()
         response, requests_mock = self.suggest(
             {"title": "Ice nucleation", "abstract": "We simulate water."},
-            reply=MockResponse(qwen_reply([
+            reply=MockResponse(kimi_reply([
                 "  DFT ", "dft", "Molecular Dynamics", "water", "Water",
                 "ice nucleation", "a", "x" * 80, "phase diagrams",
                 "free energy", "nucleation", "simulation", "supercooling",
@@ -141,6 +173,49 @@ class TestAssistSuggestions(AssistTestBase):
         self.assertEqual(len([k for k in keywords
                               if k.lower() == "water"]), 1)
         requests_mock.post.assert_called_once()
+
+    def test_calls_the_kimi_endpoint_with_bearer_auth_and_model(self):
+        self.login()
+        response, requests_mock = self.suggest({"title": "T"})
+        self.assertEqual(200, response.status_code, response.text)
+        args, kwargs = requests_mock.post.call_args
+        # Fixed Moonshot/Kimi endpoint (positional URL), never configurable.
+        self.assertEqual(
+            "https://api.moonshot.cn/v1/chat/completions", args[0])
+        self.assertEqual(assist.KIMI_API_URL, args[0])
+        self.assertEqual("Bearer sk-test-super-secret",
+                         kwargs["headers"]["Authorization"])
+        self.assertEqual("kimi-test", kwargs["json"]["model"])
+        # Bounded timeout is always passed.
+        self.assertTrue(0 < kwargs["timeout"] <= assist.KIMI_MAX_TIMEOUT)
+        # No tool calling / web search / file APIs are ever requested.
+        for forbidden in ("tools", "tool_choice", "functions", "files",
+                          "web_search"):
+            self.assertNotIn(forbidden, kwargs["json"])
+
+    def test_model_falls_back_to_the_default_when_unset(self):
+        os.environ.pop("QRESP_KIMI_MODEL", None)
+        self.login()
+        response, requests_mock = self.suggest({"title": "T"})
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual("kimi-k3",
+                         requests_mock.post.call_args.kwargs["json"]["model"])
+        self.assertEqual(assist.KIMI_DEFAULT_MODEL,
+                         requests_mock.post.call_args.kwargs["json"]["model"])
+
+    def test_api_key_never_reaches_the_client_or_the_logs(self):
+        self.login()
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            response, _ = self.suggest(
+                {"title": "T"},
+                reply=MockResponse({}, status_code=401,
+                                   text="invalid api key sk-test-super-secret"))
+        self.assertEqual(502, response.status_code)
+        for sink in (response.text, stdout.getvalue()):
+            self.assertNotIn("sk-test-super-secret", sink)
+            self.assertNotIn("Bearer", sink)
+            self.assertNotIn("invalid api key", sink)
 
     def test_prompt_is_fixed_and_body_fields_are_allowlisted(self):
         self.login()
@@ -201,7 +276,7 @@ class TestAssistSuggestions(AssistTestBase):
         self.assertNotIn("socket timeout", response.text)
 
     def test_daily_limit_is_enforced_and_persistent(self):
-        os.environ["QRESP_QWEN_MAX_REQUESTS_PER_USER_PER_DAY"] = "2"
+        os.environ["QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY"] = "2"
         self.login()
         for _ in range(2):
             response, _ = self.suggest({"title": "T"})
@@ -218,9 +293,9 @@ class TestAssistSuggestions(AssistTestBase):
 
     def test_configuration_is_environment_only_never_config_ini(self):
         # Config.get_setting falls back to config.ini; assist must NEVER use
-        # it for Qwen. Even if config.ini could supply every QWEN key, the
+        # it for Kimi. Even if config.ini could supply every KIMI key, the
         # endpoint must stay unconfigured while the env vars are unset.
-        for key in QWEN_ENV:
+        for key in KIMI_ENV:
             os.environ.pop(key, None)
         self.login()
         with mock.patch("project.config.Config.get_setting",
@@ -230,13 +305,12 @@ class TestAssistSuggestions(AssistTestBase):
         requests_mock.post.assert_not_called()
 
     def test_timeout_is_bounded_even_when_misconfigured(self):
-        from project import assist
-        os.environ["QRESP_QWEN_TIMEOUT_SECONDS"] = "99999"
+        os.environ["QRESP_KIMI_TIMEOUT_SECONDS"] = "99999"
         try:
-            self.assertEqual(assist.QWEN_MAX_TIMEOUT,
-                             assist._qwen_config()["TIMEOUT"])
+            self.assertEqual(assist.KIMI_MAX_TIMEOUT,
+                             assist._kimi_config()["TIMEOUT"])
         finally:
-            os.environ.pop("QRESP_QWEN_TIMEOUT_SECONDS", None)
+            os.environ.pop("QRESP_KIMI_TIMEOUT_SECONDS", None)
 
     def test_invalid_input_consumes_no_quota(self):
         self.login()
@@ -256,14 +330,14 @@ class TestAssistSuggestions(AssistTestBase):
 
     def test_quota_counts_provider_calls_not_ui_requests(self):
         # A 3-chunk manuscript = 3 provider calls = 3 quota units.
-        os.environ["QRESP_QWEN_MAX_REQUESTS_PER_USER_PER_DAY"] = "3"
+        os.environ["QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY"] = "3"
         self.login()
         body = "ice nucleation " * 5000  # ~75k chars -> 3 chunks
         tex = ("\\documentclass{article}\\begin{document}%s\\end{document}"
                % body)
-        responses = [MockResponse(qwen_reply(["Ice"])),
-                     MockResponse(qwen_reply(["Nucleation"])),
-                     MockResponse(qwen_reply(["Simulation"]))]
+        responses = [MockResponse(kimi_reply(["Ice"])),
+                     MockResponse(kimi_reply(["Nucleation"])),
+                     MockResponse(kimi_reply(["Simulation"]))]
         response, requests_mock = self.suggest(
             {"filename": "paper.tex", "content_base64": b64(tex)},
             responses=responses)
@@ -278,7 +352,7 @@ class TestAssistSuggestions(AssistTestBase):
         self.assertEqual(3, AssistUsage.objects.first().count)
 
     def test_multi_chunk_request_cannot_bypass_a_smaller_limit(self):
-        os.environ["QRESP_QWEN_MAX_REQUESTS_PER_USER_PER_DAY"] = "2"
+        os.environ["QRESP_KIMI_MAX_REQUESTS_PER_USER_PER_DAY"] = "2"
         self.login()
         body = "ice nucleation " * 5000
         tex = ("\\documentclass{article}\\begin{document}%s\\end{document}"
@@ -315,7 +389,7 @@ class TestAssistManuscript(AssistTestBase):
                 "title": "T",
                 "filename": "paper.tex",
                 "content_base64": b64(self.TEX),
-            }, reply=MockResponse(qwen_reply(["ice nucleation"])))
+            }, reply=MockResponse(kimi_reply(["ice nucleation"])))
         self.assertEqual(200, response.status_code, response.text)
         sent = requests_mock.post.call_args.kwargs["json"]
         user_payload = json.loads(sent["messages"][1]["content"])
@@ -333,9 +407,9 @@ class TestAssistManuscript(AssistTestBase):
         body = "ice nucleation " * 5000  # ~75k chars -> capped, 3 chunks
         tex = "\\documentclass{article}\\begin{document}%s\\end{document}" % body
         responses = [
-            MockResponse(qwen_reply(["Ice"])),
-            MockResponse(qwen_reply(["Nucleation", "ice"])),
-            MockResponse(qwen_reply(["Simulation"])),
+            MockResponse(kimi_reply(["Ice"])),
+            MockResponse(kimi_reply(["Nucleation", "ice"])),
+            MockResponse(kimi_reply(["Simulation"])),
         ]
         response, requests_mock = self.suggest({
             "filename": "paper.tex",

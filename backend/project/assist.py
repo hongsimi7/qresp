@@ -1,4 +1,4 @@
-"""Opt-in AI keyword suggestions (Auto-Curation Lite, Qwen).
+"""Opt-in AI keyword suggestions (Auto-Curation Lite, Kimi).
 
 One endpoint (wired through swagger.yml):
 - POST /api/assist/keywords   suggest up to 8 Keywords/tags for the paper
@@ -6,7 +6,10 @@ One endpoint (wired through swagger.yml):
 Strictly suggestion-only: nothing is ever written to a record, draft, or tag
 list here — the curator reviews and explicitly applies suggestions in the
 frontend. Disabled by default; configured EXCLUSIVELY via environment
-variables (QRESP_QWEN_*) — never config.ini.
+variables (QRESP_KIMI_*) — never config.ini. Kimi (Moonshot) is the single
+selected provider: this is deliberately NOT a multi-provider framework, and
+the endpoint below is fixed in code so no configuration can redirect
+manuscript-derived text somewhere else.
 
 Privacy/safety model:
 - Only allowlisted fields are accepted (title/abstract/venue/doi and, with
@@ -36,11 +39,15 @@ from project.manuscript import (
 
 # ---- configuration (environment only) --------------------------------------
 
-QWEN_DEFAULT_TIMEOUT = 15
-QWEN_MAX_TIMEOUT = 60
-QWEN_DEFAULT_MAX_MANUSCRIPT_CHARS = 60000
-QWEN_MAX_MANUSCRIPT_CHARS_CEILING = 200000
-QWEN_DEFAULT_DAILY_LIMIT = 20
+# Fixed provider endpoint: never configurable, so no environment mistake can
+# point the prompt (and any consented manuscript excerpt) at another host.
+KIMI_API_URL = "https://api.moonshot.cn/v1/chat/completions"
+KIMI_DEFAULT_MODEL = "kimi-k3"
+KIMI_DEFAULT_TIMEOUT = 15
+KIMI_MAX_TIMEOUT = 60
+KIMI_DEFAULT_MAX_MANUSCRIPT_CHARS = 60000
+KIMI_MAX_MANUSCRIPT_CHARS_CEILING = 200000
+KIMI_DEFAULT_DAILY_LIMIT = 20
 
 # Bounded chunking for long manuscripts: candidates are aggregated across
 # chunks and capped afterwards.
@@ -72,7 +79,7 @@ def _truthy(value):
 
 def _env(key):
     # ENVIRONMENT ONLY, deliberately not Config.get_setting: that helper
-    # falls back to config.ini, and Qwen credentials/switches must never be
+    # falls back to config.ini, and Kimi credentials/switches must never be
     # configurable (or accidentally committed) there.
     return os.environ.get("QRESP_" + key)
 
@@ -89,28 +96,30 @@ def _int_env(key, default, ceiling=None):
     return value
 
 
-def _qwen_config():
+def _kimi_config():
     cfg = {
-        "ENABLED": _truthy(_env("QWEN_ENABLED")),
-        "API_KEY": (_env("QWEN_API_KEY") or "").strip(),
-        "BASE_URL": (_env("QWEN_BASE_URL") or "").strip().rstrip("/"),
-        "MODEL": (_env("QWEN_MODEL") or "").strip(),
+        "ENABLED": _truthy(_env("KIMI_ENABLED")),
+        "API_KEY": (_env("KIMI_API_KEY") or "").strip(),
+        # The model name is the only provider knob; it falls back to the
+        # default only once the feature is explicitly enabled.
+        "MODEL": (_env("KIMI_MODEL") or "").strip() or KIMI_DEFAULT_MODEL,
         # Bounded even against misconfiguration: a worker must never hang on
         # the provider for minutes.
-        "TIMEOUT": _int_env("QWEN_TIMEOUT_SECONDS", QWEN_DEFAULT_TIMEOUT,
-                            ceiling=QWEN_MAX_TIMEOUT),
+        "TIMEOUT": _int_env("KIMI_TIMEOUT_SECONDS", KIMI_DEFAULT_TIMEOUT,
+                            ceiling=KIMI_MAX_TIMEOUT),
         "MAX_MANUSCRIPT_CHARS": _int_env(
-            "QWEN_MAX_MANUSCRIPT_CHARS", QWEN_DEFAULT_MAX_MANUSCRIPT_CHARS,
-            ceiling=QWEN_MAX_MANUSCRIPT_CHARS_CEILING),
+            "KIMI_MAX_MANUSCRIPT_CHARS", KIMI_DEFAULT_MAX_MANUSCRIPT_CHARS,
+            ceiling=KIMI_MAX_MANUSCRIPT_CHARS_CEILING),
         "DAILY_LIMIT": _int_env(
-            "QWEN_MAX_REQUESTS_PER_USER_PER_DAY", QWEN_DEFAULT_DAILY_LIMIT),
+            "KIMI_MAX_REQUESTS_PER_USER_PER_DAY", KIMI_DEFAULT_DAILY_LIMIT),
     }
     return cfg
 
 
-def _qwen_ready(cfg):
-    return bool(cfg["ENABLED"] and cfg["API_KEY"] and cfg["BASE_URL"]
-                and cfg["MODEL"])
+def _kimi_ready(cfg):
+    # Both required settings must be present; everything else has a safe
+    # default. Anything missing keeps the feature off (503).
+    return bool(cfg["ENABLED"] and cfg["API_KEY"])
 
 
 # ---- per-user daily limit (persistent) --------------------------------------
@@ -187,13 +196,14 @@ def _parse_keywords(content):
     return [str(k) for k in keywords if isinstance(k, (str, int, float))]
 
 
-def _ask_qwen(cfg, payload):
-    """One chat-completions call (OpenAI-compatible HTTP, no provider SDK).
-    Returns (keywords, None) or (None, error_message). Provider error bodies
-    and keys never leave this function."""
+def _ask_kimi(cfg, payload):
+    """One Kimi chat-completions call (plain OpenAI-compatible HTTP, no
+    provider SDK, no tool calling / web search / file upload). Returns
+    (keywords, None) or (None, error_message). Provider error bodies, the
+    Authorization header, and the API key never leave this function."""
     try:
         response = requests.post(
-            cfg["BASE_URL"] + "/chat/completions",
+            KIMI_API_URL,
             headers={
                 "Authorization": "Bearer %s" % cfg["API_KEY"],
                 "Content-Type": "application/json",
@@ -267,8 +277,8 @@ def suggest_keywords(body):
     if not user:
         return {"error": "authentication required"}, 401
 
-    cfg = _qwen_config()
-    if not _qwen_ready(cfg):
+    cfg = _kimi_config()
+    if not _kimi_ready(cfg):
         return {"error": "AI keyword suggestions are not configured on this "
                          "server."}, 503
 
@@ -340,7 +350,7 @@ def suggest_keywords(body):
         payload = dict(metadata)
         if chunk:
             payload["manuscript_excerpt"] = chunk
-        keywords, error = _ask_qwen(cfg, payload)
+        keywords, error = _ask_kimi(cfg, payload)
         if error:
             warnings.append(error)
             continue
