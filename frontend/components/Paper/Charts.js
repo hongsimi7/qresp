@@ -12,6 +12,10 @@ import { Typography, Button } from "@mui/material";
 
 import RecordTable from "../Table/Table";
 import Drawer from "../drawer";
+import {
+  buildDirectoryUrl,
+  buildFileUrl,
+} from "../../Utils/fileServerUrl";
 import Slider from "../HorizontalSlider";
 import StyledTooltip from "../tooltip";
 import ChartWorkflow from "./ChartWorkflow";
@@ -38,11 +42,7 @@ const FilesView = ({ rowdata }) => {
     }
     return (
       <a
-        href={
-          file[0] === "/"
-            ? rowdata["server"] + file
-            : rowdata["server"] + "/" + file
-        }
+        href={buildFileUrl(rowdata["server"], file)}
         key={index}
         style={{ color: "#007bff" }}
         target="_blank"
@@ -118,24 +118,52 @@ const ChartInfo = ({
     : null;
 
   const FigureView = ({ rowdata }) => {
-    const datatreeLink =
-      rowdata.server +
-      "/" +
-      rowdata.imageFile.slice(
-        rowdata.imageFile.startsWith("/") ? 1 : 0,
-        rowdata.imageFile.lastIndexOf("/")
+    const datatreeLink = buildDirectoryUrl(rowdata.server, rowdata.imageFile);
+    const imageUrl = buildFileUrl(rowdata.server, rowdata.imageFile);
+
+    // No file server path saved yet, or no image path stored: say so
+    // instead of rendering a broken image.
+    if (!imageUrl) {
+      return (
+        <Typography
+          variant="caption"
+          color="error"
+          data-testid="chart-image-missing"
+          sx={{ display: "block", p: 1 }}
+        >
+          {rowdata.imageFile
+            ? "No file server path is saved yet, so this chart's image cannot be shown. Save the File Server path in “Where is the paper”."
+            : "This chart has no image file set."}
+        </Typography>
       );
+    }
 
     return (
       <Fragment>
         <StyledTooltip title={rowdata.caption} placement="left" arrow>
           <Button focusRipple onClick={() => setLightboxIndex(rowdata.index)}>
             <img
-              src={rowdata["server"] + "/" + rowdata["imageFile"]}
+              src={imageUrl}
               style={{ maxWidth: "30vw" }}
-              alt={rowdata.caption}
+              alt={rowdata.caption || rowdata.imageFile}
               loading="lazy"
+              data-testid="chart-image"
+              onError={(event) => {
+                // The server path is right but the file is not reachable:
+                // a labelled failure beats a silent empty box.
+                event.currentTarget.style.display = "none";
+                const note = event.currentTarget.nextElementSibling;
+                if (note) note.style.display = "block";
+              }}
             ></img>
+            <Typography
+              variant="caption"
+              color="error"
+              data-testid="chart-image-error"
+              sx={{ display: "none", p: 1 }}
+            >
+              This chart&rsquo;s image could not be loaded from {imageUrl}
+            </Typography>
           </Button>
         </StyledTooltip>
         {showSlider && (
@@ -239,7 +267,7 @@ const ChartInfo = ({
     row["downloadPath"] = downloadPath;
 
     Gallery.push({
-      src: row["server"] + "/" + row["imageFile"],
+      src: buildFileUrl(row["server"], row["imageFile"]),
       description: row["caption"],
     });
     return {

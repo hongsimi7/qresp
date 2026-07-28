@@ -1,4 +1,5 @@
 import { IdTypeMap, NodeType } from "./Types";
+import { buildFileUrl } from "../../Utils/fileServerUrl";
 
 const hoverTooltip = (type, id, nodeData) => {
   const maxCaptionLength = 200;
@@ -16,7 +17,7 @@ const hoverTooltip = (type, id, nodeData) => {
           word-break:break-all;
           ">
           <img
-            src=${nodeData["server"] + "/" + nodeData["imageFile"]}
+            src=${buildFileUrl(nodeData["server"], nodeData["imageFile"])}
             style="
               max-width:400px;
               max-height:400px;
