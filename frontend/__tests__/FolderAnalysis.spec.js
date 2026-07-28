@@ -256,6 +256,41 @@ describe("Analyze RCC Folder", () => {
     ).toBeDisabled();
   });
 
+  it("keeps candidate actions in their own non-breaking action group", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    const actions = screen.getByTestId("actions-chart-0");
+    // The three actions live together, so they wrap as one block rather than
+    // the row tearing a label apart.
+    ["Details", "Edit Proposal", "Remove"].forEach((label) => {
+      expect(actions).toHaveTextContent(label);
+    });
+    // Multi-word labels must never break word by word.
+    expect(
+      screen.getByRole("button", { name: "Edit Proposal" })
+    ).toHaveStyle("white-space: nowrap");
+    // The action group does not shrink into the label.
+    expect(actions).toHaveStyle("flex-shrink: 0");
+  });
+
+  it("separates the editable fields from the header with real spacing", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    // Closed by default...
+    expect(screen.queryByTestId("fields-chart-0")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+    const fields = await screen.findByTestId("fields-chart-0");
+    // ...and when open it is a spaced grid, visually detached from the
+    // header/evidence above (a divider precedes it).
+    expect(fields.previousElementSibling).toHaveClass("MuiDivider-root");
+    expect(screen.getByLabelText(/^caption$/i)).toBeInTheDocument();
+  });
+
   it("keeps Unclassified secondary and collapsed by default", async () => {
     const user = userEvent.setup();
     renderWith();
@@ -439,20 +474,36 @@ describe("Analyze RCC Folder", () => {
     expect(addMany).not.toHaveBeenCalled();
   });
 
-  it("surfaces truncation and warnings honestly", async () => {
+  it("says plainly that a truncated analysis is partial, and why", async () => {
     axios.post.mockResolvedValue({
       data: {
         ...analysis,
         truncated: true,
+        counts: { files: 1971, directories: 260 },
+        limits: { max_depth: 4, max_files: 2000 },
         warnings: ["Only the first 4 folder levels were inspected."],
       },
     });
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
+
+    // Explicit and non-alarming: what was scanned, that limits stopped it,
+    // and that the result is not the whole folder.
     expect(
-      screen.getByText(/only part of the folder was inspected/i)
+      screen.getByText(/this is a partial view of the folder/i)
     ).toBeInTheDocument();
+    const notice = screen
+      .getByText(/this is a partial view of the folder/i)
+      .closest(".MuiAlert-root");
+    expect(notice).toHaveTextContent("1971 file(s) across 260 folder(s)");
+    expect(notice).toHaveTextContent(/built-in safety limits/i);
+    expect(notice).toHaveTextContent("at most 4 folder levels, 2000 files");
+    expect(notice).toHaveTextContent(/do not represent everything/i);
+    // Not styled as an error — it is an expected, safe outcome.
+    expect(notice).toHaveClass("MuiAlert-colorInfo");
+    expect(notice.className).not.toMatch(/colorError|colorWarning/);
+    // The specific reason is still listed.
     expect(
       screen.getByText(/only the first 4 folder levels were inspected/i)
     ).toBeInTheDocument();

@@ -186,6 +186,52 @@ class TestTlsPosture(CurationTestBase):
         # Only the named host: every other host still verifies.
         self.assertTrue(curation._verify_for("https://other.example.org/pub"))
 
+    def test_the_scope_is_a_no_op_for_a_verified_host(self):
+        # No exception configured -> no notice, and urllib3's own warning is
+        # left exactly as it is.
+        with mock.patch("builtins.print") as printed:
+            with curation.tls_exception_scope(FOLDER):
+                pass
+        printed.assert_not_called()
+
+    def test_the_configured_exception_warns_once_and_quiets_urllib3(self):
+        os.environ["QRESP_FILESERVER_INSECURE_TLS_HOSTS"] = \
+            "notebook.rcc.uchicago.edu"
+        from urllib3.exceptions import InsecureRequestWarning
+        import warnings as warnings_module
+        with mock.patch("builtins.print") as printed:
+            with curation.tls_exception_scope(FOLDER):
+                # Exactly one class is silenced, and only that one. Asserting
+                # on the filter list keeps this independent of whatever
+                # warning state other tests happen to leave behind.
+                inside = [f for f in warnings_module.filters
+                          if f[0] == "ignore" and f[2] is InsecureRequestWarning]
+                self.assertEqual(1, len(inside))
+        # Exactly one human-readable notice, naming the host and the variable.
+        self.assertEqual(1, printed.call_count)
+        message = printed.call_args.args[0]
+        self.assertIn("notebook.rcc.uchicago.edu", message)
+        self.assertIn("QRESP_FILESERVER_INSECURE_TLS_HOSTS", message)
+        self.assertIn("every other host still verifies", message)
+
+    def test_the_exception_does_not_leak_out_of_the_scope(self):
+        os.environ["QRESP_FILESERVER_INSECURE_TLS_HOSTS"] = \
+            "notebook.rcc.uchicago.edu"
+        import warnings as warnings_module
+        before = list(warnings_module.filters)
+        with curation.tls_exception_scope(FOLDER):
+            self.assertNotEqual(before, list(warnings_module.filters))
+        # Restored exactly: the suppression lasts one analysis, not the
+        # lifetime of the process.
+        self.assertEqual(before, list(warnings_module.filters))
+
+    def test_other_hosts_still_verify_inside_the_scope(self):
+        os.environ["QRESP_FILESERVER_INSECURE_TLS_HOSTS"] = \
+            "notebook.rcc.uchicago.edu"
+        with curation.tls_exception_scope(FOLDER):
+            self.assertTrue(curation._verify_for("https://other.example.org/a"))
+            self.assertFalse(curation._verify_for(FOLDER))
+
     def test_listing_passes_verify_true_by_default(self):
         with mock.patch("project.curation.requests") as requests_mock:
             requests_mock.get.return_value = mock.Mock(
@@ -232,6 +278,33 @@ class TestBoundedWalk(CurationTestBase):
         self.assertTrue(truncated)
         self.assertEqual(curation.MAX_FILES, len(files))
         self.assertIn("larger than Qresp will inspect", " ".join(warnings))
+
+    def test_the_depth_cap_says_so_even_alongside_other_warnings(self):
+        # A deep tree that ALSO has an unlistable folder must still report
+        # why it stopped — a silent `truncated` flag is what makes a partial
+        # result look complete.
+        deep = {}
+        path = ""
+        for level in range(curation.MAX_DEPTH + 3):
+            child = "level%d" % level
+            deep[path] = ([child, "broken"], ["f%d.dat" % level])
+            path = ("%s/%s" % (path, child)) if path else child
+        deep[path] = ([], [])
+
+        def lister(url):
+            relative = url[len(FOLDER):].strip("/")
+            if relative.endswith("broken"):
+                raise IOError("boom")
+            return deep[relative]
+
+        _, _, warnings, truncated = curation.walk_folder(
+            FOLDER, list_directory=lister)
+        self.assertTrue(truncated)
+        joined = " ".join(warnings)
+        self.assertIn("could not be listed", joined)
+        self.assertIn("first %d folder levels" % curation.MAX_DEPTH, joined)
+        # The depth message is reported once, not once per skipped folder.
+        self.assertEqual(1, joined.count("folder levels"))
 
     def test_a_failing_subfolder_is_skipped_not_fatal(self):
         def flaky(url):
@@ -383,6 +456,15 @@ class TestAnalyzeFolderResponse(CurationTestBase):
         files, _, _, _ = curation.walk_folder(
             FOLDER, list_directory=fake_lister)
         return files
+
+    def test_the_response_states_the_limits_in_force(self):
+        self.login()
+        response, _, _ = self.analyze()
+        limits = response.json()["limits"]
+        self.assertEqual(curation.MAX_DEPTH, limits["max_depth"])
+        self.assertEqual(curation.MAX_FILES, limits["max_files"])
+        self.assertEqual(curation.MAX_DIR_REQUESTS,
+                         limits["max_directory_listings"])
 
     def test_paths_are_relative_and_filetree_compatible(self):
         self.login()

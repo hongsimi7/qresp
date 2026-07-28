@@ -76,6 +76,33 @@ environment variables on the staging backend container.
       new identity until an admin reassigns ownership or adds the new email
       as an editor (expected behavior)
 
+### Google sign-in diagnosis (2026-07-28)
+
+The OAuth flow itself was verified working on staging (`/api/auth/google`
+302 → callback 302 → `/api/auth/me` 200). What failed afterwards was nginx:
+a single server-wide `limit_req` throttled every request, so one page load's
+`/_next/static` burst came back **503** and it looked like a login failure.
+
+- [ ] Deploy the nginx config, then run `./nginx/ratelimit-check.sh
+      https://localhost:8443` → **RESULT: PASS** (no 503/429 anywhere)
+- [ ] Manually: sign out, click **Sign in** → Continue with Google → Google
+      shows the **account chooser** (not a silent re-login), pick an account
+      → land back on the page you started from, fully rendered, no 503
+- [ ] Sign out and in again with a DIFFERENT Google account — possible now
+      that `prompt=select_account` is sent
+- [ ] Hard-reload `/`, `/login`, `/account`, `/curator` several times in a
+      row → every asset 200/304, never 503
+- [ ] Expensive endpoints still protected: fire ~30 rapid
+      `POST /api/curation/analyze-folder` → later ones get **429**
+      (not 503) and the app keeps working
+- [ ] `docker compose -p qresp_staging logs nginx | grep auth/google/callback`
+      → shows `/api/auth/google/callback?[redacted]`, never `code=`/`state=`
+- [ ] Backend log for the same request → also redacted; a cancelled sign-in
+      shows a generic "did not complete" message to the user with the
+      provider's error string only in the log
+- [ ] No secret, token, provider response body, or stack trace appears in any
+      user-visible error
+
 ## API smoke (curl -k through the tunnel)
 
 - [ ] `curl -k https://localhost:8443/api/auth/me` → 200, `authenticated:false`, a `csrf_token`
@@ -357,6 +384,27 @@ Path safety (expect a clear 400 and NO outbound request):
       partial result)
 - [ ] Server log for a successful run contains counts only — no file names,
       no directory contents, no manifest text
+
+Responsive layout and partial results:
+
+- [ ] At a normal desktop width a candidate card is one line: checkbox, label,
+      chips, then **Details / Edit Proposal / Remove** on the right
+- [ ] Narrow the dialog: the actions wrap to their own line as a group —
+      "Edit Proposal" never breaks word by word, and nothing overflows
+      horizontally
+- [ ] Long relative paths in **Details** wrap instead of forcing a sideways
+      scrollbar
+- [ ] **Edit Proposal** opens the fields with clear vertical separation from
+      the header/evidence (a divider), two columns on desktop and one column
+      on narrow widths
+- [ ] The DOI fixture folder reports `truncated` → an **info** (not error)
+      notice says it is a partial view, how many files/folders were scanned,
+      and which limits stopped it; the specific reason is listed below it
+- [ ] Backend log shows ONE `TLS VERIFICATION DISABLED for
+      notebook.rcc.uchicago.edu ...` line per analysis instead of hundreds of
+      urllib3 `InsecureRequestWarning` lines; any OTHER host still warns
+- [ ] `/login` renders as a fixed centered card — no accordion to expand
+      before the provider buttons are usable
 
 Optional AI descriptions (only with Gemini configured):
 

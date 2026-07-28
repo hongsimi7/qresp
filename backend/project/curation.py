@@ -23,10 +23,12 @@ Safety model:
   (QRESP_FILESERVER_INSECURE_TLS_HOSTS) — never settable from the browser.
 - Directory contents and source text are never logged.
 """
+import contextlib
 import json
 import os
 import posixpath
 import re
+import warnings
 from urllib.parse import unquote, urljoin, urlparse
 
 import requests
@@ -166,6 +168,41 @@ def _verify_for(url):
     return host not in _insecure_tls_hosts()
 
 
+@contextlib.contextmanager
+def tls_exception_scope(url):
+    """Quiet urllib3's per-request InsecureRequestWarning for the ONE host an
+    operator has explicitly excepted, and say so once instead.
+
+    A single analysis makes hundreds of requests, so the unscoped warning
+    buries every other log line — which is how a genuinely alarming warning
+    stops being read. TLS verification itself is untouched: this only affects
+    the warning, only inside this block, and only when the host is already in
+    QRESP_FILESERVER_INSECURE_TLS_HOSTS. Every other host still verifies and
+    still warns normally.
+
+    (`warnings` filters are process-global, so a concurrent request could
+    briefly miss its own InsecureRequestWarning. This code path is the only
+    place that disables verification at all, and the scope is one analysis.)
+    """
+    host = (urlparse(url).hostname or "").lower()
+    if not host or host not in _insecure_tls_hosts():
+        yield
+        return
+    print("TLS VERIFICATION DISABLED for %s by "
+          "QRESP_FILESERVER_INSECURE_TLS_HOSTS. This is an explicit, "
+          "host-restricted exception; every other host still verifies. "
+          "Per-request urllib3 warnings are suppressed for this analysis "
+          "only." % host)
+    try:
+        from urllib3.exceptions import InsecureRequestWarning
+    except Exception:
+        yield
+        return
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", InsecureRequestWarning)
+        yield
+
+
 # ---- bounded directory walk ------------------------------------------------
 
 _HEADERS = {"User-Agent": "Qresp/2.0 (curation folder analysis)"}
@@ -202,6 +239,10 @@ def walk_folder(root_url, list_directory=None):
     """
     lister = list_directory or _list_directory
     files, dirs, warnings = [], [], []
+    # Which caps were actually hit. Reported explicitly so a partial result
+    # is never mistaken for the whole folder, and so the curator can see WHY
+    # it stopped rather than just that it did.
+    limits_hit = []
     truncated = False
     requests_made = 0
     queue = [("", 0)]
@@ -210,6 +251,7 @@ def walk_folder(root_url, list_directory=None):
         relative, depth = queue.pop(0)
         if requests_made >= MAX_DIR_REQUESTS:
             truncated = True
+            limits_hit.append("directories")
             warnings.append(
                 "Stopped after %d directory listings; deeper folders were not "
                 "inspected." % MAX_DIR_REQUESTS)
@@ -233,6 +275,7 @@ def walk_folder(root_url, list_directory=None):
             files.append(path)
         if len(files) >= MAX_FILES:
             truncated = True
+            limits_hit.append("files")
             warnings.append(
                 "Stopped after %d files; the folder is larger than Qresp will "
                 "inspect in one pass." % MAX_FILES)
@@ -243,12 +286,13 @@ def walk_folder(root_url, list_directory=None):
             dirs.append(path)
             if depth + 1 <= MAX_DEPTH:
                 queue.append((path, depth + 1))
-            else:
+            elif "depth" not in limits_hit:
                 truncated = True
+                limits_hit.append("depth")
+                warnings.append(
+                    "Only the first %d folder levels were inspected; anything "
+                    "deeper was not opened." % MAX_DEPTH)
 
-    if truncated and not warnings:
-        warnings.append(
-            "Only the first %d folder levels were inspected." % MAX_DEPTH)
     return files, dirs, warnings, truncated
 
 
@@ -594,31 +638,34 @@ def analyze_folder(body):
     except FolderError as e:
         return {"error": str(e)}, 400
 
-    try:
-        files, dirs, warnings, truncated = walk_folder(root_url)
-    except Exception as e:
-        print("Folder analysis failed: %s" % type(e).__name__)
-        return {"error": "The folder could not be read. Check that the path "
-                         "is correct and reachable."}, 502
-
-    if not files and not dirs:
-        return {"error": "No files were found in that folder."}, 404
-
-    # Bounded evidence reads: manifests first, then script headers.
-    texts = {}
-    wanted = [p for p in files
-              if posixpath.basename(p).lower() in MANIFEST_NAMES]
-    wanted += [p for p in files if _ext(p) in SCRIPT_EXTENSIONS
-               and _ext(p) != ".ipynb"]
-    for path in wanted[:MAX_TEXT_FILES]:
+    # One scope for the whole analysis: hundreds of requests, at most one TLS
+    # exception notice. (`notes`, not `warnings` — the module is in scope.)
+    with tls_exception_scope(root_url):
         try:
-            texts[path] = _fetch_text(root_url + "/" + path)
+            files, dirs, notes, truncated = walk_folder(root_url)
         except Exception as e:
-            print("Evidence read skipped (%s)" % type(e).__name__)
-    if len(wanted) > MAX_TEXT_FILES:
-        warnings.append(
-            "Only the first %d manifest/script files were read for evidence."
-            % MAX_TEXT_FILES)
+            print("Folder analysis failed: %s" % type(e).__name__)
+            return {"error": "The folder could not be read. Check that the "
+                             "path is correct and reachable."}, 502
+
+        if not files and not dirs:
+            return {"error": "No files were found in that folder."}, 404
+
+        # Bounded evidence reads: manifests first, then script headers.
+        texts = {}
+        wanted = [p for p in files
+                  if posixpath.basename(p).lower() in MANIFEST_NAMES]
+        wanted += [p for p in files if _ext(p) in SCRIPT_EXTENSIONS
+                   and _ext(p) != ".ipynb"]
+        for path in wanted[:MAX_TEXT_FILES]:
+            try:
+                texts[path] = _fetch_text(root_url + "/" + path)
+            except Exception as e:
+                print("Evidence read skipped (%s)" % type(e).__name__)
+        if len(wanted) > MAX_TEXT_FILES:
+            notes.append(
+                "Only the first %d manifest/script files were read for "
+                "evidence." % MAX_TEXT_FILES)
 
     result = analyze_folder_tree(files, dirs, texts)
     counts = {key: len(value) for key, value in result.items()
@@ -630,7 +677,15 @@ def analyze_folder(body):
         "root": root_url,
         "counts": dict(counts, files=len(files), directories=len(dirs)),
         "truncated": truncated,
-        "warnings": warnings,
+        # The caps in force, so the UI can say what "partial" means without
+        # hardcoding numbers that only the server knows.
+        "limits": {
+            "max_depth": MAX_DEPTH,
+            "max_files": MAX_FILES,
+            "max_directory_listings": MAX_DIR_REQUESTS,
+            "max_evidence_files": MAX_TEXT_FILES,
+        },
+        "warnings": notes,
         "candidates": result,
     }, 200
 

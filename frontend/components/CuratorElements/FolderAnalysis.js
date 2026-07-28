@@ -464,7 +464,18 @@ const FolderAnalysis = ({ path }) => {
         key={candidate.id}
         sx={{ border: 1, borderColor: "divider", borderRadius: 1, p: 1.5, mb: 1.5 }}
       >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        {/* One wrapping row: the label grows, the actions keep their natural
+            width and drop onto their own line when the row runs out of
+            space, instead of the labels breaking word by word. */}
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            flexWrap: "wrap",
+            rowGap: 1,
+            columnGap: 1,
+          }}
+        >
           <Checkbox
             size="small"
             checked={isSelected}
@@ -476,49 +487,75 @@ const FolderAnalysis = ({ path }) => {
             }
             slotProps={{ input: { "aria-label": `Select ${primary}` } }}
           />
-          <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+          <Box sx={{ flexGrow: 1, flexBasis: 200, minWidth: 0 }}>
             <Typography variant="subtitle2" noWrap title={primary}>
               {primary}
             </Typography>
             {secondary ? (
-              <Typography variant="caption" color="text.secondary" noWrap
-                display="block">
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                noWrap
+                display="block"
+                title={secondary}
+              >
                 {secondary}
               </Typography>
             ) : null}
           </Box>
-          <Chip
-            size="small"
-            label={candidate.confidence}
-            data-testid={`confidence-${candidate.id}`}
-          />
-          {needs.length > 0 && (
-            <Tooltip title={`Needs your input: ${needs.join(", ")}`}>
-              <Chip size="small" color="warning" label="needs input" />
-            </Tooltip>
-          )}
-          <Button size="small" onClick={() => toggle(setDetailsOpen, candidate.id)}>
-            Details
-          </Button>
-          {!isSelected && (
-            <Button size="small" onClick={() => toggle(setEditOpen, candidate.id)}>
-              Edit proposal
-            </Button>
-          )}
-          <Button
-            size="small"
-            onClick={() =>
-              setRemoved((current) => ({ ...current, [candidate.id]: true }))
-            }
+          <Box
+            sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}
           >
-            Remove
-          </Button>
+            <Chip
+              size="small"
+              label={candidate.confidence}
+              data-testid={`confidence-${candidate.id}`}
+            />
+            {needs.length > 0 && (
+              <Tooltip title={`Needs your input: ${needs.join(", ")}`}>
+                <Chip size="small" color="warning" label="needs input" />
+              </Tooltip>
+            )}
+          </Box>
+          <Box
+            data-testid={`actions-${candidate.id}`}
+            sx={{
+              display: "flex",
+              gap: 0.5,
+              flexShrink: 0,
+              ml: "auto",
+              // Multi-word labels stay on one line at every width.
+              "& .MuiButton-root": { whiteSpace: "nowrap", minWidth: "auto" },
+            }}
+          >
+            <Button size="small" onClick={() => toggle(setDetailsOpen, candidate.id)}>
+              Details
+            </Button>
+            {!isSelected && (
+              <Button size="small" onClick={() => toggle(setEditOpen, candidate.id)}>
+                Edit Proposal
+              </Button>
+            )}
+            <Button
+              size="small"
+              onClick={() =>
+                setRemoved((current) => ({ ...current, [candidate.id]: true }))
+              }
+            >
+              Remove
+            </Button>
+          </Box>
         </Box>
 
         <Collapse in={Boolean(detailsOpen[candidate.id])} unmountOnExit>
-          <Box sx={{ pl: 5, pt: 1 }}>
+          <Box sx={{ pl: { xs: 0, sm: 5 }, pt: 1 }}>
             {(candidate.evidence || []).map((line) => (
-              <Typography key={line} variant="caption" display="block">
+              <Typography
+                key={line}
+                variant="caption"
+                display="block"
+                sx={{ overflowWrap: "anywhere" }}
+              >
                 {line}
               </Typography>
             ))}
@@ -526,7 +563,7 @@ const FolderAnalysis = ({ path }) => {
               variant="caption"
               color="text.secondary"
               display="block"
-              sx={{ wordBreak: "break-all" }}
+              sx={{ overflowWrap: "anywhere" }}
             >
               Files: {(candidate.paths || []).join(", ")}
             </Typography>
@@ -536,9 +573,16 @@ const FolderAnalysis = ({ path }) => {
         {renderAiProposal(candidate)}
 
         <Collapse in={fieldsVisible} unmountOnExit>
-          <Grid container spacing={1} sx={{ mt: 0.5, pl: 5 }}>
+          {/* Deliberate separation from the header/evidence above. */}
+          <Divider sx={{ mt: 2 }} />
+          <Grid
+            container
+            spacing={2}
+            sx={{ mt: 0.5, pl: { xs: 0, sm: 5 } }}
+            data-testid={`fields-${candidate.id}`}
+          >
             {Object.keys(draft).map((field) => (
-              <Grid key={field} size={{ xs: 12, sm: 6 }}>
+              <Grid key={field} size={{ xs: 12, md: 6 }}>
                 <TextField
                   fullWidth
                   size="small"
@@ -602,8 +646,21 @@ const FolderAnalysis = ({ path }) => {
                 form.
               </Typography>
               {analysis.truncated && (
-                <Alert severity="warning" sx={{ mb: 1 }}>
-                  Only part of the folder was inspected.
+                <Alert severity="info" sx={{ mb: 1 }}>
+                  <strong>This is a partial view of the folder.</strong> Qresp
+                  scanned{" "}
+                  {(analysis.counts || {}).files != null
+                    ? `${analysis.counts.files} file(s) across ${
+                        (analysis.counts || {}).directories || 0
+                      } folder(s)`
+                    : "part of the folder"}{" "}
+                  and stopped at its built-in safety limits
+                  {(analysis.limits || {}).max_depth
+                    ? ` (at most ${analysis.limits.max_depth} folder levels, ${analysis.limits.max_files} files)`
+                    : ""}
+                  , so the candidates below do not represent everything that is
+                  there. Nothing was skipped silently — the reasons are listed
+                  below.
                 </Alert>
               )}
               {(analysis.warnings || []).map((warning) => (

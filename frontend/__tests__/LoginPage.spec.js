@@ -46,6 +46,38 @@ describe("/login", () => {
     expect(screen.getAllByRole("link")).toHaveLength(2);
   });
 
+  it("is a fixed page: the heading and controls are always visible", async () => {
+    anonymous();
+    renderLogin();
+
+    // A real heading, not an expandable section header.
+    const heading = await screen.findByRole("heading", {
+      name: /sign in to qresp/i,
+    });
+    expect(heading).toBeInTheDocument();
+    // Nothing to expand: no accordion/collapse control gates the providers.
+    expect(screen.queryByRole("button", { name: /expand/i })).toBeNull();
+    expect(document.querySelector(".MuiAccordion-root")).toBeNull();
+    // Both providers are reachable without any prior interaction.
+    expect(
+      screen.getByRole("link", { name: /continue with microsoft/i })
+    ).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: /continue with google/i })
+    ).toBeVisible();
+  });
+
+  it("spells Microsoft correctly everywhere it appears", async () => {
+    anonymous();
+    const { container } = renderLogin();
+    await screen.findByRole("link", { name: /continue with google/i });
+    const text = container.textContent;
+    expect(text).toContain("Microsoft");
+    [/micosoft/i, /micorsoft/i, /microsft/i, /mircosoft/i].forEach((typo) => {
+      expect(text).not.toMatch(typo);
+    });
+  });
+
   it("describes Microsoft as work/school without over-claiming", async () => {
     anonymous();
     renderLogin();
