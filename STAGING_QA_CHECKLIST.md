@@ -360,8 +360,29 @@ blank and flagged — a generated-looking value is worse than an empty field.
       (`numpy==1.26.4`); an unpinned `scipy>=1.10` produces no Tool; imports
       appear only as the "possible dependencies … not added as tools" note.
       `Tools (0)` is a correct result for a folder with no manifest
+- [ ] A `module load pkg/1.2.3` line in a run script, or a README stating
+      "… v7.2", DOES produce a Tool with that exact version; prose with no
+      version marker produces none
 - [ ] Existing manually curated Tools records elsewhere in the form are
       untouched by an analysis
+- [ ] Open **Edit Proposal**: each field carries its own evidence chip —
+      `High evidence` on the detected image path, `Medium evidence` on a
+      same-folder notebook, `Needs input` on figure number and caption. No
+      field shows `High evidence` for something Qresp did not read
+- [ ] Details lists **Filename hints — not verified metadata**; the tokens
+      and any name-similar file in another folder appear ONLY there
+
+Folder organization guide:
+
+- [ ] A **How to organize an RCC folder** button sits beside the File Server
+      actions and opens a dialog; nothing is shown until you click it
+- [ ] The example is a live icon tree (selectable text, scales with the
+      window, scrolls rather than overflowing at phone width) — not an image
+- [ ] It says the layout is optional, that existing folders are analyzed as
+      they are, and never asks for a YAML/JSON/Qresp-specific file
+- [ ] It warns against storing secrets in an inspected folder
+- [ ] Analyze a folder that follows NONE of the advice → it behaves exactly
+      as before; the guide never validates, scores, or blocks anything
 - [ ] No Experiment record is proposed anywhere
 - [ ] `README.md` (or anything unmatched) appears under Unclassified
 

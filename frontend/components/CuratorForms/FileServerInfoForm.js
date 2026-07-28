@@ -5,6 +5,7 @@ import { Box, Grid, Typography } from "@mui/material";
 
 import Drawer from "../drawer";
 import FolderAnalysis from "../CuratorElements/FolderAnalysis";
+import FolderGuide from "../CuratorElements/FolderGuide";
 import RadioInput from "../Form/RadioInput";
 import { SelectInputField, TextInputField } from "../Form/InputFields";
 import { SubmitAndReset } from "../Form/Util";
@@ -234,6 +235,8 @@ const FileServerInfoForm = ({ editor }) => {
         >
           Save File Server
         </RegularStyledButton>
+        {/* Advice only — it validates nothing and changes no behavior. */}
+        <FolderGuide />
       </Box>
 
       <Typography

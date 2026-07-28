@@ -170,6 +170,18 @@ const labelOf = (candidate) => {
   };
 };
 
+// Evidence vocabulary, shared by the card chip and the per-field chips.
+// "High evidence" is reserved for something a file directly states — an AI
+// suggestion can never earn it (see AI_TARGETS / the suggestion panel).
+const HIGH_EVIDENCE = "high";
+
+const EVIDENCE_LABELS = {
+  high: "High evidence",
+  medium: "Medium evidence",
+  low: "Low evidence",
+  needs_input: "Needs input",
+};
+
 const FIELD_LABELS = {
   imageFile: "Image file",
   number: "Figure number (proposed order)",
@@ -605,7 +617,10 @@ const FolderAnalysis = ({ path }) => {
           >
             <Chip
               size="small"
-              label={candidate.confidence}
+              color={candidate.confidence === HIGH_EVIDENCE ? "success" : "info"}
+              label={
+                EVIDENCE_LABELS[candidate.confidence] || candidate.confidence
+              }
               data-testid={`confidence-${candidate.id}`}
             />
             {needs.length > 0 && (
@@ -656,6 +671,27 @@ const FolderAnalysis = ({ path }) => {
                 {line}
               </Typography>
             ))}
+            {/* Filename material, kept clearly apart from evidence: these
+                are guesses about names, not things Qresp verified. */}
+            {(candidate.filename_hints || []).length > 0 && (
+              <Box sx={{ mt: 1 }} data-testid={`hints-${candidate.id}`}>
+                <Typography variant="caption" color="warning.main" display="block">
+                  Filename hints — not verified metadata, never used as a
+                  field value:
+                </Typography>
+                {(candidate.filename_hints || []).map((hint) => (
+                  <Typography
+                    key={hint}
+                    variant="caption"
+                    color="text.secondary"
+                    display="block"
+                    sx={{ overflowWrap: "anywhere" }}
+                  >
+                    {hint}
+                  </Typography>
+                ))}
+              </Box>
+            )}
             <Typography
               variant="caption"
               color="text.secondary"
@@ -678,24 +714,45 @@ const FolderAnalysis = ({ path }) => {
             sx={{ mt: 0.5, pl: { xs: 0, sm: 5 } }}
             data-testid={`fields-${candidate.id}`}
           >
-            {Object.keys(draft).map((field) => (
-              <Grid key={field} size={{ xs: 12, md: 6 }}>
-                <TextField
-                  fullWidth
-                  size="small"
-                  label={FIELD_LABELS[field] || field}
-                  value={draft[field]}
-                  onChange={(event) =>
-                    setField(candidate.id, field, event.target.value)
-                  }
-                  helperText={
-                    needs.includes(field)
-                      ? "Qresp could not determine this — please fill it in."
-                      : " "
-                  }
-                />
-              </Grid>
-            ))}
+            {Object.keys(draft).map((field) => {
+              const evidence = (candidate.field_evidence || {})[field];
+              return (
+                <Grid key={field} size={{ xs: 12, md: 6 }}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label={FIELD_LABELS[field] || field}
+                    value={draft[field]}
+                    onChange={(event) =>
+                      setField(candidate.id, field, event.target.value)
+                    }
+                    helperText={
+                      needs.includes(field)
+                        ? "Qresp could not determine this — please fill it in."
+                        : " "
+                    }
+                  />
+                  {/* Per-field standing, so a detected path and an
+                      unverifiable figure number never look alike. */}
+                  {evidence ? (
+                    <Chip
+                      size="small"
+                      variant={evidence === HIGH_EVIDENCE ? "filled" : "outlined"}
+                      color={
+                        evidence === HIGH_EVIDENCE
+                          ? "success"
+                          : evidence === "medium"
+                          ? "info"
+                          : "default"
+                      }
+                      label={EVIDENCE_LABELS[evidence] || evidence}
+                      data-testid={`field-evidence-${candidate.id}-${field}`}
+                      sx={{ mt: -1.5 }}
+                    />
+                  ) : null}
+                </Grid>
+              );
+            })}
           </Grid>
         </Collapse>
       </Box>

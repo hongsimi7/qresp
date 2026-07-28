@@ -182,7 +182,9 @@ describe("Analyze RCC Folder", () => {
       screen.getByRole("tab", { name: /unclassified \(1\)/i })
     ).toBeInTheDocument();
 
-    expect(screen.getByTestId("confidence-chart-0")).toHaveTextContent("high");
+    expect(screen.getByTestId("confidence-chart-0")).toHaveTextContent(
+      "High evidence"
+    );
     expect(
       screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
     ).toBeInTheDocument();
@@ -298,6 +300,83 @@ describe("Analyze RCC Folder", () => {
     expect(screen.getByLabelText(/^caption$/i)).toBeInTheDocument();
   });
 
+  it("labels evidence per field, not one badge for the whole card", async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        ...analysis,
+        candidates: {
+          ...analysis.candidates,
+          charts: [
+            {
+              ...analysis.candidates.charts[0],
+              field_evidence: {
+                imageFile: "high",
+                notebookFile: "medium",
+                number: "needs_input",
+                caption: "needs_input",
+              },
+            },
+          ],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+
+    // The detected path and the unverifiable figure number must not look
+    // alike.
+    expect(
+      await screen.findByTestId("field-evidence-chart-0-imageFile")
+    ).toHaveTextContent("High evidence");
+    expect(
+      screen.getByTestId("field-evidence-chart-0-notebookFile")
+    ).toHaveTextContent("Medium evidence");
+    expect(
+      screen.getByTestId("field-evidence-chart-0-number")
+    ).toHaveTextContent("Needs input");
+    expect(
+      screen.getByTestId("field-evidence-chart-0-caption")
+    ).toHaveTextContent("Needs input");
+  });
+
+  it("shows filename hints in Details, clearly marked as unverified", async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        ...analysis,
+        candidates: {
+          ...analysis.candidates,
+          charts: [
+            {
+              ...analysis.candidates.charts[0],
+              filename_hints: [
+                "Detected from filename (not verified metadata): embedded",
+                "Name-similar file, relationship not verified: data/f1.csv",
+              ],
+            },
+          ],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    // Not on the card by default.
+    expect(screen.queryByTestId("hints-chart-0")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /^details$/i }));
+    const hints = await screen.findByTestId("hints-chart-0");
+    expect(hints).toHaveTextContent(/not verified metadata, never used as a/i);
+    expect(hints).toHaveTextContent("embedded");
+    expect(hints).toHaveTextContent("data/f1.csv");
+
+    // And still not a field value.
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+    expect(screen.getByLabelText(/^properties/i)).toHaveValue("");
+  });
+
   it("nothing is selected by default", async () => {
     const user = userEvent.setup();
     const { addMany } = renderWith();
@@ -339,7 +418,9 @@ describe("Analyze RCC Folder", () => {
     // The tab count is honest about the total; the list shows the first 25.
     expect(screen.getAllByRole("checkbox")).toHaveLength(25);
     // Strongest evidence leads.
-    expect(screen.getAllByTestId(/^confidence-/)[0]).toHaveTextContent("high");
+    expect(screen.getAllByTestId(/^confidence-/)[0]).toHaveTextContent(
+      "High evidence"
+    );
     // And the rest are explicitly reachable, described as collapsed.
     expect(
       screen.getByText(/15 more with weaker evidence are collapsed, not discarded/i)
