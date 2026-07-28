@@ -246,8 +246,6 @@ const AccountPage = () => {
             Signed in with{" "}
             {user.provider === "google"
               ? "Google"
-              : user.provider === "cilogon"
-              ? "your institution (CILogon)"
               : user.provider === "microsoft"
               ? "Microsoft"
               : user.provider}

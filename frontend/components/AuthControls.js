@@ -1,52 +1,22 @@
-import { Fragment, useContext, useState } from "react";
+import { Fragment, useContext } from "react";
 
-import {
-  Button,
-  Checkbox,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  FormControlLabel,
-  TextField,
-  Typography,
-} from "@mui/material";
+import { Button, Typography } from "@mui/material";
 
 import Link from "next/link";
 import { useRouter } from "next/router";
 
 import AuthContext from "../Context/Auth/authContext";
+import { loginHref } from "../Utils/safeNext";
 
-// Minimal header auth widget. The sign-in here is the DEVELOPMENT/staging
-// dev-login (explicitly labelled as such, no Google branding/scopes); it will
-// be swapped for Google sign-in in a later phase.
+// Header auth widget. Anonymous visitors get ONE short entry point — the
+// provider choice lives on /login, so the header stays readable at every
+// width and no provider branding or staging-only login leaks into it.
 const AuthControls = () => {
-  const { loading, authenticated, user, devLogin, logout } =
-    useContext(AuthContext);
-
-  const [open, setOpen] = useState(false);
-  const [email, setEmail] = useState("");
-  const [name, setName] = useState("");
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [message, setMessage] = useState("");
+  const { loading, authenticated, user, logout } = useContext(AuthContext);
 
   const router = useRouter();
 
   if (loading) return null;
-
-  const submit = async () => {
-    if (!email.trim()) {
-      setMessage("Please enter an email address.");
-      return;
-    }
-    const result = await devLogin(email, name, isAdmin);
-    if (result.ok) {
-      setOpen(false);
-      setMessage("");
-    } else {
-      setMessage(result.error);
-    }
-  };
 
   if (authenticated) {
     return (
@@ -60,7 +30,7 @@ const AuthControls = () => {
             color: "#FFF",
             alignSelf: "center",
             mx: 1,
-            maxWidth: 180,
+            maxWidth: { xs: 110, sm: 180 },
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -73,6 +43,7 @@ const AuthControls = () => {
         </Typography>
         <Button
           color="inherit"
+          size="small"
           sx={{ color: "#FFF", whiteSpace: "nowrap" }}
           onClick={logout}
         >
@@ -82,104 +53,18 @@ const AuthControls = () => {
     );
   }
 
+  // A short, non-wrapping control that survives the narrowest header, and a
+  // plain link so it works before hydration.
   return (
-    <Fragment>
-      {/* Full-page navigation: the backend redirects to the identity
-          provider and back to the current page (validated same-origin
-          `next`); on return the app remounts and AuthState refetches
-          /api/auth/me. Institutional login goes through CILogon, which
-          brokers the university IdP selection; Google stays as a temporary
-          fallback during the migration. */}
-      {/* size="small" keeps the anonymous actions compact inside the nowrap
-          header row (inline at the xl breakpoint; the drawer stacks them
-          below that). Microsoft covers universities on Entra/M365 directly;
-          CILogon brokers campus SSO; Google stays as a temporary fallback. */}
-      <Button
-        color="inherit"
-        size="small"
-        sx={{ color: "#FFF", whiteSpace: "nowrap" }}
-        component="a"
-        href={`/api/auth/cilogon?next=${encodeURIComponent(
-          (router && router.asPath) || "/"
-        )}`}
-      >
-        Sign in with your institution
-      </Button>
-      <Button
-        color="inherit"
-        size="small"
-        sx={{ color: "#FFF", whiteSpace: "nowrap" }}
-        component="a"
-        href={`/api/auth/microsoft?next=${encodeURIComponent(
-          (router && router.asPath) || "/"
-        )}`}
-      >
-        Sign in with Microsoft
-      </Button>
-      <Button
-        color="inherit"
-        size="small"
-        sx={{ color: "#FFF", whiteSpace: "nowrap" }}
-        component="a"
-        href={`/api/auth/google?next=${encodeURIComponent(
-          (router && router.asPath) || "/"
-        )}`}
-      >
-        Sign in with Google
-      </Button>
-      <Button
-        color="inherit"
-        size="small"
-        sx={{ color: "#FFF", whiteSpace: "nowrap" }}
-        onClick={() => setOpen(true)}
-      >
-        Dev sign in
-      </Button>
-      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="xs">
-        <DialogTitle>Development sign in</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" color="secondary" gutterBottom>
-            Staging/development only — not the production login.
-          </Typography>
-          <TextField
-            label="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            fullWidth
-            margin="dense"
-            variant="outlined"
-          />
-          <TextField
-            label="Name (optional)"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            fullWidth
-            margin="dense"
-            variant="outlined"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={isAdmin}
-                onChange={(e) => setIsAdmin(e.target.checked)}
-              />
-            }
-            label="Admin (dev only)"
-          />
-          {message ? (
-            <Typography variant="body2" color="error">
-              {message}
-            </Typography>
-          ) : null}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={submit} variant="contained">
-            Sign in
-          </Button>
-        </DialogActions>
-      </Dialog>
-    </Fragment>
+    <Button
+      color="inherit"
+      size="small"
+      sx={{ color: "#FFF", whiteSpace: "nowrap", flexShrink: 0 }}
+      component="a"
+      href={loginHref((router && router.asPath) || "/")}
+    >
+      Sign in
+    </Button>
   );
 };
 

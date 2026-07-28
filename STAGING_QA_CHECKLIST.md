@@ -18,10 +18,12 @@ environment variables on the staging backend container.
       link in the browser instead of sending SMTP email; never in production)
 - [ ] `QRESP_OAUTHLIB_INSECURE_TRANSPORT=1` **only if** the callback is served
       over plain HTTP (not needed for the HTTPS tunnel; never in production)
-- [ ] Institutional login (after registering a staging client — see
-      CILOGON_INSTITUTIONAL_LOGIN_SETUP.md): `QRESP_CILOGON_CLIENT_ID`,
-      `QRESP_CILOGON_CLIENT_SECRET`, `QRESP_CILOGON_REDIRECT_URI`
-      (= the registered staging callback, exactly)
+- [ ] **Cleanup after this deploy:** CILogon was removed from the code.
+      Delete `QRESP_CILOGON_CLIENT_ID` / `_CLIENT_SECRET` / `_REDIRECT_URI` /
+      `_DISCOVERY_URL` and any CILogon-only `env_file` reference from the
+      staging backend by hand. Nothing reads them any more; leaving them set
+      is harmless but misleading. Do NOT delete `ExternalIdentity` rows —
+      legacy `provider: "cilogon"` documents stay in place, unused.
 
 ## Microsoft Entra sign-in — pending app registration
 
@@ -30,7 +32,7 @@ environment variables on the staging backend container.
       `QRESP_MICROSOFT_REDIRECT_URI`
       (= `https://localhost:8443/api/auth/microsoft/callback`, exactly as
       registered); optional `QRESP_MICROSOFT_TENANT` (default organizations)
-- [ ] Unconfigured: "Sign in with Microsoft" → JSON 503; CILogon, Google and
+- [ ] Unconfigured: "Continue with Microsoft" → JSON 503; Google and
       dev-login unaffected
 - [ ] Configured: button → Microsoft account picker → work/school sign-in →
       returns to the ORIGINATING page; header shows the name; `/account`
@@ -42,25 +44,37 @@ environment variables on the staging backend container.
 - [ ] Personal (consumer) Microsoft accounts are rejected by the
       organizations authority
 - [ ] Campus requiring admin consent shows Entra's approval screen (expected;
-      use CILogon for that campus until consent is granted)
+      that campus can use Google until consent is granted)
 
-## Institutional login (CILogon) — pending client registration
+## Sign-in entry points (Microsoft + Google only)
 
-- [ ] Unconfigured: "Sign in with your institution" → JSON 503 "not
-      configured"; Google + dev-login unaffected
-- [ ] Configured: button → CILogon IdP selector → University of Chicago SSO
-      → returns to the ORIGINATING page; header shows the name
-- [ ] `/account` shows "Signed in with your institution (CILogon)"
-- [ ] A second IdP (another campus, or CILogon's ORCID/GitHub options)
-      creates a SEPARATE external identity (distinct issuer+subject)
-- [ ] Publish → verify → edit → drafts → (allowlisted email) admin surfaces
-      all work through the CILogon session
-- [ ] `QRESP_ADMIN_EMAILS` matching the asserted institutional email grants
-      the admin badge/surfaces
-- [ ] Sign out ends only the Qresp session (campus SSO remains signed in)
-- [ ] Legacy note: records owned by a DIFFERENT email (e.g. Gmail) are not
-      visible to the institutional identity until an admin reassigns
-      ownership or adds the new email as an editor (expected behavior)
+- [ ] Header, signed out: exactly ONE **Sign in** control — no per-provider
+      buttons, no "Dev sign in", no institution/CILogon wording anywhere
+- [ ] It links to `/login?next=<the page you were on>` and returns you there
+      after signing in
+- [ ] Narrow the window to phone width: **Sign in** stays visible in the
+      header bar, on one line, NOT hidden behind the hamburger; navigation
+      links still collapse into the drawer
+- [ ] Opening the drawer does not duplicate or relocate the Sign in control
+- [ ] `/login` shows exactly two choices — "Continue with Microsoft" and
+      "Continue with Google" — with no provider errors, config, API keys,
+      Drive/Gmail permissions, dev-login, or CILogon
+- [ ] `/login?next=https://evil.example.com/x` → the provider links fall back
+      to `next=%2F` (never an external redirect)
+- [ ] Visiting `/login` while already signed in redirects to `next`, or to
+      `/account` when no `next` was given — it does not ask again
+- [ ] Signed in: header shows the name (linking to `/account`), the admin
+      label where applicable, and **Sign out**
+- [ ] `/curator` while signed out: the gate shows a primary **Sign in to
+      curate** button linking to `/login?next=/curator`, and returns to the
+      curator afterwards
+- [ ] `QRESP_ADMIN_EMAILS` matching the signed-in email grants the admin
+      badge/surfaces
+- [ ] `GET /api/auth/cilogon` and `/api/auth/cilogon/callback` → 404;
+      `/api/ui/` lists only google/microsoft/me/logout/dev-login auth routes
+- [ ] Legacy note: records owned by a DIFFERENT email are not visible to a
+      new identity until an admin reassigns ownership or adds the new email
+      as an editor (expected behavior)
 
 ## API smoke (curl -k through the tunnel)
 

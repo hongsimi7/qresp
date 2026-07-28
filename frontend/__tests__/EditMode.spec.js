@@ -83,6 +83,20 @@ describe("EditModeController", () => {
     expect(screen.queryByText(/FORMS/)).not.toBeInTheDocument();
   });
 
+  it("gives the anonymous create gate a direct Sign in to curate action", () => {
+    renderController({
+      editId: null,
+      auth: { loading: false, authenticated: false },
+    });
+    // A primary action right where the visitor is blocked — no hunting in
+    // the header, and it returns them to the curator afterwards.
+    const action = screen.getByRole("link", { name: /sign in to curate/i });
+    expect(action).toHaveAttribute("href", "/login?next=%2Fcurator");
+    // The old "use the header / Dev sign in" instructions are gone.
+    expect(screen.queryByText(/dev sign in/i)).toBeNull();
+    expect(screen.queryByText(/in the header/i)).toBeNull();
+  });
+
   it("waits for the auth state before deciding on create mode", () => {
     renderController({
       editId: null,

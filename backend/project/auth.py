@@ -39,22 +39,8 @@ GOOGLE_USERINFO_URI_DEFAULT = "https://openidconnect.googleapis.com/v1/userinfo"
 # Google API scope (Drive/Gmail/...) can ever be requested by this flow.
 GOOGLE_SCOPES = ["openid", "email", "profile"]
 
-# CILogon: institutional login broker (universities' own SSO behind one OIDC
-# provider). Configured EXCLUSIVELY via environment variables
-# (QRESP_CILOGON_CLIENT_ID / _CLIENT_SECRET / _REDIRECT_URI, optional
-# _DISCOVERY_URL) — never config.ini values. Scopes are identity-only, and
-# hardcoded like Google's so nothing broader can be requested.
-CILOGON_DISCOVERY_DEFAULT = "https://cilogon.org/.well-known/openid-configuration"
-CILOGON_SCOPES = "openid email profile"
-CILOGON_STATE_KEY = "cilogon_state"
-CILOGON_NONCE_KEY = "cilogon_nonce"
-CILOGON_PKCE_KEY = "cilogon_code_verifier"
-# ID-token signature algorithms CILogon publishes; "none" is implicitly
-# rejected by the allowlist.
-CILOGON_ID_TOKEN_ALGS = ["RS256", "RS384", "RS512"]
-
 # Microsoft Entra ID (work/school accounts): direct OIDC sign-in for
-# universities on Microsoft 365, complementing CILogon and Google. Configured
+# universities on Microsoft 365, alongside Google. Configured
 # EXCLUSIVELY via environment variables (QRESP_MICROSOFT_CLIENT_ID /
 # _CLIENT_SECRET / _REDIRECT_URI, optional _TENANT) — never config.ini.
 # The default 'organizations' authority accepts ANY organizational (Entra)
@@ -372,45 +358,9 @@ def _record_external_identity(issuer, subject, provider, email, name,
         return None
 
 
-def _cilogon_config():
-    """CILogon OIDC client settings, environment-only (QRESP_CILOGON_*).
-    Returns None values when not configured — the app must boot, and Google
-    login / dev-login must keep working, without them."""
-    cfg = {}
-    for key in ("CILOGON_CLIENT_ID", "CILOGON_CLIENT_SECRET",
-                "CILOGON_REDIRECT_URI"):
-        value = Config.get_setting("CILOGON", key)
-        cfg[key] = value.strip() if value else None
-    cfg["DISCOVERY_URL"] = ((Config.get_setting(
-        "CILOGON", "CILOGON_DISCOVERY_URL") or "").strip()
-        or CILOGON_DISCOVERY_DEFAULT)
-    return cfg
-
-
-def _cilogon_ready(cfg):
-    return bool(cfg["CILOGON_CLIENT_ID"] and cfg["CILOGON_CLIENT_SECRET"]
-                and cfg["CILOGON_REDIRECT_URI"])
-
-
-# Discovery metadata cache, keyed by discovery URL (process-lifetime; the
-# document is static in practice). Tests clear this between cases.
-_cilogon_metadata_cache = {}
-
-
-def _cilogon_metadata(discovery_url):
-    cached = _cilogon_metadata_cache.get(discovery_url)
-    if cached:
-        return cached
-    response = requests.get(discovery_url, timeout=10)
-    response.raise_for_status()
-    metadata = response.json()
-    _cilogon_metadata_cache[discovery_url] = metadata
-    return metadata
-
-
 def _oidc_signing_key(jwks_uri, id_token):
-    """Resolve the JWKS key matching the token's kid header (provider-
-    agnostic: CILogon and Microsoft both publish standard JWKS). Fetched
+    """Resolve the JWKS key matching the token's kid header. Provider-
+    agnostic by design (any OIDC provider publishing a standard JWKS). Fetched
     through `requests` (uniformly mockable in tests); verification itself is
     PyJWT's."""
     header = jwt.get_unverified_header(id_token)
@@ -423,181 +373,6 @@ def _oidc_signing_key(jwks_uri, id_token):
     raise jwt.InvalidTokenError("no JWKS key matches the ID token")
 
 
-def _validate_cilogon_id_token(id_token, metadata, client_id, expected_nonce):
-    """Full OIDC ID-token validation: signature against the provider JWKS,
-    issuer, audience, expiry, required claims, and the session nonce.
-    Raises jwt.InvalidTokenError (or subclasses) on any failure."""
-    signing_key = _oidc_signing_key(metadata["jwks_uri"], id_token)
-    claims = jwt.decode(
-        id_token,
-        signing_key,
-        algorithms=CILOGON_ID_TOKEN_ALGS,
-        audience=client_id,
-        issuer=metadata["issuer"],
-        options={"require": ["exp", "iat", "iss", "aud", "sub"]},
-    )
-    nonce = claims.get("nonce") or ""
-    if not expected_nonce or not secrets.compare_digest(
-            str(expected_nonce), str(nonce)):
-        raise jwt.InvalidTokenError("nonce missing or mismatched")
-    return claims
-
-
-def cilogon_login(next=None):
-    """GET /api/auth/cilogon — start the institutional (CILogon) OIDC flow.
-
-    Standards-compliant Authorization Code flow with server-side session
-    state, nonce, and PKCE (S256). CILogon brokers the university IdP
-    selection and SSO; the requested scopes are identity-only.
-    """
-    cfg = _cilogon_config()
-    if not _cilogon_ready(cfg):
-        return {"error": "Institutional login (CILogon) is not configured "
-                         "on this server."}, 503
-
-    try:
-        metadata = _cilogon_metadata(cfg["DISCOVERY_URL"])
-    except Exception as e:
-        print("CILogon discovery failed: %s" % e)
-        return {"error": "The institutional login service could not be "
-                         "reached, please try again later."}, 503
-
-    next_path = _safe_next_path(next)
-    if next_path:
-        session[AUTH_NEXT_KEY] = next_path
-    else:
-        session.pop(AUTH_NEXT_KEY, None)
-
-    state = secrets.token_urlsafe(32)
-    nonce = secrets.token_urlsafe(32)
-    code_verifier = secrets.token_urlsafe(64)
-    code_challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(code_verifier.encode("ascii")).digest()
-    ).rstrip(b"=").decode("ascii")
-
-    session[CILOGON_STATE_KEY] = state
-    session[CILOGON_NONCE_KEY] = nonce
-    session[CILOGON_PKCE_KEY] = code_verifier
-
-    params = {
-        "response_type": "code",
-        "client_id": cfg["CILOGON_CLIENT_ID"],
-        "redirect_uri": cfg["CILOGON_REDIRECT_URI"],
-        "scope": CILOGON_SCOPES,
-        "state": state,
-        "nonce": nonce,
-        "code_challenge": code_challenge,
-        "code_challenge_method": "S256",
-    }
-    authorization_url = "%s?%s" % (
-        metadata["authorization_endpoint"], urlencode(params))
-    return redirect(authorization_url, code=302)
-
-
-def cilogon_callback(code=None, state=None, error=None):
-    """GET /api/auth/cilogon/callback — finish the CILogon flow.
-
-    Verifies state, exchanges the code (with the PKCE verifier and the exact
-    configured redirect URI), validates the ID token (signature via JWKS,
-    issuer, audience, expiry, nonce), records the durable external identity,
-    and establishes the same session shape every other login uses. Provider
-    tokens are used transiently for verification only and never persisted.
-    """
-    cfg = _cilogon_config()
-    if not _cilogon_ready(cfg):
-        return {"error": "Institutional login (CILogon) is not configured "
-                         "on this server."}, 503
-
-    if error:
-        return {"error": "Institutional sign-in was cancelled or failed: %s"
-                         % error}, 400
-
-    expected_state = session.pop(CILOGON_STATE_KEY, None)
-    code_verifier = session.pop(CILOGON_PKCE_KEY, None)
-    expected_nonce = session.pop(CILOGON_NONCE_KEY, None)
-
-    if (not expected_state or not state
-            or not secrets.compare_digest(str(expected_state), str(state))):
-        return {"error": "Invalid OAuth state, please retry signing in."}, 400
-    if not code:
-        return {"error": "Missing authorization code."}, 400
-    if not code_verifier or not expected_nonce:
-        return {"error": "Your sign-in session expired, please retry "
-                         "signing in."}, 400
-
-    try:
-        metadata = _cilogon_metadata(cfg["DISCOVERY_URL"])
-        token_response = requests.post(
-            metadata["token_endpoint"],
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": cfg["CILOGON_REDIRECT_URI"],
-                "client_id": cfg["CILOGON_CLIENT_ID"],
-                "client_secret": cfg["CILOGON_CLIENT_SECRET"],
-                "code_verifier": code_verifier,
-            },
-            timeout=10,
-        )
-        token_response.raise_for_status()
-        tokens = token_response.json()
-    except Exception as e:
-        print("CILogon token exchange failed: %s" % e)
-        return {"error": "Institutional sign-in failed, please try again."}, 400
-
-    id_token = tokens.get("id_token")
-    if not id_token:
-        return {"error": "The institutional login did not return an "
-                         "identity token."}, 400
-
-    try:
-        claims = _validate_cilogon_id_token(
-            id_token, metadata, cfg["CILOGON_CLIENT_ID"], expected_nonce)
-    except Exception as e:
-        print("CILogon ID token rejected: %s" % e)
-        return {"error": "The institutional identity token could not be "
-                         "verified, please retry signing in."}, 400
-
-    email = (claims.get("email") or "").strip().lower()
-    if not email and tokens.get("access_token"):
-        # Some IdPs only release email via the userinfo endpoint.
-        try:
-            userinfo = requests.get(
-                metadata["userinfo_endpoint"],
-                headers={"Authorization": "Bearer %s"
-                                          % tokens["access_token"]},
-                timeout=10,
-            ).json()
-            email = (userinfo.get("email") or "").strip().lower()
-        except Exception as e:
-            print("CILogon userinfo fetch failed: %s" % e)
-    if not email:
-        return {"error": "Your institution did not release an email "
-                         "address, which Qresp requires to link your "
-                         "records. Please contact the administrators."}, 400
-
-    name = (claims.get("name")
-            or ("%s %s" % (claims.get("given_name") or "",
-                           claims.get("family_name") or "")).strip()
-            or email)
-
-    user = {
-        "email": email,
-        "name": name,
-        # Identity comes from the university via CILogon; admin comes
-        # exclusively from the local allowlist, never from the provider.
-        "is_admin": email in _admin_emails(),
-        "provider": "cilogon",
-    }
-    account_id = _record_external_identity(
-        claims.get("iss"), claims.get("sub"), "cilogon", email, name,
-        idp_name=claims.get("idp_name"))
-    if account_id:
-        user["account_id"] = account_id
-    session[AUTH_SESSION_KEY] = user
-
-    target = _safe_next_path(session.pop(AUTH_NEXT_KEY, None)) or "/"
-    return redirect(target, code=302)
 
 
 def _microsoft_config():

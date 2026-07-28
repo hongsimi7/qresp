@@ -116,5 +116,46 @@ class TestAuthSkeleton(unittest.TestCase):
         self.assertIsNone(body["user"])
 
 
+class TestRetiredProviders(unittest.TestCase):
+    """CILogon was removed: Microsoft Entra and Google are the only public
+    providers. Nothing may still route to the retired broker."""
+
+    def setUp(self):
+        self.client = connexionapp.test_client()
+
+    def test_cilogon_routes_are_gone(self):
+        for path in ("/api/auth/cilogon", "/api/auth/cilogon/callback"):
+            response = self.client.get(path)
+            self.assertEqual(404, response.status_code, path)
+
+    def test_cilogon_handlers_are_gone(self):
+        from project import auth
+        for name in ("cilogon_login", "cilogon_callback", "_cilogon_config",
+                     "_cilogon_metadata", "_validate_cilogon_id_token"):
+            self.assertFalse(hasattr(auth, name), name)
+
+    def test_the_shared_oidc_helper_microsoft_needs_is_kept(self):
+        from project import auth
+        self.assertTrue(callable(auth._oidc_signing_key))
+        self.assertTrue(callable(auth._validate_microsoft_id_token))
+
+    def test_only_google_and_microsoft_are_advertised(self):
+        import io
+        import os
+        import yaml
+        spec_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "swagger.yml")
+        with io.open(spec_path, encoding="utf-8") as handle:
+            spec = yaml.safe_load(handle)
+        providers = sorted(
+            path for path in spec["paths"] if path.startswith("/auth/"))
+        self.assertEqual(
+            ["/auth/dev-login", "/auth/google", "/auth/google/callback",
+             "/auth/logout", "/auth/me", "/auth/microsoft",
+             "/auth/microsoft/callback"],
+            providers)
+
+
 if __name__ == "__main__":
     unittest.main()

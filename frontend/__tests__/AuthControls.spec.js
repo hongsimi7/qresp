@@ -12,6 +12,7 @@ jest.mock("next/router", () => ({
 
 import AuthState from "../Context/Auth/AuthState";
 import AuthControls from "../components/AuthControls";
+import Header from "../components/header";
 
 const renderControls = () =>
   render(
@@ -20,110 +21,33 @@ const renderControls = () =>
     </AuthState>
   );
 
+const anonymous = () =>
+  axios.get.mockResolvedValue({ data: { authenticated: false, user: null } });
+
 describe("AuthControls", () => {
   afterEach(() => {
     jest.resetAllMocks();
     mockPush.mockReset();
   });
 
-  it("shows the dev sign-in entry point when anonymous", async () => {
-    axios.get.mockResolvedValue({
-      data: { authenticated: false, user: null },
-    });
+  it("offers ONE sign-in entry point when anonymous, not provider buttons", async () => {
+    anonymous();
     renderControls();
-    expect(
-      await screen.findByRole("button", { name: /dev sign in/i })
-    ).toBeInTheDocument();
+
+    const signIn = await screen.findByRole("link", { name: /^sign in$/i });
+    // It leads to the choice page, carrying the current page as a
+    // same-origin return path.
+    expect(signIn).toHaveAttribute("href", "/login?next=%2Fexplorer");
+
+    // No provider branding, and no staging-only login, in the header.
+    expect(screen.queryByRole("link", { name: /google/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /microsoft/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /dev sign in/i })).toBeNull();
+    expect(screen.queryByText(/institution/i)).toBeNull();
+    expect(screen.queryByText(/cilogon/i)).toBeNull();
   });
 
-  it("offers institutional (CILogon) sign-in pointing at the backend flow", async () => {
-    axios.get.mockResolvedValue({
-      data: { authenticated: false, user: null },
-    });
-    renderControls();
-    const institutionLink = await screen.findByRole("link", {
-      name: /sign in with your institution/i,
-    });
-    // carries the current page as a same-origin return path
-    expect(institutionLink).toHaveAttribute(
-      "href",
-      "/api/auth/cilogon?next=%2Fexplorer"
-    );
-  });
-
-  it("offers Google sign-in pointing at the backend flow when anonymous", async () => {
-    axios.get.mockResolvedValue({
-      data: { authenticated: false, user: null },
-    });
-    renderControls();
-    const googleLink = await screen.findByRole("link", {
-      name: /sign in with google/i,
-    });
-    // carries the current page as a same-origin return path
-    expect(googleLink).toHaveAttribute(
-      "href",
-      "/api/auth/google?next=%2Fexplorer"
-    );
-  });
-
-  it("offers Microsoft (work/school) sign-in pointing at the backend flow", async () => {
-    axios.get.mockResolvedValue({
-      data: { authenticated: false, user: null },
-    });
-    renderControls();
-    const microsoftLink = await screen.findByRole("link", {
-      name: /sign in with microsoft/i,
-    });
-    // carries the current page as a same-origin return path
-    expect(microsoftLink).toHaveAttribute(
-      "href",
-      "/api/auth/microsoft?next=%2Fexplorer"
-    );
-  });
-
-  it("shows institution, Microsoft, AND the temporary Google fallback together", async () => {
-    axios.get.mockResolvedValue({
-      data: { authenticated: false, user: null },
-    });
-    renderControls();
-    expect(
-      await screen.findByRole("link", { name: /sign in with your institution/i })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: /sign in with microsoft/i })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: /sign in with google/i })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /dev sign in/i })
-    ).toBeInTheDocument();
-  });
-
-  it("hides the sign-in links once authenticated (CILogon session)", async () => {
-    axios.get.mockResolvedValue({
-      data: {
-        authenticated: true,
-        user: {
-          email: "prof@uchicago.edu",
-          name: "Prof Example",
-          is_admin: false,
-          provider: "cilogon",
-          account_id: "abc123",
-        },
-      },
-    });
-    renderControls();
-    expect(await screen.findByText(/Prof Example/)).toBeInTheDocument();
-    expect(
-      screen.queryByRole("link", { name: /sign in with your institution/i })
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /sign out/i })
-    ).toBeInTheDocument();
-  });
-
-  it("shows the user and a sign-out button when authenticated", async () => {
+  it("shows the user, admin label and a sign-out button when authenticated", async () => {
     axios.get.mockResolvedValue({
       data: {
         authenticated: true,
@@ -131,23 +55,34 @@ describe("AuthControls", () => {
           email: "owner@example.com",
           name: "Owner Example",
           is_admin: true,
-          provider: "dev",
+          provider: "microsoft",
         },
       },
     });
     renderControls();
     expect(await screen.findByText(/Owner Example/)).toBeInTheDocument();
     expect(screen.getByText(/\(admin\)/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Owner Example/ })).toHaveAttribute(
+      "href",
+      "/account"
+    );
     expect(
       screen.getByRole("button", { name: /sign out/i })
     ).toBeInTheDocument();
+    // The sign-in entry point is gone while signed in.
+    expect(screen.queryByRole("link", { name: /^sign in$/i })).toBeNull();
   });
 
   it("logs out back to the anonymous state and returns home", async () => {
     axios.get.mockResolvedValue({
       data: {
         authenticated: true,
-        user: { email: "o@e.com", name: "", is_admin: false, provider: "dev" },
+        user: {
+          email: "o@e.com",
+          name: "",
+          is_admin: false,
+          provider: "google",
+        },
       },
     });
     axios.post.mockResolvedValue({ data: { success: true } });
@@ -157,22 +92,76 @@ describe("AuthControls", () => {
     expect(axios.post).toHaveBeenCalledWith("/api/auth/logout");
     expect(mockPush).toHaveBeenCalledWith("/");
     expect(
-      await screen.findByRole("button", { name: /dev sign in/i })
+      await screen.findByRole("link", { name: /^sign in$/i })
     ).toBeInTheDocument();
   });
+});
 
-  it("reports when dev login is disabled on the server", async () => {
-    axios.get.mockResolvedValue({
-      data: { authenticated: false, user: null },
-    });
-    axios.post.mockRejectedValue({ response: { status: 404 } });
+describe("Header sign-in availability", () => {
+  afterEach(() => {
+    jest.resetAllMocks();
+    mockPush.mockReset();
+  });
+
+  const renderHeader = () =>
+    render(
+      <AuthState>
+        <Header />
+      </AuthState>
+    );
+
+  it("keeps exactly one Sign in control, outside the drawer, at any width", async () => {
+    anonymous();
+    renderHeader();
+
+    const signIn = await screen.findAllByRole("link", { name: /^sign in$/i });
+    // One control only — it is not duplicated into the collapsible drawer.
+    expect(signIn).toHaveLength(1);
+    expect(signIn[0]).toHaveAttribute("href", "/login?next=%2Fexplorer");
+    // It must not wrap out of the header row.
+    expect(signIn[0]).toHaveStyle("white-space: nowrap");
+
+    // The hamburger is a sibling, not its container: opening the drawer is
+    // never required to reach sign-in.
+    const menu = screen.getByRole("button", { name: "" });
+    expect(menu).not.toContainElement(signIn[0]);
+  });
+
+  it("never moves or duplicates Sign in into the navigation drawer", async () => {
+    anonymous();
     const user = userEvent.setup();
-    renderControls();
-    await user.click(await screen.findByRole("button", { name: /dev sign in/i }));
-    await user.type(screen.getByLabelText(/email/i), "owner@example.com");
-    await user.click(screen.getByRole("button", { name: /^sign in$/i }));
+    renderHeader();
+    await screen.findByRole("link", { name: /^sign in$/i });
+
+    await user.click(screen.getByRole("button", { name: "" }));
+
+    // The drawer carries navigation only. The one sign-in control stays in
+    // the header bar (the open modal hides it from the a11y tree, hence
+    // hidden: true) — it is never relocated behind the hamburger.
+    const drawer = await screen.findByRole("presentation");
+    expect(drawer).not.toHaveTextContent(/sign in/i);
+    expect(drawer).toHaveTextContent(/explorer/i);
     expect(
-      await screen.findByText(/development login is unavailable/i)
+      screen.getAllByRole("link", { name: /^sign in$/i, hidden: true })
+    ).toHaveLength(1);
+  });
+
+  it("shows the signed-in identity in the header at any width", async () => {
+    axios.get.mockResolvedValue({
+      data: {
+        authenticated: true,
+        user: {
+          email: "prof@uchicago.edu",
+          name: "Prof Example",
+          is_admin: false,
+          provider: "microsoft",
+        },
+      },
+    });
+    renderHeader();
+    expect(await screen.findByText(/Prof Example/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /sign out/i })
     ).toBeInTheDocument();
   });
 });

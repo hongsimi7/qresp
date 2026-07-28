@@ -183,11 +183,18 @@ const EditModeController = ({ editId, server, children }) => {
           <Typography variant="h6" color="secondary" gutterBottom>
             Sign in to curate and publish a record.
           </Typography>
-          <Typography variant="body1" color="secondary">
-            New records are owned by the account that publishes them — use
-            "Sign in with Google" in the header (or "Dev sign in" on staging)
-            and come back to the curator.
+          <Typography variant="body1" color="secondary" gutterBottom>
+            New records are owned by the account that publishes them, so the
+            curator needs a signed-in account. You will come straight back
+            here afterwards.
           </Typography>
+          <RegularStyledButton
+            component="a"
+            href="/login?next=%2Fcurator"
+            sx={{ mt: 1 }}
+          >
+            Sign in to curate
+          </RegularStyledButton>
         </Box>
       );
     }

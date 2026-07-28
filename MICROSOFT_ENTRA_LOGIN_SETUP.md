@@ -2,10 +2,9 @@
 
 Qresp offers a direct **"Sign in with Microsoft"** for university/work
 accounts on Microsoft Entra ID (Azure AD), including UChicago accounts where
-the campus tenant policy permits it. It complements — does not replace —
-CILogon institutional login and the temporary Google fallback; all providers
-establish the same Qresp session and flow through the same
-ownership/editor/admin checks.
+the campus tenant policy permits it. Microsoft and Google are the two
+supported public providers; both establish the same Qresp session and flow
+through the same ownership/editor/admin checks.
 
 **Identity only.** The flow requests exactly `openid profile email` and
 validates the returned ID token. **No Microsoft Graph, Outlook, OneDrive,
@@ -46,7 +45,7 @@ environment variables — never in config.ini, compose files, or Git.
 | `QRESP_MICROSOFT_TENANT` | Optional. Default `organizations` (any work/school tenant). Set a tenant GUID to pin logins to one university's tenant. |
 
 When unset, `GET /api/auth/microsoft` returns a clear JSON 503 and every
-other login (CILogon, Google, dev-login) is unaffected.
+other login (Google, and staging dev-login) is unaffected.
 
 ## What the backend implements
 
@@ -75,8 +74,8 @@ other login (CILogon, Google, dev-login) is unaffected.
 Some universities restrict which multitenant apps members may consent to. If
 a user sees an Entra "Need admin approval" screen, that campus requires its
 IT/tenant admin to grant consent to the Qresp app registration (identity
-scopes only) before logins from that tenant succeed. CILogon remains the
-alternative for such campuses.
+scopes only) before logins from that tenant succeed. Until that is
+granted, members of such a campus can sign in with Google instead.
 
 ## Staging QA after registration (E2E — still to do)
 
@@ -92,5 +91,5 @@ container (bind-mount: restart, not rebuild), then:
    work through the session.
 4. Sign out of Qresp → click "Sign in with Microsoft" again → the account
    PICKER appears (select_account), allowing a different account.
-5. Unset the env vars → the button yields the JSON 503; CILogon/Google/dev
-   login still work.
+5. Unset the env vars → the button yields the JSON 503; Google (and
+   staging dev-login) still work.

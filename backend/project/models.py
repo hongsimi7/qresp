@@ -214,7 +214,7 @@ class Paper(Document):
 
 class ExternalIdentity(Document):
     """Durable account identity asserted by an external identity provider
-    (CILogon institutional login, Google).
+    (Microsoft Entra work/school accounts, Google).
 
     Keyed by the IMMUTABLE OIDC pair issuer+subject — never by email, which
     institutions can change or reassign. The asserted email/name are stored
@@ -224,7 +224,10 @@ class ExternalIdentity(Document):
     """
     issuer = StringField(required=True)
     subject = StringField(required=True)
-    provider = StringField(required=True)  # 'cilogon' | 'google'
+    # 'microsoft' | 'google'. Rows written by the retired CILogon broker
+    # ('cilogon') may still exist and are simply left unused — nothing reads
+    # them and no migration is performed.
+    provider = StringField(required=True)
     email = StringField(max_length=254)    # normalized asserted email
     name = StringField()
     idp_name = StringField()               # e.g. the university name, if asserted
