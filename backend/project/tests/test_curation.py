@@ -555,6 +555,169 @@ class TestClassification(CurationTestBase):
                          result["charts"][0]["proposal"]["files"])
 
 
+class TestFolderRoles(CurationTestBase):
+    """A file's meaning depends on WHERE it sits, not just its extension."""
+
+    def test_roles_are_suggested_from_directory_names(self):
+        suggested = curation.suggest_folder_roles(
+            ["figures_tables/f.png", "data/x.csv", "scripts/a.py",
+             "doc/index.png", "weird_name/z.dat"],
+            ["figures_tables", "data", "scripts", "doc", "weird_name"])
+        self.assertEqual("figures", suggested["figures_tables"])
+        self.assertEqual("datasets", suggested["data"])
+        self.assertEqual("scripts", suggested["scripts"])
+        self.assertEqual("documentation", suggested["doc"])
+        # Unrecognized names are never guessed into a productive role.
+        self.assertEqual("unclassified", suggested["weird_name"])
+        self.assertEqual("unclassified", suggested[""])
+
+    def test_documentation_subtrees_produce_nothing(self):
+        files = ["doc/architecture.png", "doc/guide.ipynb", "doc/setup.py",
+                 "doc/sample.csv"]
+        result = curation.analyze_folder_tree(files, ["doc"], {})
+        self.assertEqual([], result["charts"])
+        self.assertEqual([], result["datasets"])
+        self.assertEqual([], result["scripts"])
+        self.assertEqual([], result["tools"])
+        # Still visible, never silently dropped.
+        for path in files:
+            self.assertIn(path, result["unclassified"])
+
+    def test_scripts_under_a_dataset_role_are_not_script_candidates(self):
+        result = curation.analyze_folder_tree(
+            ["data/run.sh", "data/prepare.py", "data/notes.ipynb",
+             "data/values.csv"],
+            ["data"], {})
+        self.assertEqual([], result["scripts"])
+        # The data file is still a dataset.
+        self.assertEqual(["data/values.csv"],
+                         result["datasets"][0]["proposal"]["files"])
+        self.assertIn("data/run.sh", result["unclassified"])
+
+    def test_data_files_under_a_script_role_are_not_dataset_candidates(self):
+        result = curation.analyze_folder_tree(
+            ["scripts/config.json", "scripts/table.csv", "scripts/run.py"],
+            ["scripts"], {})
+        self.assertEqual([], result["datasets"])
+        self.assertEqual(["scripts/run.py"],
+                         result["scripts"][0]["proposal"]["files"])
+        self.assertIn("scripts/config.json", result["unclassified"])
+
+    def test_static_assets_are_never_charts(self):
+        result = curation.analyze_folder_tree(
+            ["figures/logo.png", "figures/toc_graphic.png",
+             "figures/site-icon.png", "figures/bandgap.png"],
+            ["figures"], {})
+        images = [c["proposal"]["imageFile"] for c in result["charts"]]
+        self.assertEqual(["figures/bandgap.png"], images)
+        for asset in ("figures/logo.png", "figures/toc_graphic.png",
+                      "figures/site-icon.png"):
+            self.assertIn(asset, result["unclassified"])
+
+    def test_a_confirmed_role_overrides_the_suggestion_for_this_run_only(self):
+        files = ["gallery/plot.png"]
+        # Suggested: unclassified -> a low-confidence chart.
+        default = curation.analyze_folder_tree(files, ["gallery"], {})
+        self.assertEqual("low", default["charts"][0]["confidence"])
+        # Confirmed as documentation -> nothing at all.
+        as_docs = curation.analyze_folder_tree(
+            files, ["gallery"], {}, roles={"gallery": "documentation"})
+        self.assertEqual([], as_docs["charts"])
+        # Confirmed as figures -> a likely chart.
+        as_figures = curation.analyze_folder_tree(
+            files, ["gallery"], {}, roles={"gallery": "figures"})
+        self.assertEqual("medium", as_figures["charts"][0]["confidence"])
+        # And the suggestion itself is unchanged — nothing was remembered.
+        self.assertEqual(
+            "unclassified",
+            curation.suggest_folder_roles(files, ["gallery"])["gallery"])
+
+    def test_unknown_directories_and_roles_in_the_request_are_ignored(self):
+        suggested = curation.suggest_folder_roles(["data/x.csv"], ["data"])
+        roles = curation.normalize_roles(
+            {"data": "figures", "../etc": "scripts", "data2": "datasets",
+             "": "not-a-role"}, suggested)
+        self.assertEqual("figures", roles["data"])
+        self.assertNotIn("../etc", roles)
+        self.assertNotIn("data2", roles)
+        self.assertEqual("unclassified", roles[""])
+
+    def test_an_irregular_legacy_folder_still_analyzes(self):
+        # No recognizable directory names at all.
+        result = curation.analyze_folder_tree(
+            ["stuff/a.png", "stuff/b.csv", "stuff/c.py"], ["stuff"], {})
+        self.assertTrue(result["charts"])
+        self.assertTrue(result["datasets"])
+        self.assertTrue(result["scripts"])
+        # ...but honestly labelled as extension-only guesses.
+        for group in ("charts", "datasets", "scripts"):
+            self.assertEqual("low", result[group][0]["confidence"])
+
+
+class TestArtifactGrouping(CurationTestBase):
+    def test_a_named_figure_folder_becomes_ONE_chart(self):
+        files = [
+            "figures_tables/figure_2/figure_2.png",
+            "figures_tables/figure_2/homo.png",
+            "figures_tables/figure_2/lumo.png",
+            "figures_tables/figure_2/rdos_pb.png",
+            "figures_tables/figure_2/figure_2.ipynb",
+        ]
+        result = curation.analyze_folder_tree(
+            files, ["figures_tables", "figures_tables/figure_2"], {})
+
+        self.assertEqual(1, len(result["charts"]))
+        chart = result["charts"][0]
+        self.assertEqual("figures_tables/figure_2/figure_2.png",
+                         chart["proposal"]["imageFile"])
+        # The panels ride along as associated files, not four more Charts.
+        for panel in ("homo.png", "lumo.png", "rdos_pb.png"):
+            self.assertTrue(
+                any(panel in f for f in chart["proposal"]["files"]), panel)
+        self.assertTrue(any("kept as associated files" in line
+                            for line in chart["evidence"]))
+        # The notebook is the chart's, not a Script.
+        self.assertEqual("figures_tables/figure_2/figure_2.ipynb",
+                         chart["proposal"]["notebookFile"])
+        self.assertEqual([], result["scripts"])
+        # Still no invented figure number or caption.
+        self.assertEqual("", chart["proposal"]["number"])
+        self.assertEqual("", chart["proposal"]["caption"])
+
+    def test_a_flat_figures_folder_keeps_one_chart_per_image(self):
+        result = curation.analyze_folder_tree(
+            ["figures/bandgap.png", "figures/dos.png"], ["figures"], {})
+        self.assertEqual(
+            ["figures/bandgap.png", "figures/dos.png"],
+            sorted(c["proposal"]["imageFile"] for c in result["charts"]))
+
+    def test_several_unnamed_images_outside_a_figures_role_are_not_guessed(self):
+        result = curation.analyze_folder_tree(
+            ["misc/a.png", "misc/b.png", "misc/c.png"], ["misc"], {})
+        self.assertEqual([], result["charts"])
+        for path in ("misc/a.png", "misc/b.png", "misc/c.png"):
+            self.assertIn(path, result["unclassified"])
+        self.assertIn("misc/a.png", result["ungrouped_images"])
+
+    def test_a_notebook_that_belongs_to_no_chart_is_a_hint(self):
+        result = curation.analyze_folder_tree(
+            ["exploratory.ipynb", "scripts/analysis.ipynb"],
+            ["scripts"], {})
+        self.assertEqual([], result["scripts"])
+        self.assertIn("exploratory.ipynb", result["notebook_hints"])
+        self.assertIn("scripts/analysis.ipynb", result["notebook_hints"])
+
+    def test_classification_confidence_is_not_file_existence(self):
+        result = curation.analyze_folder_tree(
+            ["figures/bandgap.png"], ["figures"], {})
+        chart = result["charts"][0]
+        # The artifact is at best "likely"...
+        self.assertEqual("medium", chart["confidence"])
+        # ...while the FILE path itself is certain.
+        self.assertEqual("high", chart["field_evidence"]["imageFile"])
+        self.assertEqual("needs_input", chart["field_evidence"]["number"])
+
+
 class TestAnalyzeFolderResponse(CurationTestBase):
     def test_response_shape_and_counts(self):
         self.login()
