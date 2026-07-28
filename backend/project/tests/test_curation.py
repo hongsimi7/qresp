@@ -347,43 +347,95 @@ class TestClassification(CurationTestBase):
             self.assertIn("caption", chart["needs_input"])
             self.assertIn("number", chart["needs_input"])
 
-    def test_chart_number_is_a_sequence_proposal_not_the_paper_figure(self):
+    def test_chart_figure_number_is_never_guessed(self):
+        # Discovery order is not figure order. A prefilled number looks like
+        # curated metadata and would be wrong for most papers.
         numbers = [c["proposal"]["number"] for c in self.result["charts"]]
-        self.assertEqual([1, 2], numbers)
+        self.assertEqual(["", ""], numbers)
         for chart in self.result["charts"]:
             self.assertIn("number", chart["needs_input"])
+        # Reordering the input cannot produce a number either.
+        reversed_result = curation.analyze_folder_tree(
+            ["figures/z.png", "figures/a.png"], [], {})
+        self.assertEqual(
+            ["", ""],
+            [c["proposal"]["number"] for c in reversed_result["charts"]])
 
-    def test_notebook_is_only_attached_when_one_exists(self):
+    def test_chart_caption_stays_blank_without_caption_text(self):
+        for chart in self.result["charts"]:
+            self.assertEqual("", chart["proposal"]["caption"])
+            self.assertIn("caption", chart["needs_input"])
+
+    def test_filename_tokens_are_evidence_hints_not_properties(self):
+        result = curation.analyze_folder_tree(
+            ["figures/embedded_Pb_dens_coord.png"], [], {})
+        chart = result["charts"][0]
+        # The tokens are visible to the curator...
+        hint_lines = [e for e in chart["evidence"] if "Filename hints" in e]
+        self.assertEqual(1, len(hint_lines))
+        for token in ("embedded", "Pb", "dens", "coord"):
+            self.assertIn(token, hint_lines[0])
+        # ...but they are NOT metadata.
+        self.assertEqual([], chart["proposal"]["properties"])
+        self.assertIn("properties", chart["needs_input"])
+
+    def test_notebook_needs_same_folder_and_basename_and_shows_why(self):
         for chart in self.result["charts"]:
             self.assertEqual("", chart["proposal"]["notebookFile"])
+
+        # Same directory AND same basename: strong and explainable.
         with_nb = curation.analyze_folder_tree(
             ["figures/figure1.png", "figures/figure1.ipynb"], [], {})
+        chart = with_nb["charts"][0]
         self.assertEqual("figures/figure1.ipynb",
-                         with_nb["charts"][0]["proposal"]["notebookFile"])
+                         chart["proposal"]["notebookFile"])
+        self.assertTrue(any("same folder with the same basename" in line
+                            for line in chart["evidence"]))
 
-    def test_datasets_group_by_directory_with_generic_descriptions(self):
+        # Same basename in a DIFFERENT folder is a coincidence, not evidence.
+        elsewhere = curation.analyze_folder_tree(
+            ["figures/figure1.png", "notebooks/figure1.ipynb"], [], {})
+        self.assertEqual(
+            "", elsewhere["charts"][0]["proposal"]["notebookFile"])
+
+    def test_datasets_keep_exact_files_but_no_generated_description(self):
         datasets = {d["proposal"]["files"][0].rsplit("/", 1)[0]: d
                     for d in self.result["datasets"]}
         traj = datasets["data/short_traj"]
+        # The file list is real evidence and is kept exactly.
         self.assertEqual(["data/short_traj/traj_1.xyz",
                           "data/short_traj/traj_2.xyz"],
                          traj["proposal"]["files"])
-        self.assertEqual("Files from data/short_traj",
-                         traj["proposal"]["readme"])
+        # The description is not: "Files from <path>" says nothing while
+        # looking like a curator wrote it.
+        self.assertEqual("", traj["proposal"]["readme"])
+        self.assertIn("readme", traj["needs_input"])
+        for dataset in self.result["datasets"]:
+            self.assertNotIn("Files from", dataset["proposal"]["readme"])
+        # The same fact is still reported, as evidence.
+        self.assertTrue(any("data/short_traj" in line
+                            for line in traj["evidence"]))
         # Never an invented URL.
         self.assertEqual([], traj["proposal"]["URLs"])
 
-    def test_scripts_use_their_own_docstring_when_present(self):
+    def test_a_docstring_is_evidence_not_a_silent_description(self):
         scripts = {s["proposal"]["files"][0]: s
                    for s in self.result["scripts"]}
-        self.assertEqual("Plot the vibrational density of states.",
-                         scripts["scripts/plot_vdos.py"]["proposal"]["readme"])
-        self.assertEqual([], scripts["scripts/plot_vdos.py"]["needs_input"])
-        # No docstring -> a generic, non-inventive placeholder that the
-        # curator is told to fill in.
-        other = scripts["scripts/compute_dipoles.py"]
-        self.assertEqual("Script compute_dipoles.py", other["proposal"]["readme"])
-        self.assertIn("readme", other["needs_input"])
+        documented = scripts["scripts/plot_vdos.py"]
+        # The docstring is shown to the curator...
+        self.assertTrue(any("Plot the vibrational density of states." in line
+                            for line in documented["evidence"]))
+        # ...but it does not become the record's description on its own.
+        self.assertEqual("", documented["proposal"]["readme"])
+        self.assertIn("readme", documented["needs_input"])
+
+        undocumented = scripts["scripts/compute_dipoles.py"]
+        self.assertEqual("", undocumented["proposal"]["readme"])
+        self.assertNotIn("Script compute_dipoles.py",
+                         undocumented["proposal"]["readme"])
+        self.assertIn("readme", undocumented["needs_input"])
+        self.assertTrue(any("No docstring" in line
+                            for line in undocumented["evidence"]))
 
     def test_tools_only_from_pinned_manifest_entries(self):
         tools = {t["proposal"]["packageName"]: t for t in self.result["tools"]}
@@ -755,9 +807,10 @@ class TestDescribeCandidatesResponse(DescribeCandidatesBase):
         # The schema has no room for factual fields, so a model that tries to
         # set one cannot reach the curator.
         properties = curation.AI_RESPONSE_SCHEMA["properties"]["items"]
-        # id + the three reviewable, non-factual suggestions.
-        self.assertEqual({"id", "description", "keywords", "kind"},
-                         set(properties["items"]["properties"]))
+        # id + the reviewable, non-factual suggestions + how well supported.
+        self.assertEqual(
+            {"id", "description", "keywords", "kind", "confidence", "reason"},
+            set(properties["items"]["properties"]))
         # `kind` is an enum of the four record types, so it cannot become a
         # free-text field either.
         self.assertEqual(["chart", "dataset", "script", "tool"],
@@ -769,8 +822,33 @@ class TestDescribeCandidatesResponse(DescribeCandidatesBase):
                 {"id": "script-0", "description": "ok", "keywords": [],
                  "files": ["invented.py"], "packageName": "fake",
                  "version": "9.9", "number": 3, "imageFile": "fake.png"}])))
-        self.assertEqual({"description", "keywords", "kind"},
-                         set(response.json()["suggestions"]["script-0"]))
+        self.assertEqual(
+            {"description", "keywords", "kind", "confidence", "reason"},
+            set(response.json()["suggestions"]["script-0"]))
+
+    def test_ai_confidence_can_never_reach_high(self):
+        # Only direct deterministic evidence is "high"; a model claiming it
+        # would put a guess on the same footing as a detected file path.
+        self.login()
+        for claimed in ("high", "HIGH", "certain", "", None, 99):
+            response, _ = self.describe(
+                {"consent": True, "items": AI_ITEMS},
+                reply=MockResponse(gemini_reply([
+                    {"id": "script-0", "description": "d", "keywords": [],
+                     "confidence": claimed}])))
+            got = response.json()["suggestions"]["script-0"]["confidence"]
+            self.assertIn(got, ("medium", "low"), claimed)
+
+    def test_ai_confidence_and_reason_are_passed_through_bounded(self):
+        self.login()
+        response, _ = self.describe(
+            {"consent": True, "items": AI_ITEMS},
+            reply=MockResponse(gemini_reply([
+                {"id": "script-0", "description": "d", "keywords": [],
+                 "confidence": "medium", "reason": "r" * 999}])))
+        suggestion = response.json()["suggestions"]["script-0"]
+        self.assertEqual("medium", suggestion["confidence"])
+        self.assertEqual(200, len(suggestion["reason"]))
 
     def test_a_differing_kind_comes_back_as_a_note(self):
         self.login()
@@ -811,8 +889,9 @@ class TestDescribeCandidatesResponse(DescribeCandidatesBase):
                 {"id": "script-0", "description": "d", "keywords": [],
                  "kind": "chart", "imageFile": "invented.png",
                  "files": ["invented.py"], "number": 3}])))
-        self.assertEqual({"description", "keywords", "kind"},
-                         set(response.json()["suggestions"]["script-0"]))
+        self.assertEqual(
+            {"description", "keywords", "kind", "confidence", "reason"},
+            set(response.json()["suggestions"]["script-0"]))
 
     def test_insufficient_evidence_yields_a_blank_description(self):
         self.login()

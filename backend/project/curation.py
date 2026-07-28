@@ -343,48 +343,80 @@ def _candidate(kind, index, proposal, evidence, confidence, paths,
 
 
 def classify_charts(files):
-    """Image files -> chart candidates. Only imageFile is certain."""
+    """Image files -> chart candidates.
+
+    ONLY the image path is asserted. Everything a filename cannot prove —
+    the figure number, the caption, the properties — is left blank and
+    flagged, and the filename tokens that used to be written into
+    `properties` are reported as HINTS in the evidence instead. A token like
+    "Pb" or "dens" is a guess about a filename, not a property of the
+    figure, and metadata a curator did not write must not look like metadata
+    they did.
+    """
     candidates = []
     images = [p for p in files if _ext(p) in CHART_EXTENSIONS]
     notebooks = [p for p in files if _ext(p) in NOTEBOOK_EXTENSIONS]
     for index, path in enumerate(sorted(images)):
         stem = _stem(path)
         related = _related_files(stem, files, exclude={path})
+        # A notebook only counts with a STRONG, explainable relationship:
+        # same directory AND same basename. A same-named notebook elsewhere
+        # in the tree is a coincidence we will not act on.
         notebook = ""
         for candidate_nb in notebooks:
-            if _stem(candidate_nb).lower() == stem.lower():
+            if (_stem(candidate_nb).lower() == stem.lower()
+                    and posixpath.dirname(candidate_nb) == posixpath.dirname(path)):
                 notebook = candidate_nb
                 break
+
         evidence = ["%s is a %s image" % (path, _ext(path))]
         if related:
             evidence.append(
                 "Related files matched by name only (verify): %s"
                 % ", ".join(related))
         if notebook:
-            evidence.append("Notebook with the same basename: %s" % notebook)
+            evidence.append(
+                "Notebook in the same folder with the same basename: %s"
+                % notebook)
+        hints = _tokens(stem)
+        if hints:
+            # Reported, never written into a field.
+            evidence.append(
+                "Filename hints (not metadata): %s" % ", ".join(hints))
+        evidence.append(
+            "Figure number and caption cannot be derived from a filename — "
+            "they are left blank for you.")
+
         candidates.append(_candidate(
             "chart", index,
             {
-                # Deterministic.
+                # Directly evidenced.
                 "imageFile": path,
                 "files": related,
                 "notebookFile": notebook,
-                # Proposals the curator must confirm.
-                "number": index + 1,
+                # Not evidenced by anything Qresp can see: left for the
+                # curator. `number` is deliberately NOT the discovery order.
+                "number": "",
                 "caption": "",
-                "properties": _tokens(stem),
+                "properties": [],
                 "extraFields": [],
             },
             evidence,
             "high" if not related else "medium",
             [path] + related,
-            needs_input=["caption", "number"],
+            needs_input=["caption", "number", "properties"],
         ))
     return candidates
 
 
 def classify_datasets(files, dirs):
-    """Data files grouped conservatively by their directory."""
+    """Data files grouped conservatively by their directory.
+
+    The file list is evidence; the description is not. A generated
+    "Files from data/short_traj" reads like a curator's sentence while
+    saying nothing, so the field stays blank and the same fact is reported
+    as evidence instead.
+    """
     candidates = []
     grouped = {}
     for path in files:
@@ -401,15 +433,15 @@ def classify_datasets(files, dirs):
             "dataset", index,
             {
                 "files": sorted(members),
-                # Deliberately generic: Qresp never claims scientific meaning
-                # it has no evidence for.
-                "readme": "Files from %s" % label,
+                "readme": "",
                 "URLs": [],
                 "extraFields": [],
             },
             ["%d data file(s) in %s: %s"
              % (len(members), label,
-                ", ".join(posixpath.basename(m) for m in sorted(members)[:5]))],
+                ", ".join(posixpath.basename(m) for m in sorted(members)[:5])),
+             "Qresp cannot tell what these files mean — the description is "
+             "left blank for you."],
             "medium",
             sorted(members),
             needs_input=["readme"],
@@ -418,33 +450,37 @@ def classify_datasets(files, dirs):
 
 
 def classify_scripts(files, headers=None):
-    """Script files; descriptions come from a local docstring when present."""
+    """Script files.
+
+    A module docstring is shown as EVIDENCE, never silently copied into the
+    description: a docstring is written for a reader of the code, and
+    promoting it into curated metadata makes an author's aside look like a
+    dataset description they approved.
+    """
     headers = headers or {}
     candidates = []
     scripts = [p for p in files if _ext(p) in SCRIPT_EXTENSIONS]
     for index, path in enumerate(sorted(scripts)):
         docstring = headers.get(path) or ""
+        evidence = ["%s is a %s script" % (path, _ext(path))]
         if docstring:
-            readme = docstring
-            evidence = ["Description taken from the file's own header/docstring"]
-            needs = []
+            evidence.append(
+                "Header/docstring found (shown as evidence, not copied into "
+                "the description): %s" % docstring)
         else:
-            readme = "Script %s" % posixpath.basename(path)
-            evidence = ["%s is a %s script; no docstring or header comment "
-                        "was found" % (path, _ext(path))]
-            needs = ["readme"]
+            evidence.append("No docstring or header comment was found.")
         candidates.append(_candidate(
             "script", index,
             {
                 "files": [path],
-                "readme": readme,
+                "readme": "",
                 "URLs": [],
                 "extraFields": [],
             },
             evidence,
             "high",
             [path],
-            needs_input=needs,
+            needs_input=["readme"],
         ))
     return candidates
 
@@ -724,6 +760,13 @@ AI_RESPONSE_SCHEMA = {
                     # candidate here.
                     "kind": {"type": "string",
                              "enum": ["chart", "dataset", "script", "tool"]},
+                    # How well the supplied evidence supports the suggestion,
+                    # and where it came from. Both are shown to the curator;
+                    # `confidence` is clamped below so a model can never
+                    # claim the same standing as deterministic evidence.
+                    "confidence": {"type": "string",
+                                   "enum": ["medium", "low"]},
+                    "reason": {"type": "string"},
                 },
                 "required": ["id"],
             },
@@ -745,9 +788,15 @@ AI_SYSTEM_PROMPT = (
     "are factual fields the researcher owns. If the evidence for an item is "
     "insufficient, return an EMPTY description for it rather than guessing. "
     "Each item states the kind Qresp inferred; include a \"kind\" only when "
-    "the evidence clearly contradicts it, and omit it otherwise. "
+    "the evidence clearly contradicts it, and omit it otherwise. Propose a "
+    "chart caption ONLY when the supplied text actually describes that "
+    "figure — never from a file name. Give \"confidence\": \"medium\" when "
+    "the supplied text directly supports your answer and \"low\" when you "
+    "are working mostly from names, and a one-line \"reason\" naming the "
+    "evidence you used. "
     'Respond with ONLY a JSON object of the form {"items": [{"id": "...", '
-    '"description": "...", "keywords": ["..."]}]}, one entry per input item, '
+    '"description": "...", "keywords": ["..."], "confidence": "...", '
+    '"reason": "..."}]}, one entry per input item, '
     "reusing the given ids, with a description of at most 30 words and at "
     "most 5 short keywords."
 )
@@ -814,6 +863,13 @@ def _parse_ai_items(answer_text):
             continue
         keywords = entry.get("keywords")
         kind = _clip(entry.get("kind"), 16).lower()
+        # CLAMPED: only direct deterministic evidence is ever "high". A model
+        # asserting high confidence about a filename does not make it so, and
+        # an interface that showed both on the same scale would invite the
+        # curator to trust them equally.
+        confidence = _clip(entry.get("confidence"), 16).lower()
+        if confidence not in ("medium", "low"):
+            confidence = "low" if confidence != "high" else "medium"
         parsed[item_id] = {
             "description": _clip(entry.get("description"),
                                  MAX_AI_DESCRIPTION_CHARS),
@@ -823,6 +879,8 @@ def _parse_ai_items(answer_text):
             # passed through for the UI to interpret.
             "kind": kind if kind in ("chart", "dataset", "script",
                                      "tool") else "",
+            "confidence": confidence,
+            "reason": _clip(entry.get("reason"), 200),
         }
     return parsed
 

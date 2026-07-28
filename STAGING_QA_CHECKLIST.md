@@ -340,21 +340,40 @@ Selection vs. saving (these are separate steps on purpose):
 
 Deterministic results on the fixture folder:
 
-- [ ] Charts tab lists `figures/*.png`; each shows confidence, evidence, and
-      a "Needs your input: caption, number" chip; caption is blank
-- [ ] The proposed `number` is a 1..N sequence and is flagged as needing
-      input (it is NOT claimed to be the paper's figure number)
-- [ ] No chart has Extra Fields, and `notebookFile` is empty (no `.ipynb`)
-- [ ] Datasets tab groups by directory — `data/short_traj` holds both
-      `.xyz` files with the generic "Files from data/short_traj" description
-      and NO invented URL
-- [ ] Scripts tab: a `.py` with a module docstring uses that docstring; one
-      without falls back to "Script `<filename>`" flagged as needing input
+Only directly evidenced values may be filled in. Everything else must be
+blank and flagged — a generated-looking value is worse than an empty field.
+
+- [ ] Charts tab lists `figures/*.png` with the exact image path filled in
+- [ ] **Figure number is BLANK** on every chart — not 1, 2, 3 — and flagged
+      as needing input. Switch tabs / re-run: it is still blank
+- [ ] **Caption is BLANK** on every chart
+- [ ] **Properties is BLANK.** Open Details: filename tokens appear there as
+      `Filename hints (not metadata): …` and NOWHERE in a field
+- [ ] `notebookFile` is filled only for a `.ipynb` in the SAME folder with
+      the same basename, and Details says so; no chart has Extra Fields
+- [ ] Datasets tab groups by directory — `data/short_traj` holds both `.xyz`
+      files exactly, the **description is BLANK** (no "Files from …"), and
+      there is NO invented URL
+- [ ] Scripts tab: the **description is BLANK** even for a `.py` that has a
+      module docstring; the docstring appears under Details as evidence
 - [ ] Tools tab: entries appear ONLY for pinned manifest lines
       (`numpy==1.26.4`); an unpinned `scipy>=1.10` produces no Tool; imports
-      appear only as the "possible dependencies … not added as tools" note
+      appear only as the "possible dependencies … not added as tools" note.
+      `Tools (0)` is a correct result for a folder with no manifest
+- [ ] Existing manually curated Tools records elsewhere in the form are
+      untouched by an analysis
 - [ ] No Experiment record is proposed anywhere
 - [ ] `README.md` (or anything unmatched) appears under Unclassified
+
+Candidate visibility (the DOI folder has ~2000 files):
+
+- [ ] Every tab count matches the real total; nothing is silently dropped
+- [ ] A tab with more than 25 candidates shows the first 25, strongest
+      evidence first, plus **Show all N candidates** and a line saying how
+      many are collapsed *and not discarded*
+- [ ] Click Show all → the full list renders and the button disappears
+- [ ] Select a candidate near the end of a long list, then re-collapse →
+      your selection is still visible
 
 Review, apply, and non-destructiveness:
 
@@ -408,10 +427,17 @@ Responsive layout and partial results:
 
 Optional AI descriptions (only with Gemini configured):
 
-- [ ] The action is labelled **Enhance selected with AI** and stays on one
-      line at narrow widths
-- [ ] The consent box is UNCHECKED on every open; the AI button is disabled
-      without both consent and a selection
+- [ ] **Enhance selected with AI** is DISABLED until at least one candidate is
+      selected, and says "Select the candidates you want described first."
+- [ ] Clicking it opens a CONSENT DIALOG that sends nothing: it names the
+      count, lists what travels (relative paths, file/folder names, README /
+      docstring / manifest excerpts) and what does not (raw datasets, image
+      bytes, notebook contents, credentials, account data)
+- [ ] The consent checkbox is UNCHECKED and "Send and get suggestions" is
+      disabled until it is ticked; Cancel makes no request (check the Network
+      tab — only the analyze call appears)
+- [ ] Run it once, then click Enhance again → consent is asked AFRESH, the
+      box is unchecked again (no remembered blanket consent)
 - [ ] Select an item Qresp classified with MEDIUM confidence → if the AI
       disagrees about the kind it says so as a NOTE ("reads this more like a
       dataset … nothing has been moved"); the candidate stays in its original
@@ -422,11 +448,22 @@ Optional AI descriptions (only with Gemini configured):
       to accept it
 - [ ] Factual fields (image file, figure number, files, package name,
       version, executable, patches) are unchanged before and after the AI run
-- [ ] With consent + selection → descriptions fill the editable fields;
-      nothing is applied to the form and nothing is saved
+- [ ] After consent → suggestions appear in their own **AI suggestion** area
+      with a `medium`/`low` label and a "Based on: …" reason. NO field is
+      filled in, nothing is added, nothing is saved
+- [ ] The AI label never reads `high`, and no numeric percentage (e.g. "92%")
+      appears anywhere
+- [ ] "Use as …" applies exactly one field; the candidate is NOT added to
+      Curator by accepting
+- [ ] Type your own text in a field first → the matching "Use as …" is
+      DISABLED with "your text is kept — clear the field to use this instead"
+- [ ] Factual fields are unchanged before and after: image file, figure
+      number (still blank), files, notebook file, package name, version,
+      executable, patches
 - [ ] Network: the request body carries only `id/kind/name/paths/context`;
       no file contents, no image bytes, no email/account fields, and every
       path is relative
+- [ ] Then "Add selected items to Curator" still adds the reviewed records
 - [ ] With Gemini NOT configured → the folder analysis still completes in
       full and only the AI action reports "not configured on this server"
 

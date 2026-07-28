@@ -28,7 +28,7 @@ sent against its own allowed roots regardless.
 
 ## Data flow
 
-```
+```text
 selected (or saved) file server folder
   → POST /api/curation/analyze-folder   (authenticated, CSRF-protected)
       → path validated against the server's OWN allowed roots
@@ -42,12 +42,16 @@ selected (or saved) file server folder
 
 Optional, separate, consented:
 
-```
-selected candidates (max 10)
-  → POST /api/curation/describe-candidates
+```text
+curator selects candidates (nothing is selected by default)
+  → "Enhance selected with AI"  (disabled until something is selected)
+  → CONSENT DIALOG: states the count and the exact scope; the checkbox is
+    unchecked, and is asked again for every request — never remembered
+  → POST /api/curation/describe-candidates   (max 10 selected candidates)
       → allowlisted names/paths/local text → Gemini
-  → proposals shown per candidate, NOT applied
-  → curator accepts one into an editable field, or ignores it
+  → proposals shown per candidate, labelled "AI suggestion", NOT applied
+  → curator accepts a single field, or ignores it
+  → "Add selected items to Curator" remains a separate, final action
 ```
 
 ## Endpoints
@@ -86,12 +90,34 @@ exactly and stay fully editable.
 
 **Everything below is deterministic. AI is never required.**
 
-| Kind | Deterministic | Proposal the curator must confirm |
+A field is filled in **only when a file on the server proves it**. Everything
+else is left blank, flagged in `needs_input`, and the reason is reported as
+evidence. Generated-looking text is worse than an empty field: a curator
+cannot tell "Qresp wrote this for you" from "someone checked this".
+
+| Kind | Filled in (directly evidenced) | Left blank for the curator |
 | --- | --- | --- |
-| Chart | `imageFile` (`.png/.jpg/.jpeg/.gif`); `files` only from conservative basename/token matches, each shown as evidence; `notebookFile` only when a `.ipynb` with the same basename exists | `number` (a **sequence proposal**, not the paper's figure number), `caption` (blank, flagged), `properties` (filename tokens) |
-| Dataset | `files` (exact, grouped by directory) | `readme` — a generic `"Files from data/short_traj"`; `URLs` stay empty (never invented) |
-| Script | `files` (`.py/.ipynb/.sh/.bash/.R/.r/.jl/.m`); `readme` from the file's **own** module docstring or leading comment block when present | `readme` when no docstring exists (a plain `"Script plot_vdos.py"` placeholder, flagged) |
-| Tool | `packageName` + `version` **only from a pinned manifest entry**; `patches` only from real `.patch`/`.diff` files | `description`; `executableName` and `urls` stay empty unless a manifest states them |
+| Chart | `imageFile`; `files` only from conservative basename matches, each listed as evidence; `notebookFile` only when a `.ipynb` sits in the **same folder with the same basename** | `number`, `caption`, `properties` |
+| Dataset | `files` (exact, grouped by directory) | `readme`; `URLs` stay empty (never invented) |
+| Script | `files` | `readme` — a module docstring is shown as **evidence**, never copied into the description |
+| Tool | `packageName` + `version` **only from a pinned manifest entry**; `patches` only from real `.patch`/`.diff` files | `description`; `executableName` and `urls` unless a manifest states them |
+
+Specifically **never guessed**:
+
+- **Figure number.** Not from discovery order, tab order, or filename order.
+  Reordering the input cannot produce a number. A real figure number needs a
+  manuscript mapping (`\includegraphics` → matching image path → nearby
+  `\caption` → actual figure order); until that exists the field stays blank.
+- **Chart caption.** Blank unless caption-like source text exists.
+- **Chart properties.** Filename tokens (`embedded`, `Pb`, `dens`, `coord`,
+  `figure`) appear as `Filename hints (not metadata): …` in Details and
+  nowhere else. A token is a fact about a filename, not a property of a
+  figure.
+- **Dataset description.** No `"Files from <path>"`: it reads like a sentence
+  a person wrote while saying nothing the file list did not already say.
+- **Script description.** A docstring is written for a reader of the code;
+  promoting it into curated metadata would make an author's aside look like
+  approved documentation.
 
 - `extraFields` are **never** auto-created for any kind.
 - Manifests read: `requirements.txt`, `requirements.lock.txt`,
@@ -119,6 +145,19 @@ back.
 | Dataset | description, keywords | `readme` (keywords are informational — a dataset record has no keyword field) |
 | Script | description, keywords | `readme` (same) |
 | Tool | description only | `description` (keywords are dropped server-side) |
+
+Every suggestion carries **`AI suggestion: medium | low`** and a one-line
+reason naming the evidence it used. That label is deliberately a different
+shape from the deterministic evidence chip, and **`high` is unreachable for
+AI**: a model asserting high confidence about a filename is clamped to
+`medium` server-side, because only a detected file can be high. No numeric
+percentage is ever shown — a "92%" invites trust the evidence does not carry.
+
+Acceptance is per field and explicit. A suggestion never lands in a field on
+its own, and the accept button is **disabled while the curator's own text is
+in that field** — an AI suggestion cannot overwrite something a person wrote.
+Accepting a suggestion does not add the candidate to Curator; "Add selected
+items to Curator" stays a separate final action.
 
 It may also offer a **second opinion on the classification**, constrained to
 the four record types by the response schema. This is shown as a note on the
