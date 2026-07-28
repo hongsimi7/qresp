@@ -311,31 +311,55 @@ def _tokens(name):
     return [p for p in parts if not p.isdigit()][:8]
 
 
-def _related_files(stem, files, exclude):
-    """Conservative basename/token matching for a chart's related files."""
-    related = []
+def _related_files(stem, directory, files, exclude):
+    """Split name-similar files into what is EVIDENCED and what is a hint.
+
+    Evidenced: the same folder and the exact same basename — "figure1.png"
+    next to "figure1.csv" is a relationship a curator can check at a glance.
+    Everything else (a prefix match, or the same name in another folder) is
+    a guess about a filename; it is reported in Details and never written
+    into the record.
+    """
+    evidenced, hints = [], []
     stem_lower = stem.lower()
     for path in files:
         if path in exclude or _ext(path) in CHART_EXTENSIONS:
             continue
         other = _stem(path).lower()
-        if other == stem_lower or (
-                len(stem_lower) >= 4 and (
+        same_directory = posixpath.dirname(path) == directory
+        if other == stem_lower and same_directory:
+            evidenced.append(path)
+        elif other == stem_lower or (
+                len(stem_lower) >= 4 and len(other) >= 4 and (
                     other.startswith(stem_lower)
-                    or stem_lower.startswith(other) and len(other) >= 4)):
-            related.append(path)
-        if len(related) >= 5:
+                    or stem_lower.startswith(other))):
+            hints.append(path)
+        if len(evidenced) >= 5 and len(hints) >= 5:
             break
-    return related
+    return evidenced[:5], hints[:5]
+
+
+# Evidence strength, per field. "high" is reserved for something a file
+# directly states; "medium" is a structural relationship a curator can
+# verify; "low" is a filename-only hint; "needs_input" means Qresp cannot
+# know and has left the field alone.
+HIGH, MEDIUM, LOW, NEEDS_INPUT = "high", "medium", "low", "needs_input"
 
 
 def _candidate(kind, index, proposal, evidence, confidence, paths,
-               needs_input=None):
+               needs_input=None, field_evidence=None, hints=None):
     return {
         "id": "%s-%d" % (kind, index),
         "kind": kind,
+        # Whole-candidate strength, kept for sorting and the summary chip.
         "confidence": confidence,
+        # Per-field strength: an exact image path and an unverifiable figure
+        # number must never wear the same badge.
+        "field_evidence": field_evidence or {},
         "evidence": evidence,
+        # Filename fragments, explicitly labelled as unverified. Shown in
+        # Details only; never a field value.
+        "filename_hints": hints or [],
         "needs_input": needs_input or [],
         "paths": paths,
         "proposal": proposal,
@@ -358,34 +382,46 @@ def classify_charts(files):
     notebooks = [p for p in files if _ext(p) in NOTEBOOK_EXTENSIONS]
     for index, path in enumerate(sorted(images)):
         stem = _stem(path)
-        related = _related_files(stem, files, exclude={path})
+        directory = posixpath.dirname(path)
+        related, name_hints = _related_files(
+            stem, directory, files, exclude={path})
         # A notebook only counts with a STRONG, explainable relationship:
         # same directory AND same basename. A same-named notebook elsewhere
         # in the tree is a coincidence we will not act on.
         notebook = ""
         for candidate_nb in notebooks:
             if (_stem(candidate_nb).lower() == stem.lower()
-                    and posixpath.dirname(candidate_nb) == posixpath.dirname(path)):
+                    and posixpath.dirname(candidate_nb) == directory):
                 notebook = candidate_nb
                 break
 
         evidence = ["%s is a %s image" % (path, _ext(path))]
         if related:
             evidence.append(
-                "Related files matched by name only (verify): %s"
-                % ", ".join(related))
+                "Same folder, same basename: %s" % ", ".join(related))
         if notebook:
             evidence.append(
                 "Notebook in the same folder with the same basename: %s"
                 % notebook)
-        hints = _tokens(stem)
-        if hints:
-            # Reported, never written into a field.
-            evidence.append(
-                "Filename hints (not metadata): %s" % ", ".join(hints))
         evidence.append(
             "Figure number and caption cannot be derived from a filename — "
             "they are left blank for you.")
+
+        # Unverified filename material: name-similar files that are NOT in
+        # the same folder, plus the word fragments in the name itself.
+        hints = ["Detected from filename (not verified metadata): %s" % token
+                 for token in _tokens(stem)]
+        hints += ["Name-similar file, relationship not verified: %s" % other
+                  for other in name_hints]
+
+        field_evidence = {
+            "imageFile": HIGH,
+            "files": HIGH if related else NEEDS_INPUT,
+            "notebookFile": MEDIUM if notebook else NEEDS_INPUT,
+            "number": NEEDS_INPUT,
+            "caption": NEEDS_INPUT,
+            "properties": NEEDS_INPUT,
+        }
 
         candidates.append(_candidate(
             "chart", index,
@@ -402,9 +438,11 @@ def classify_charts(files):
                 "extraFields": [],
             },
             evidence,
-            "high" if not related else "medium",
+            HIGH,
             [path] + related,
             needs_input=["caption", "number", "properties"],
+            field_evidence=field_evidence,
+            hints=hints,
         ))
     return candidates
 
@@ -442,9 +480,11 @@ def classify_datasets(files, dirs):
                 ", ".join(posixpath.basename(m) for m in sorted(members)[:5])),
              "Qresp cannot tell what these files mean — the description is "
              "left blank for you."],
-            "medium",
+            HIGH,
             sorted(members),
             needs_input=["readme"],
+            field_evidence={"files": HIGH, "readme": NEEDS_INPUT,
+                            "URLs": NEEDS_INPUT},
         ))
     return candidates
 
@@ -478,9 +518,11 @@ def classify_scripts(files, headers=None):
                 "extraFields": [],
             },
             evidence,
-            "high",
+            HIGH,
             [path],
             needs_input=["readme"],
+            field_evidence={"files": HIGH, "readme": NEEDS_INPUT,
+                            "URLs": NEEDS_INPUT},
         ))
     return candidates
 
@@ -495,6 +537,19 @@ _CONDA_RE = re.compile(
     r"([0-9][A-Za-z0-9._+-]*)\s*$")
 _PYTHON_IMPORT_RE = re.compile(
     r"^\s*(?:import|from)\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
+# HPC module systems: `module load west/5.0.0`. A human wrote this to make
+# the run reproducible, and it names the package AND the exact version, so
+# it is as explicit as a pinned manifest line.
+_MODULE_LOAD_RE = re.compile(
+    r"^\s*module\s+(?:load|add)\s+([A-Za-z0-9][A-Za-z0-9._+-]*)"
+    r"/([0-9][A-Za-z0-9._+-]*)", re.MULTILINE | re.IGNORECASE)
+# A README stating a version outright, e.g. "Quantum ESPRESSO 7.2" or
+# "WEST v5.0.0". Deliberately narrow: a bare number near a word is not a
+# declaration, so a `v`/`version` marker or an `==`/`=` is required.
+_README_VERSION_RE = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9._+-]{1,40})\s*"
+    r"(?:(?:==|=)\s*|\bv(?:ersion)?\.?\s*)"
+    r"([0-9]+(?:\.[0-9]+){1,3}[A-Za-z0-9._+-]*)\b")
 
 
 def parse_manifest(path, text):
@@ -546,39 +601,74 @@ def parse_manifest(path, text):
         if project and version:
             found.append((project.group(1), version.group(1),
                           "setup() metadata in %s" % path))
+    elif name in README_NAMES:
+        for match in _README_VERSION_RE.finditer(text or ""):
+            found.append((match.group(1), match.group(2),
+                          "stated in %s" % path))
     return found
 
 
-def classify_tools(manifests, files):
-    """Software tools ONLY from explicit machine-readable package+version."""
+def parse_module_loads(path, text):
+    """`module load pkg/version` lines from a human-authored run script or
+    README: an explicit, versioned declaration of what was used."""
+    found = []
+    for match in _MODULE_LOAD_RE.finditer(text or ""):
+        found.append((match.group(1), match.group(2),
+                      "loaded by `module load` in %s" % path))
+    return found
+
+
+def classify_tools(manifests, files, run_texts=None):
+    """Software tools ONLY from an explicit, human-authored package+version.
+
+    Sources: a pinned manifest entry, a README that states a version
+    outright, or a `module load pkg/version` line in a run script. Import
+    statements, file names and package-like strings never reach here.
+    """
     candidates = []
     seen = set()
     patches = [p for p in files if _ext(p) in PATCH_EXTENSIONS]
     index = 0
+
+    declared = []
     for path, text in sorted(manifests.items()):
-        for package, version, evidence in parse_manifest(path, text):
-            key = (package.lower(), version)
-            if key in seen:
-                continue
-            seen.add(key)
-            candidates.append(_candidate(
-                "tool", index,
-                {
-                    "kind": "software",
-                    "packageName": package,
-                    "version": version,
-                    "executableName": "",
-                    "patches": patches,
-                    "description": "",
-                    "urls": "",
-                    "extraFields": [],
-                },
-                ["%s %s %s" % (package, version, evidence)],
-                "high",
-                [path],
-                needs_input=["description"],
-            ))
-            index += 1
+        declared.extend(parse_manifest(path, text))
+    # `module load` lines live in ordinary run scripts, not manifests.
+    for path, text in sorted((run_texts or {}).items()):
+        declared.extend(parse_module_loads(path, text))
+
+    for package, version, evidence in declared:
+        key = (package.lower(), version)
+        if key in seen:
+            continue
+        seen.add(key)
+        source = evidence.rsplit(" ", 1)[-1]
+        candidates.append(_candidate(
+            "tool", index,
+            {
+                "kind": "software",
+                "packageName": package,
+                "version": version,
+                "executableName": "",
+                "patches": patches,
+                "description": "",
+                "urls": "",
+                "extraFields": [],
+            },
+            ["%s %s %s" % (package, version, evidence)],
+            HIGH,
+            [source],
+            needs_input=["description"],
+            field_evidence={
+                "packageName": HIGH,
+                "version": HIGH,
+                "executableName": NEEDS_INPUT,
+                "description": NEEDS_INPUT,
+                "urls": NEEDS_INPUT,
+                "patches": HIGH if patches else NEEDS_INPUT,
+            },
+        ))
+        index += 1
     return candidates
 
 
@@ -629,7 +719,8 @@ def _script_header(text):
 def analyze_folder_tree(files, dirs, texts):
     """Pure classification over an inventory — the unit under test."""
     manifests = {path: text for path, text in texts.items()
-                 if posixpath.basename(path).lower() in MANIFEST_NAMES}
+                 if posixpath.basename(path).lower() in MANIFEST_NAMES
+                 or posixpath.basename(path).lower() in README_NAMES}
     script_texts = {path: text for path, text in texts.items()
                     if _ext(path) in SCRIPT_EXTENSIONS}
     headers = {path: _script_header(text)
@@ -639,7 +730,11 @@ def analyze_folder_tree(files, dirs, texts):
     charts = classify_charts(files)
     datasets = classify_datasets(files, dirs)
     scripts = classify_scripts(files, headers)
-    tools = classify_tools(manifests, files)
+    # `module load` lines are read from scripts and READMEs alike.
+    run_texts = dict(script_texts)
+    run_texts.update({path: text for path, text in texts.items()
+                      if posixpath.basename(path).lower() in README_NAMES})
+    tools = classify_tools(manifests, files, run_texts=run_texts)
 
     claimed = set()
     for group in (charts, datasets, scripts, tools):
@@ -690,7 +785,8 @@ def analyze_folder(body):
         # Bounded evidence reads: manifests first, then script headers.
         texts = {}
         wanted = [p for p in files
-                  if posixpath.basename(p).lower() in MANIFEST_NAMES]
+                  if posixpath.basename(p).lower() in MANIFEST_NAMES
+                  or posixpath.basename(p).lower() in README_NAMES]
         wanted += [p for p in files if _ext(p) in SCRIPT_EXTENSIONS
                    and _ext(p) != ".ipynb"]
         for path in wanted[:MAX_TEXT_FILES]:

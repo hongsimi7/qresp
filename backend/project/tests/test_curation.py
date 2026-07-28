@@ -366,18 +366,84 @@ class TestClassification(CurationTestBase):
             self.assertEqual("", chart["proposal"]["caption"])
             self.assertIn("caption", chart["needs_input"])
 
-    def test_filename_tokens_are_evidence_hints_not_properties(self):
+    def test_filename_tokens_are_labelled_hints_not_properties(self):
         result = curation.analyze_folder_tree(
             ["figures/embedded_Pb_dens_coord.png"], [], {})
         chart = result["charts"][0]
-        # The tokens are visible to the curator...
-        hint_lines = [e for e in chart["evidence"] if "Filename hints" in e]
-        self.assertEqual(1, len(hint_lines))
+        # The tokens are visible to the curator, in their own clearly
+        # labelled place...
+        hints = " ".join(chart["filename_hints"])
         for token in ("embedded", "Pb", "dens", "coord"):
-            self.assertIn(token, hint_lines[0])
-        # ...but they are NOT metadata.
+            self.assertIn(token, hints)
+        self.assertIn("not verified metadata", hints)
+        # ...but they are NOT metadata, and never a field value.
         self.assertEqual([], chart["proposal"]["properties"])
         self.assertIn("properties", chart["needs_input"])
+        self.assertEqual("needs_input",
+                         chart["field_evidence"]["properties"])
+        # The only place the token legitimately appears is the detected
+        # path itself; no descriptive field carries it.
+        for field in ("caption", "properties", "number"):
+            self.assertNotIn("embedded", str(chart["proposal"][field]))
+
+    def test_field_evidence_is_per_field_not_one_badge(self):
+        result = curation.analyze_folder_tree(
+            ["figures/f1.png", "figures/f1.ipynb", "figures/f1.csv"], [], {})
+        chart = result["charts"][0]
+        evidence = chart["field_evidence"]
+        # An exact detected path and an unverifiable figure number must not
+        # wear the same badge.
+        self.assertEqual("high", evidence["imageFile"])
+        self.assertEqual("high", evidence["files"])
+        self.assertEqual("medium", evidence["notebookFile"])
+        self.assertEqual("needs_input", evidence["number"])
+        self.assertEqual("needs_input", evidence["caption"])
+
+    def test_related_files_need_the_same_folder_and_exact_basename(self):
+        # Same folder + exact basename is evidence...
+        strong = curation.analyze_folder_tree(
+            ["figures/f1.png", "figures/f1.csv"], [], {})
+        self.assertEqual(["figures/f1.csv"],
+                         strong["charts"][0]["proposal"]["files"])
+
+        # ...a prefix match, or the same name in another folder, is a hint.
+        weak = curation.analyze_folder_tree(
+            ["figures/bandgap.png", "figures/bandgap_extra.csv",
+             "data/bandgap.csv"], [], {})
+        chart = weak["charts"][0]
+        self.assertEqual([], chart["proposal"]["files"])
+        hints = " ".join(chart["filename_hints"])
+        self.assertIn("figures/bandgap_extra.csv", hints)
+        self.assertIn("data/bandgap.csv", hints)
+        self.assertIn("relationship not verified", hints)
+
+    def test_a_module_load_line_is_explicit_enough_for_a_tool(self):
+        result = curation.analyze_folder_tree(
+            ["scripts/run.sh"], [],
+            {"scripts/run.sh": "#!/bin/bash\nmodule load west/5.0.0\n"})
+        tool = result["tools"][0]
+        self.assertEqual("west", tool["proposal"]["packageName"])
+        self.assertEqual("5.0.0", tool["proposal"]["version"])
+        self.assertTrue(any("module load" in line
+                            for line in tool["evidence"]))
+
+    def test_a_readme_that_states_a_version_is_explicit_enough(self):
+        result = curation.analyze_folder_tree(
+            ["README.md"], [],
+            {"README.md": "Run with Quantum ESPRESSO v7.2 on the cluster."})
+        names = [t["proposal"]["packageName"] for t in result["tools"]]
+        self.assertIn("ESPRESSO", names)
+        self.assertEqual(
+            "7.2",
+            [t for t in result["tools"]
+             if t["proposal"]["packageName"] == "ESPRESSO"][0]
+            ["proposal"]["version"])
+
+    def test_prose_without_a_version_marker_is_not_a_tool(self):
+        result = curation.analyze_folder_tree(
+            ["README.md"], [],
+            {"README.md": "We ran 500 steps using our code on 64 cores."})
+        self.assertEqual([], result["tools"])
 
     def test_notebook_needs_same_folder_and_basename_and_shows_why(self):
         for chart in self.result["charts"]:

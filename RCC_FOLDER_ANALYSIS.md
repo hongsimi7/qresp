@@ -97,10 +97,31 @@ cannot tell "Qresp wrote this for you" from "someone checked this".
 
 | Kind | Filled in (directly evidenced) | Left blank for the curator |
 | --- | --- | --- |
-| Chart | `imageFile`; `files` only from conservative basename matches, each listed as evidence; `notebookFile` only when a `.ipynb` sits in the **same folder with the same basename** | `number`, `caption`, `properties` |
+| Chart | `imageFile`; `files` only from **same folder + exact basename**; `notebookFile` only when a `.ipynb` sits in the **same folder with the same basename** | `number`, `caption`, `properties` |
 | Dataset | `files` (exact, grouped by directory) | `readme`; `URLs` stay empty (never invented) |
 | Script | `files` | `readme` — a module docstring is shown as **evidence**, never copied into the description |
-| Tool | `packageName` + `version` **only from a pinned manifest entry**; `patches` only from real `.patch`/`.diff` files | `description`; `executableName` and `urls` unless a manifest states them |
+| Tool | `packageName` + `version` from a pinned manifest entry, a `module load pkg/version` line, or a README that states a version outright; `patches` only from real `.patch`/`.diff` files | `description`; `executableName` and `urls` unless a manifest states them |
+
+### Evidence strength, per field
+
+A single badge for a whole candidate would put an exact detected path and an
+unguessable figure number on the same footing. Each candidate therefore
+carries `field_evidence`:
+
+| Label | Means |
+| --- | --- |
+| **High evidence** | A file directly states it — a detected path, a pinned manifest line |
+| **Medium evidence** | A structural relationship a curator can verify at a glance — same folder, same basename |
+| **Low evidence** | A filename-only hint. Never a field value |
+| **Needs input** | Qresp cannot know it; the field is untouched |
+
+`High evidence` is **deterministic-only**. AI suggestions carry their own
+`AI suggestion: medium | low` label and can never reach it.
+
+Filename material that does not meet the bar is reported under `Details` as
+`filename_hints`, prefixed `Detected from filename (not verified metadata)`
+or `Name-similar file, relationship not verified`. It is never written into
+a field.
 
 Specifically **never guessed**:
 
@@ -173,6 +194,23 @@ and any experiment facility or measurement. These are factual and the schema
 sent back has no room for them. When the evidence is too thin the model is
 instructed to return an empty description, and the candidate keeps its
 `needs_input` flag rather than receiving a guess.
+
+## Folder organization guide
+
+A **How to organize an RCC folder** button sits beside the File Server
+actions. It opens a live folder-tree example drawn with the app's own icons
+(not a bitmap of text, so it scales and the names stay selectable) plus a
+short list of tips.
+
+It is advice and nothing else: **no API, no persistence, no validation, no
+score, and no effect on the analysis.** A folder that ignores every word is
+analyzed exactly as before. It deliberately introduces **no YAML, JSON, or
+Qresp-specific metadata file** — researchers should not have to create files
+for Qresp in order to be understood. The tips point at ordinary artifacts
+(`README.md`, `requirements.txt`, `environment.yml`) that already improve
+software/version detection, warn against keeping secrets anywhere Qresp may
+read, and state plainly that better organization still does not let Qresp
+infer figure numbers, captions, properties, or versions without evidence.
 
 ## Security limits
 
