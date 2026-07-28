@@ -96,7 +96,19 @@ const analysis = {
         },
       },
     ],
-    unclassified: ["README.md"],
+    unclassified: [],
+    unclassified_total: 1,
+    grouped_unclassified: [
+      {
+        path: "",
+        name: "folder root",
+        file_count: 1,
+        extensions: [".md"],
+        sample_names: ["README.md"],
+      },
+    ],
+    boundary_trees: {},
+    applied_boundaries: {},
     possible_dependencies: ["ase"],
   },
 };
@@ -464,77 +476,92 @@ describe("Analyze RCC Folder", () => {
     expect(screen.getAllByRole("checkbox")).toHaveLength(30);
   });
 
-  it("groups Unclassified by folder instead of one text blob", async () => {
+  it("renders grouped folder rows, never a raw path dump", async () => {
     axios.post.mockResolvedValue({
       data: {
         ...analysis,
         candidates: {
           ...analysis.candidates,
-          unclassified: [
-            "README.md",
-            "doc/logo.png",
-            "doc/guide.ipynb",
-            "misc/a.dat",
+          unclassified: [],
+          unclassified_total: 141,
+          grouped_unclassified: [
+            {
+              path: "doc",
+              name: "doc",
+              file_count: 120,
+              extensions: [".png", ".md"],
+              sample_names: ["logo.png", "guide.md"],
+            },
+            {
+              path: "misc",
+              name: "misc",
+              file_count: 21,
+              extensions: [".dat"],
+              sample_names: ["a.dat"],
+            },
           ],
-          unclassified_total: 4,
         },
       },
     });
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
-    await user.click(screen.getByRole("tab", { name: /unclassified \(4\)/i }));
+    await user.click(screen.getByRole("tab", { name: /unclassified \(141\)/i }));
 
+    // The full count is preserved so nothing looks silently discarded.
     expect(
-      screen.getByText(/4 file\(s\) were not classified/i)
+      screen.getByText(/141 file\(s\) were not classified/i)
     ).toBeInTheDocument();
+    // One row per folder, with its count and representative extensions.
+    expect(screen.getByRole("button", { name: "doc (120)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "misc (21)" })).toBeInTheDocument();
+    expect(screen.getByText(".png .md")).toBeInTheDocument();
 
-    // One expandable group per parent folder, each with its own count.
-    expect(
-      screen.getByRole("button", { name: "folder root (1)" })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "doc (2)" })
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "misc (1)" })).toBeInTheDocument();
-
-    // Names are behind an explicit expansion, and are separate rows/chips.
+    // Names only after an explicit expansion, and only a bounded sample.
     expect(screen.queryByText("logo.png")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "doc (2)" }));
+    await user.click(screen.getByRole("button", { name: "doc (120)" }));
     expect(await screen.findByText("logo.png")).toBeInTheDocument();
-    expect(screen.getByText("guide.ipynb")).toBeInTheDocument();
-    // The full relative path stays available.
-    expect(screen.getByText("logo.png").closest("[title]")).toHaveAttribute(
-      "title",
-      "doc/logo.png"
-    );
+    expect(screen.getByText(/and 118 more in this folder/i)).toBeInTheDocument();
   });
 
-  it("filters Unclassified without losing the rest", async () => {
+  it("filters folder rows and caps how many render at once", async () => {
+    const rows = Array.from({ length: 30 }, (unused, index) => ({
+      path: `f${String(index).padStart(2, "0")}`,
+      name: `f${String(index).padStart(2, "0")}`,
+      file_count: 2,
+      extensions: [".txt"],
+      sample_names: ["a.txt"],
+    }));
     axios.post.mockResolvedValue({
       data: {
         ...analysis,
         candidates: {
           ...analysis.candidates,
-          unclassified: ["doc/logo.png", "misc/a.dat"],
-          unclassified_total: 2,
+          unclassified: [],
+          unclassified_total: 60,
+          grouped_unclassified: rows,
         },
       },
     });
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
-    await user.click(screen.getByRole("tab", { name: /unclassified \(2\)/i }));
+    await user.click(screen.getByRole("tab", { name: /unclassified \(60\)/i }));
+
+    // 25 rows initially, the rest behind an explicit action.
+    expect(screen.getByRole("button", { name: "f24 (2)" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "f25 (2)" })).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: /show more \(5 more folders\)/i })
+    );
+    expect(screen.getByRole("button", { name: "f29 (2)" })).toBeInTheDocument();
 
     await user.type(
-      screen.getByLabelText(/filter unclassified files/i),
-      "misc"
+      screen.getByLabelText(/filter unclassified folders/i),
+      "f03"
     );
-    expect(screen.getByRole("button", { name: "misc (1)" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "doc (1)" })).toBeNull();
-
-    await user.clear(screen.getByLabelText(/filter unclassified files/i));
-    expect(screen.getByRole("button", { name: "doc (1)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "f03 (2)" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "f04 (2)" })).toBeNull();
   });
 
   it("shows how the folder was read, and why", async () => {
@@ -794,6 +821,225 @@ describe("Analyze RCC Folder", () => {
     expect(
       screen.queryByRole("checkbox", { name: /select ase/i })
     ).toBeNull();
+  });
+});
+
+describe("Analyze RCC Folder — record boundaries", () => {
+  const legacy = {
+    ...analysis,
+    structure_mode: "legacy",
+    boundary_trees: {
+      data: {
+        role: "datasets",
+        nodes: [
+          { path: "data/DFT", name: "DFT", level: 1, file_count: 12,
+            extensions: [".in"], sample_names: [] },
+          { path: "data/DFT/Figure2", name: "Figure2", level: 2,
+            file_count: 8, extensions: [".in"], sample_names: [] },
+          { path: "data/other", name: "other", level: 1, file_count: 3,
+            extensions: [".dat"], sample_names: [] },
+        ],
+      },
+    },
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: legacy });
+  });
+
+  const openPicker = async (user) => {
+    await openAnalysis(user);
+    await user.click(
+      screen.getByRole("button", { name: /choose record boundaries/i })
+    );
+    return screen.findByTestId("boundary-picker");
+  };
+
+  it("explains the choice and starts with nothing selected", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPicker(user);
+
+    expect(
+      screen.getByText(/one selected folder becomes one proposed dataset or/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/nothing on the file server is changed/i)
+    ).toBeInTheDocument();
+    screen
+      .getAllByRole("checkbox", { name: /use data\//i })
+      .forEach((box) => expect(box).not.toBeChecked());
+    // Rebuild is pointless until something is chosen.
+    expect(
+      screen.getByRole("button", { name: /rebuild proposals/i })
+    ).toBeDisabled();
+  });
+
+  it("selecting a parent excludes its descendants", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPicker(user);
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "Use data/DFT as one record" })
+    );
+    // The child can no longer be chosen at the same time.
+    expect(
+      screen.getByRole("checkbox", { name: "Use data/DFT/Figure2 as one record" })
+    ).toBeDisabled();
+    // An unrelated sibling stays available.
+    expect(
+      screen.getByRole("checkbox", { name: "Use data/other as one record" })
+    ).toBeEnabled();
+  });
+
+  it("selecting a child excludes its ancestor", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPicker(user);
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "Use data/DFT/Figure2 as one record" })
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "Use data/DFT as one record" })
+    ).toBeDisabled();
+  });
+
+  it("choosing the parent after the child replaces it", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPicker(user);
+
+    const child = screen.getByRole("checkbox", {
+      name: "Use data/DFT/Figure2 as one record",
+    });
+    await user.click(child);
+    await user.click(child); // unselect
+    await user.click(
+      screen.getByRole("checkbox", { name: "Use data/DFT as one record" })
+    );
+    expect(child).toBeDisabled();
+  });
+
+  it("rebuilds through the BACKEND with the chosen boundaries", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPicker(user);
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "Use data/DFT/Figure2 as one record" })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /rebuild proposals/i })
+    );
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+    expect(axios.post.mock.calls[1][1]).toEqual({
+      path: FOLDER,
+      boundaries: { data: ["data/DFT/Figure2"] },
+    });
+    // The first analysis carried no boundaries: defaults are the default.
+    expect(axios.post.mock.calls[0][1]).toEqual({ path: FOLDER });
+  });
+
+  it("Use default boundaries clears the choice and re-analyzes", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPicker(user);
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "Use data/DFT as one record" })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /use default boundaries/i })
+    );
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+    expect(axios.post.mock.calls[1][1]).toEqual({ path: FOLDER });
+  });
+
+  it("a standard layout is never asked to pick boundaries", async () => {
+    axios.post.mockResolvedValue({
+      data: { ...analysis, structure_mode: "standard", boundary_trees: {} },
+    });
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    expect(screen.queryByTestId("boundary-picker")).toBeNull();
+  });
+});
+
+describe("Analyze RCC Folder — needs reorganization", () => {
+  const invalid = {
+    ...analysis,
+    structure_mode: "invalid",
+    structure_issues: [
+      {
+        path: "mystery_stuff",
+        reason:
+          "Not a Qresp Folder Standard role (datasets, charts, scripts, " +
+          "tools, docs) and not a layout Qresp recognizes.",
+      },
+    ],
+    candidates: {
+      charts: [],
+      datasets: [],
+      scripts: [],
+      tools: [],
+      unclassified: [],
+      unclassified_total: 121,
+      grouped_unclassified: [
+        {
+          path: "mystery_stuff",
+          name: "mystery_stuff",
+          file_count: 121,
+          extensions: [".png", ".csv"],
+          sample_names: ["a.png", "b.csv"],
+          reason: "Not a Qresp Folder Standard role.",
+        },
+      ],
+      boundary_trees: {},
+      possible_dependencies: [],
+    },
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: invalid });
+  });
+
+  it("warns, names the folder, and blocks adding anything", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await user.click(analyzeButton());
+    await screen.findByTestId("structure-mode");
+
+    const badge = screen.getByTestId("structure-mode");
+    expect(badge).toHaveTextContent("Needs reorganization");
+    expect(badge).toHaveTextContent(/mystery_stuff:/);
+    expect(badge).toHaveTextContent(/not a layout Qresp recognizes/i);
+
+    // No candidate can be added while the layout cannot be read.
+    expect(
+      screen.getByRole("button", { name: /add selected items to curator/i })
+    ).toBeDisabled();
+    expect(addMany).not.toHaveBeenCalled();
+
+    // Grouped summary only — no raw path paragraph.
+    await user.click(screen.getByRole("tab", { name: /unclassified \(121\)/i }));
+    expect(
+      screen.getByRole("button", { name: "mystery_stuff (121)" })
+    ).toBeInTheDocument();
+    expect(screen.queryByText("a.png")).toBeNull();
+  });
+
+  it("offers no boundary picker for an unreadable layout", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await user.click(analyzeButton());
+    await screen.findByTestId("structure-mode");
+    expect(screen.queryByTestId("boundary-picker")).toBeNull();
   });
 });
 

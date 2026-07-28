@@ -48,6 +48,9 @@ const GROUPS = [
 // selection cannot silently turn into an oversized (and expensive) call.
 const MAX_AI_BATCH = 10;
 
+// Grouped Unclassified rows rendered before "Show more".
+const UNCLASSIFIED_ROWS = 25;
+
 // Where an accepted AI proposal is allowed to land, per kind. Anything not
 // listed here — image files, figure numbers, file lists, package names,
 // versions, executables, patches, facilities, measurements — is factual and
@@ -220,6 +223,12 @@ const FolderAnalysis = ({ path }) => {
   const [editOpen, setEditOpen] = useState({});
   const [showUnclassified, setShowUnclassified] = useState({});
   const [unclassifiedFilter, setUnclassifiedFilter] = useState("");
+  const [showAllUnclassified, setShowAllUnclassified] = useState(false);
+  // Record-boundary selection, keyed by role root. Nothing is selected by
+  // default: the deterministic immediate-child boundaries are in force until
+  // the curator rebuilds with a choice.
+  const [boundaries, setBoundaries] = useState({});
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [tab, setTab] = useState(0);
   // Optional AI enrichment: a SEPARATE action over the candidates already
   // selected, behind its own always-unchecked consent box. Selecting
@@ -250,6 +259,9 @@ const FolderAnalysis = ({ path }) => {
     setEditOpen({});
     setShowUnclassified({});
     setUnclassifiedFilter("");
+    setShowAllUnclassified(false);
+    setBoundaries({});
+    setPickerOpen(false);
     setTab(0);
     setAiConsent(false);
     setAiConsentOpen(false);
@@ -259,7 +271,7 @@ const FolderAnalysis = ({ path }) => {
     setShowAll({});
   };
 
-  const analyze = async () => {
+  const analyze = async (chosen) => {
     setOpen(true);
     setLoading(true);
     setError("");
@@ -267,6 +279,11 @@ const FolderAnalysis = ({ path }) => {
     try {
       const response = await axios.post("/api/curation/analyze-folder", {
         path: target,
+        // Only sent when the curator picked boundaries; the backend
+        // validates every path against the tree it just listed.
+        ...(chosen && Object.keys(chosen).length
+          ? { boundaries: chosen }
+          : {}),
       });
       const data = response.data || {};
       const initial = {};
@@ -453,6 +470,20 @@ const FolderAnalysis = ({ path }) => {
       ...current,
       [id]: { ...current[id], [field]: value },
     }));
+
+  // Selecting a folder clears any ancestor or descendant of it, so a file
+  // can only ever belong to one proposed record.
+  const toggleBoundary = (root, path) =>
+    setBoundaries((current) => {
+      const chosen = current[root] || [];
+      if (chosen.includes(path)) {
+        return { ...current, [root]: chosen.filter((p) => p !== path) };
+      }
+      const kept = chosen.filter(
+        (other) => !path.startsWith(`${other}/`) && !other.startsWith(`${path}/`)
+      );
+      return { ...current, [root]: kept.concat(path) };
+    });
 
   const toggle = (setter, id) =>
     setter((current) => ({ ...current, [id]: !current[id] }));
@@ -778,23 +809,21 @@ const FolderAnalysis = ({ path }) => {
 
   const activeGroup = GROUPS[tab];
   const hints = ((analysis || {}).candidates || {}).possible_dependencies || [];
-  const unclassified = ((analysis || {}).candidates || {}).unclassified || [];
+  const candidates = (analysis || {}).candidates || {};
+  // Grouped folder ROWS from the backend — never the raw path list, which is
+  // what used to render as one unreadable paragraph.
+  const groupedUnclassified = candidates.grouped_unclassified || [];
+  const unclassifiedTotal = candidates.unclassified_total || 0;
+  const structureMode = (analysis || {}).structure_mode || "";
+  const invalidStructure = structureMode === "invalid";
 
-  // Unclassified files, bucketed by their parent folder and filtered.
-  const unclassifiedGroups = useMemo(() => {
+  const visibleUnclassified = useMemo(() => {
     const needle = unclassifiedFilter.trim().toLowerCase();
-    const buckets = new Map();
-    unclassified
-      .filter((file) => !needle || file.toLowerCase().includes(needle))
-      .forEach((file) => {
-        const cut = file.lastIndexOf("/");
-        const folder = cut === -1 ? "" : file.slice(0, cut);
-        buckets.set(folder, (buckets.get(folder) || []).concat(file));
-      });
-    return Array.from(buckets.entries()).sort((a, b) =>
-      a[0].localeCompare(b[0])
+    const rows = groupedUnclassified.filter(
+      (row) => !needle || (row.path || "").toLowerCase().includes(needle)
     );
-  }, [unclassified, unclassifiedFilter]);
+    return showAllUnclassified ? rows : rows.slice(0, UNCLASSIFIED_ROWS);
+  }, [groupedUnclassified, unclassifiedFilter, showAllUnclassified]);
 
   return (
     <Fragment>
@@ -808,7 +837,7 @@ const FolderAnalysis = ({ path }) => {
         }
       >
         <Box component="span" sx={{ display: "inline-flex" }}>
-          <RegularStyledButton onClick={analyze} disabled={!ready}>
+          <RegularStyledButton onClick={() => analyze()} disabled={!ready}>
             Analyze RCC Folder
           </RegularStyledButton>
         </Box>
@@ -891,6 +920,114 @@ const FolderAnalysis = ({ path }) => {
                   ))}
                 </Box>
               )}
+              {/* Legacy layouts only: their nesting is something only the
+                  author can resolve, so the boundary is theirs to choose.
+                  Standard layouts use the deterministic immediate children
+                  and never see this. */}
+              {Object.keys(analysis.boundary_trees || {}).length > 0 && (
+                <Box sx={{ mb: 2 }} data-testid="boundary-picker">
+                  <Button
+                    size="small"
+                    onClick={() => setPickerOpen((value) => !value)}
+                    sx={{ textTransform: "none" }}
+                  >
+                    {pickerOpen
+                      ? "Hide record boundaries"
+                      : "Choose record boundaries"}
+                  </Button>
+                  <Collapse in={pickerOpen} unmountOnExit>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      display="block"
+                      sx={{ mb: 1 }}
+                    >
+                      One selected folder becomes one proposed Dataset or
+                      Script record. Select a parent to keep everything
+                      beneath it together, or select child folders to split
+                      it. Nothing on the file server is changed.
+                    </Typography>
+                    {Object.keys(analysis.boundary_trees)
+                      .sort()
+                      .map((root) => {
+                        const tree = analysis.boundary_trees[root];
+                        const chosen = boundaries[root] || [];
+                        return (
+                          <Box key={root} sx={{ mb: 1.5 }}>
+                            <Typography variant="subtitle2">
+                              {`${root} → ${tree.role}`}
+                            </Typography>
+                            {(tree.nodes || []).map((node) => {
+                              const isChosen = chosen.includes(node.path);
+                              // Mutual exclusion: an ancestor or a descendant
+                              // of an already-chosen node cannot also be
+                              // chosen, because the same files would land in
+                              // two records.
+                              const blocked =
+                                !isChosen &&
+                                chosen.some(
+                                  (other) =>
+                                    node.path.startsWith(`${other}/`) ||
+                                    other.startsWith(`${node.path}/`)
+                                );
+                              return (
+                                <Box
+                                  key={node.path}
+                                  sx={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    pl: { xs: (node.level - 1) * 1.5, sm: (node.level - 1) * 3 },
+                                  }}
+                                >
+                                  <Checkbox
+                                    size="small"
+                                    checked={isChosen}
+                                    disabled={blocked}
+                                    onChange={() => toggleBoundary(root, node.path)}
+                                    slotProps={{
+                                      input: {
+                                        "aria-label": `Use ${node.path} as one record`,
+                                      },
+                                    }}
+                                  />
+                                  <Typography
+                                    variant="caption"
+                                    noWrap
+                                    title={node.path}
+                                    sx={{ color: blocked ? "text.disabled" : "inherit" }}
+                                  >
+                                    {`${node.name} (${node.file_count} files)`}
+                                  </Typography>
+                                </Box>
+                              );
+                            })}
+                          </Box>
+                        );
+                      })}
+                    <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mt: 1 }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={
+                          !Object.values(boundaries).some((v) => v.length)
+                        }
+                        onClick={() => analyze(boundaries)}
+                      >
+                        Rebuild proposals
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          setBoundaries({});
+                          analyze();
+                        }}
+                      >
+                        Use default boundaries
+                      </Button>
+                    </Box>
+                  </Collapse>
+                </Box>
+              )}
               <Tabs
                 value={tab}
                 onChange={(event, next) => setTab(next)}
@@ -902,7 +1039,7 @@ const FolderAnalysis = ({ path }) => {
                     sx={secondary ? { color: "text.secondary" } : undefined}
                     label={`${label} (${
                       key === "unclassified"
-                        ? unclassified.length
+                        ? unclassifiedTotal
                         : candidatesFor(key).length
                     })`}
                   />
@@ -958,53 +1095,62 @@ const FolderAnalysis = ({ path }) => {
               ) : (
                 <Fragment>
                   <Typography variant="body2" color="text.secondary" gutterBottom>
-                    {(analysis.candidates || {}).unclassified_total ||
-                      unclassified.length}{" "}
-                    file(s) were not classified — Qresp would have had to
-                    guess. Add them by hand if they belong to the paper.
+                    {unclassifiedTotal} file(s) were not classified — Qresp
+                    would have had to guess. Add them by hand if they belong
+                    to the paper.
                   </Typography>
-                  {unclassified.length > 0 && (
+                  {groupedUnclassified.length > 0 && (
                     <Fragment>
                       <TextField
                         size="small"
                         fullWidth
-                        placeholder="Filter by name or folder"
+                        placeholder="Filter by folder"
                         value={unclassifiedFilter}
                         onChange={(event) =>
                           setUnclassifiedFilter(event.target.value)
                         }
                         slotProps={{
-                          input: { "aria-label": "Filter unclassified files" },
+                          input: { "aria-label": "Filter unclassified folders" },
                         }}
                         sx={{ mb: 1, maxWidth: 360 }}
                       />
-                      {/* Grouped by folder: hundreds of paths as one
-                          paragraph is unreadable, and the folder is the
-                          thing a curator actually scans for. */}
-                      {unclassifiedGroups.length === 0 && (
+                      {/* Grouped folder rows. The backend never sends the raw
+                          path list any more, so hundreds of paths cannot be
+                          rendered as one paragraph. */}
+                      {visibleUnclassified.length === 0 && (
                         <Typography variant="body2">
-                          No unclassified file matches that filter.
+                          No folder matches that filter.
                         </Typography>
                       )}
-                      {unclassifiedGroups.map(([folder, entries]) => (
+                      {visibleUnclassified.map((row) => (
                         <Box
-                          key={folder}
+                          key={row.path}
                           sx={{ mb: 1 }}
-                          data-testid={`unclassified-group-${folder || "root"}`}
+                          data-testid={`unclassified-group-${row.path || "root"}`}
                         >
                           <Button
                             size="small"
                             onClick={() =>
                               setShowUnclassified((current) => ({
                                 ...current,
-                                [folder]: !current[folder],
+                                [row.path]: !current[row.path],
                               }))
                             }
                             sx={{ textTransform: "none" }}
                           >
-                            {`${folder || "folder root"} (${entries.length})`}
+                            {`${row.name} (${row.file_count})`}
                           </Button>
-                          <Collapse in={Boolean(showUnclassified[folder])} unmountOnExit>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ ml: 1 }}
+                          >
+                            {(row.extensions || []).join(" ")}
+                          </Typography>
+                          <Collapse
+                            in={Boolean(showUnclassified[row.path])}
+                            unmountOnExit
+                          >
                             <Box
                               sx={{
                                 pl: 2,
@@ -1015,19 +1161,42 @@ const FolderAnalysis = ({ path }) => {
                                 overflowY: "auto",
                               }}
                             >
-                              {entries.map((file) => (
+                              {(row.sample_names || []).map((name) => (
                                 <Chip
-                                  key={file}
+                                  key={name}
                                   size="small"
                                   variant="outlined"
-                                  label={file.split("/").pop()}
-                                  title={file}
+                                  label={name}
+                                  title={
+                                    row.path ? `${row.path}/${name}` : name
+                                  }
                                 />
                               ))}
+                              {row.file_count >
+                                (row.sample_names || []).length && (
+                                <Typography variant="caption" sx={{ ml: 1 }}>
+                                  …and{" "}
+                                  {row.file_count -
+                                    (row.sample_names || []).length}{" "}
+                                  more in this folder
+                                </Typography>
+                              )}
                             </Box>
                           </Collapse>
                         </Box>
                       ))}
+                      {!showAllUnclassified &&
+                        groupedUnclassified.length > UNCLASSIFIED_ROWS && (
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={() => setShowAllUnclassified(true)}
+                          >
+                            {`Show more (${
+                              groupedUnclassified.length - UNCLASSIFIED_ROWS
+                            } more folders)`}
+                          </Button>
+                        )}
                     </Fragment>
                   )}
                 </Fragment>
@@ -1063,7 +1232,7 @@ const FolderAnalysis = ({ path }) => {
           <Button onClick={close}>Cancel</Button>
           <Button
             variant="contained"
-            disabled={selectedCount === 0}
+            disabled={selectedCount === 0 || invalidStructure}
             onClick={apply}
           >
             Add selected items to Curator
