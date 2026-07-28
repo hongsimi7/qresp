@@ -116,6 +116,68 @@ class TestAuthSkeleton(unittest.TestCase):
         self.assertIsNone(body["user"])
 
 
+class TestCallbackLogRedaction(unittest.TestCase):
+    """OAuth callback secrets must never reach the access log."""
+
+    def setUp(self):
+        from project import logredact
+        self.logredact = logredact
+
+    def test_code_and_state_values_are_redacted(self):
+        line = ('GET /api/auth/google/callback?code=4/0AY0e-abc123'
+                '&state=xUq7Secret&scope=openid HTTP/1.1')
+        redacted = self.logredact.redact_query(line)
+        self.assertNotIn("4/0AY0e-abc123", redacted)
+        self.assertNotIn("xUq7Secret", redacted)
+        self.assertIn("code=REDACTED", redacted)
+        self.assertIn("state=REDACTED", redacted)
+        # Everything useful survives.
+        self.assertIn("GET /api/auth/google/callback", redacted)
+        self.assertIn("scope=openid", redacted)
+        self.assertIn("HTTP/1.1", redacted)
+
+    def test_microsoft_specific_parameters_are_redacted(self):
+        line = ("GET /api/auth/microsoft/callback?code=M.C1_BAY.2-abc"
+                "&session_state=9f8e&error=access_denied"
+                "&error_description=User+cancelled HTTP/1.1")
+        redacted = self.logredact.redact_query(line)
+        for secret in ("M.C1_BAY.2-abc", "9f8e", "access_denied",
+                       "User+cancelled"):
+            self.assertNotIn(secret, redacted)
+        self.assertIn("/api/auth/microsoft/callback", redacted)
+
+    def test_ordinary_requests_are_untouched(self):
+        line = 'GET /api/search?searchWord=water&tags=dft HTTP/1.1'
+        self.assertEqual(line, self.logredact.redact_query(line))
+
+    def test_the_filter_rewrites_a_real_access_record(self):
+        import logging
+        record = logging.LogRecord(
+            "uvicorn.access", logging.INFO, __file__, 1,
+            '%s - "%s %s HTTP/%s" %d',
+            ("127.0.0.1:1", "GET",
+             "/api/auth/google/callback?code=SECRET&state=ALSOSECRET", "1.1",
+             302),
+            None)
+        self.assertTrue(self.logredact.SensitiveQueryFilter().filter(record))
+        message = record.getMessage()
+        self.assertNotIn("SECRET", message)
+        self.assertNotIn("ALSOSECRET", message)
+        self.assertIn("code=REDACTED", message)
+        # Status and method still logged.
+        self.assertIn("302", message)
+        self.assertIn("GET", message)
+
+    def test_install_is_idempotent_and_targets_access_loggers(self):
+        import logging
+        self.logredact.install()
+        self.logredact.install()
+        logger = logging.getLogger("uvicorn.access")
+        installed = [f for f in logger.filters
+                     if isinstance(f, self.logredact.SensitiveQueryFilter)]
+        self.assertEqual(1, len(installed))
+
+
 class TestRetiredProviders(unittest.TestCase):
     """CILogon was removed: Microsoft Entra and Google are the only public
     providers. Nothing may still route to the retired broker."""

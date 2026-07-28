@@ -260,7 +260,11 @@ class TestMicrosoftCallbackRejections(MicrosoftTestBase):
             follow_redirects=False,
         )
         self.assertEqual(400, response.status_code)
-        self.assertIn("access_denied", response.json()["error"])
+        message = response.json()["error"]
+        self.assertIn("did not complete", message)
+        # The provider's error string arrives in the URL and is therefore
+        # attacker-controllable: log it, never reflect it.
+        self.assertNotIn("access_denied", message)
 
     def test_mismatched_nonce_rejected(self):
         response = self.finish_login(

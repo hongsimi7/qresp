@@ -247,6 +247,11 @@ def google_login(next=None):
     An optional ``next`` query parameter (validated to a same-origin path)
     is remembered in the session so the callback can return the user to the
     page they signed in from.
+
+    ``prompt=select_account`` (as Microsoft's flow already does) so that
+    signing out of Qresp and back in lets the user pick a DIFFERENT Google
+    account: without it Google silently reuses the single signed-in session
+    and the user cannot switch.
     """
     cfg = _google_config()
     if not _google_ready(cfg):
@@ -261,7 +266,8 @@ def google_login(next=None):
     oauth = OAuth2Session(cfg["GOOGLE_CLIENT_ID"],
                           redirect_uri=cfg["GOOGLE_REDIRECT_URI"],
                           scope=GOOGLE_SCOPES)
-    authorization_url, state = oauth.authorization_url(cfg["AUTH_URI"])
+    authorization_url, state = oauth.authorization_url(
+        cfg["AUTH_URI"], prompt="select_account")
     session[OAUTH_STATE_KEY] = state
     return redirect(authorization_url, code=302)
 
@@ -278,7 +284,12 @@ def google_callback(state=None, code=None, error=None):
         return {"error": "Google login is not configured on this server."}, 503
 
     if error:
-        return {"error": "Google sign-in was cancelled or failed: %s" % error}, 400
+        # The provider's error code is attacker-controllable through a
+        # crafted callback URL, so it is logged (bounded) rather than
+        # reflected into the page.
+        print("Google sign-in returned an error: %s" % str(error)[:100])
+        return {"error": "Google sign-in was cancelled or did not "
+                         "complete. Please try again."}, 400
 
     expected_state = session.pop(OAUTH_STATE_KEY, None)
     if not expected_state or not state or state != expected_state:
@@ -295,7 +306,10 @@ def google_callback(state=None, code=None, error=None):
                           code=code)
         info = oauth.get(cfg["USER_INFO"]).json()
     except Exception as e:
-        print("Google sign-in failed: %s" % e)
+        # Only the failure SHAPE is logged: oauthlib exceptions can embed the
+        # provider's response body (and the request carries the client
+        # secret), which must never reach a log file or the user.
+        print("Google sign-in failed: %s" % type(e).__name__)
         return {"error": "Google sign-in failed, please try again."}, 400
 
     email = (info.get("email") or "").strip().lower()
@@ -533,8 +547,11 @@ def microsoft_callback(code=None, state=None, error=None):
                          "server."}, 503
 
     if error:
-        return {"error": "Microsoft sign-in was cancelled or failed: %s"
-                         % error}, 400
+        # Same reasoning as the Google flow: never reflect a provider-
+        # supplied (URL-controllable) error string back into the page.
+        print("Microsoft sign-in returned an error: %s" % str(error)[:100])
+        return {"error": "Microsoft sign-in was cancelled or did not "
+                         "complete. Please try again."}, 400
 
     expected_state = session.pop(MICROSOFT_STATE_KEY, None)
     code_verifier = session.pop(MICROSOFT_PKCE_KEY, None)

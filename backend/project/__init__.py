@@ -6,9 +6,15 @@ from flask_session import Session
 from flask_sitemap import Sitemap
 from project.config import Config
 from project.jsonutil import MongoJSONEncoder, MongoJSONProvider
+from project import logredact
 from flask_cors import CORS
 
 Config.initialize()
+
+# OAuth callbacks carry their authorization code and state in the query
+# string, which access loggers write verbatim. Redact those values before
+# anything is emitted -- status/method/path logging is untouched.
+logredact.install()
 
 # Create the application instance. Connexion 3: FlaskApp is an ASGI app that
 # wraps Flask (routing/validation/swagger-ui run as ASGI middleware). The

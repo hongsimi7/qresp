@@ -78,6 +78,19 @@ class TestGoogleLogin(GoogleAuthTestBase):
         self.assertNotIn("drive", query["scope"][0])
         self.assertNotIn("gmail", query["scope"][0])
 
+    def test_login_asks_google_for_the_account_chooser(self):
+        # Without prompt=select_account Google silently reuses whichever
+        # account is already signed in, so signing out of Qresp and back in
+        # can never switch accounts. Microsoft's flow already does this.
+        query = parse_qs(urlparse(self.start_login()).query)
+        self.assertEqual(["select_account"], query["prompt"])
+
+    def test_the_account_chooser_does_not_disturb_scopes_or_state(self):
+        query = parse_qs(urlparse(self.start_login()).query)
+        self.assertEqual(["openid email profile"], query["scope"])
+        self.assertEqual(["code"], query["response_type"])
+        self.assertTrue(query["state"][0])
+
     def test_callback_rejects_mismatched_state(self):
         response = self.finish_login(
             {"email": "a@b.co", "name": "A", "sub": "1"}, state="wrong-state"
@@ -139,14 +152,49 @@ class TestGoogleLogin(GoogleAuthTestBase):
             csrf = self.client.get("/api/auth/me").json()["csrf_token"]
             self.client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
 
-    def test_callback_reports_provider_error(self):
+    def test_callback_reports_provider_error_without_reflecting_it(self):
         response = self.client.get(
             "/api/auth/google/callback",
             params={"error": "access_denied"},
             follow_redirects=False,
         )
         self.assertEqual(400, response.status_code)
-        self.assertIn("access_denied", response.json()["error"])
+        message = response.json()["error"]
+        self.assertIn("did not complete", message)
+        # The provider string is URL-controllable: it is logged, not shown.
+        self.assertNotIn("access_denied", message)
+
+    def test_callback_error_message_cannot_carry_injected_text(self):
+        response = self.client.get(
+            "/api/auth/google/callback",
+            params={"error": "<script>alert(1)</script> contact evil.example"},
+            follow_redirects=False,
+        )
+        self.assertEqual(400, response.status_code)
+        message = response.json()["error"]
+        self.assertNotIn("script", message.lower())
+        self.assertNotIn("evil.example", message)
+
+    def test_token_exchange_failures_stay_generic(self):
+        # oauthlib exceptions can embed the provider's response body; neither
+        # it nor a stack trace may reach the user.
+        with mock.patch("project.auth.OAuth2Session") as session_cls:
+            instance = session_cls.return_value
+            instance.authorization_url.return_value = (
+                "https://accounts.google.com/o/oauth2/v2/auth?state=s", "s")
+            self.client.get("/api/auth/google", follow_redirects=False)
+            instance.fetch_token.side_effect = RuntimeError(
+                'invalid_client: {"client_secret":"top-secret"}')
+            response = self.client.get(
+                "/api/auth/google/callback",
+                params={"state": "s", "code": "authcode"},
+                follow_redirects=False,
+            )
+        self.assertEqual(400, response.status_code)
+        message = response.json()["error"]
+        self.assertEqual("Google sign-in failed, please try again.", message)
+        self.assertNotIn("top-secret", response.text)
+        self.assertNotIn("invalid_client", response.text)
 
 
 if __name__ == "__main__":
