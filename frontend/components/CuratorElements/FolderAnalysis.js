@@ -18,6 +18,7 @@ import {
   FormControlLabel,
   Grid,
   Tab,
+  MenuItem,
   Tabs,
   TextField,
   Tooltip,
@@ -175,6 +176,15 @@ const labelOf = (candidate) => {
 // suggestion can never earn it (see AI_TARGETS / the suggestion panel).
 const HIGH_EVIDENCE = "high";
 
+// What a folder holds, in the curator's words.
+const ROLE_LABELS = {
+  figures: "Figures",
+  datasets: "Datasets",
+  scripts: "Scripts",
+  documentation: "Documentation / Ignore",
+  unclassified: "Unclassified",
+};
+
 const EVIDENCE_LABELS = {
   high: "High evidence",
   medium: "Medium evidence",
@@ -218,7 +228,10 @@ const FolderAnalysis = ({ path }) => {
   const [removed, setRemoved] = useState({});
   const [detailsOpen, setDetailsOpen] = useState({});
   const [editOpen, setEditOpen] = useState({});
-  const [showUnclassified, setShowUnclassified] = useState(false);
+  const [showUnclassified, setShowUnclassified] = useState({});
+  const [rolesOpen, setRolesOpen] = useState(false);
+  const [roleEdits, setRoleEdits] = useState({});
+  const [unclassifiedFilter, setUnclassifiedFilter] = useState("");
   const [tab, setTab] = useState(0);
   // Optional AI enrichment: a SEPARATE action over the candidates already
   // selected, behind its own always-unchecked consent box. Selecting
@@ -247,7 +260,10 @@ const FolderAnalysis = ({ path }) => {
     setRemoved({});
     setDetailsOpen({});
     setEditOpen({});
-    setShowUnclassified(false);
+    setShowUnclassified({});
+    setUnclassifiedFilter("");
+    setRolesOpen(false);
+    setRoleEdits({});
     setTab(0);
     setAiConsent(false);
     setAiConsentOpen(false);
@@ -257,7 +273,7 @@ const FolderAnalysis = ({ path }) => {
     setShowAll({});
   };
 
-  const analyze = async () => {
+  const analyze = async (roles) => {
     setOpen(true);
     setLoading(true);
     setError("");
@@ -265,6 +281,9 @@ const FolderAnalysis = ({ path }) => {
     try {
       const response = await axios.post("/api/curation/analyze-folder", {
         path: target,
+        // Session-only: the server applies these to this run and stores
+        // nothing. Omitted on the first pass so the suggestions are used.
+        ...(roles && Object.keys(roles).length ? { roles } : {}),
       });
       const data = response.data || {};
       const initial = {};
@@ -421,10 +440,25 @@ const FolderAnalysis = ({ path }) => {
       }
     });
     if (setAlert) {
+      // Candidate paths are RELATIVE to the folder that was analyzed. Charts
+      // render as fileServerPath + imageFile, so if the analyzed folder is
+      // not (yet) the saved one, every image URL would point somewhere else.
+      // Say so at the moment it matters rather than leaving blank figures.
+      const mismatch =
+        target && fileServerPath && target !== fileServerPath
+          ? " NOTE: these paths are relative to the folder you analyzed, " +
+            "which is not the saved File Server path — save that folder so " +
+            "chart images resolve."
+          : !fileServerPath
+          ? " NOTE: no File Server path is saved yet. Use Save File Server " +
+            "for this folder, or chart images will not load."
+          : "";
       setAlert(
         "Added to the form",
         `${total} item(s) were added to this curation form. Nothing has been ` +
-          "saved or published — review each one and use Save when you are ready.",
+          "saved or published — review each one and use Save when you are " +
+          "ready." +
+          mismatch,
         null
       );
     }
@@ -763,6 +797,22 @@ const FolderAnalysis = ({ path }) => {
   const hints = ((analysis || {}).candidates || {}).possible_dependencies || [];
   const unclassified = ((analysis || {}).candidates || {}).unclassified || [];
 
+  // Unclassified files, bucketed by their parent folder and filtered.
+  const unclassifiedGroups = useMemo(() => {
+    const needle = unclassifiedFilter.trim().toLowerCase();
+    const buckets = new Map();
+    unclassified
+      .filter((file) => !needle || file.toLowerCase().includes(needle))
+      .forEach((file) => {
+        const cut = file.lastIndexOf("/");
+        const folder = cut === -1 ? "" : file.slice(0, cut);
+        buckets.set(folder, (buckets.get(folder) || []).concat(file));
+      });
+    return Array.from(buckets.entries()).sort((a, b) =>
+      a[0].localeCompare(b[0])
+    );
+  }, [unclassified, unclassifiedFilter]);
+
   return (
     <Fragment>
       {/* Trigger only — the surrounding form owns the explanatory copy so the
@@ -775,7 +825,7 @@ const FolderAnalysis = ({ path }) => {
         }
       >
         <Box component="span" sx={{ display: "inline-flex" }}>
-          <RegularStyledButton onClick={analyze} disabled={!ready}>
+          <RegularStyledButton onClick={() => analyze()} disabled={!ready}>
             Analyze RCC Folder
           </RegularStyledButton>
         </Box>
@@ -822,6 +872,68 @@ const FolderAnalysis = ({ path }) => {
                   {warning}
                 </Alert>
               ))}
+              {/* Folder roles govern what a file can become. They are
+                  suggested from directory names, changeable here, and apply
+                  to THIS analysis only — nothing is stored and the RCC
+                  folder is never touched. */}
+              {Object.keys(analysis.roles || {}).length > 0 && (
+                <Box sx={{ mb: 2 }} data-testid="folder-roles">
+                  <Button
+                    size="small"
+                    onClick={() => setRolesOpen((value) => !value)}
+                    sx={{ textTransform: "none" }}
+                  >
+                    {rolesOpen ? "Hide folder roles" : "Folder roles"}
+                  </Button>
+                  <Collapse in={rolesOpen} unmountOnExit>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      display="block"
+                      sx={{ mb: 1 }}
+                    >
+                      What each folder holds decides what its files can
+                      become. Change anything that looks wrong and re-run —
+                      this is used for this analysis only and is never saved.
+                    </Typography>
+                    <Grid container spacing={1}>
+                      {Object.keys(analysis.roles)
+                        .sort()
+                        .map((folder) => (
+                          <Grid key={folder} size={{ xs: 12, sm: 6 }}>
+                            <TextField
+                              select
+                              fullWidth
+                              size="small"
+                              label={folder || "folder root"}
+                              value={roleEdits[folder] || analysis.roles[folder]}
+                              onChange={(event) =>
+                                setRoleEdits((current) => ({
+                                  ...current,
+                                  [folder]: event.target.value,
+                                }))
+                              }
+                            >
+                              {(analysis.role_options || []).map((option) => (
+                                <MenuItem key={option} value={option}>
+                                  {ROLE_LABELS[option] || option}
+                                </MenuItem>
+                              ))}
+                            </TextField>
+                          </Grid>
+                        ))}
+                    </Grid>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      sx={{ mt: 1 }}
+                      onClick={() => analyze(roleEdits)}
+                    >
+                      Re-analyze with these roles
+                    </Button>
+                  </Collapse>
+                </Box>
+              )}
               <Tabs
                 value={tab}
                 onChange={(event, next) => setTab(next)}
@@ -889,33 +1001,76 @@ const FolderAnalysis = ({ path }) => {
               ) : (
                 <Fragment>
                   <Typography variant="body2" color="text.secondary" gutterBottom>
-                    {unclassified.length} file(s) were not classified. Add them
-                    by hand if they belong to the paper.
+                    {(analysis.candidates || {}).unclassified_total ||
+                      unclassified.length}{" "}
+                    file(s) were not classified — Qresp would have had to
+                    guess. Add them by hand if they belong to the paper.
                   </Typography>
                   {unclassified.length > 0 && (
                     <Fragment>
-                      <Button
+                      <TextField
                         size="small"
-                        onClick={() => setShowUnclassified((value) => !value)}
-                      >
-                        {showUnclassified
-                          ? "Hide file names"
-                          : "Show file names"}
-                      </Button>
-                      <Collapse in={showUnclassified} unmountOnExit>
-                        <Box sx={{ mt: 1, maxHeight: 240, overflowY: "auto" }}>
-                          {unclassified.map((file) => (
-                            <Typography
-                              key={file}
-                              variant="caption"
-                              display="block"
-                              sx={{ wordBreak: "break-all" }}
+                        fullWidth
+                        placeholder="Filter by name or folder"
+                        value={unclassifiedFilter}
+                        onChange={(event) =>
+                          setUnclassifiedFilter(event.target.value)
+                        }
+                        slotProps={{
+                          input: { "aria-label": "Filter unclassified files" },
+                        }}
+                        sx={{ mb: 1, maxWidth: 360 }}
+                      />
+                      {/* Grouped by folder: hundreds of paths as one
+                          paragraph is unreadable, and the folder is the
+                          thing a curator actually scans for. */}
+                      {unclassifiedGroups.length === 0 && (
+                        <Typography variant="body2">
+                          No unclassified file matches that filter.
+                        </Typography>
+                      )}
+                      {unclassifiedGroups.map(([folder, entries]) => (
+                        <Box
+                          key={folder}
+                          sx={{ mb: 1 }}
+                          data-testid={`unclassified-group-${folder || "root"}`}
+                        >
+                          <Button
+                            size="small"
+                            onClick={() =>
+                              setShowUnclassified((current) => ({
+                                ...current,
+                                [folder]: !current[folder],
+                              }))
+                            }
+                            sx={{ textTransform: "none" }}
+                          >
+                            {`${folder || "folder root"} (${entries.length})`}
+                          </Button>
+                          <Collapse in={Boolean(showUnclassified[folder])} unmountOnExit>
+                            <Box
+                              sx={{
+                                pl: 2,
+                                display: "flex",
+                                flexWrap: "wrap",
+                                gap: 0.5,
+                                maxHeight: 220,
+                                overflowY: "auto",
+                              }}
                             >
-                              {file}
-                            </Typography>
-                          ))}
+                              {entries.map((file) => (
+                                <Chip
+                                  key={file}
+                                  size="small"
+                                  variant="outlined"
+                                  label={file.split("/").pop()}
+                                  title={file}
+                                />
+                              ))}
+                            </Box>
+                          </Collapse>
                         </Box>
-                      </Collapse>
+                      ))}
                     </Fragment>
                   )}
                 </Fragment>

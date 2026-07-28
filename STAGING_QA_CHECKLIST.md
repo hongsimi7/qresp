@@ -386,6 +386,47 @@ Folder organization guide:
 - [ ] No Experiment record is proposed anywhere
 - [ ] `README.md` (or anything unmatched) appears under Unclassified
 
+Folder roles and grouping:
+
+- [ ] The review dialog offers **Folder roles** listing each top-level folder
+      with a suggested role (`figures_tables` → Figures, `data` → Datasets,
+      `scripts` → Scripts, `doc` → Documentation / Ignore)
+- [ ] Change one and **Re-analyze with these roles** → candidates change
+      accordingly; reopening the dialog shows the SUGGESTED roles again
+      (session-only, nothing persisted)
+- [ ] Set a folder to Documentation / Ignore → it produces no Charts,
+      Datasets, Scripts or Tools; its files still appear under Unclassified
+- [ ] A figure folder named after one of its images (e.g.
+      `figure_2/figure_2.png` beside `homo.png`, `lumo.png`) yields **ONE**
+      Chart, with the panels listed as associated files
+- [ ] That folder's `figure_2.ipynb` is the Chart's notebook file, NOT a
+      separate Script
+- [ ] `.sh` / `.py` / `.ipynb` under a Datasets role produce no Scripts;
+      `.csv` / `.json` under a Scripts role produce no Datasets
+- [ ] A logo/icon/TOC graphic is never a Chart
+- [ ] The card chip reads `Medium evidence` (likely) rather than
+      `High evidence` for an artifact — only FIELD chips say High
+
+Unclassified readability:
+
+- [ ] Unclassified is grouped by folder with a name and count per group;
+      names appear as chips only after expanding a group
+- [ ] The filter box narrows the groups and clearing it restores them
+- [ ] No screen shows hundreds of paths as one continuous paragraph
+
+Chart images:
+
+- [ ] Apply a Chart from folder analysis with the folder SAVED → the PNG
+      renders; the URL is `fileServerPath/figures/....png` with no double
+      slash
+- [ ] Apply one BEFORE saving the File Server path → the alert warns, and the
+      chart shows "No file server path is saved yet…" instead of a blank box
+- [ ] A chart whose file was moved/deleted shows "could not be loaded from
+      `<url>`" rather than an empty frame
+- [ ] A manually curated chart (picked through the file tree) renders exactly
+      as before
+- [ ] A folder or file name containing a space still renders
+
 Candidate visibility (the DOI folder has ~2000 files):
 
 - [ ] Every tab count matches the real total; nothing is silently dropped

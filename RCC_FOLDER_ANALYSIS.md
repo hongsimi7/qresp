@@ -90,6 +90,61 @@ exactly and stay fully editable.
 
 **Everything below is deterministic. AI is never required.**
 
+### Folder roles come first
+
+Classifying every file by its extension across the whole tree is what made a
+documentation logo a Chart and a job script under `data/` a Script. What a
+file *is* depends on **where it sits**, so analysis runs at three levels:
+folder role → artifact group → individual files.
+
+A role is suggested per top-level directory from its name (`figures_tables/`
+→ Figures, `data/` → Datasets, `scripts/` → Scripts, `doc/` →
+Documentation / Ignore) and shown in the review dialog under **Folder
+roles**, where the curator can change any of them and re-run. The mapping is
+**session-only**: nothing is written to MongoDB, nothing is sent to RCC, and
+an unrecognized directory is simply `Unclassified` — never guessed into a
+productive role. A nested directory may be given its own entry, which
+overrides its parent.
+
+Roles are boundaries, not hints:
+
+| Role | Produces |
+| --- | --- |
+| Figures | Chart groups only |
+| Datasets | Dataset groups only — a `.sh`/`.py`/`.ipynb` here is **not** a Script |
+| Scripts | Script candidates only — a `.csv`/`.json` here is **not** a Dataset |
+| Documentation / Ignore | **Nothing.** Its files stay visible under Unclassified |
+| Unclassified | Extension-based guesses, always at **low** classification confidence |
+
+Branding and documentation graphics (`logo`, `icon`, `toc`,
+`graphical_abstract`, `banner`, `screenshot`, …) are never Charts, wherever
+they sit.
+
+### Artifacts, not files
+
+One candidate per matching file turned a single Figure 2 into five Charts
+and a Script. Candidates are built from artifact **groups**:
+
+- A folder **named after one of its images** is one chart. The named image
+  represents it and the rest ride along as associated files —
+  `figure_2/{figure_2.png, homo.png, lumo.png, rdos_pb.png}` is one Chart.
+- A **figures container** holding distinct images keeps one chart per image;
+  panels are only implied by a named folder.
+- Several unnamed images with no Figures role are **not guessed** — they go
+  to Unclassified with the group listed under `ungrouped_images`.
+- A notebook is offered as a chart's `notebookFile` (same folder, same
+  basename) or reported under `notebook_hints`. **A notebook is never a
+  Script candidate**, because it is usually what produced a figure.
+
+### Two confidences, never conflated
+
+- **Classification confidence** — is this a Chart/Dataset/Script *at all*?
+  Capped at `medium` ("likely"): a directory convention is good evidence,
+  never proof. An extension-only guess is `low`. It is **never** `high`
+  merely because a file exists.
+- **Field evidence** — how sure is one field's *value*? A detected path is
+  `high` here; that is a claim about the file, not about the artifact.
+
 A field is filled in **only when a file on the server proves it**. Everything
 else is left blank, flagged in `needs_input`, and the reason is reported as
 evidence. Generated-looking text is worse than an empty field: a curator
@@ -211,6 +266,29 @@ for Qresp in order to be understood. The tips point at ordinary artifacts
 software/version detection, warn against keeping secrets anywhere Qresp may
 read, and state plainly that better organization still does not let Qresp
 infer figure numbers, captions, properties, or versions without evidence.
+
+## Chart images
+
+A chart renders as the paper's `fileServerPath` joined to the chart's
+relative `imageFile`. That join used to be `server + "/" + imageFile` at four
+call sites, which broke three ways:
+
+- **No saved path.** Analysis runs on the *selected* folder, so a chart could
+  be applied before **Save File Server**. `"" + "/" + "figures/x.png"` is a
+  path on the Qresp origin — a silent 404 and a blank figure. This was the
+  main cause.
+- **Inconsistent leading slash.** `Utils/Scraper.node` strips the server
+  prefix from a manually picked file and leaves `/figures/x.png`, so manual
+  charts produced `…/DOI//figures/x.png` while analyzed ones did not.
+- **No encoding.** Spaces and `#` in real folder names broke the URL.
+
+`Utils/fileServerUrl.buildFileUrl` now owns the join: it trims separators,
+encodes each segment (without double-encoding), and returns `""` when it
+cannot build a real absolute URL. Callers render an explicit message instead
+of a broken `<img>`, and an `onError` handler labels a URL that is correct
+but unreachable. Applying candidates whose analyzed folder is not the saved
+path also warns at that moment. No proxy was added and no TLS behavior
+changed — the browser fetches the file server directly, as before.
 
 ## Security limits
 

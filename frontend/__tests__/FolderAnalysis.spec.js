@@ -464,20 +464,121 @@ describe("Analyze RCC Folder", () => {
     expect(screen.getAllByRole("checkbox")).toHaveLength(30);
   });
 
-  it("keeps Unclassified secondary and collapsed by default", async () => {
+  it("groups Unclassified by folder instead of one text blob", async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        ...analysis,
+        candidates: {
+          ...analysis.candidates,
+          unclassified: [
+            "README.md",
+            "doc/logo.png",
+            "doc/guide.ipynb",
+            "misc/a.dat",
+          ],
+          unclassified_total: 4,
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await user.click(screen.getByRole("tab", { name: /unclassified \(4\)/i }));
+
+    expect(
+      screen.getByText(/4 file\(s\) were not classified/i)
+    ).toBeInTheDocument();
+
+    // One expandable group per parent folder, each with its own count.
+    expect(
+      screen.getByRole("button", { name: "folder root (1)" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "doc (2)" })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "misc (1)" })).toBeInTheDocument();
+
+    // Names are behind an explicit expansion, and are separate rows/chips.
+    expect(screen.queryByText("logo.png")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "doc (2)" }));
+    expect(await screen.findByText("logo.png")).toBeInTheDocument();
+    expect(screen.getByText("guide.ipynb")).toBeInTheDocument();
+    // The full relative path stays available.
+    expect(screen.getByText("logo.png").closest("[title]")).toHaveAttribute(
+      "title",
+      "doc/logo.png"
+    );
+  });
+
+  it("filters Unclassified without losing the rest", async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        ...analysis,
+        candidates: {
+          ...analysis.candidates,
+          unclassified: ["doc/logo.png", "misc/a.dat"],
+          unclassified_total: 2,
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await user.click(screen.getByRole("tab", { name: /unclassified \(2\)/i }));
+
+    await user.type(
+      screen.getByLabelText(/filter unclassified files/i),
+      "misc"
+    );
+    expect(screen.getByRole("button", { name: "misc (1)" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "doc (1)" })).toBeNull();
+
+    await user.clear(screen.getByLabelText(/filter unclassified files/i));
+    expect(screen.getByRole("button", { name: "doc (1)" })).toBeInTheDocument();
+  });
+
+  it("offers session-only folder roles and re-runs with them", async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        ...analysis,
+        roles: { "": "unclassified", figures: "figures", doc: "documentation" },
+        suggested_roles: {
+          "": "unclassified",
+          figures: "figures",
+          doc: "documentation",
+        },
+        role_options: [
+          "figures",
+          "datasets",
+          "scripts",
+          "documentation",
+          "unclassified",
+        ],
+      },
+    });
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
 
-    await user.click(screen.getByRole("tab", { name: /unclassified \(1\)/i }));
+    await user.click(screen.getByRole("button", { name: /^folder roles$/i }));
     expect(
-      screen.getByText(/1 file\(s\) were not classified/i)
+      await screen.findByText(/used for this analysis only and is never saved/i)
     ).toBeInTheDocument();
-    // The names are behind an explicit expansion, not dumped by default.
-    expect(screen.queryByText("README.md")).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: /show file names/i }));
-    expect(await screen.findByText("README.md")).toBeInTheDocument();
+    // Change one role and re-run.
+    await user.click(screen.getByRole("combobox", { name: /^doc$/i }));
+    await user.click(await screen.findByRole("option", { name: /^datasets$/i }));
+    await user.click(
+      screen.getByRole("button", { name: /re-analyze with these roles/i })
+    );
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+    expect(axios.post.mock.calls[1][1]).toEqual({
+      path: FOLDER,
+      roles: { doc: "datasets" },
+    });
+    // The first call carried no roles at all: suggestions are the default.
+    expect(axios.post.mock.calls[0][1]).toEqual({ path: FOLDER });
   });
 
   it("selects nothing by default and cannot apply until something is checked", async () => {
