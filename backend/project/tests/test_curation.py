@@ -14,6 +14,7 @@ import mongomock
 # no directory contents in logs or storage.
 from project import connexionapp
 from project import curation
+from project import folderstandard
 from project.models import Paper
 
 RCC = "https://notebook.rcc.uchicago.edu/files"
@@ -329,393 +330,279 @@ class TestBoundedWalk(CurationTestBase):
         self.assertIn("directory listings", " ".join(warnings))
 
 
-class TestClassification(CurationTestBase):
-    def setUp(self):
-        super().setUp()
-        self.files, self.dirs, _, _ = curation.walk_folder(
-            FOLDER, list_directory=fake_lister)
-        self.result = curation.analyze_folder_tree(
-            self.files, self.dirs, TEXTS)
+class TestStructureDetection(CurationTestBase):
+    """Which mode a folder lands in, and why."""
 
-    def test_charts_come_only_from_images(self):
-        charts = self.result["charts"]
-        self.assertEqual(["figures/figure1.png", "figures/figure2.png"],
-                         [c["proposal"]["imageFile"] for c in charts])
-        for chart in charts:
-            self.assertEqual([], chart["proposal"]["extraFields"])
-            self.assertEqual("", chart["proposal"]["caption"])
-            self.assertIn("caption", chart["needs_input"])
-            self.assertIn("number", chart["needs_input"])
-
-    def test_chart_figure_number_is_never_guessed(self):
-        # Discovery order is not figure order. A prefilled number looks like
-        # curated metadata and would be wrong for most papers.
-        numbers = [c["proposal"]["number"] for c in self.result["charts"]]
-        self.assertEqual(["", ""], numbers)
-        for chart in self.result["charts"]:
-            self.assertIn("number", chart["needs_input"])
-        # Reordering the input cannot produce a number either.
-        reversed_result = curation.analyze_folder_tree(
-            ["figures/z.png", "figures/a.png"], [], {})
+    def test_exact_lowercase_roles_are_the_standard(self):
+        mode, roles, issues = folderstandard.detect_structure(
+            ["datasets/a/x.csv", "charts/f1/preview.png", "scripts/s/r.py",
+             "docs/g.md", "README.md"],
+            ["datasets", "datasets/a", "charts", "charts/f1", "scripts",
+             "scripts/s", "docs"])
+        self.assertEqual("standard", mode)
         self.assertEqual(
-            ["", ""],
-            [c["proposal"]["number"] for c in reversed_result["charts"]])
+            {"datasets": "datasets", "charts": "charts",
+             "scripts": "scripts", "docs": "docs"}, roles)
+        self.assertEqual([], issues)
 
-    def test_chart_caption_stays_blank_without_caption_text(self):
-        for chart in self.result["charts"]:
-            self.assertEqual("", chart["proposal"]["caption"])
-            self.assertIn("caption", chart["needs_input"])
-
-    def test_filename_tokens_are_labelled_hints_not_properties(self):
-        result = curation.analyze_folder_tree(
-            ["figures/embedded_Pb_dens_coord.png"], [], {})
-        chart = result["charts"][0]
-        # The tokens are visible to the curator, in their own clearly
-        # labelled place...
-        hints = " ".join(chart["filename_hints"])
-        for token in ("embedded", "Pb", "dens", "coord"):
-            self.assertIn(token, hints)
-        self.assertIn("not verified metadata", hints)
-        # ...but they are NOT metadata, and never a field value.
-        self.assertEqual([], chart["proposal"]["properties"])
-        self.assertIn("properties", chart["needs_input"])
-        self.assertEqual("needs_input",
-                         chart["field_evidence"]["properties"])
-        # The only place the token legitimately appears is the detected
-        # path itself; no descriptive field carries it.
-        for field in ("caption", "properties", "number"):
-            self.assertNotIn("embedded", str(chart["proposal"][field]))
-
-    def test_field_evidence_is_per_field_not_one_badge(self):
-        result = curation.analyze_folder_tree(
-            ["figures/f1.png", "figures/f1.ipynb", "figures/f1.csv"], [], {})
-        chart = result["charts"][0]
-        evidence = chart["field_evidence"]
-        # An exact detected path and an unverifiable figure number must not
-        # wear the same badge.
-        self.assertEqual("high", evidence["imageFile"])
-        self.assertEqual("high", evidence["files"])
-        self.assertEqual("medium", evidence["notebookFile"])
-        self.assertEqual("needs_input", evidence["number"])
-        self.assertEqual("needs_input", evidence["caption"])
-
-    def test_related_files_need_the_same_folder_and_exact_basename(self):
-        # Same folder + exact basename is evidence...
-        strong = curation.analyze_folder_tree(
-            ["figures/f1.png", "figures/f1.csv"], [], {})
-        self.assertEqual(["figures/f1.csv"],
-                         strong["charts"][0]["proposal"]["files"])
-
-        # ...a prefix match, or the same name in another folder, is a hint.
-        weak = curation.analyze_folder_tree(
-            ["figures/bandgap.png", "figures/bandgap_extra.csv",
-             "data/bandgap.csv"], [], {})
-        chart = weak["charts"][0]
-        self.assertEqual([], chart["proposal"]["files"])
-        hints = " ".join(chart["filename_hints"])
-        self.assertIn("figures/bandgap_extra.csv", hints)
-        self.assertIn("data/bandgap.csv", hints)
-        self.assertIn("relationship not verified", hints)
-
-    def test_a_module_load_line_is_explicit_enough_for_a_tool(self):
-        result = curation.analyze_folder_tree(
-            ["scripts/run.sh"], [],
-            {"scripts/run.sh": "#!/bin/bash\nmodule load west/5.0.0\n"})
-        tool = result["tools"][0]
-        self.assertEqual("west", tool["proposal"]["packageName"])
-        self.assertEqual("5.0.0", tool["proposal"]["version"])
-        self.assertTrue(any("module load" in line
-                            for line in tool["evidence"]))
-
-    def test_a_readme_that_states_a_version_is_explicit_enough(self):
-        result = curation.analyze_folder_tree(
-            ["README.md"], [],
-            {"README.md": "Run with Quantum ESPRESSO v7.2 on the cluster."})
-        names = [t["proposal"]["packageName"] for t in result["tools"]]
-        self.assertIn("ESPRESSO", names)
+    def test_known_aliases_map_case_insensitively_to_legacy(self):
+        mode, roles, issues = folderstandard.detect_structure(
+            ["Data/x.csv", "Figures_Tables/f.png", "Plot_Scripts/p.py",
+             "Doc/readme.md"],
+            ["Data", "Figures_Tables", "Plot_Scripts", "Doc"])
+        self.assertEqual("legacy", mode)
         self.assertEqual(
-            "7.2",
-            [t for t in result["tools"]
-             if t["proposal"]["packageName"] == "ESPRESSO"][0]
-            ["proposal"]["version"])
+            {"Data": "datasets", "Figures_Tables": "charts",
+             "Plot_Scripts": "scripts", "Doc": "docs"}, roles)
+        # The mapping is explained, and nothing is renamed on the server.
+        self.assertTrue(issues)
+        self.assertTrue(any("Nothing on the file server is renamed"
+                            in issue["reason"] for issue in issues))
 
-    def test_prose_without_a_version_marker_is_not_a_tool(self):
-        result = curation.analyze_folder_tree(
-            ["README.md"], [],
-            {"README.md": "We ran 500 steps using our code on 64 cores."})
-        self.assertEqual([], result["tools"])
+    def test_the_known_acs_folder_enters_legacy_mode(self):
+        # acs.nanolett.7b00283 in the public corpus.
+        mode, roles, _ = folderstandard.detect_structure(
+            ["data/a.dat", "doc/notes.md", "figures_tables/f.png",
+             "scripts/s.py"],
+            ["data", "doc", "figures_tables", "scripts"])
+        self.assertEqual("legacy", mode)
+        self.assertEqual("datasets", roles["data"])
+        self.assertEqual("charts", roles["figures_tables"])
+        self.assertEqual("scripts", roles["scripts"])
+        self.assertEqual("docs", roles["doc"])
 
-    def test_notebook_needs_same_folder_and_basename_and_shows_why(self):
-        for chart in self.result["charts"]:
-            self.assertEqual("", chart["proposal"]["notebookFile"])
+    def test_an_unknown_root_is_invalid_not_a_guess(self):
+        mode, _, issues = folderstandard.detect_structure(
+            ["datasets/a/x.csv", "mystery_stuff/y.png"],
+            ["datasets", "datasets/a", "mystery_stuff"])
+        self.assertEqual("invalid", mode)
+        self.assertEqual(["mystery_stuff"], [i["path"] for i in issues])
 
-        # Same directory AND same basename: strong and explainable.
-        with_nb = curation.analyze_folder_tree(
-            ["figures/figure1.png", "figures/figure1.ipynb"], [], {})
-        chart = with_nb["charts"][0]
-        self.assertEqual("figures/figure1.ipynb",
-                         chart["proposal"]["notebookFile"])
-        self.assertTrue(any("same folder with the same basename" in line
-                            for line in chart["evidence"]))
+    def test_a_flat_folder_of_loose_files_is_invalid(self):
+        mode, _, issues = folderstandard.detect_structure(
+            ["a.csv", "b.png", "c.py"], [])
+        self.assertEqual("invalid", mode)
+        self.assertIn("no top-level directories", issues[0]["reason"])
 
-        # Same basename in a DIFFERENT folder is a coincidence, not evidence.
-        elsewhere = curation.analyze_folder_tree(
-            ["figures/figure1.png", "notebooks/figure1.ipynb"], [], {})
-        self.assertEqual(
-            "", elsewhere["charts"][0]["proposal"]["notebookFile"])
-
-    def test_datasets_keep_exact_files_but_no_generated_description(self):
-        datasets = {d["proposal"]["files"][0].rsplit("/", 1)[0]: d
-                    for d in self.result["datasets"]}
-        traj = datasets["data/short_traj"]
-        # The file list is real evidence and is kept exactly.
-        self.assertEqual(["data/short_traj/traj_1.xyz",
-                          "data/short_traj/traj_2.xyz"],
-                         traj["proposal"]["files"])
-        # The description is not: "Files from <path>" says nothing while
-        # looking like a curator wrote it.
-        self.assertEqual("", traj["proposal"]["readme"])
-        self.assertIn("readme", traj["needs_input"])
-        for dataset in self.result["datasets"]:
-            self.assertNotIn("Files from", dataset["proposal"]["readme"])
-        # The same fact is still reported, as evidence.
-        self.assertTrue(any("data/short_traj" in line
-                            for line in traj["evidence"]))
-        # Never an invented URL.
-        self.assertEqual([], traj["proposal"]["URLs"])
-
-    def test_a_docstring_is_evidence_not_a_silent_description(self):
-        scripts = {s["proposal"]["files"][0]: s
-                   for s in self.result["scripts"]}
-        documented = scripts["scripts/plot_vdos.py"]
-        # The docstring is shown to the curator...
-        self.assertTrue(any("Plot the vibrational density of states." in line
-                            for line in documented["evidence"]))
-        # ...but it does not become the record's description on its own.
-        self.assertEqual("", documented["proposal"]["readme"])
-        self.assertIn("readme", documented["needs_input"])
-
-        undocumented = scripts["scripts/compute_dipoles.py"]
-        self.assertEqual("", undocumented["proposal"]["readme"])
-        self.assertNotIn("Script compute_dipoles.py",
-                         undocumented["proposal"]["readme"])
-        self.assertIn("readme", undocumented["needs_input"])
-        self.assertTrue(any("No docstring" in line
-                            for line in undocumented["evidence"]))
-
-    def test_tools_only_from_pinned_manifest_entries(self):
-        tools = {t["proposal"]["packageName"]: t for t in self.result["tools"]}
-        self.assertEqual({"numpy", "matplotlib"}, set(tools))
-        self.assertEqual("1.26.4", tools["numpy"]["proposal"]["version"])
-        # scipy>=1.10 is not an exact version -> not a tool.
-        self.assertNotIn("scipy", tools)
-        for tool in self.result["tools"]:
-            self.assertEqual("", tool["proposal"]["executableName"])
-            self.assertEqual("", tool["proposal"]["urls"])
-            self.assertEqual([], tool["proposal"]["patches"])
-
-    def test_python_imports_are_a_hint_never_a_tool(self):
-        result = curation.analyze_folder_tree(
-            ["scripts/a.py"], [], {"scripts/a.py": "import ase\nimport numpy"})
-        self.assertEqual([], result["tools"])
-        self.assertIn("ase", result["possible_dependencies"])
-
-    def test_no_experiment_records_are_inferred(self):
-        self.assertNotIn("experiments", self.result)
-        for group in ("charts", "datasets", "scripts", "tools"):
-            for candidate in self.result[group]:
-                self.assertNotIn("experiment", candidate["kind"])
-
-    def test_patches_only_from_real_patch_files(self):
-        result = curation.analyze_folder_tree(
-            ["requirements.txt", "fix.patch", "notes.txt"], [],
-            {"requirements.txt": "numpy==1.0\n"})
-        self.assertEqual(["fix.patch"],
-                         result["tools"][0]["proposal"]["patches"])
-
-    def test_manifests_and_readmes_are_not_datasets(self):
-        dataset_files = [f for d in self.result["datasets"]
-                         for f in d["proposal"]["files"]]
-        self.assertNotIn("requirements.txt", dataset_files)
-        self.assertNotIn("README.md", dataset_files)
-
-    def test_every_candidate_carries_evidence_and_a_stable_id(self):
-        ids = []
-        for group in ("charts", "datasets", "scripts", "tools"):
-            for candidate in self.result[group]:
-                self.assertTrue(candidate["evidence"])
-                self.assertTrue(candidate["paths"])
-                ids.append(candidate["id"])
-        self.assertEqual(len(ids), len(set(ids)))
-
-    def test_related_chart_files_are_conservative(self):
-        result = curation.analyze_folder_tree(
-            ["figure1.png", "figure1.csv", "unrelated_data.csv"], [], {})
-        self.assertEqual(["figure1.csv"],
-                         result["charts"][0]["proposal"]["files"])
+    def test_new_artifact_ids_must_be_url_safe(self):
+        for good in ("figure_01", "bandgap-2", "d.1", "A9"):
+            self.assertTrue(folderstandard.validate_artifact_id(good), good)
+        for bad in ("has space", "a/b", "a?b", "a#b", "", None):
+            self.assertFalse(folderstandard.validate_artifact_id(bad), bad)
 
 
-class TestFolderRoles(CurationTestBase):
-    """A file's meaning depends on WHERE it sits, not just its extension."""
+class TestRecordBoundaries(CurationTestBase):
+    """One immediate child of a role directory is ONE Qresp record."""
 
-    def test_roles_are_suggested_from_directory_names(self):
-        suggested = curation.suggest_folder_roles(
-            ["figures_tables/f.png", "data/x.csv", "scripts/a.py",
-             "doc/index.png", "weird_name/z.dat"],
-            ["figures_tables", "data", "scripts", "doc", "weird_name"])
-        self.assertEqual("figures", suggested["figures_tables"])
-        self.assertEqual("datasets", suggested["data"])
-        self.assertEqual("scripts", suggested["scripts"])
-        self.assertEqual("documentation", suggested["doc"])
-        # Unrecognized names are never guessed into a productive role.
-        self.assertEqual("unclassified", suggested["weird_name"])
-        self.assertEqual("unclassified", suggested[""])
+    STANDARD_FILES = [
+        "datasets/bandgap/values.csv",
+        "datasets/bandgap/runs/run1/out.dat",
+        "datasets/bandgap/runs/run2/out.dat",
+        "datasets/single.csv",
+        "charts/figure_01/preview.png",
+        "charts/figure_01/notebook.ipynb",
+        "charts/figure_01/data/points.csv",
+        "scripts/analysis/analyze.py",
+        "scripts/analysis/helper.py",
+        "scripts/plot.py",
+        "docs/guide.md",
+        "docs/img/logo.png",
+        "README.md",
+        "main.ipynb",
+    ]
+    STANDARD_DIRS = [
+        "datasets", "datasets/bandgap", "datasets/bandgap/runs",
+        "datasets/bandgap/runs/run1", "datasets/bandgap/runs/run2",
+        "charts", "charts/figure_01", "charts/figure_01/data",
+        "scripts", "scripts/analysis", "docs", "docs/img",
+    ]
 
-    def test_documentation_subtrees_produce_nothing(self):
-        files = ["doc/architecture.png", "doc/guide.ipynb", "doc/setup.py",
-                 "doc/sample.csv"]
-        result = curation.analyze_folder_tree(files, ["doc"], {})
-        self.assertEqual([], result["charts"])
-        self.assertEqual([], result["datasets"])
-        self.assertEqual([], result["scripts"])
-        self.assertEqual([], result["tools"])
-        # Still visible, never silently dropped.
-        for path in files:
-            self.assertIn(path, result["unclassified"])
+    def analyze(self):
+        return curation.analyze_folder_tree(
+            self.STANDARD_FILES, self.STANDARD_DIRS, {})
 
-    def test_scripts_under_a_dataset_role_are_not_script_candidates(self):
-        result = curation.analyze_folder_tree(
-            ["data/run.sh", "data/prepare.py", "data/notes.ipynb",
-             "data/values.csv"],
-            ["data"], {})
-        self.assertEqual([], result["scripts"])
-        # The data file is still a dataset.
-        self.assertEqual(["data/values.csv"],
-                         result["datasets"][0]["proposal"]["files"])
-        self.assertIn("data/run.sh", result["unclassified"])
+    def test_a_dataset_folder_is_one_candidate_carrying_its_path(self):
+        result = self.analyze()
+        by_files = [c["proposal"]["files"] for c in result["datasets"]]
+        # The folder, not its 3 descendants.
+        self.assertIn(["datasets/bandgap"], by_files)
+        # A direct file under datasets/ is also one dataset.
+        self.assertIn(["datasets/single.csv"], by_files)
+        self.assertEqual(2, len(result["datasets"]))
 
-    def test_data_files_under_a_script_role_are_not_dataset_candidates(self):
-        result = curation.analyze_folder_tree(
-            ["scripts/config.json", "scripts/table.csv", "scripts/run.py"],
-            ["scripts"], {})
-        self.assertEqual([], result["datasets"])
-        self.assertEqual(["scripts/run.py"],
-                         result["scripts"][0]["proposal"]["files"])
-        self.assertIn("scripts/config.json", result["unclassified"])
+    def test_nested_dataset_descendants_do_not_duplicate(self):
+        result = self.analyze()
+        paths = [f for c in result["datasets"] for f in c["proposal"]["files"]]
+        for nested in ("datasets/bandgap/runs",
+                       "datasets/bandgap/runs/run1",
+                       "datasets/bandgap/runs/run1/out.dat"):
+            self.assertNotIn(nested, paths)
+        # The curator is told how to split them if they want to.
+        bandgap = [c for c in result["datasets"]
+                   if c["proposal"]["files"] == ["datasets/bandgap"]][0]
+        self.assertTrue(any("place them as siblings" in line
+                            for line in bandgap["evidence"]))
 
-    def test_static_assets_are_never_charts(self):
-        result = curation.analyze_folder_tree(
-            ["figures/logo.png", "figures/toc_graphic.png",
-             "figures/site-icon.png", "figures/bandgap.png"],
-            ["figures"], {})
-        images = [c["proposal"]["imageFile"] for c in result["charts"]]
-        self.assertEqual(["figures/bandgap.png"], images)
-        for asset in ("figures/logo.png", "figures/toc_graphic.png",
-                      "figures/site-icon.png"):
-            self.assertIn(asset, result["unclassified"])
-
-    def test_a_confirmed_role_overrides_the_suggestion_for_this_run_only(self):
-        files = ["gallery/plot.png"]
-        # Suggested: unclassified -> a low-confidence chart.
-        default = curation.analyze_folder_tree(files, ["gallery"], {})
-        self.assertEqual("low", default["charts"][0]["confidence"])
-        # Confirmed as documentation -> nothing at all.
-        as_docs = curation.analyze_folder_tree(
-            files, ["gallery"], {}, roles={"gallery": "documentation"})
-        self.assertEqual([], as_docs["charts"])
-        # Confirmed as figures -> a likely chart.
-        as_figures = curation.analyze_folder_tree(
-            files, ["gallery"], {}, roles={"gallery": "figures"})
-        self.assertEqual("medium", as_figures["charts"][0]["confidence"])
-        # And the suggestion itself is unchanged — nothing was remembered.
-        self.assertEqual(
-            "unclassified",
-            curation.suggest_folder_roles(files, ["gallery"])["gallery"])
-
-    def test_unknown_directories_and_roles_in_the_request_are_ignored(self):
-        suggested = curation.suggest_folder_roles(["data/x.csv"], ["data"])
-        roles = curation.normalize_roles(
-            {"data": "figures", "../etc": "scripts", "data2": "datasets",
-             "": "not-a-role"}, suggested)
-        self.assertEqual("figures", roles["data"])
-        self.assertNotIn("../etc", roles)
-        self.assertNotIn("data2", roles)
-        self.assertEqual("unclassified", roles[""])
-
-    def test_an_irregular_legacy_folder_still_analyzes(self):
-        # No recognizable directory names at all.
-        result = curation.analyze_folder_tree(
-            ["stuff/a.png", "stuff/b.csv", "stuff/c.py"], ["stuff"], {})
-        self.assertTrue(result["charts"])
-        self.assertTrue(result["datasets"])
-        self.assertTrue(result["scripts"])
-        # ...but honestly labelled as extension-only guesses.
-        for group in ("charts", "datasets", "scripts"):
-            self.assertEqual("low", result[group][0]["confidence"])
-
-
-class TestArtifactGrouping(CurationTestBase):
-    def test_a_named_figure_folder_becomes_ONE_chart(self):
-        files = [
-            "figures_tables/figure_2/figure_2.png",
-            "figures_tables/figure_2/homo.png",
-            "figures_tables/figure_2/lumo.png",
-            "figures_tables/figure_2/rdos_pb.png",
-            "figures_tables/figure_2/figure_2.ipynb",
-        ]
-        result = curation.analyze_folder_tree(
-            files, ["figures_tables", "figures_tables/figure_2"], {})
-
+    def test_a_chart_folder_groups_preview_data_and_notebook(self):
+        result = self.analyze()
         self.assertEqual(1, len(result["charts"]))
         chart = result["charts"][0]
-        self.assertEqual("figures_tables/figure_2/figure_2.png",
+        self.assertEqual("charts/figure_01/preview.png",
                          chart["proposal"]["imageFile"])
-        # The panels ride along as associated files, not four more Charts.
-        for panel in ("homo.png", "lumo.png", "rdos_pb.png"):
-            self.assertTrue(
-                any(panel in f for f in chart["proposal"]["files"]), panel)
-        self.assertTrue(any("kept as associated files" in line
-                            for line in chart["evidence"]))
-        # The notebook is the chart's, not a Script.
-        self.assertEqual("figures_tables/figure_2/figure_2.ipynb",
+        self.assertEqual(["charts/figure_01/data"], chart["proposal"]["files"])
+        self.assertEqual("charts/figure_01/notebook.ipynb",
                          chart["proposal"]["notebookFile"])
-        self.assertEqual([], result["scripts"])
-        # Still no invented figure number or caption.
+        # Still never invented.
         self.assertEqual("", chart["proposal"]["number"])
         self.assertEqual("", chart["proposal"]["caption"])
+        self.assertEqual([], chart["proposal"]["properties"])
 
-    def test_a_flat_figures_folder_keeps_one_chart_per_image(self):
-        result = curation.analyze_folder_tree(
-            ["figures/bandgap.png", "figures/dos.png"], ["figures"], {})
-        self.assertEqual(
-            ["figures/bandgap.png", "figures/dos.png"],
-            sorted(c["proposal"]["imageFile"] for c in result["charts"]))
+    def test_a_script_folder_is_one_record_and_a_loose_file_is_another(self):
+        result = self.analyze()
+        by_files = [c["proposal"]["files"] for c in result["scripts"]]
+        self.assertIn(["scripts/analysis"], by_files)
+        self.assertIn(["scripts/plot.py"], by_files)
+        self.assertEqual(2, len(result["scripts"]))
 
-    def test_several_unnamed_images_outside_a_figures_role_are_not_guessed(self):
-        result = curation.analyze_folder_tree(
-            ["misc/a.png", "misc/b.png", "misc/c.png"], ["misc"], {})
-        self.assertEqual([], result["charts"])
-        for path in ("misc/a.png", "misc/b.png", "misc/c.png"):
-            self.assertIn(path, result["unclassified"])
-        self.assertIn("misc/a.png", result["ungrouped_images"])
+    def test_docs_produce_no_candidates_and_no_unclassified_noise(self):
+        result = self.analyze()
+        everything = (result["charts"] + result["datasets"]
+                      + result["scripts"] + result["tools"])
+        for candidate in everything:
+            for path in candidate["paths"]:
+                self.assertFalse(path.startswith("docs/"), path)
+        self.assertEqual(0, result["unclassified_total"])
 
-    def test_a_notebook_that_belongs_to_no_chart_is_a_hint(self):
+    def test_python_under_a_dataset_root_is_not_a_script(self):
         result = curation.analyze_folder_tree(
-            ["exploratory.ipynb", "scripts/analysis.ipynb"],
-            ["scripts"], {})
+            ["data/set1/prepare.py", "data/set1/values.csv"],
+            ["data", "data/set1"], {})
         self.assertEqual([], result["scripts"])
-        self.assertIn("exploratory.ipynb", result["notebook_hints"])
-        self.assertIn("scripts/analysis.ipynb", result["notebook_hints"])
+        self.assertEqual(["data/set1"],
+                         result["datasets"][0]["proposal"]["files"])
 
-    def test_classification_confidence_is_not_file_existence(self):
+    def test_csv_under_a_script_root_is_not_a_dataset(self):
         result = curation.analyze_folder_tree(
-            ["figures/bandgap.png"], ["figures"], {})
-        chart = result["charts"][0]
-        # The artifact is at best "likely"...
-        self.assertEqual("medium", chart["confidence"])
-        # ...while the FILE path itself is certain.
-        self.assertEqual("high", chart["field_evidence"]["imageFile"])
-        self.assertEqual("needs_input", chart["field_evidence"]["number"])
+            ["scripts/job/table.csv", "scripts/job/run.py"],
+            ["scripts", "scripts/job"], {})
+        self.assertEqual([], result["datasets"])
+        self.assertEqual(["scripts/job"],
+                         result["scripts"][0]["proposal"]["files"])
+
+    def test_a_tool_folder_leaves_package_and_version_blank_without_evidence(self):
+        result = curation.analyze_folder_tree(
+            ["tools/west/patches/a.patch", "tools/west/README.md"],
+            ["tools", "tools/west", "tools/west/patches"], {})
+        tool = result["tools"][0]
+        self.assertEqual("", tool["proposal"]["packageName"])
+        self.assertEqual("", tool["proposal"]["version"])
+        self.assertIn("packageName", tool["needs_input"])
+        self.assertEqual(["tools/west/patches/a.patch"],
+                         tool["proposal"]["patches"])
+
+    def test_a_tool_folder_uses_an_explicit_declaration_when_present(self):
+        result = curation.analyze_folder_tree(
+            ["tools/west/README.md"], ["tools", "tools/west"],
+            {"tools/west/README.md": "Run with WEST v5.0.0"})
+        tool = result["tools"][0]
+        self.assertEqual("WEST", tool["proposal"]["packageName"])
+        self.assertEqual("5.0.0", tool["proposal"]["version"])
+
+    def test_optional_root_files_are_not_a_problem(self):
+        result = self.analyze()
+        self.assertEqual(0, result["unclassified_total"])
+        self.assertEqual("standard", result["structure_mode"])
+
+
+class TestLegacyMode(CurationTestBase):
+    def test_legacy_aliases_produce_boundary_candidates(self):
+        files = ["Data/set_a/x.dat", "Figures_Tables/fig1/preview.png",
+                 "Plot_Scripts/plot.py", "Doc/manual.md"]
+        dirs = ["Data", "Data/set_a", "Figures_Tables",
+                "Figures_Tables/fig1", "Plot_Scripts", "Doc"]
+        result = curation.analyze_folder_tree(files, dirs, {})
+        self.assertEqual("legacy", result["structure_mode"])
+        self.assertEqual(["Data/set_a"],
+                         result["datasets"][0]["proposal"]["files"])
+        self.assertEqual("Figures_Tables/fig1/preview.png",
+                         result["charts"][0]["proposal"]["imageFile"])
+        self.assertEqual(["Plot_Scripts/plot.py"],
+                         result["scripts"][0]["proposal"]["files"])
+
+    def test_legacy_offers_a_bounded_boundary_tree_for_data_and_scripts(self):
+        files = ["data/%s/x.dat" % name for name in ("a", "b", "c")]
+        files += ["data/a/nested/y.dat", "scripts/s/run.py"]
+        dirs = ["data", "data/a", "data/a/nested", "data/b", "data/c",
+                "scripts", "scripts/s"]
+        result = curation.analyze_folder_tree(files, dirs, {})
+        trees = result["boundary_trees"]
+        self.assertIn("data", trees)
+        self.assertIn("scripts", trees)
+        self.assertEqual("datasets", trees["data"]["role"])
+        paths = [node["path"] for node in trees["data"]["nodes"]]
+        self.assertIn("data/a", paths)
+        self.assertIn("data/a/nested", paths)
+        # Every node carries a count, not a file list.
+        for node in trees["data"]["nodes"]:
+            self.assertIn("file_count", node)
+            self.assertLessEqual(len(node["sample_names"]),
+                                 folderstandard.MAX_NAMES_PER_GROUP)
+
+    def test_the_acs_folder_does_not_explode_into_unclassified(self):
+        files = (["data/run%02d/out.dat" % i for i in range(40)]
+                 + ["figures_tables/fig1/preview.png"]
+                 + ["scripts/plot.py"]
+                 + ["doc/notes.md"])
+        dirs = (["data"] + ["data/run%02d" % i for i in range(40)]
+                + ["figures_tables", "figures_tables/fig1", "scripts", "doc"])
+        result = curation.analyze_folder_tree(files, dirs, {})
+        self.assertEqual("legacy", result["structure_mode"])
+        # 40 dataset records (one per immediate child), not 40 raw files.
+        self.assertEqual(40, len(result["datasets"]))
+        self.assertEqual(0, result["unclassified_total"])
+        self.assertEqual([], result["grouped_unclassified"])
+
+
+class TestNeedsReorganization(CurationTestBase):
+    def test_unknown_roots_produce_grouped_rows_and_no_candidates(self):
+        files = ["mystery/%d.png" % i for i in range(120)]
+        files += ["mystery/deep/a.csv", "datasets/d/x.csv"]
+        dirs = ["mystery", "mystery/deep", "datasets", "datasets/d"]
+        result = curation.analyze_folder_tree(files, dirs, {})
+
+        self.assertEqual("invalid", result["structure_mode"])
+        # No extension-based guessing at all.
+        for group in ("charts", "datasets", "scripts", "tools"):
+            self.assertEqual([], result[group], group)
+        # ONE grouped row for the unsupported root, not 121 file entries.
+        rows = result["grouped_unclassified"]
+        self.assertEqual(["mystery"], [row["path"] for row in rows])
+        row = rows[0]
+        self.assertEqual(121, row["file_count"])
+        self.assertIn(".png", row["extensions"])
+        self.assertLessEqual(len(row["sample_names"]),
+                             folderstandard.MAX_NAMES_PER_GROUP)
+        self.assertIn("not a layout Qresp", row["reason"])
+        # The raw list is never returned.
+        self.assertEqual([], result["unclassified"])
+
+
+class TestGroupedUnclassified(CurationTestBase):
+    def test_rows_are_grouped_bounded_and_counted(self):
+        leftover = ["a/%d.txt" % i for i in range(60)] + ["b/x.dat"]
+        rows = folderstandard.group_unclassified(leftover, leftover)
+        self.assertEqual(["a", "b"], sorted(row["path"] for row in rows))
+        row_a = [r for r in rows if r["path"] == "a"][0]
+        self.assertEqual(60, row_a["file_count"])
+        self.assertEqual([".txt"], row_a["extensions"])
+        # Names only as a bounded sample, never the whole list.
+        self.assertEqual(folderstandard.MAX_NAMES_PER_GROUP,
+                         len(row_a["sample_names"]))
+
+    def test_the_row_count_itself_is_bounded(self):
+        leftover = ["f%03d/x.txt" % i for i in range(400)]
+        rows = folderstandard.group_unclassified(leftover, leftover)
+        self.assertLessEqual(len(rows), folderstandard.MAX_GROUP_ROWS)
 
 
 class TestAnalyzeFolderResponse(CurationTestBase):
@@ -725,12 +612,20 @@ class TestAnalyzeFolderResponse(CurationTestBase):
         body = response.json()
         self.assertEqual(FOLDER, body["root"])
         self.assertFalse(body["truncated"])
+        # data/ + figures/ + scripts/ are known aliases -> legacy mode.
+        self.assertEqual("legacy", body["structure_mode"])
+        self.assertEqual("datasets", body["normalized_roles"]["data"])
+        self.assertEqual("charts", body["normalized_roles"]["figures"])
         candidates = body["candidates"]
+        # Two loose images directly under figures/ -> two charts.
         self.assertEqual(2, len(candidates["charts"]))
-        self.assertEqual(2, len(candidates["tools"]))
         self.assertEqual(2, len(candidates["scripts"]))
-        self.assertTrue(candidates["datasets"])
-        self.assertIn("unclassified", candidates)
+        # Five immediate children of data/ -> five datasets, not 6 raw files.
+        self.assertEqual(5, len(candidates["datasets"]))
+        # Tools now come only from a tools/ role folder; a root
+        # requirements.txt is not one.
+        self.assertEqual([], candidates["tools"])
+        self.assertIn("grouped_unclassified", candidates)
         self.assertEqual(body["counts"]["files"], len(self.all_files()))
 
     def all_files(self):
@@ -750,12 +645,9 @@ class TestAnalyzeFolderResponse(CurationTestBase):
     def test_paths_are_relative_and_filetree_compatible(self):
         self.login()
         response, _, _ = self.analyze()
-        for group in response.json()["candidates"].values():
-            if not isinstance(group, list):
-                continue
-            for candidate in group:
-                if not isinstance(candidate, dict):
-                    continue
+        candidates = response.json()["candidates"]
+        for key in ("charts", "datasets", "scripts", "tools"):
+            for candidate in candidates[key]:
                 for path in candidate["paths"]:
                     self.assertFalse(path.startswith("/"), path)
                     self.assertNotIn("://", path)

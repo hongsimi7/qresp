@@ -1,0 +1,304 @@
+"""Qresp Folder Standard v1: structure detection and record boundaries.
+
+Why this exists
+---------------
+The analyzer used to walk the whole tree and turn every matching FILE into a
+candidate. On a real paper folder that produces hundreds of Charts, Scripts
+and "Unclassified" rows, which is worse than no help at all.
+
+A paper folder already carries the answer in its shape. One immediate child
+of a role directory is ONE Qresp record, and everything beneath that child
+belongs to it. So instead of guessing per file, we:
+
+  1. decide whether the folder follows the standard, a known legacy layout,
+     or neither;
+  2. take record boundaries from immediate children;
+  3. report anything we will not classify as GROUPED folder rows, never as a
+     list of every path.
+
+Nothing here fetches, writes, renames or migrates anything. It operates on a
+relative-path inventory the caller already has, and every path it returns
+stays relative to the selected paper root.
+"""
+import posixpath
+import re
+
+# ---- the standard ------------------------------------------------------------
+
+ROLE_DATASETS = "datasets"
+ROLE_CHARTS = "charts"
+ROLE_SCRIPTS = "scripts"
+ROLE_TOOLS = "tools"
+ROLE_DOCS = "docs"
+
+# The ONLY names a newly organized paper may use, exactly, in lower case.
+STANDARD_ROLES = (ROLE_DATASETS, ROLE_CHARTS, ROLE_SCRIPTS, ROLE_TOOLS,
+                  ROLE_DOCS)
+
+# Legacy names seen across the public corpus (63 RCC paper folders). Matched
+# case-insensitively. Adding a name here is the ONLY thing needed to support
+# another historical layout — no path is ever renamed on the server.
+LEGACY_ALIASES = {
+    ROLE_DATASETS: (
+        "data", "datasets", "dataset", "raw_data", "rawdata", "raw-data",
+        "data_files", "datafiles",
+    ),
+    ROLE_CHARTS: (
+        "charts", "chart", "figures_tables", "figures-tables", "figurestables",
+        "figures", "figure", "figs", "fig", "plots",
+    ),
+    ROLE_SCRIPTS: (
+        "scripts", "script", "plot_scripts", "plotscripts",
+        "postprocessing_scripts", "postprocessingscripts", "code", "codes",
+        "src",
+    ),
+    ROLE_DOCS: (
+        "doc", "docs", "documentation", "tutorials", "tutorial", "manual",
+    ),
+    ROLE_TOOLS: ("tools", "tool", "software"),
+}
+
+# Root files that are expected and never a structure problem.
+OPTIONAL_ROOT_FILES = ("main.ipynb", "readme.md", "readme", "readme.txt",
+                       "readme.rst", "license", "license.txt", "license.md")
+
+CHART_PREVIEW_EXTENSIONS = (".png", ".jpeg", ".jpg", ".gif")
+CHART_PREVIEW_STEM = "preview"
+CHART_NOTEBOOK = "notebook.ipynb"
+CHART_DATA_DIR = "data"
+
+# A new artifact id must be safe in a URL and readable in a path.
+ARTIFACT_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+MODE_STANDARD = "standard"
+MODE_LEGACY = "legacy"
+MODE_INVALID = "invalid"
+
+# Grouped reporting caps. These bound the RESPONSE, not the crawl.
+MAX_GROUP_ROWS = 200
+MAX_NAMES_PER_GROUP = 20
+MAX_TREE_NODES = 200
+
+
+def _normalized(name):
+    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
+
+def _alias_lookup():
+    table = {}
+    for role, names in LEGACY_ALIASES.items():
+        for name in names:
+            table[_normalized(name)] = role
+    return table
+
+
+ALIAS_TABLE = _alias_lookup()
+
+
+def top_level_dirs(files, dirs):
+    """Top-level directory names present in the inventory."""
+    tops = set()
+    for path in list(dirs) + list(files):
+        if "/" in path:
+            tops.add(path.split("/", 1)[0])
+    return sorted(tops)
+
+
+def root_files(files):
+    return sorted(path for path in files if "/" not in path)
+
+
+def detect_structure(files, dirs):
+    """Decide the analysis mode and map productive roots to roles.
+
+    Returns (mode, roles, issues) where `roles` maps an ACTUAL top-level
+    directory name to a standard role. Directories are never renamed; the
+    mapping only tells the analyzer how to read them.
+    """
+    tops = top_level_dirs(files, dirs)
+    roles = {}
+    unknown = []
+
+    for top in tops:
+        if top in STANDARD_ROLES:
+            roles[top] = top
+            continue
+        role = ALIAS_TABLE.get(_normalized(top))
+        if role:
+            roles[top] = role
+        else:
+            unknown.append(top)
+
+    issues = []
+    if not tops:
+        # A flat folder of loose files: nothing to take a boundary from.
+        return MODE_INVALID, {}, [{
+            "path": "",
+            "reason": "This folder has no top-level directories, so Qresp "
+                      "cannot tell datasets from charts or scripts.",
+        }]
+
+    if unknown:
+        return MODE_INVALID, roles, [
+            {"path": name,
+             "reason": "Not a Qresp Folder Standard role (datasets, charts, "
+                       "scripts, tools, docs) and not a layout Qresp "
+                       "recognizes."}
+            for name in unknown
+        ]
+
+    # Every productive root is known. Standard only when every one of them is
+    # already the exact lowercase name.
+    if all(top == role for top, role in roles.items()):
+        mode = MODE_STANDARD
+    else:
+        mode = MODE_LEGACY
+        issues = [
+            {"path": top,
+             "reason": "Read as %s (Qresp Folder Standard name: %s). Nothing "
+                       "on the file server is renamed." % (role, role)}
+            for top, role in sorted(roles.items()) if top != role
+        ]
+    return mode, roles, issues
+
+
+def validate_artifact_id(name):
+    """True when a name is safe as a NEW artifact directory name."""
+    return bool(name) and bool(ARTIFACT_ID_RE.match(name))
+
+
+# ---- boundaries ---------------------------------------------------------------
+
+def _children_of(root, files, dirs):
+    """Immediate children of a top-level directory: (folders, files)."""
+    prefix = root + "/"
+    child_dirs, child_files = set(), []
+    for path in dirs:
+        if path.startswith(prefix):
+            child_dirs.add(prefix + path[len(prefix):].split("/", 1)[0])
+    for path in files:
+        if not path.startswith(prefix):
+            continue
+        rest = path[len(prefix):]
+        if "/" in rest:
+            child_dirs.add(prefix + rest.split("/", 1)[0])
+        else:
+            child_files.append(path)
+    return sorted(child_dirs), sorted(child_files)
+
+
+def descendants_of(folder, files):
+    prefix = folder + "/"
+    return [path for path in files if path.startswith(prefix)]
+
+
+def summarize_folder(folder, files):
+    """A grouped row: what is in here, without listing everything."""
+    contents = descendants_of(folder, files)
+    extensions = {}
+    for path in contents:
+        ext = posixpath.splitext(path)[1].lower() or "(no extension)"
+        extensions[ext] = extensions.get(ext, 0) + 1
+    common = sorted(extensions.items(), key=lambda kv: (-kv[1], kv[0]))
+    return {
+        "path": folder,
+        "name": posixpath.basename(folder) or folder,
+        "file_count": len(contents),
+        "extensions": [ext for ext, _ in common[:6]],
+        # Names are for an EXPANDED row only, and bounded.
+        "sample_names": [posixpath.basename(p) for p in contents[:MAX_NAMES_PER_GROUP]],
+    }
+
+
+def boundary_tree(root, files, dirs, depth=2):
+    """A compact, selectable tree for choosing record boundaries by hand.
+
+    Only folders, only a couple of levels, each with a file count — enough to
+    answer "is this one dataset or several?" without rendering the corpus.
+    """
+    nodes = []
+    prefix = root + "/"
+    seen = set()
+    for path in sorted(set(dirs)):
+        if not path.startswith(prefix):
+            continue
+        relative = path[len(prefix):]
+        level = relative.count("/") + 1
+        if level > depth or path in seen:
+            continue
+        seen.add(path)
+        summary = summarize_folder(path, files)
+        summary["level"] = level
+        summary["parent"] = posixpath.dirname(path)
+        nodes.append(summary)
+        if len(nodes) >= MAX_TREE_NODES:
+            break
+    return nodes
+
+
+def group_unclassified(paths, files):
+    """Grouped folder rows instead of a list of every path."""
+    buckets = {}
+    for path in paths:
+        folder = posixpath.dirname(path)
+        buckets.setdefault(folder, []).append(path)
+    rows = []
+    for folder, members in sorted(buckets.items()):
+        extensions = {}
+        for path in members:
+            ext = posixpath.splitext(path)[1].lower() or "(no extension)"
+            extensions[ext] = extensions.get(ext, 0) + 1
+        common = sorted(extensions.items(), key=lambda kv: (-kv[1], kv[0]))
+        rows.append({
+            "path": folder,
+            "name": folder or "folder root",
+            "file_count": len(members),
+            "extensions": [ext for ext, _ in common[:6]],
+            "sample_names": [posixpath.basename(p)
+                             for p in members[:MAX_NAMES_PER_GROUP]],
+        })
+    rows.sort(key=lambda row: (-row["file_count"], row["path"]))
+    return rows[:MAX_GROUP_ROWS]
+
+
+def chart_parts(folder, files):
+    """preview / data / notebook inside one charts/<child> folder."""
+    contents = descendants_of(folder, files)
+    preview = ""
+    for path in contents:
+        name = posixpath.basename(path).lower()
+        stem, ext = posixpath.splitext(name)
+        if stem == CHART_PREVIEW_STEM and ext in CHART_PREVIEW_EXTENSIONS:
+            preview = path
+            break
+    if not preview:
+        # A single image directly in the folder is an acceptable stand-in.
+        images = [p for p in contents
+                  if posixpath.splitext(p)[1].lower() in CHART_PREVIEW_EXTENSIONS
+                  and posixpath.dirname(p) == folder]
+        if len(images) == 1:
+            preview = images[0]
+
+    notebook = ""
+    for path in contents:
+        if posixpath.basename(path).lower() == CHART_NOTEBOOK:
+            notebook = path
+            break
+    if not notebook:
+        notebooks = [p for p in contents
+                     if p.lower().endswith(".ipynb")
+                     and posixpath.dirname(p) == folder]
+        if len(notebooks) == 1:
+            notebook = notebooks[0]
+
+    data_dir = "%s/%s" % (folder, CHART_DATA_DIR)
+    if any(p.startswith(data_dir + "/") for p in contents):
+        data = [data_dir]
+    else:
+        data = sorted(
+            p for p in contents
+            if p not in (preview, notebook)
+            and posixpath.dirname(p) == folder
+            and posixpath.splitext(p)[1].lower() not in CHART_PREVIEW_EXTENSIONS
+        )
+    return preview, data, notebook

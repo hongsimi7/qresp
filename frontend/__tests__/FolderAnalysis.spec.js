@@ -537,22 +537,19 @@ describe("Analyze RCC Folder", () => {
     expect(screen.getByRole("button", { name: "doc (1)" })).toBeInTheDocument();
   });
 
-  it("offers session-only folder roles and re-runs with them", async () => {
+  it("shows how the folder was read, and why", async () => {
     axios.post.mockResolvedValue({
       data: {
         ...analysis,
-        roles: { "": "unclassified", figures: "figures", doc: "documentation" },
-        suggested_roles: {
-          "": "unclassified",
-          figures: "figures",
-          doc: "documentation",
-        },
-        role_options: [
-          "figures",
-          "datasets",
-          "scripts",
-          "documentation",
-          "unclassified",
+        structure_mode: "legacy",
+        normalized_roles: { data: "datasets", figures_tables: "charts" },
+        structure_issues: [
+          {
+            path: "figures_tables",
+            reason:
+              "Read as charts (Qresp Folder Standard name: charts). Nothing " +
+              "on the file server is renamed.",
+          },
         ],
       },
     });
@@ -560,25 +557,28 @@ describe("Analyze RCC Folder", () => {
     renderWith();
     await openAnalysis(user);
 
-    await user.click(screen.getByRole("button", { name: /^folder roles$/i }));
-    expect(
-      await screen.findByText(/used for this analysis only and is never saved/i)
-    ).toBeInTheDocument();
+    const badge = screen.getByTestId("structure-mode");
+    expect(badge).toHaveTextContent("Legacy-compatible");
+    expect(badge).toHaveTextContent(/figures_tables: Read as charts/);
+    expect(badge).toHaveTextContent(/Nothing on the file server is renamed/);
+  });
 
-    // Change one role and re-run.
-    await user.click(screen.getByRole("combobox", { name: /^doc$/i }));
-    await user.click(await screen.findByRole("option", { name: /^datasets$/i }));
-    await user.click(
-      screen.getByRole("button", { name: /re-analyze with these roles/i })
-    );
-
-    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
-    expect(axios.post.mock.calls[1][1]).toEqual({
-      path: FOLDER,
-      roles: { doc: "datasets" },
+  it("flags a folder that needs reorganizing", async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        ...analysis,
+        structure_mode: "invalid",
+        structure_issues: [
+          { path: "mystery", reason: "Not a Qresp Folder Standard role." },
+        ],
+      },
     });
-    // The first call carried no roles at all: suggestions are the default.
-    expect(axios.post.mock.calls[0][1]).toEqual({ path: FOLDER });
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    expect(screen.getByTestId("structure-mode")).toHaveTextContent(
+      "Needs reorganization"
+    );
   });
 
   it("selects nothing by default and cannot apply until something is checked", async () => {

@@ -18,7 +18,6 @@ import {
   FormControlLabel,
   Grid,
   Tab,
-  MenuItem,
   Tabs,
   TextField,
   Tooltip,
@@ -176,15 +175,6 @@ const labelOf = (candidate) => {
 // suggestion can never earn it (see AI_TARGETS / the suggestion panel).
 const HIGH_EVIDENCE = "high";
 
-// What a folder holds, in the curator's words.
-const ROLE_LABELS = {
-  figures: "Figures",
-  datasets: "Datasets",
-  scripts: "Scripts",
-  documentation: "Documentation / Ignore",
-  unclassified: "Unclassified",
-};
-
 const EVIDENCE_LABELS = {
   high: "High evidence",
   medium: "Medium evidence",
@@ -229,8 +219,6 @@ const FolderAnalysis = ({ path }) => {
   const [detailsOpen, setDetailsOpen] = useState({});
   const [editOpen, setEditOpen] = useState({});
   const [showUnclassified, setShowUnclassified] = useState({});
-  const [rolesOpen, setRolesOpen] = useState(false);
-  const [roleEdits, setRoleEdits] = useState({});
   const [unclassifiedFilter, setUnclassifiedFilter] = useState("");
   const [tab, setTab] = useState(0);
   // Optional AI enrichment: a SEPARATE action over the candidates already
@@ -262,8 +250,6 @@ const FolderAnalysis = ({ path }) => {
     setEditOpen({});
     setShowUnclassified({});
     setUnclassifiedFilter("");
-    setRolesOpen(false);
-    setRoleEdits({});
     setTab(0);
     setAiConsent(false);
     setAiConsentOpen(false);
@@ -273,7 +259,7 @@ const FolderAnalysis = ({ path }) => {
     setShowAll({});
   };
 
-  const analyze = async (roles) => {
+  const analyze = async () => {
     setOpen(true);
     setLoading(true);
     setError("");
@@ -281,9 +267,6 @@ const FolderAnalysis = ({ path }) => {
     try {
       const response = await axios.post("/api/curation/analyze-folder", {
         path: target,
-        // Session-only: the server applies these to this run and stores
-        // nothing. Omitted on the first pass so the suggestions are used.
-        ...(roles && Object.keys(roles).length ? { roles } : {}),
       });
       const data = response.data || {};
       const initial = {};
@@ -825,7 +808,7 @@ const FolderAnalysis = ({ path }) => {
         }
       >
         <Box component="span" sx={{ display: "inline-flex" }}>
-          <RegularStyledButton onClick={() => analyze()} disabled={!ready}>
+          <RegularStyledButton onClick={analyze} disabled={!ready}>
             Analyze RCC Folder
           </RegularStyledButton>
         </Box>
@@ -872,66 +855,40 @@ const FolderAnalysis = ({ path }) => {
                   {warning}
                 </Alert>
               ))}
-              {/* Folder roles govern what a file can become. They are
-                  suggested from directory names, changeable here, and apply
-                  to THIS analysis only — nothing is stored and the RCC
-                  folder is never touched. */}
-              {Object.keys(analysis.roles || {}).length > 0 && (
-                <Box sx={{ mb: 2 }} data-testid="folder-roles">
-                  <Button
+              {/* How the folder was read. Derived from its shape by the
+                  Folder Standard validator — session-only, and nothing on
+                  the file server is renamed. */}
+              {analysis.structure_mode && (
+                <Box sx={{ mb: 2 }} data-testid="structure-mode">
+                  <Chip
                     size="small"
-                    onClick={() => setRolesOpen((value) => !value)}
-                    sx={{ textTransform: "none" }}
-                  >
-                    {rolesOpen ? "Hide folder roles" : "Folder roles"}
-                  </Button>
-                  <Collapse in={rolesOpen} unmountOnExit>
+                    color={
+                      analysis.structure_mode === "standard"
+                        ? "success"
+                        : analysis.structure_mode === "legacy"
+                        ? "info"
+                        : "warning"
+                    }
+                    label={
+                      analysis.structure_mode === "standard"
+                        ? "Qresp Standard"
+                        : analysis.structure_mode === "legacy"
+                        ? "Legacy-compatible"
+                        : "Needs reorganization"
+                    }
+                  />
+                  {(analysis.structure_issues || []).map((issue) => (
                     <Typography
+                      key={`${issue.path}-${issue.reason}`}
                       variant="caption"
                       color="text.secondary"
                       display="block"
-                      sx={{ mb: 1 }}
+                      sx={{ mt: 0.5 }}
                     >
-                      What each folder holds decides what its files can
-                      become. Change anything that looks wrong and re-run —
-                      this is used for this analysis only and is never saved.
+                      {issue.path ? `${issue.path}: ` : ""}
+                      {issue.reason}
                     </Typography>
-                    <Grid container spacing={1}>
-                      {Object.keys(analysis.roles)
-                        .sort()
-                        .map((folder) => (
-                          <Grid key={folder} size={{ xs: 12, sm: 6 }}>
-                            <TextField
-                              select
-                              fullWidth
-                              size="small"
-                              label={folder || "folder root"}
-                              value={roleEdits[folder] || analysis.roles[folder]}
-                              onChange={(event) =>
-                                setRoleEdits((current) => ({
-                                  ...current,
-                                  [folder]: event.target.value,
-                                }))
-                              }
-                            >
-                              {(analysis.role_options || []).map((option) => (
-                                <MenuItem key={option} value={option}>
-                                  {ROLE_LABELS[option] || option}
-                                </MenuItem>
-                              ))}
-                            </TextField>
-                          </Grid>
-                        ))}
-                    </Grid>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      sx={{ mt: 1 }}
-                      onClick={() => analyze(roleEdits)}
-                    >
-                      Re-analyze with these roles
-                    </Button>
-                  </Collapse>
+                  ))}
                 </Box>
               )}
               <Tabs

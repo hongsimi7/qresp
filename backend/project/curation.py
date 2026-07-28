@@ -34,6 +34,7 @@ from urllib.parse import unquote, urljoin, urlparse
 import requests
 from lxml import html
 
+from project import folderstandard as fs
 from project.auth import csrf_protect, get_current_user
 from project.assist import (
     _consume_daily_quota,
@@ -70,6 +71,8 @@ DATASET_EXTENSIONS = (
 SCRIPT_EXTENSIONS = (".py", ".ipynb", ".sh", ".bash", ".r", ".jl", ".m")
 NOTEBOOK_EXTENSIONS = (".ipynb",)
 PATCH_EXTENSIONS = (".patch", ".diff")
+# Genuinely runnable/source files. A README or CHANGELOG is never a script.
+RUNNABLE_EXTENSIONS = (".py", ".sh", ".bash", ".r", ".jl", ".m")
 
 MANIFEST_NAMES = (
     "requirements.txt", "requirements.lock.txt", "environment.yml",
@@ -81,114 +84,6 @@ README_NAMES = ("readme", "readme.md", "readme.txt", "readme.rst")
 # Manifest/readme names that are NOT dataset candidates even though the
 # extension matches.
 NON_DATASET_NAMES = set(MANIFEST_NAMES) | set(README_NAMES)
-
-# ---- folder roles ------------------------------------------------------------
-#
-# Classifying every file by its extension across the whole tree is what made
-# a documentation logo a "Chart" and a job script under data/ a "Script". A
-# real folder has STRUCTURE: a directory means something, and what a file is
-# depends on where it sits. Roles are suggested from directory names, shown
-# to the curator for confirmation, and applied for that analysis only —
-# nothing is stored, and an irregular folder simply gets UNCLASSIFIED and is
-# still analyzed.
-
-ROLE_FIGURES = "figures"
-ROLE_DATASETS = "datasets"
-ROLE_SCRIPTS = "scripts"
-ROLE_DOCS = "documentation"
-ROLE_UNCLASSIFIED = "unclassified"
-ROLES = (ROLE_FIGURES, ROLE_DATASETS, ROLE_SCRIPTS, ROLE_DOCS,
-         ROLE_UNCLASSIFIED)
-
-# Directory-name conventions, matched on a normalized name. Deliberately
-# conservative: an unrecognized directory is UNCLASSIFIED, never guessed
-# into a productive role.
-ROLE_HINTS = (
-    (ROLE_FIGURES, ("figure", "figures", "figs", "fig", "figures_tables",
-                    "figurestables", "plots", "images", "graphics")),
-    (ROLE_DATASETS, ("data", "dataset", "datasets", "raw", "rawdata",
-                     "results", "output", "outputs", "trajectories")),
-    (ROLE_SCRIPTS, ("script", "scripts", "src", "code", "analysis",
-                    "notebooks", "bin", "tools")),
-    (ROLE_DOCS, ("doc", "docs", "documentation", "manual", "www", "web",
-                 "site", "assets", "static", "media", "logo", "logos",
-                 "icons", "img", "_static", "sphinx", "latex", "tex",
-                 "paper", "manuscript")),
-)
-
-# Files that are documentation/branding wherever they live. A logo is not a
-# figure even when it sits beside one.
-STATIC_ASSET_TOKENS = (
-    "logo", "icon", "favicon", "banner", "toc", "graphical_abstract",
-    "graphicalabstract", "header", "footer", "watermark", "badge",
-    "thumbnail", "screenshot",
-)
-
-# Extensions that are genuinely runnable/source under a Scripts role.
-# Notebooks are deliberately EXCLUDED: a notebook is usually the thing that
-# made a figure, so it is offered as a chart's notebookFile or left as a
-# hint rather than becoming a Script record on its own.
-RUNNABLE_EXTENSIONS = (".py", ".sh", ".bash", ".r", ".jl", ".m")
-
-
-def _normalized_name(name):
-    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
-
-
-def _top_level(path):
-    """The directory whose role governs a path ("" for the folder root)."""
-    return path.split("/", 1)[0] if "/" in path else ""
-
-
-def suggest_folder_roles(files, dirs):
-    """Suggest a role for each top-level directory, plus the root.
-
-    Suggestions only: the curator confirms or changes them before candidates
-    are generated, and the result never leaves the session.
-    """
-    tops = sorted({_top_level(path) for path in list(dirs) + list(files)
-                   if "/" in path})
-    suggestions = {}
-    for top in tops:
-        normalized = _normalized_name(top)
-        role = ROLE_UNCLASSIFIED
-        for candidate_role, names in ROLE_HINTS:
-            if normalized in names:
-                role = candidate_role
-                break
-        suggestions[top] = role
-    # Loose files at the root are not a scientific artifact by default.
-    suggestions[""] = ROLE_UNCLASSIFIED
-    return suggestions
-
-
-def normalize_roles(raw, suggested):
-    """Take only known directories and known roles from the request body."""
-    roles = dict(suggested)
-    for directory, role in (raw or {}).items():
-        if directory in suggested and role in ROLES:
-            roles[directory] = role
-    return roles
-
-
-def role_of(path, roles):
-    """The confirmed role governing a path. An explicit entry for a nested
-    directory wins over its parent, which is the override an irregular tree
-    needs (e.g. docs/figures kept as documentation)."""
-    directory = posixpath.dirname(path)
-    while True:
-        if directory in roles:
-            return roles[directory]
-        if not directory:
-            return roles.get("", ROLE_UNCLASSIFIED)
-        directory = posixpath.dirname(directory)
-
-
-def is_static_asset(path):
-    """Branding/documentation graphics, wherever they sit."""
-    name = _normalized_name(_stem(path))
-    return any(token.replace("_", "") in name for token in STATIC_ASSET_TOKENS)
-
 
 def _env_list(key, default=""):
     raw = os.environ.get("QRESP_" + key)
@@ -416,39 +311,6 @@ def _stem(path):
     return posixpath.splitext(posixpath.basename(path))[0]
 
 
-def _tokens(name):
-    parts = [p for p in re.split(r"[^A-Za-z0-9]+", name) if len(p) > 1]
-    return [p for p in parts if not p.isdigit()][:8]
-
-
-def _related_files(stem, directory, files, exclude):
-    """Split name-similar files into what is EVIDENCED and what is a hint.
-
-    Evidenced: the same folder and the exact same basename — "figure1.png"
-    next to "figure1.csv" is a relationship a curator can check at a glance.
-    Everything else (a prefix match, or the same name in another folder) is
-    a guess about a filename; it is reported in Details and never written
-    into the record.
-    """
-    evidenced, hints = [], []
-    stem_lower = stem.lower()
-    for path in files:
-        if path in exclude or _ext(path) in CHART_EXTENSIONS:
-            continue
-        other = _stem(path).lower()
-        same_directory = posixpath.dirname(path) == directory
-        if other == stem_lower and same_directory:
-            evidenced.append(path)
-        elif other == stem_lower or (
-                len(stem_lower) >= 4 and len(other) >= 4 and (
-                    other.startswith(stem_lower)
-                    or stem_lower.startswith(other))):
-            hints.append(path)
-        if len(evidenced) >= 5 and len(hints) >= 5:
-            break
-    return evidenced[:5], hints[:5]
-
-
 # Evidence strength, per field. "high" is reserved for something a file
 # directly states; "medium" is a structural relationship a curator can
 # verify; "low" is a filename-only hint; "needs_input" means Qresp cannot
@@ -474,278 +336,6 @@ def _candidate(kind, index, proposal, evidence, confidence, paths,
         "paths": paths,
         "proposal": proposal,
     }
-
-
-# ---- artifact grouping -------------------------------------------------------
-#
-# One candidate per matching FILE turned a single Figure 2 (its panels, its
-# data and its notebook) into five Charts and a Script. Candidates are built
-# from artifact GROUPS instead: a directory under a Figures role is one
-# chart, its other files ride along as evidence.
-#
-# Two different confidences are reported and must not be conflated:
-#   confidence     — how sure we are this is a Chart/Dataset/Script AT ALL.
-#                    Capped at "medium": a directory convention is good
-#                    evidence, never proof. Extension-only guesses are "low".
-#   field_evidence — how sure we are of one FIELD's value. A detected path is
-#                    "high" here; that is about the file, not the artifact.
-LIKELY, POSSIBLE = MEDIUM, LOW
-
-
-def _group_key(path):
-    """The directory an artifact group is keyed on."""
-    return posixpath.dirname(path)
-
-
-def classify_charts(files, roles):
-    """Chart candidates, one per figure FOLDER rather than per image.
-
-    Only Figures-role subtrees (and, for legacy trees, unclassified ones)
-    are considered; documentation subtrees and branding assets never are.
-    """
-    candidates = []
-    unclaimed = []
-    groups = {}
-    for path in sorted(files):
-        if _ext(path) not in CHART_EXTENSIONS:
-            continue
-        role = role_of(path, roles)
-        if role in (ROLE_DOCS, ROLE_DATASETS, ROLE_SCRIPTS):
-            continue
-        if is_static_asset(path):
-            # A logo/icon/TOC graphic is documentation wherever it lives.
-            unclaimed.append(path)
-            continue
-        groups.setdefault((_group_key(path), role), []).append(path)
-
-    index = 0
-    for (directory, role), images in sorted(groups.items()):
-        folder_name = _normalized_name(posixpath.basename(directory))
-        # A folder NAMED after one of its images is one artifact: that image
-        # represents it and the rest are its panels. This is the case that
-        # used to explode figure_2/{figure_2.png,homo.png,lumo.png,...} into
-        # five separate Charts.
-        named = [p for p in images
-                 if folder_name and _normalized_name(_stem(p)) == folder_name]
-        if len(named) == 1:
-            selected = [(
-                named[0],
-                [p for p in images if p != named[0]],
-                "folder %s names its representative image %s"
-                % (directory or "root", posixpath.basename(named[0])),
-                LIKELY,
-            )]
-        elif len(images) > 1 and role != ROLE_FIGURES:
-            # Several images, no naming convention and no folder role saying
-            # these are figures: show them, do not guess.
-            unclaimed.extend(images)
-            continue
-        else:
-            # A figures container holding distinct images: each is its own
-            # figure. Panels are only implied by a NAMED folder, above.
-            selected = [
-                (image, [], "image in the figures folder %s"
-                 % (directory or "root")
-                 if role == ROLE_FIGURES
-                 else "an image file; no folder role confirms it is a figure",
-                 LIKELY if role == ROLE_FIGURES else POSSIBLE)
-                for image in images
-            ]
-
-        for representative, companions, reason, classification in selected:
-            index = _emit_chart(candidates, index, files, directory,
-                                representative, companions, reason,
-                                classification)
-    return candidates, unclaimed
-
-
-def _emit_chart(candidates, index, files, directory, representative,
-                companions, reason, classification):
-    if True:
-        stem = _stem(representative)
-        # Same folder, same basename — the relationship a curator can check.
-        related = [p for p in files
-                   if _group_key(p) == directory
-                   and p != representative
-                   and _ext(p) not in CHART_EXTENSIONS
-                   and _ext(p) not in NOTEBOOK_EXTENSIONS
-                   and _stem(p).lower() == stem.lower()]
-        notebook = ""
-        for path in files:
-            if (_ext(path) in NOTEBOOK_EXTENSIONS
-                    and _group_key(path) == directory
-                    and _stem(path).lower() == stem.lower()):
-                notebook = path
-                break
-
-        evidence = ["Chart group from %s: %s" % (directory or "the folder root",
-                                                 reason)]
-        if companions:
-            evidence.append(
-                "%d more image(s) in the same folder, kept as associated "
-                "files rather than separate charts: %s"
-                % (len(companions), ", ".join(companions)))
-        if related:
-            evidence.append("Same folder, same basename: %s"
-                            % ", ".join(related))
-        if notebook:
-            evidence.append(
-                "Notebook in the same folder with the same basename: %s"
-                % notebook)
-        evidence.append(
-            "Figure number and caption cannot be derived from a folder or a "
-            "filename — they are left blank for you.")
-
-        hints = ["Detected from filename (not verified metadata): %s" % token
-                 for token in _tokens(stem)]
-        # Name-similar files we will NOT claim a relationship with.
-        stem_lower = stem.lower()
-        for path in files:
-            other = _stem(path).lower()
-            if (path == representative or path in related
-                    or path == notebook or path in companions):
-                continue
-            if other == stem_lower or (
-                    len(stem_lower) >= 4 and len(other) >= 4 and (
-                        other.startswith(stem_lower)
-                        or stem_lower.startswith(other))):
-                hints.append(
-                    "Name-similar file, relationship not verified: %s" % path)
-        hints = hints[:10]
-
-        candidates.append(_candidate(
-            "chart", index,
-            {
-                "imageFile": representative,
-                "files": sorted(companions + related),
-                "notebookFile": notebook,
-                "number": "",
-                "caption": "",
-                "properties": [],
-                "extraFields": [],
-            },
-            evidence,
-            classification,
-            [representative] + sorted(companions + related)
-            + ([notebook] if notebook else []),
-            needs_input=["caption", "number", "properties"],
-            field_evidence={
-                "imageFile": HIGH,
-                "files": HIGH if (companions or related) else NEEDS_INPUT,
-                "notebookFile": MEDIUM if notebook else NEEDS_INPUT,
-                "number": NEEDS_INPUT,
-                "caption": NEEDS_INPUT,
-                "properties": NEEDS_INPUT,
-            },
-            hints=hints,
-        ))
-        return index + 1
-
-
-def classify_datasets(files, dirs, roles):
-    """Data files grouped by their analysis folder.
-
-    A Scripts-role subtree never yields a dataset just because it holds a
-    .json or .dat, and a documentation subtree never yields one at all.
-    """
-    candidates = []
-    grouped = {}
-    for path in files:
-        name = posixpath.basename(path).lower()
-        if name in NON_DATASET_NAMES or _ext(path) in SCRIPT_EXTENSIONS:
-            continue
-        if _ext(path) not in DATASET_EXTENSIONS:
-            continue
-        role = role_of(path, roles)
-        if role in (ROLE_DOCS, ROLE_SCRIPTS, ROLE_FIGURES):
-            continue
-        grouped.setdefault((posixpath.dirname(path), role), []).append(path)
-
-    index = 0
-    for (directory, role), members in sorted(grouped.items()):
-        label = directory or "the folder root"
-        classification = LIKELY if role == ROLE_DATASETS else POSSIBLE
-        evidence = [
-            "%d data file(s) in %s: %s"
-            % (len(members), label,
-               ", ".join(posixpath.basename(m) for m in sorted(members)[:5])),
-            "Grouped as one dataset because they share the folder %s." % label
-            if role == ROLE_DATASETS
-            else "No folder role confirms this is data — grouped by extension "
-                 "only, so please check it.",
-            "Qresp cannot tell what these files mean — the description is "
-            "left blank for you.",
-        ]
-        candidates.append(_candidate(
-            "dataset", index,
-            {
-                "files": sorted(members),
-                "readme": "",
-                "URLs": [],
-                "extraFields": [],
-            },
-            evidence,
-            classification,
-            sorted(members),
-            needs_input=["readme"],
-            field_evidence={"files": HIGH, "readme": NEEDS_INPUT,
-                            "URLs": NEEDS_INPUT},
-        ))
-        index += 1
-    return candidates
-
-
-def classify_scripts(files, roles, headers=None):
-    """Runnable/source files under a Scripts role.
-
-    Notebooks are NOT scripts here: a notebook is usually what produced a
-    figure, so it is offered as a chart's notebookFile or left as a hint.
-    Data-role and documentation subtrees produce no scripts at all.
-    """
-    headers = headers or {}
-    candidates = []
-    notebook_hints = []
-    index = 0
-    for path in sorted(files):
-        role = role_of(path, roles)
-        if _ext(path) in NOTEBOOK_EXTENSIONS:
-            if role != ROLE_DOCS:
-                notebook_hints.append(path)
-            continue
-        if _ext(path) not in RUNNABLE_EXTENSIONS:
-            continue
-        if role in (ROLE_DOCS, ROLE_DATASETS, ROLE_FIGURES):
-            continue
-        classification = LIKELY if role == ROLE_SCRIPTS else POSSIBLE
-        docstring = headers.get(path) or ""
-        evidence = ["%s is a %s file" % (path, _ext(path))]
-        evidence.append(
-            "In a scripts folder." if role == ROLE_SCRIPTS
-            else "No folder role confirms this is a script — matched by "
-                 "extension only, so please check it.")
-        if docstring:
-            evidence.append(
-                "Header/docstring found (shown as evidence, not copied into "
-                "the description): %s" % docstring)
-        else:
-            evidence.append("No docstring or header comment was found.")
-        candidates.append(_candidate(
-            "script", index,
-            {
-                "files": [path],
-                "readme": "",
-                "URLs": [],
-                "extraFields": [],
-            },
-            evidence,
-            classification,
-            [path],
-            needs_input=["readme"],
-            field_evidence={"files": HIGH, "readme": NEEDS_INPUT,
-                            "URLs": NEEDS_INPUT},
-        ))
-        index += 1
-    return candidates, notebook_hints
 
 
 # ---- manifest-driven tools -------------------------------------------------
@@ -937,6 +527,283 @@ def _script_header(text):
     return re.sub(r"\s+", " ", " ".join(comments)).strip()[:500]
 
 
+def _empty_result(mode, roles, issues, unclassified_rows, total,
+                  boundary_trees=None):
+    return {
+        "structure_mode": mode,
+        "structure_issues": issues,
+        "normalized_roles": roles,
+        "charts": [], "datasets": [], "scripts": [], "tools": [],
+        "unclassified": [],
+        "unclassified_total": total,
+        "grouped_unclassified": unclassified_rows,
+        "boundary_trees": boundary_trees or {},
+        "notebook_hints": [],
+        "ungrouped_images": [],
+        "possible_dependencies": [],
+    }
+
+
+def _analyze_unsupported(files, dirs, roles, issues):
+    """Needs-reorganization mode.
+
+    No role can be established for at least one productive root, so nothing
+    is classified: guessing from extensions here is exactly what produced the
+    candidate explosion. Every unsupported root is reported as ONE grouped
+    row so the curator sees the shape of the problem, not a file list.
+    """
+    rows = []
+    for issue in issues:
+        top = issue["path"]
+        if not top:
+            rows.append({
+                "path": "", "name": "folder root",
+                "file_count": len(fs.root_files(files)),
+                "extensions": sorted({_ext(p) or "(no extension)"
+                                      for p in fs.root_files(files)})[:6],
+                "sample_names": fs.root_files(files)[:fs.MAX_NAMES_PER_GROUP],
+                "reason": issue["reason"],
+            })
+            continue
+        summary = fs.summarize_folder(top, files)
+        summary["reason"] = issue["reason"]
+        rows.append(summary)
+    return _empty_result(fs.MODE_INVALID, roles, issues, rows, len(files))
+
+
+def _analyze_by_boundaries(files, dirs, texts, mode, roles, issues):
+    """Standard / legacy-compatible mode: one record per immediate child."""
+    groups, claimed = build_boundary_candidates(files, dirs, roles, texts)
+
+    # Root files that the standard expects are not a problem, and are not
+    # candidates either.
+    for path in fs.root_files(files):
+        if posixpath.basename(path).lower() in fs.OPTIONAL_ROOT_FILES:
+            claimed.add(path)
+
+    leftover = [p for p in sorted(files) if p not in claimed]
+
+    # Legacy trees are often nested in ways only the author can resolve, so
+    # the dataset/script roots come with a compact selectable tree. Nothing
+    # is selected by default and the tree changes nothing on the server.
+    boundary_trees = {}
+    if mode == fs.MODE_LEGACY:
+        for top, role in sorted(roles.items()):
+            if role in (fs.ROLE_DATASETS, fs.ROLE_SCRIPTS):
+                nodes = fs.boundary_tree(top, files, dirs)
+                if nodes:
+                    boundary_trees[top] = {"role": role, "nodes": nodes}
+
+    return {
+        "structure_mode": mode,
+        "structure_issues": issues,
+        "normalized_roles": roles,
+        "charts": groups["charts"],
+        "datasets": groups["datasets"],
+        "scripts": groups["scripts"],
+        "tools": groups["tools"],
+        # Kept for compatibility, but the grouped rows are what the UI reads.
+        "unclassified": leftover[:MAX_UNCLASSIFIED],
+        "unclassified_total": len(leftover),
+        "grouped_unclassified": fs.group_unclassified(leftover, files),
+        "boundary_trees": boundary_trees,
+        "notebook_hints": [],
+        "ungrouped_images": [],
+        "possible_dependencies": [],
+    }
+
+
+def _boundary_candidate(kind, index, proposal, evidence, classification,
+                        paths, needs_input, field_evidence):
+    return _candidate(kind, index, proposal, evidence, classification, paths,
+                      needs_input=needs_input, field_evidence=field_evidence)
+
+
+def build_boundary_candidates(files, dirs, roles, texts):
+    """One record per IMMEDIATE CHILD of a role directory.
+
+    This is the whole point of the Folder Standard: the folder already says
+    where one record ends and the next begins, so a dataset of 4000 files is
+    ONE candidate carrying its folder path — not 4000 candidates, and not
+    4000 Unclassified rows.
+    """
+    charts, datasets, scripts, tools = [], [], [], []
+    claimed = set()
+    chart_i = dataset_i = script_i = tool_i = 0
+
+    for top, role in sorted(roles.items()):
+        child_dirs, child_files = fs._children_of(top, files, dirs)
+
+        if role == fs.ROLE_DOCS:
+            # Documentation produces nothing, and its files are accounted for
+            # so they never reappear as Unclassified noise.
+            claimed.update(fs.descendants_of(top, files))
+            claimed.update(child_files)
+            continue
+
+        if role == fs.ROLE_DATASETS:
+            for folder in child_dirs:
+                members = fs.descendants_of(folder, files)
+                if not members:
+                    continue
+                claimed.update(members)
+                datasets.append(_boundary_candidate(
+                    "dataset", dataset_i,
+                    {"files": [folder], "readme": "", "URLs": [],
+                     "extraFields": []},
+                    ["One dataset: the folder %s and everything in it "
+                     "(%d file(s))." % (folder, len(members)),
+                     "Nested folders inside it belong to this dataset — to "
+                     "split them, place them as siblings under %s/." % top,
+                     "Qresp cannot tell what these files mean — the "
+                     "description is left blank for you."],
+                    MEDIUM, [folder], ["readme"],
+                    {"files": HIGH, "readme": NEEDS_INPUT,
+                     "URLs": NEEDS_INPUT}))
+                dataset_i += 1
+            for path in child_files:
+                claimed.add(path)
+                datasets.append(_boundary_candidate(
+                    "dataset", dataset_i,
+                    {"files": [path], "readme": "", "URLs": [],
+                     "extraFields": []},
+                    ["One dataset: the file %s directly under %s/."
+                     % (path, top)],
+                    MEDIUM, [path], ["readme"],
+                    {"files": HIGH, "readme": NEEDS_INPUT,
+                     "URLs": NEEDS_INPUT}))
+                dataset_i += 1
+
+        elif role == fs.ROLE_CHARTS:
+            for folder in child_dirs:
+                members = fs.descendants_of(folder, files)
+                if not members:
+                    continue
+                preview, data, notebook = fs.chart_parts(folder, files)
+                claimed.update(members)
+                evidence = ["One chart: the folder %s (%d file(s))."
+                            % (folder, len(members))]
+                if preview:
+                    evidence.append("Primary image: %s" % preview)
+                else:
+                    evidence.append(
+                        "No preview image found — add preview.png to this "
+                        "folder, or set the image file yourself.")
+                if data:
+                    evidence.append("Chart files: %s" % ", ".join(data))
+                if notebook:
+                    evidence.append("Chart notebook: %s" % notebook)
+                evidence.append(
+                    "Figure number, caption and properties are never derived "
+                    "from a folder or a filename — they are left blank.")
+                charts.append(_boundary_candidate(
+                    "chart", chart_i,
+                    {"imageFile": preview, "files": data,
+                     "notebookFile": notebook, "number": "", "caption": "",
+                     "properties": [], "extraFields": []},
+                    evidence,
+                    MEDIUM if preview else LOW, [folder],
+                    ["caption", "number", "properties"]
+                    + ([] if preview else ["imageFile"]),
+                    {"imageFile": HIGH if preview else NEEDS_INPUT,
+                     "files": HIGH if data else NEEDS_INPUT,
+                     "notebookFile": HIGH if notebook else NEEDS_INPUT,
+                     "number": NEEDS_INPUT, "caption": NEEDS_INPUT,
+                     "properties": NEEDS_INPUT}))
+                chart_i += 1
+            # A loose image directly under charts/ is still one chart.
+            for path in child_files:
+                if _ext(path) not in CHART_EXTENSIONS:
+                    continue
+                claimed.add(path)
+                charts.append(_boundary_candidate(
+                    "chart", chart_i,
+                    {"imageFile": path, "files": [], "notebookFile": "",
+                     "number": "", "caption": "", "properties": [],
+                     "extraFields": []},
+                    ["One chart: the image %s directly under %s/."
+                     % (path, top)],
+                    MEDIUM, [path], ["caption", "number", "properties"],
+                    {"imageFile": HIGH, "files": NEEDS_INPUT,
+                     "notebookFile": NEEDS_INPUT, "number": NEEDS_INPUT,
+                     "caption": NEEDS_INPUT, "properties": NEEDS_INPUT}))
+                chart_i += 1
+
+        elif role == fs.ROLE_SCRIPTS:
+            for folder in child_dirs:
+                members = fs.descendants_of(folder, files)
+                if not members:
+                    continue
+                claimed.update(members)
+                scripts.append(_boundary_candidate(
+                    "script", script_i,
+                    {"files": [folder], "readme": "", "URLs": [],
+                     "extraFields": []},
+                    ["One script record: the folder %s and everything in it "
+                     "(%d file(s))." % (folder, len(members))],
+                    MEDIUM, [folder], ["readme"],
+                    {"files": HIGH, "readme": NEEDS_INPUT,
+                     "URLs": NEEDS_INPUT}))
+                script_i += 1
+            for path in child_files:
+                claimed.add(path)
+                if _ext(path) not in RUNNABLE_EXTENSIONS + NOTEBOOK_EXTENSIONS:
+                    continue
+                scripts.append(_boundary_candidate(
+                    "script", script_i,
+                    {"files": [path], "readme": "", "URLs": [],
+                     "extraFields": []},
+                    ["One script record: %s directly under %s/." % (path, top)],
+                    MEDIUM, [path], ["readme"],
+                    {"files": HIGH, "readme": NEEDS_INPUT,
+                     "URLs": NEEDS_INPUT}))
+                script_i += 1
+
+        elif role == fs.ROLE_TOOLS:
+            for folder in child_dirs:
+                members = fs.descendants_of(folder, files)
+                if not members:
+                    continue
+                claimed.update(members)
+                declared = []
+                for path in members:
+                    text = texts.get(path)
+                    if text is None:
+                        continue
+                    declared.extend(parse_manifest(path, text))
+                    declared.extend(parse_module_loads(path, text))
+                package, version, source = (
+                    declared[0] if declared else ("", "", ""))
+                patches = [p for p in members if _ext(p) in PATCH_EXTENSIONS]
+                evidence = ["One tool: the folder %s." % folder]
+                if package:
+                    evidence.append("%s %s %s" % (package, version, source))
+                else:
+                    evidence.append(
+                        "No explicit package/version declaration was found — "
+                        "these stay blank rather than being guessed from file "
+                        "names or imports.")
+                tools.append(_boundary_candidate(
+                    "tool", tool_i,
+                    {"kind": "software", "packageName": package,
+                     "version": version, "executableName": "",
+                     "patches": patches, "description": "", "urls": "",
+                     "extraFields": []},
+                    evidence,
+                    MEDIUM if package else LOW, [folder],
+                    ["description"] + ([] if package
+                                       else ["packageName", "version"]),
+                    {"packageName": HIGH if package else NEEDS_INPUT,
+                     "version": HIGH if version else NEEDS_INPUT,
+                     "executableName": NEEDS_INPUT,
+                     "description": NEEDS_INPUT, "urls": NEEDS_INPUT,
+                     "patches": HIGH if patches else NEEDS_INPUT}))
+                tool_i += 1
+
+    return {"charts": charts, "datasets": datasets, "scripts": scripts,
+            "tools": tools}, claimed
+
+
 def analyze_folder_tree(files, dirs, texts, roles=None):
     """Pure classification over an inventory — the unit under test.
 
@@ -945,49 +812,18 @@ def analyze_folder_tree(files, dirs, texts, roles=None):
     still analyzes (everything falls to UNCLASSIFIED, which classifies by
     extension at LOW confidence rather than not at all).
     """
-    suggested = suggest_folder_roles(files, dirs)
-    roles = normalize_roles(roles, suggested)
-    manifests = {path: text for path, text in texts.items()
-                 if posixpath.basename(path).lower() in MANIFEST_NAMES
-                 or posixpath.basename(path).lower() in README_NAMES}
-    script_texts = {path: text for path, text in texts.items()
-                    if _ext(path) in SCRIPT_EXTENSIONS}
-    headers = {path: _script_header(text)
-               for path, text in script_texts.items()}
-    headers = {path: header for path, header in headers.items() if header}
+    mode, standard_roles, issues = fs.detect_structure(files, dirs)
 
-    charts, ungrouped_images = classify_charts(files, roles)
-    datasets = classify_datasets(files, dirs, roles)
-    scripts, notebook_hints = classify_scripts(files, roles, headers)
-    # `module load` lines are read from scripts and READMEs alike.
-    run_texts = dict(script_texts)
-    run_texts.update({path: text for path, text in texts.items()
-                      if posixpath.basename(path).lower() in README_NAMES})
-    tools = classify_tools(manifests, files, run_texts=run_texts)
+    if mode in (fs.MODE_STANDARD, fs.MODE_LEGACY):
+        # The folder tells us where one record ends and the next begins.
+        return _analyze_by_boundaries(files, dirs, texts, mode,
+                                      standard_roles, issues)
+    if mode == fs.MODE_INVALID:
+        # Deliberately NO extension-based guessing and NO per-file dump: one
+        # grouped row per unsupported root, and the guide.
+        return _analyze_unsupported(files, dirs, standard_roles, issues)
 
-    claimed = set()
-    for group in (charts, datasets, scripts, tools):
-        for candidate in group:
-            claimed.update(candidate["paths"])
-    # Everything not claimed stays VISIBLE here — images we would not guess a
-    # representative for, documentation, notebooks that are not a chart's,
-    # and anything ambiguous. Nothing is dropped.
-    unclassified = [p for p in sorted(files) if p not in claimed]
-
-    return {
-        "charts": charts,
-        "datasets": datasets,
-        "scripts": scripts,
-        "tools": tools,
-        "unclassified": unclassified[:MAX_UNCLASSIFIED],
-        "unclassified_total": len(unclassified),
-        # Notebooks that were not attached to a chart: offered as hints so a
-        # curator can attach one by hand, never auto-added as Scripts.
-        "notebook_hints": sorted(
-            set(notebook_hints) - claimed)[:100],
-        "ungrouped_images": sorted(set(ungrouped_images))[:100],
-        "possible_dependencies": possible_dependency_hints(script_texts),
-    }
+    raise AssertionError("unreachable analysis mode: %s" % mode)
 
 
 @csrf_protect
@@ -1037,13 +873,7 @@ def analyze_folder(body):
                 "Only the first %d manifest/script files were read for "
                 "evidence." % MAX_TEXT_FILES)
 
-    # Roles the curator confirmed in this session, if any. They are applied
-    # to THIS analysis only: nothing about them is stored, and the RCC folder
-    # is never modified.
-    suggested_roles = suggest_folder_roles(files, dirs)
-    roles = normalize_roles((body or {}).get("roles"), suggested_roles)
-
-    result = analyze_folder_tree(files, dirs, texts, roles=roles)
+    result = analyze_folder_tree(files, dirs, texts)
     counts = {key: len(value) for key, value in result.items()
               if isinstance(value, list)}
     print("Folder analysis: files=%d dirs=%d truncated=%s candidates=%s"
@@ -1062,12 +892,12 @@ def analyze_folder(body):
             "max_evidence_files": MAX_TEXT_FILES,
         },
         "warnings": notes,
-        # Suggested vs. in-force roles, so the UI can offer a confirmation
-        # step. Session-only: re-analyzing with different roles is the only
-        # thing they affect.
-        "suggested_roles": suggested_roles,
-        "roles": roles,
-        "role_options": list(ROLES),
+        # How the folder was read. Session-only and derived from the
+        # inventory: nothing is stored and RCC is never modified.
+        "structure_mode": result["structure_mode"],
+        "structure_issues": result["structure_issues"],
+        "normalized_roles": result["normalized_roles"],
+        "standard_roles": list(fs.STANDARD_ROLES),
         "candidates": result,
     }, 200
 
