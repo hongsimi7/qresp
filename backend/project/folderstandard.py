@@ -261,6 +261,79 @@ def group_unclassified(paths, files):
     return rows[:MAX_GROUP_ROWS]
 
 
+class BoundaryError(Exception):
+    """A rejected boundary selection. The message is safe to show."""
+
+
+def validate_boundaries(raw, roles, files, dirs):
+    """Turn a browser-supplied boundary selection into trusted paths.
+
+    A boundary says "treat THIS folder as one record" instead of the default
+    immediate children. That is a lot of power to hand a request body, so
+    every entry has to survive:
+
+      * its role root must be one the analyzed tree actually has;
+      * the path must be a relative POSIX path we SAW in this tree — not a
+        URL, not absolute, no `..`, no backslash, no percent-encoding, and
+        no path we never listed;
+      * it must sit under the role root it was submitted for;
+      * a parent and one of its descendants cannot both be selected, because
+        the same files would end up in two records.
+
+    Returns {role_root: [paths]} with duplicates collapsed, or raises
+    BoundaryError. Nothing here fetches or writes anything.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise BoundaryError("Boundary selection must be an object.")
+
+    known = set(dirs) | set(files)
+    selected = {}
+
+    for root, paths in raw.items():
+        if root not in roles:
+            raise BoundaryError(
+                "%r is not a folder in this paper." % str(root)[:80])
+        if not isinstance(paths, (list, tuple)):
+            raise BoundaryError(
+                "Boundaries for %s must be a list of folders." % root)
+
+        cleaned = []
+        for entry in paths:
+            path = entry if isinstance(entry, str) else ""
+            path = path.strip()
+            if not path:
+                raise BoundaryError("An empty boundary path was submitted.")
+            if (path.startswith("/") or "\\" in path or "://" in path
+                    or "%" in path or ".." in path.split("/")):
+                raise BoundaryError(
+                    "%r is not a relative folder inside this paper." % path[:80])
+            if path != posixpath.normpath(path):
+                raise BoundaryError("%r is not a normalized path." % path[:80])
+            if path != root and not path.startswith(root + "/"):
+                raise BoundaryError(
+                    "%r is not inside %s." % (path[:80], root))
+            if path not in known:
+                # Only paths this analysis actually listed. A boundary can
+                # never point at something we never saw.
+                raise BoundaryError(
+                    "%r was not found in this folder." % path[:80])
+            if path not in cleaned:
+                cleaned.append(path)
+
+        for path in cleaned:
+            for other in cleaned:
+                if other != path and path.startswith(other + "/"):
+                    raise BoundaryError(
+                        "%s and %s overlap — select the parent or the child, "
+                        "not both." % (other, path))
+        if cleaned:
+            selected[root] = sorted(cleaned)
+
+    return selected
+
+
 def chart_parts(folder, files):
     """preview / data / notebook inside one charts/<child> folder."""
     contents = descendants_of(folder, files)

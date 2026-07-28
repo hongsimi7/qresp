@@ -571,9 +571,11 @@ def _analyze_unsupported(files, dirs, roles, issues):
     return _empty_result(fs.MODE_INVALID, roles, issues, rows, len(files))
 
 
-def _analyze_by_boundaries(files, dirs, texts, mode, roles, issues):
+def _analyze_by_boundaries(files, dirs, texts, mode, roles, issues,
+                           selected=None):
     """Standard / legacy-compatible mode: one record per immediate child."""
-    groups, claimed = build_boundary_candidates(files, dirs, roles, texts)
+    groups, claimed = build_boundary_candidates(files, dirs, roles, texts,
+                                                selected=selected)
 
     # Root files that the standard expects are not a problem, and are not
     # candidates either.
@@ -607,6 +609,8 @@ def _analyze_by_boundaries(files, dirs, texts, mode, roles, issues):
         "unclassified_total": len(leftover),
         "grouped_unclassified": fs.group_unclassified(leftover, files),
         "boundary_trees": boundary_trees,
+        # Echoed back so the UI can show what is in force right now.
+        "applied_boundaries": selected or {},
         "notebook_hints": [],
         "ungrouped_images": [],
         "possible_dependencies": [],
@@ -619,7 +623,7 @@ def _boundary_candidate(kind, index, proposal, evidence, classification,
                       needs_input=needs_input, field_evidence=field_evidence)
 
 
-def build_boundary_candidates(files, dirs, roles, texts):
+def build_boundary_candidates(files, dirs, roles, texts, selected=None):
     """One record per IMMEDIATE CHILD of a role directory.
 
     This is the whole point of the Folder Standard: the folder already says
@@ -629,10 +633,17 @@ def build_boundary_candidates(files, dirs, roles, texts):
     """
     charts, datasets, scripts, tools = [], [], [], []
     claimed = set()
+    selected = selected or {}
     chart_i = dataset_i = script_i = tool_i = 0
 
     for top, role in sorted(roles.items()):
         child_dirs, child_files = fs._children_of(top, files, dirs)
+        # An explicit selection REPLACES the default immediate children for
+        # this role root only. Every other root keeps its defaults.
+        chosen = selected.get(top)
+        if chosen is not None:
+            child_dirs = [p for p in chosen if p in set(dirs)]
+            child_files = [p for p in chosen if p in set(files)]
 
         if role == fs.ROLE_DOCS:
             # Documentation produces nothing, and its files are accounted for
@@ -653,8 +664,11 @@ def build_boundary_candidates(files, dirs, roles, texts):
                      "extraFields": []},
                     ["One dataset: the folder %s and everything in it "
                      "(%d file(s))." % (folder, len(members)),
+                     "You chose this folder as the record boundary."
+                     if chosen is not None else
                      "Nested folders inside it belong to this dataset — to "
-                     "split them, place them as siblings under %s/." % top,
+                     "split them, choose a different boundary or place them "
+                     "as siblings under %s/." % top,
                      "Qresp cannot tell what these files mean — the "
                      "description is left blank for you."],
                     MEDIUM, [folder], ["readme"],
@@ -740,7 +754,9 @@ def build_boundary_candidates(files, dirs, roles, texts):
                     {"files": [folder], "readme": "", "URLs": [],
                      "extraFields": []},
                     ["One script record: the folder %s and everything in it "
-                     "(%d file(s))." % (folder, len(members))],
+                     "(%d file(s))." % (folder, len(members))]
+                    + (["You chose this folder as the record boundary."]
+                       if chosen is not None else []),
                     MEDIUM, [folder], ["readme"],
                     {"files": HIGH, "readme": NEEDS_INPUT,
                      "URLs": NEEDS_INPUT}))
@@ -804,7 +820,7 @@ def build_boundary_candidates(files, dirs, roles, texts):
             "tools": tools}, claimed
 
 
-def analyze_folder_tree(files, dirs, texts, roles=None):
+def analyze_folder_tree(files, dirs, texts, boundaries=None):
     """Pure classification over an inventory — the unit under test.
 
     `roles` maps a directory to its confirmed role. Omitted, the suggested
@@ -815,9 +831,13 @@ def analyze_folder_tree(files, dirs, texts, roles=None):
     mode, standard_roles, issues = fs.detect_structure(files, dirs)
 
     if mode in (fs.MODE_STANDARD, fs.MODE_LEGACY):
-        # The folder tells us where one record ends and the next begins.
+        # The folder tells us where one record ends and the next begins,
+        # unless the curator chose different boundaries by hand.
+        selected = fs.validate_boundaries(boundaries, standard_roles,
+                                          files, dirs)
         return _analyze_by_boundaries(files, dirs, texts, mode,
-                                      standard_roles, issues)
+                                      standard_roles, issues,
+                                      selected=selected)
     if mode == fs.MODE_INVALID:
         # Deliberately NO extension-based guessing and NO per-file dump: one
         # grouped row per unsupported root, and the guide.
@@ -873,7 +893,13 @@ def analyze_folder(body):
                 "Only the first %d manifest/script files were read for "
                 "evidence." % MAX_TEXT_FILES)
 
-    result = analyze_folder_tree(files, dirs, texts)
+    # An optional, fully validated record-boundary selection. Rejections are
+    # user-facing and happen before anything is built.
+    try:
+        result = analyze_folder_tree(files, dirs, texts,
+                                     boundaries=(body or {}).get("boundaries"))
+    except fs.BoundaryError as e:
+        return {"error": str(e)}, 400
     counts = {key: len(value) for key, value in result.items()
               if isinstance(value, list)}
     print("Folder analysis: files=%d dirs=%d truncated=%s candidates=%s"

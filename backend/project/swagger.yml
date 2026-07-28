@@ -756,6 +756,14 @@ paths:
             properties:
               path:
                 type: string
+              boundaries:
+                type: object
+                description: Optional record-boundary selection, keyed by the
+                  role directory it applies to. Each value is a list of
+                  relative folder paths that this analysis listed; a selected
+                  folder becomes exactly one candidate containing everything
+                  beneath it, replacing the default immediate children for
+                  that root only. Validated server-side.
       responses:
         200:
           description: Deterministic candidates returned for curator review

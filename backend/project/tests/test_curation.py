@@ -563,6 +563,160 @@ class TestLegacyMode(CurationTestBase):
         self.assertEqual([], result["grouped_unclassified"])
 
 
+class TestExplicitBoundaries(CurationTestBase):
+    """A curator may choose where one record ends, within strict limits."""
+
+    FILES = [
+        "data/DFT/Figure2/espresso_calculation/scf.in",
+        "data/DFT/Figure2/espresso_calculation/scf.out",
+        "data/DFT/Figure2/plot.dat",
+        "data/DFT/Figure3/scf.in",
+        "data/other/x.dat",
+        "scripts/analysis/run.py",
+        "scripts/analysis/helper.py",
+        "doc/notes.md",
+    ]
+    DIRS = [
+        "data", "data/DFT", "data/DFT/Figure2",
+        "data/DFT/Figure2/espresso_calculation", "data/DFT/Figure3",
+        "data/other", "scripts", "scripts/analysis", "doc",
+    ]
+
+    def analyze_tree(self, boundaries=None):
+        return curation.analyze_folder_tree(
+            self.FILES, self.DIRS, {}, boundaries=boundaries)
+
+    def dataset_paths(self, result):
+        return sorted(f for c in result["datasets"]
+                      for f in c["proposal"]["files"])
+
+    def test_no_boundaries_uses_immediate_children(self):
+        result = self.analyze_tree()
+        self.assertEqual("legacy", result["structure_mode"])
+        self.assertEqual(["data/DFT", "data/other"],
+                         self.dataset_paths(result))
+        self.assertEqual({}, result["applied_boundaries"])
+
+    def test_selecting_the_parent_yields_one_dataset(self):
+        result = self.analyze_tree({"data": ["data/DFT"]})
+        self.assertEqual(["data/DFT"], self.dataset_paths(result))
+        self.assertEqual(1, len(result["datasets"]))
+        # Everything beneath it belongs to that one record.
+        candidate = result["datasets"][0]
+        self.assertTrue(any("everything in it" in line
+                            for line in candidate["evidence"]))
+        self.assertTrue(any("You chose this folder" in line
+                            for line in candidate["evidence"]))
+        self.assertEqual({"data": ["data/DFT"]}, result["applied_boundaries"])
+
+    def test_selecting_a_child_splits_it_instead(self):
+        result = self.analyze_tree(
+            {"data": ["data/DFT/Figure2", "data/DFT/Figure3"]})
+        self.assertEqual(["data/DFT/Figure2", "data/DFT/Figure3"],
+                         self.dataset_paths(result))
+
+    def test_a_selection_only_replaces_its_own_role_root(self):
+        result = self.analyze_tree({"data": ["data/DFT/Figure2"]})
+        # scripts/ keeps its deterministic default.
+        self.assertEqual(["scripts/analysis"],
+                         sorted(f for c in result["scripts"]
+                                for f in c["proposal"]["files"]))
+
+    def test_scripts_boundaries_are_honoured_too(self):
+        result = self.analyze_tree({"scripts": ["scripts/analysis"]})
+        self.assertEqual(["scripts/analysis"],
+                         sorted(f for c in result["scripts"]
+                                for f in c["proposal"]["files"]))
+
+    def test_duplicates_collapse_to_one(self):
+        result = self.analyze_tree(
+            {"data": ["data/DFT", "data/DFT", "data/DFT"]})
+        self.assertEqual(1, len(result["datasets"]))
+        self.assertEqual({"data": ["data/DFT"]}, result["applied_boundaries"])
+
+    def assert_rejected(self, boundaries, fragment):
+        with self.assertRaises(folderstandard.BoundaryError) as caught:
+            self.analyze_tree(boundaries)
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_a_parent_and_its_descendant_cannot_both_be_selected(self):
+        self.assert_rejected(
+            {"data": ["data/DFT", "data/DFT/Figure2"]}, "overlap")
+
+    def test_paths_outside_the_role_root_are_rejected(self):
+        self.assert_rejected({"data": ["scripts/analysis"]}, "is not inside")
+
+    def test_unseen_paths_are_rejected(self):
+        self.assert_rejected(
+            {"data": ["data/DFT/Figure9"]}, "was not found")
+
+    def test_absolute_urls_and_traversal_are_rejected(self):
+        for bad in ("/etc/passwd", "../../etc", "data/../../etc",
+                    "https://evil.example.com/x", "data\\DFT",
+                    "data/%2e%2e/x"):
+            self.assert_rejected({"data": [bad]},
+                                 "not a relative folder"
+                                 if bad != "data/../../etc" else "not a")
+
+    def test_an_unknown_role_root_is_rejected(self):
+        self.assert_rejected({"nope": ["nope/a"]}, "not a folder in this paper")
+
+    def test_a_malformed_payload_is_rejected(self):
+        self.assert_rejected({"data": "data/DFT"}, "must be a list")
+        with self.assertRaises(folderstandard.BoundaryError):
+            self.analyze_tree(["data/DFT"])
+
+    def test_docs_still_never_produce_candidates(self):
+        result = self.analyze_tree({"data": ["data/DFT"]})
+        for group in ("charts", "datasets", "scripts", "tools"):
+            for candidate in result[group]:
+                for path in candidate["paths"]:
+                    self.assertFalse(path.startswith("doc/"), path)
+
+    def test_standard_folders_do_not_need_a_selection(self):
+        files = ["datasets/a/x.csv", "charts/f1/preview.png",
+                 "scripts/s/run.py"]
+        dirs = ["datasets", "datasets/a", "charts", "charts/f1",
+                "scripts", "scripts/s"]
+        result = curation.analyze_folder_tree(files, dirs, {})
+        self.assertEqual("standard", result["structure_mode"])
+        self.assertEqual(["datasets/a"], self.dataset_paths(result))
+        # No picker is offered for a standard layout.
+        self.assertEqual({}, result["boundary_trees"])
+
+    def test_the_endpoint_rejects_a_bad_boundary_with_400(self):
+        self.login()
+        with mock.patch("project.curation._list_directory",
+                        side_effect=fake_lister), \
+                mock.patch("project.curation._fetch_text",
+                           side_effect=lambda url: ""):
+            response = self.client.post(
+                "/api/curation/analyze-folder",
+                json={"path": FOLDER,
+                      "boundaries": {"data": ["/etc/passwd"]}},
+                headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(400, response.status_code)
+        self.assertIn("not a relative folder", response.json()["error"])
+
+    def test_the_endpoint_applies_a_valid_boundary(self):
+        self.login()
+        with mock.patch("project.curation._list_directory",
+                        side_effect=fake_lister), \
+                mock.patch("project.curation._fetch_text",
+                           side_effect=lambda url: ""):
+            response = self.client.post(
+                "/api/curation/analyze-folder",
+                json={"path": FOLDER, "boundaries": {"data": ["data"]}},
+                headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        datasets = body["candidates"]["datasets"]
+        self.assertEqual(1, len(datasets))
+        self.assertEqual(["data"], datasets[0]["proposal"]["files"])
+        self.assertEqual({"data": ["data"]},
+                         body["candidates"]["applied_boundaries"])
+
+
 class TestNeedsReorganization(CurationTestBase):
     def test_unknown_roots_produce_grouped_rows_and_no_candidates(self):
         files = ["mystery/%d.png" % i for i in range(120)]
