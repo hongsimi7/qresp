@@ -25,21 +25,32 @@ import {
 // width and in any theme. (A rendered image of a folder tree would carry
 // unselectable, unscalable text.)
 const TREE = [
-  { depth: 0, name: "my-paper/", kind: "folder" },
-  { depth: 1, name: "figures/", kind: "folder" },
-  { depth: 2, name: "figure-01/", kind: "folder" },
-  { depth: 3, name: "figure-01.png", kind: "image" },
-  { depth: 3, name: "figure-01.ipynb", kind: "file" },
-  { depth: 3, name: "figure-01-data.csv", kind: "file" },
-  { depth: 1, name: "datasets/", kind: "folder" },
-  { depth: 2, name: "bandgap/", kind: "folder" },
-  { depth: 3, name: "bandgap.csv", kind: "file" },
-  { depth: 1, name: "scripts/", kind: "folder" },
-  { depth: 2, name: "analysis/", kind: "folder" },
-  { depth: 3, name: "analyze_bandgap.py", kind: "file" },
+  { depth: 0, name: "paper-folder/", kind: "folder" },
   { depth: 1, name: "README.md", kind: "file" },
-  { depth: 1, name: "environment.yml", kind: "file" },
+  { depth: 1, name: "main.ipynb", kind: "file" },
+  { depth: 1, name: "datasets/", kind: "folder" },
+  { depth: 2, name: "dataset-id/", kind: "folder" },
+  { depth: 3, name: "...", kind: "file" },
+  { depth: 1, name: "charts/", kind: "folder" },
+  { depth: 2, name: "figure-id/", kind: "folder" },
+  { depth: 3, name: "preview.png", kind: "image" },
+  { depth: 3, name: "notebook.ipynb", kind: "file" },
+  { depth: 3, name: "data/", kind: "folder" },
+  { depth: 4, name: "...", kind: "file" },
+  { depth: 1, name: "scripts/", kind: "folder" },
+  { depth: 2, name: "script-id/", kind: "folder" },
+  { depth: 3, name: "...", kind: "file" },
+  { depth: 1, name: "tools/", kind: "folder" },
+  { depth: 2, name: "tool-id/", kind: "folder" },
+  { depth: 3, name: "...", kind: "file" },
+  { depth: 1, name: "docs/", kind: "folder" },
+  { depth: 2, name: "...", kind: "file" },
 ];
+
+// The same tree as plain text, for the clipboard.
+const TREE_TEXT = TREE.map(
+  (entry) => `${"  ".repeat(entry.depth)}${entry.name}`
+).join("\n");
 
 const iconFor = (kind) => {
   const sx = { fontSize: 16, mr: 0.75, flexShrink: 0 };
@@ -87,16 +98,35 @@ const FolderTree = () => (
 );
 
 const TIPS = [
-  "This layout is optional. Existing folders are analyzed exactly as they are — nothing here is required, checked, or scored.",
-  "Keep an image, its notebook and its input data together where practical. Qresp can link them when they sit in the same folder and share a basename.",
-  "Use meaningful folder and file names; recognizable names like figures, data, datasets and scripts help when practical.",
-  "A README.md is a good place to explain the project to collaborators.",
-  "Ordinary files like requirements.txt or environment.yml improve software and version detection. No Qresp-specific file is ever needed.",
+  "All five role folders are optional — use only the ones your paper needs.",
+  "For new Qresp-managed folders use these exact lowercase names: datasets, charts, scripts, tools, docs.",
+  "Each immediate child of datasets/, charts/, scripts/ or tools/ is ONE Qresp record, and everything beneath that child belongs to it.",
+  "A file placed directly under datasets/ is one dataset on its own.",
+  "In a chart folder, preview.png is the image, notebook.ipynb is the notebook, and data/ holds its inputs.",
+  "docs/ is ignored by the analysis entirely.",
+  "No YAML, JSON, metadata manifest or Qresp-specific file is ever required.",
+  "Existing folders are never renamed. Recognized legacy names such as data, Figures_Tables, Plot_Scripts and doc keep working.",
+  "Figure number, caption, scientific description and tool version are never inferred from filenames — you enter those, or accept an AI suggestion.",
   "Never store secrets, API keys, credentials or private account data in a folder Qresp may inspect.",
 ];
 
 const FolderGuide = () => {
   const [open, setOpen] = useState(false);
+  const [copyState, setCopyState] = useState("");
+
+  // Clipboard access is unavailable over plain HTTP and in some browsers, so
+  // failure is expected and gets a useful answer rather than a silent no-op.
+  const copyStructure = async () => {
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.writeText) {
+        throw new Error("clipboard unavailable");
+      }
+      await navigator.clipboard.writeText(TREE_TEXT);
+      setCopyState("Copied.");
+    } catch (err) {
+      setCopyState("Could not copy — select the tree above and copy it.");
+    }
+  };
 
   return (
     <Fragment>
@@ -121,9 +151,28 @@ const FolderGuide = () => {
             that tend to make the analysis more useful — not requirements.
           </Typography>
 
-          <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
-            An example layout
-          </Typography>
+          <Box
+            sx={{
+              mt: 2,
+              mb: 1,
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              flexWrap: "wrap",
+            }}
+          >
+            <Typography variant="subtitle2">
+              Qresp Folder Standard v1
+            </Typography>
+            <Button size="small" onClick={copyStructure}>
+              Copy standard structure
+            </Button>
+            {copyState ? (
+              <Typography variant="caption" color="text.secondary">
+                {copyState}
+              </Typography>
+            ) : null}
+          </Box>
           <FolderTree />
 
           <Box component="ul" sx={{ pl: 3, mt: 2, mb: 0 }}>

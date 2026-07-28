@@ -36,18 +36,21 @@ describe("How to organize an RCC folder", () => {
     const tree = await screen.findByTestId("folder-guide-tree");
     // Real, selectable text — every level of the example is present.
     [
-      "my-paper/",
-      "figures/",
-      "figure-01/",
-      "figure-01.png",
-      "figure-01.ipynb",
-      "figure-01-data.csv",
-      "datasets/",
-      "bandgap.csv",
-      "scripts/",
-      "analyze_bandgap.py",
+      "paper-folder/",
       "README.md",
-      "environment.yml",
+      "main.ipynb",
+      "datasets/",
+      "dataset-id/",
+      "charts/",
+      "figure-id/",
+      "preview.png",
+      "notebook.ipynb",
+      "data/",
+      "scripts/",
+      "script-id/",
+      "tools/",
+      "tool-id/",
+      "docs/",
     ].forEach((entry) => {
       expect(tree).toHaveTextContent(entry);
     });
@@ -77,9 +80,18 @@ describe("How to organize an RCC folder", () => {
     await screen.findByTestId("folder-guide-tree");
 
     const text = document.body.textContent;
-    expect(text).toMatch(/this layout is optional/i);
-    expect(text).toMatch(/existing folders are analyzed exactly as they are/i);
-    expect(text).toMatch(/no qresp-specific file is ever needed/i);
+    expect(text).toMatch(/all five role folders are optional/i);
+    expect(text).toMatch(/existing folders are never renamed/i);
+    expect(text).toMatch(
+      /no yaml, json, metadata manifest or qresp-specific file is ever required/i
+    );
+    // The exact standard names, and what a boundary means.
+    expect(text).toMatch(/datasets, charts, scripts, tools, docs/i);
+    expect(text).toMatch(/each immediate child of datasets\/, charts\/,/i);
+    expect(text).toMatch(/docs\/ is ignored by the analysis entirely/i);
+    expect(text).toMatch(
+      /figure number, caption, scientific description and tool version are never inferred/i
+    );
     // It must not invent a manifest requirement.
     expect(text).not.toMatch(/qresp\.ya?ml/i);
     expect(text).not.toMatch(/manifest file/i);
@@ -101,6 +113,47 @@ describe("How to organize an RCC folder", () => {
       screen.getByText(
         /does not let qresp\s*infer figure numbers, captions, scientific properties or package\s*versions without evidence/i
       )
+    ).toBeInTheDocument();
+  });
+
+  it("copies the standard structure as plain text", async () => {
+    const user = userEvent.setup();
+    const writeText = jest.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    render(<FolderGuide />);
+    await user.click(
+      screen.getByRole("button", { name: /how to organize an rcc folder/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /copy standard structure/i })
+    );
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const copied = writeText.mock.calls[0][0];
+    expect(copied).toContain("paper-folder/");
+    expect(copied).toContain("  datasets/");
+    expect(copied).toContain("      preview.png");
+    expect(await screen.findByText(/^copied\.$/i)).toBeInTheDocument();
+  });
+
+  it("says so when the clipboard is unavailable", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    render(<FolderGuide />);
+    await user.click(
+      screen.getByRole("button", { name: /how to organize an rcc folder/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /copy standard structure/i })
+    );
+    expect(
+      await screen.findByText(/could not copy — select the tree above/i)
     ).toBeInTheDocument();
   });
 

@@ -90,60 +90,99 @@ exactly and stay fully editable.
 
 **Everything below is deterministic. AI is never required.**
 
-### Folder roles come first
+### Qresp Folder Standard v1
 
-Classifying every file by its extension across the whole tree is what made a
-documentation logo a Chart and a job script under `data/` a Script. What a
-file *is* depends on **where it sits**, so analysis runs at three levels:
-folder role → artifact group → individual files.
+Classifying every file by extension is what produced hundreds of bogus
+candidates. A paper folder already says where one record ends and the next
+begins, so the analyzer reads its SHAPE instead.
 
-A role is suggested per top-level directory from its name (`figures_tables/`
-→ Figures, `data/` → Datasets, `scripts/` → Scripts, `doc/` →
-Documentation / Ignore) and shown in the review dialog under **Folder
-roles**, where the curator can change any of them and re-run. The mapping is
-**session-only**: nothing is written to MongoDB, nothing is sent to RCC, and
-an unrecognized directory is simply `Unclassified` — never guessed into a
-productive role. A nested directory may be given its own entry, which
-overrides its parent.
+```text
+paper-folder/
+  README.md
+  main.ipynb
+  datasets/
+    dataset-id/
+      ...
+  charts/
+    figure-id/
+      preview.png
+      notebook.ipynb
+      data/
+        ...
+  scripts/
+    script-id/
+      ...
+  tools/
+    tool-id/
+      ...
+  docs/
+    ...
+```
 
-Roles are boundaries, not hints:
+- All five role folders are **optional**; use only what the paper needs.
+- For new Qresp-managed folders the names are **exactly** `datasets`,
+  `charts`, `scripts`, `tools`, `docs`, lowercase. The paper root name is
+  unrestricted.
+- **Each immediate child of `datasets/`, `charts/`, `scripts/` or `tools/` is
+  ONE record**, and everything beneath it belongs to that record.
+- A file placed directly under `datasets/` is one dataset on its own.
+- In a chart folder, `preview.png` is the image, `notebook.ipynb` the
+  notebook, `data/` the inputs.
+- `docs/` is ignored entirely.
+- **No YAML, JSON, metadata manifest or Qresp-specific file is ever
+  required.** New artifact ids must be URL-safe (`[A-Za-z0-9._-]+`).
 
-| Role | Produces |
+### Three modes
+
+| Mode | When | Behavior |
+| --- | --- | --- |
+| **Qresp Standard** | every productive root is already an exact role name | deterministic immediate-child boundaries |
+| **Legacy-compatible** | every productive root matches a known alias | same boundaries, plus a boundary picker for nested dataset/script trees |
+| **Needs reorganization** | any productive root is unknown | **no candidates and no extension guessing** — one grouped row per unsupported root, and Add is disabled |
+
+Legacy aliases, matched case-insensitively. **Nothing on the file server is
+ever renamed** — the mapping only says how to read it.
+
+| Role | Aliases |
 | --- | --- |
-| Figures | Chart groups only |
-| Datasets | Dataset groups only — a `.sh`/`.py`/`.ipynb` here is **not** a Script |
-| Scripts | Script candidates only — a `.csv`/`.json` here is **not** a Dataset |
-| Documentation / Ignore | **Nothing.** Its files stay visible under Unclassified |
-| Unclassified | Extension-based guesses, always at **low** classification confidence |
+| datasets | data, datasets, dataset, raw_data, rawdata, raw-data, data_files, datafiles |
+| charts | charts, chart, figures_tables, figures-tables, figurestables, figures, figure, figs, fig, plots |
+| scripts | scripts, script, plot_scripts, plotscripts, postprocessing_scripts, code, codes, src |
+| docs | doc, docs, documentation, tutorials, tutorial, manual |
+| tools | tools, tool, software |
 
-Branding and documentation graphics (`logo`, `icon`, `toc`,
-`graphical_abstract`, `banner`, `screenshot`, …) are never Charts, wherever
-they sit.
+### Choosing record boundaries by hand
 
-### Artifacts, not files
+Legacy trees nest in ways only the author can resolve, so their dataset and
+script roots come with a compact picker (folder names and file counts, never
+a file list). One selected folder becomes exactly one record; selecting a
+parent clears any descendant and vice versa, because the same file must not
+land in two records. Nothing is selected by default, and **Rebuild proposals**
+re-runs the analysis on the server — the browser never mutates candidates
+itself.
 
-One candidate per matching file turned a single Figure 2 into five Charts
-and a Script. Candidates are built from artifact **groups**:
+```text
+POST /api/curation/analyze-folder
+{
+  "path": "https://notebook.rcc.uchicago.edu/files/<paper>",
+  "boundaries": {
+    "data":    ["data/DFT/Figure2/espresso_calculation"],
+    "scripts": ["scripts/analysis"]
+  }
+}
+```
 
-- A folder **named after one of its images** is one chart. The named image
-  represents it and the rest ride along as associated files —
-  `figure_2/{figure_2.png, homo.png, lumo.png, rdos_pb.png}` is one Chart.
-- A **figures container** holding distinct images keeps one chart per image;
-  panels are only implied by a named folder.
-- Several unnamed images with no Figures role are **not guessed** — they go
-  to Unclassified with the group listed under `ungrouped_images`.
-- A notebook is offered as a chart's `notebookFile` (same folder, same
-  basename) or reported under `notebook_hints`. **A notebook is never a
-  Script candidate**, because it is usually what produced a figure.
+Every submitted path is validated server-side: it must be a relative POSIX
+path **this analysis actually listed**, normalized, below the role root it was
+submitted for, with no absolute path, URL, `..`, backslash or percent-encoding,
+and no parent/descendant overlap. Duplicates collapse. Anything else is a
+`400` with a plain reason. A selection replaces the defaults **only within its
+own role root**; every other root keeps its deterministic children.
 
-### Two confidences, never conflated
-
-- **Classification confidence** — is this a Chart/Dataset/Script *at all*?
-  Capped at `medium` ("likely"): a directory convention is good evidence,
-  never proof. An extension-only guess is `low`. It is **never** `high`
-  merely because a file exists.
-- **Field evidence** — how sure is one field's *value*? A detected path is
-  `high` here; that is a claim about the file, not about the artifact.
+The response adds `structure_mode`, `structure_issues[]`, `normalized_roles`,
+`boundary_trees`, `applied_boundaries` and `grouped_unclassified`. Unclassified
+files are reported as grouped folder rows — path, file count, representative
+extensions and a bounded name sample — never as a list of every path.
 
 A field is filled in **only when a file on the server proves it**. Everything
 else is left blank, flagged in `needs_input`, and the reason is reported as
