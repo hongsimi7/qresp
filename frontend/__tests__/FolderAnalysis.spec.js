@@ -23,16 +23,19 @@ const analysis = {
         id: "chart-0",
         kind: "chart",
         confidence: "high",
-        evidence: ["figures/figure1.png is a .png image"],
-        needs_input: ["caption", "number"],
+        evidence: [
+          "figures/figure1.png is a .png image",
+          "Filename hints (not metadata): figure",
+        ],
+        needs_input: ["caption", "number", "properties"],
         paths: ["figures/figure1.png"],
         proposal: {
           imageFile: "figures/figure1.png",
           files: [],
           notebookFile: "",
-          number: 1,
+          number: "",
           caption: "",
-          properties: ["figure"],
+          properties: [],
           extraFields: [],
         },
       },
@@ -47,7 +50,7 @@ const analysis = {
         paths: ["data/short_traj/traj_1.xyz", "data/short_traj/traj_2.xyz"],
         proposal: {
           files: ["data/short_traj/traj_1.xyz", "data/short_traj/traj_2.xyz"],
-          readme: "Files from data/short_traj",
+          readme: "",
           URLs: [],
           extraFields: [],
         },
@@ -58,12 +61,16 @@ const analysis = {
         id: "script-0",
         kind: "script",
         confidence: "high",
-        evidence: ["Description taken from the file's own header/docstring"],
-        needs_input: [],
+        evidence: [
+          "scripts/plot_vdos.py is a .py script",
+          "Header/docstring found (shown as evidence, not copied into the " +
+            "description): Plot the vibrational density of states.",
+        ],
+        needs_input: ["readme"],
         paths: ["scripts/plot_vdos.py"],
         proposal: {
           files: ["scripts/plot_vdos.py"],
-          readme: "Plot the vibrational density of states.",
+          readme: "",
           URLs: [],
           extraFields: [],
         },
@@ -291,6 +298,91 @@ describe("Analyze RCC Folder", () => {
     expect(screen.getByLabelText(/^caption$/i)).toBeInTheDocument();
   });
 
+  it("nothing is selected by default", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await openAnalysis(user);
+
+    screen.getAllByRole("checkbox").forEach((box) => {
+      expect(box).not.toBeChecked();
+    });
+    expect(
+      screen.getByRole("button", { name: /add selected items to curator/i })
+    ).toBeDisabled();
+    expect(addMany).not.toHaveBeenCalled();
+  });
+
+  it("collapses a long list behind Show all, discarding nothing", async () => {
+    const many = {
+      ...analysis,
+      candidates: {
+        ...analysis.candidates,
+        charts: Array.from({ length: 40 }, (unused, index) => ({
+          ...analysis.candidates.charts[0],
+          id: `chart-${index}`,
+          // Later ones have weaker evidence, so they sort to the back.
+          confidence: index < 5 ? "high" : "medium",
+          paths: [`figures/figure${index}.png`],
+          proposal: {
+            ...analysis.candidates.charts[0].proposal,
+            imageFile: `figures/figure${index}.png`,
+          },
+        })),
+      },
+    };
+    axios.post.mockResolvedValue({ data: many });
+    const user = userEvent.setup();
+    renderWith();
+    await user.click(analyzeButton());
+    await screen.findByRole("tab", { name: /charts \(40\)/i });
+
+    // The tab count is honest about the total; the list shows the first 25.
+    expect(screen.getAllByRole("checkbox")).toHaveLength(25);
+    // Strongest evidence leads.
+    expect(screen.getAllByTestId(/^confidence-/)[0]).toHaveTextContent("high");
+    // And the rest are explicitly reachable, described as collapsed.
+    expect(
+      screen.getByText(/15 more with weaker evidence are collapsed, not discarded/i)
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /show all 40 candidates/i })
+    );
+    expect(screen.getAllByRole("checkbox")).toHaveLength(40);
+    expect(
+      screen.queryByRole("button", { name: /show all/i })
+    ).toBeNull();
+  });
+
+  it("a selected candidate is never hidden by the collapse", async () => {
+    const many = {
+      ...analysis,
+      candidates: {
+        ...analysis.candidates,
+        charts: Array.from({ length: 30 }, (unused, index) => ({
+          ...analysis.candidates.charts[0],
+          id: `chart-${index}`,
+          paths: [`figures/figure${index}.png`],
+          proposal: {
+            ...analysis.candidates.charts[0].proposal,
+            imageFile: `figures/figure${index}.png`,
+          },
+        })),
+      },
+    };
+    axios.post.mockResolvedValue({ data: many });
+    const user = userEvent.setup();
+    renderWith();
+    await user.click(analyzeButton());
+    await screen.findByRole("tab", { name: /charts \(30\)/i });
+
+    await user.click(screen.getByRole("button", { name: /show all 30/i }));
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figures \/ figure29\.png/i })
+    );
+    expect(screen.getAllByRole("checkbox")).toHaveLength(30);
+  });
+
   it("keeps Unclassified secondary and collapsed by default", async () => {
     const user = userEvent.setup();
     renderWith();
@@ -341,8 +433,8 @@ describe("Analyze RCC Folder", () => {
       expect.objectContaining({
         imageFile: "figures/figure1.png",
         caption: "Density of states",
-        number: "1",
-        properties: ["figure"],
+        number: "",
+        properties: [],
         files: [],
         notebookFile: "",
         extraFields: [],
@@ -523,61 +615,137 @@ describe("Analyze RCC Folder", () => {
   });
 });
 
-describe("Analyze RCC Folder — optional AI descriptions", () => {
+describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     axios.post.mockResolvedValue({ data: analysis });
   });
 
-  const aiButton = () =>
-    screen.getByRole("button", {
-      name: /enhance selected with ai/i,
-    });
+  const enhanceButton = () =>
+    screen.getByRole("button", { name: /enhance selected with ai/i });
 
   const consentBox = () =>
     screen.getByRole("checkbox", {
-      name: /send the selected file and folder names to the ai service/i,
+      name: /i agree to send this evidence to gemini for this request/i,
     });
 
-  it("requires consent AND a selection before anything is sent", async () => {
+  const sendButton = () =>
+    screen.getByRole("button", { name: /send and get suggestions/i });
+
+  // Selects a candidate in the given tab and opens the consent dialog.
+  const selectAndOpenConsent = async (user, tab, name) => {
+    if (tab) {
+      await user.click(screen.getByRole("tab", { name: tab }));
+    }
+    await user.click(screen.getByRole("checkbox", { name }));
+    await user.click(enhanceButton());
+    return screen.findByRole("heading", { name: /send .* to gemini\?/i });
+  };
+
+  const consentAndSend = async (user, reply) => {
+    axios.post.mockResolvedValue({ data: reply });
+    await user.click(consentBox());
+    await user.click(sendButton());
+  };
+
+  it("is disabled until at least one candidate is selected", async () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
 
-    expect(consentBox()).not.toBeChecked();
-    expect(aiButton()).toBeDisabled();
+    expect(enhanceButton()).toBeDisabled();
     expect(
       screen.getByText(/select the candidates you want described first/i)
     ).toBeInTheDocument();
+    // Only the analyze call has happened.
+    expect(axios.post).toHaveBeenCalledTimes(1);
 
-    // A selection alone is not consent.
     await user.click(
       screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
     );
-    expect(aiButton()).toBeDisabled();
-
-    // Consent alone, with nothing selected, is not a request either.
-    expect(axios.post.mock.calls).toHaveLength(1);
+    expect(enhanceButton()).toBeEnabled();
   });
 
-  it("sends only allowlisted, relative, locally-extracted context", async () => {
+  it("opens a consent dialog that sends nothing by itself", async () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
-    await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
-    await user.click(
-      screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
+    await selectAndOpenConsent(
+      user, null, /select figures \/ figure1\.png/i
     );
-    await user.click(consentBox());
 
-    axios.post.mockResolvedValue({
-      data: {
-        suggestions: {
-          "script-0": { description: "Plots the VDOS.", keywords: ["VDOS"] },
+    // The dialog states the count and the exact scope BEFORE anything moves.
+    expect(
+      screen.getByRole("heading", { name: /send 1 selected item\(s\) to gemini\?/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/relative paths, file names and folder names/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/readme, docstring and dependency-manifest excerpts/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/raw datasets, image bytes,\s*notebook contents, credentials/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/nothing is filled in, added,\s*saved or published/i)
+    ).toBeInTheDocument();
+
+    // Unchecked by default, and the send action is blocked.
+    expect(consentBox()).not.toBeChecked();
+    expect(sendButton()).toBeDisabled();
+    // Opening the dialog is not a request.
+    expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes NO request when consent is refused", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
+
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(axios.post.mock.calls[0][0]).toBe("/api/curation/analyze-folder");
+  });
+
+  it("asks for consent again on every request — it is never remembered", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
+    await consentAndSend(user, {
+      suggestions: {
+        "chart-0": { description: "d", keywords: [], confidence: "low" },
+      },
+    });
+    await screen.findByTestId("ai-confidence-chart-0");
+
+    // Second run: the box is unchecked again and send is blocked again.
+    await user.click(enhanceButton());
+    await screen.findByRole("heading", { name: /send .* to gemini\?/i });
+    expect(consentBox()).not.toBeChecked();
+    expect(sendButton()).toBeDisabled();
+  });
+
+  it("sends only the SELECTED candidates and only allowlisted evidence", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(
+      user, /scripts \(1\)/i, /select plot_vdos\.py/i
+    );
+    await consentAndSend(user, {
+      suggestions: {
+        "script-0": {
+          description: "Plots the VDOS.",
+          keywords: ["VDOS"],
+          confidence: "medium",
+          reason: "module docstring",
         },
       },
     });
-    await user.click(aiButton());
     await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
 
     const [url, body] = axios.post.mock.calls[1];
@@ -596,110 +764,174 @@ describe("Analyze RCC Folder — optional AI descriptions", () => {
       expect(path.startsWith("/")).toBe(false);
       expect(path).not.toContain("://");
     });
-    // Only the text Qresp already read locally travels as context.
-    expect(item.context).toContain("Plot the vibrational density of states.");
+    // Unselected candidates never travel.
+    const serialized = JSON.stringify(body.items);
+    expect(serialized).not.toContain("chart-0");
+    expect(serialized).not.toContain("dataset-0");
+    expect(serialized).not.toContain("tool-0");
+    expect(serialized).not.toContain("README.md");
   });
 
-  it("parks proposals for review and NEVER overwrites what the curator typed", async () => {
+  it("shows suggestions in a labelled AI area, applying nothing", async () => {
     const user = userEvent.setup();
     const { addMany } = renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(
+      user, /scripts \(1\)/i, /select plot_vdos\.py/i
+    );
+    await consentAndSend(user, {
+      suggestions: {
+        "script-0": {
+          description: "AI text",
+          keywords: ["md"],
+          confidence: "medium",
+          reason: "module docstring",
+        },
+      },
+    });
+
+    // The label names the source and its own confidence, distinctly from
+    // the deterministic evidence chip.
+    const badge = await screen.findByTestId("ai-confidence-script-0");
+    expect(badge).toHaveTextContent("AI suggestion: medium");
+    expect(screen.getByTestId("ai-reason-script-0")).toHaveTextContent(
+      /based on: module docstring/i
+    );
+    expect(screen.getByText(/not applied/i)).toBeInTheDocument();
+    // Nothing was written into the form and nothing was added.
+    expect(screen.getByLabelText(/^description$/i)).toHaveValue("");
+    expect(addMany).not.toHaveBeenCalled();
+  });
+
+  it("never shows a numeric percentage for AI confidence", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(
+      user, /scripts \(1\)/i, /select plot_vdos\.py/i
+    );
+    await consentAndSend(user, {
+      suggestions: {
+        "script-0": { description: "d", keywords: [], confidence: "medium" },
+      },
+    });
+    await screen.findByTestId("ai-confidence-script-0");
+    // The dialog is portalled, so check the whole document.
+    expect(document.body.textContent).not.toMatch(/\d+\s*%/);
+    expect(document.body.textContent).toContain("AI suggestion: medium");
+  });
+
+  it("applies a suggestion only on explicit per-field acceptance", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(
+      user, /scripts \(1\)/i, /select plot_vdos\.py/i
+    );
+    await consentAndSend(user, {
+      suggestions: {
+        "script-0": {
+          description: "AI text",
+          keywords: ["md"],
+          confidence: "low",
+        },
+      },
+    });
+    await screen.findByTestId("ai-confidence-script-0");
+
+    expect(screen.getByLabelText(/^description$/i)).toHaveValue("");
+    await user.click(screen.getByRole("button", { name: /use as description/i }));
+    expect(screen.getByLabelText(/^description$/i)).toHaveValue("AI text");
+
+    // Accepting is not adding: Curator state is still untouched.
+    expect(addMany).not.toHaveBeenCalled();
+  });
+
+  it("refuses to overwrite a value the curator typed", async () => {
+    const user = userEvent.setup();
+    renderWith();
     await openAnalysis(user);
     await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
     await user.click(
       screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
     );
-
-    // The curator writes their own description first.
-    await user.clear(screen.getByLabelText(/^description$/i));
     await user.type(screen.getByLabelText(/^description$/i), "Mine");
-    await user.click(consentBox());
-
-    axios.post.mockResolvedValue({
-      data: {
-        suggestions: {
-          "script-0": { description: "AI text", keywords: ["VDOS"] },
-        },
+    await user.click(enhanceButton());
+    await screen.findByRole("heading", { name: /send .* to gemini\?/i });
+    await consentAndSend(user, {
+      suggestions: {
+        "script-0": { description: "AI text", keywords: [], confidence: "low" },
       },
     });
-    await user.click(aiButton());
+    await screen.findByTestId("ai-confidence-script-0");
 
-    // The proposal is visible and clearly not applied; the typed value stands.
-    expect(await screen.findByText(/AI proposal — not applied/i)).toBeInTheDocument();
+    // The suggestion is visible but cannot be applied over the user's text.
     expect(screen.getByText("AI text")).toBeInTheDocument();
     expect(screen.getByLabelText(/^description$/i)).toHaveValue("Mine");
-    expect(screen.getByText(/nothing has been filled in/i)).toBeInTheDocument();
-    expect(addMany).not.toHaveBeenCalled();
-
-    // Only an explicit accept moves it into the field.
-    await user.click(screen.getByRole("button", { name: /use as description/i }));
-    expect(screen.getByLabelText(/^description$/i)).toHaveValue("AI text");
-    // Still editable afterwards, and still nothing added or saved.
-    await user.clear(screen.getByLabelText(/^description$/i));
-    await user.type(screen.getByLabelText(/^description$/i), "Final");
-    expect(screen.getByLabelText(/^description$/i)).toHaveValue("Final");
-    expect(addMany).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: /use as description/i })
+    ).toBeDisabled();
+    expect(
+      screen.getByText(/your text is kept — clear the field to use this instead/i)
+    ).toBeInTheDocument();
   });
 
-  it("leaves factual fields untouched by AI", async () => {
+  it("leaves every restricted factual field untouched", async () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
-    await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
-    );
-    await user.click(consentBox());
-
-    axios.post.mockResolvedValue({
-      data: {
-        suggestions: {
-          "chart-0": { description: "A nice figure", keywords: ["dft"] },
+    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
+    await consentAndSend(user, {
+      suggestions: {
+        "chart-0": {
+          description: "A nice figure",
+          keywords: ["dft"],
+          confidence: "medium",
+          // A hostile/confused provider trying to set factual fields.
+          number: 7,
+          imageFile: "invented.png",
+          notebookFile: "invented.ipynb",
+          files: "invented.csv",
+          packageName: "fake",
+          version: "9.9",
         },
       },
     });
-    await user.click(aiButton());
-    await screen.findByText(/AI proposal — not applied/i);
+    await screen.findByTestId("ai-confidence-chart-0");
 
-    // Charts accept caption/properties only — never the factual fields.
     expect(screen.getByLabelText(/^image file$/i)).toHaveValue(
       "figures/figure1.png"
     );
-    expect(screen.getByLabelText(/figure number/i)).toHaveValue("1");
+    expect(screen.getByLabelText(/figure number/i)).toHaveValue("");
     expect(screen.getByLabelText(/^notebook file$/i)).toHaveValue("");
-    expect(screen.getByLabelText(/^caption$/i)).toHaveValue("");
+    expect(screen.getByLabelText(/^files/i)).toHaveValue("");
 
+    // Only caption/properties are offered, and only on request.
     await user.click(screen.getByRole("button", { name: /use as caption/i }));
     expect(screen.getByLabelText(/^caption$/i)).toHaveValue("A nice figure");
-    // Accepting the caption did not disturb anything factual.
     expect(screen.getByLabelText(/^image file$/i)).toHaveValue(
       "figures/figure1.png"
     );
-    expect(screen.getByLabelText(/figure number/i)).toHaveValue("1");
-
-    // Keywords land in properties for charts, and only on request.
-    expect(screen.getByLabelText(/^properties/i)).toHaveValue("figure");
-    await user.click(screen.getByRole("button", { name: /use as properties/i }));
-    expect(screen.getByLabelText(/^properties/i)).toHaveValue("dft");
+    expect(screen.getByLabelText(/figure number/i)).toHaveValue("");
   });
 
   it("offers no keyword target where the record type has no keyword field", async () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
-    await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
-    await user.click(
-      screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
+    await selectAndOpenConsent(
+      user, /scripts \(1\)/i, /select plot_vdos\.py/i
     );
-    await user.click(consentBox());
-
-    axios.post.mockResolvedValue({
-      data: {
-        suggestions: {
-          "script-0": { description: "d", keywords: ["md", "water"] },
+    await consentAndSend(user, {
+      suggestions: {
+        "script-0": {
+          description: "d",
+          keywords: ["md", "water"],
+          confidence: "low",
         },
       },
     });
-    await user.click(aiButton());
-    await screen.findByText(/AI proposal — not applied/i);
+    await screen.findByTestId("ai-confidence-script-0");
 
     expect(screen.getByText("md")).toBeInTheDocument();
     expect(
@@ -710,26 +942,109 @@ describe("Analyze RCC Folder — optional AI descriptions", () => {
     ).toBeNull();
   });
 
-  it("sends only the SELECTED candidates, never the rest", async () => {
+  it("offers a kind second-opinion as a NOTE, never a reclassification", async () => {
+    const unsure = {
+      ...analysis,
+      candidates: {
+        ...analysis.candidates,
+        scripts: [{ ...analysis.candidates.scripts[0], confidence: "medium" }],
+      },
+    };
+    axios.post.mockResolvedValue({ data: unsure });
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await user.click(analyzeButton());
+    await screen.findByRole("tab", { name: /charts \(1\)/i });
+    await selectAndOpenConsent(
+      user, /scripts \(1\)/i, /select plot_vdos\.py/i
+    );
+    await consentAndSend(user, {
+      suggestions: {
+        "script-0": {
+          description: "d",
+          keywords: [],
+          kind: "dataset",
+          confidence: "low",
+        },
+      },
+    });
+
+    const note = await screen.findByTestId("ai-kind-script-0");
+    expect(note).toHaveTextContent(/reads this more like a dataset/i);
+    expect(note).toHaveTextContent(/nothing has been moved/i);
+    expect(
+      screen.getByRole("tab", { name: /scripts \(1\)/i })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /datasets \(1\)/i })).toBeInTheDocument();
+    expect(addMany).not.toHaveBeenCalled();
+  });
+
+  it("stays quiet about kind when the deterministic evidence was strong", async () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
+    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
+    await consentAndSend(user, {
+      suggestions: {
+        "chart-0": {
+          description: "d",
+          keywords: [],
+          kind: "dataset",
+          confidence: "low",
+        },
+      },
+    });
+    await screen.findByTestId("ai-confidence-chart-0");
+    expect(screen.queryByTestId("ai-kind-chart-0")).toBeNull();
+  });
+
+  it("an AI response never adds, saves, or publishes on its own", async () => {
+    const user = userEvent.setup();
+    const { addMany, setAlert } = renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
+    await consentAndSend(user, {
+      suggestions: {
+        "chart-0": { description: "x", keywords: [], confidence: "low" },
+      },
+    });
+    await screen.findByTestId("ai-confidence-chart-0");
+
+    expect(addMany).not.toHaveBeenCalled();
+    expect(setAlert).not.toHaveBeenCalled();
+    expect(axios.put).not.toHaveBeenCalled();
+    expect(axios.post.mock.calls.map((call) => call[0])).toEqual([
+      "/api/curation/analyze-folder",
+      "/api/curation/describe-candidates",
+    ]);
+  });
+
+  it("Add selected items to Curator still works after an AI review", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
+    await consentAndSend(user, {
+      suggestions: {
+        "chart-0": {
+          description: "AI caption",
+          keywords: [],
+          confidence: "medium",
+        },
+      },
+    });
+    await screen.findByTestId("ai-confidence-chart-0");
+    await user.click(screen.getByRole("button", { name: /use as caption/i }));
+
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+      screen.getByRole("button", { name: /add selected items to curator/i })
     );
-    await user.click(consentBox());
-
-    axios.post.mockResolvedValue({ data: { suggestions: {} } });
-    await user.click(aiButton());
-    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
-
-    const { items } = axios.post.mock.calls[1][1];
-    expect(items.map((item) => item.id)).toEqual(["chart-0"]);
-    const serialized = JSON.stringify(items);
-    expect(serialized).not.toContain("dataset-0");
-    expect(serialized).not.toContain("script-0");
-    expect(serialized).not.toContain("tool-0");
-    expect(serialized).not.toContain("README.md");
+    expect(addMany).toHaveBeenCalledWith("chart", [
+      expect.objectContaining({
+        imageFile: "figures/figure1.png",
+        caption: "AI caption",
+      }),
+    ]);
   });
 
   it("refuses an oversized batch locally, without any request", async () => {
@@ -761,130 +1076,36 @@ describe("Analyze RCC Folder — optional AI descriptions", () => {
         })
       );
     }
+    await user.click(enhanceButton());
+    await screen.findByRole("heading", { name: /send .* to gemini\?/i });
     await user.click(consentBox());
-    await user.click(aiButton());
+    await user.click(sendButton());
 
     expect(
       await screen.findByText(/at most 10 candidates — you have 11 selected/i)
     ).toBeInTheDocument();
-    // The analyze call is the only request that was ever made.
     expect(axios.post).toHaveBeenCalledTimes(1);
-    // Ticking eleven boxes one by one is slower than the 5s default.
   }, 30000);
-
-  it("offers a kind second-opinion as a NOTE, never a reclassification", async () => {
-    const unsure = {
-      ...analysis,
-      candidates: {
-        ...analysis.candidates,
-        scripts: [
-          { ...analysis.candidates.scripts[0], confidence: "medium" },
-        ],
-      },
-    };
-    axios.post.mockResolvedValue({ data: unsure });
-    const user = userEvent.setup();
-    const { addMany } = renderWith();
-    await user.click(analyzeButton());
-    await screen.findByRole("tab", { name: /charts \(1\)/i });
-    await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
-    await user.click(
-      screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
-    );
-    await user.click(consentBox());
-
-    axios.post.mockResolvedValue({
-      data: {
-        suggestions: {
-          "script-0": { description: "d", keywords: [], kind: "dataset" },
-        },
-      },
-    });
-    await user.click(aiButton());
-
-    const note = await screen.findByTestId("ai-kind-script-0");
-    expect(note).toHaveTextContent(/reads this more like a dataset/i);
-    expect(note).toHaveTextContent(/nothing has been moved/i);
-    // The candidate stays exactly where it was, under Scripts.
-    expect(
-      screen.getByRole("tab", { name: /scripts \(1\)/i })
-    ).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /datasets \(1\)/i })).toBeInTheDocument();
-    expect(addMany).not.toHaveBeenCalled();
-  });
-
-  it("stays quiet about kind when the deterministic pass was confident", async () => {
-    const user = userEvent.setup();
-    renderWith();
-    await openAnalysis(user);
-    await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
-    );
-    await user.click(consentBox());
-
-    axios.post.mockResolvedValue({
-      data: {
-        suggestions: {
-          "chart-0": { description: "d", keywords: [], kind: "dataset" },
-        },
-      },
-    });
-    await user.click(aiButton());
-    await screen.findByText(/AI proposal — not applied/i);
-    // chart-0 came back "high" confidence: no second-guessing.
-    expect(screen.queryByTestId("ai-kind-chart-0")).toBeNull();
-  });
-
-  it("an AI response never adds, saves, or publishes on its own", async () => {
-    const user = userEvent.setup();
-    const { addMany, setAlert } = renderWith();
-    await openAnalysis(user);
-    await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
-    );
-    await user.click(consentBox());
-
-    axios.post.mockResolvedValue({
-      data: { suggestions: { "chart-0": { description: "x", keywords: [] } } },
-    });
-    await user.click(aiButton());
-    await screen.findByText(/AI proposal — not applied/i);
-
-    expect(addMany).not.toHaveBeenCalled();
-    expect(setAlert).not.toHaveBeenCalled();
-    expect(axios.put).not.toHaveBeenCalled();
-    const posted = axios.post.mock.calls.map((call) => call[0]);
-    expect(posted).toEqual([
-      "/api/curation/analyze-folder",
-      "/api/curation/describe-candidates",
-    ]);
-  });
 
   it("is non-blocking when Gemini is not configured", async () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
-    // The deterministic candidates are there regardless.
-    expect(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
-    ).toBeInTheDocument();
+    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
 
-    await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
-    );
-    await user.click(consentBox());
     axios.post.mockRejectedValue({
       response: {
         status: 503,
         data: { error: "AI descriptions are not configured on this server." },
       },
     });
-    await user.click(aiButton());
+    await user.click(consentBox());
+    await user.click(sendButton());
 
     expect(
       await screen.findByText(/not configured on this server/i)
     ).toBeInTheDocument();
-    // The whole folder analysis is unaffected and still appliable.
+    // The deterministic review is unaffected and still appliable.
     expect(
       screen.getByRole("button", { name: /add selected items to curator/i })
     ).toBeEnabled();

@@ -215,9 +215,13 @@ const FolderAnalysis = ({ path }) => {
   // is only ever a SUGGESTION — it is parked here until the curator accepts
   // it into a field.
   const [aiConsent, setAiConsent] = useState(false);
+  const [aiConsentOpen, setAiConsentOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiNotice, setAiNotice] = useState("");
   const [aiSuggestions, setAiSuggestions] = useState({});
+  // Candidate lists can be long. Nothing is discarded — the rest is one
+  // explicit click away, and the count is always on screen.
+  const [showAll, setShowAll] = useState({});
 
   const ready = Boolean(target.trim());
 
@@ -234,9 +238,11 @@ const FolderAnalysis = ({ path }) => {
     setShowUnclassified(false);
     setTab(0);
     setAiConsent(false);
+    setAiConsentOpen(false);
     setAiLoading(false);
     setAiNotice("");
     setAiSuggestions({});
+    setShowAll({});
   };
 
   const analyze = async () => {
@@ -268,10 +274,40 @@ const FolderAnalysis = ({ path }) => {
     }
   };
 
+  const EVIDENCE_ORDER = { high: 0, medium: 1, low: 2 };
+  const DEFAULT_VISIBLE = 25;
+
+  // Strongest evidence first, so the default view leads with what Qresp can
+  // actually stand behind. Nothing is dropped by this ordering.
   const candidatesFor = (key) =>
-    (((analysis || {}).candidates || {})[key] || []).filter(
-      (candidate) => !removed[candidate.id]
+    (((analysis || {}).candidates || {})[key] || [])
+      .filter((candidate) => !removed[candidate.id])
+      .slice()
+      .sort(
+        (a, b) =>
+          (EVIDENCE_ORDER[a.confidence] == null
+            ? 3
+            : EVIDENCE_ORDER[a.confidence]) -
+          (EVIDENCE_ORDER[b.confidence] == null
+            ? 3
+            : EVIDENCE_ORDER[b.confidence])
+      );
+
+  // What the tab renders right now. Selected candidates are ALWAYS shown, so
+  // collapsing the list can never hide something the curator picked.
+  const visibleCandidatesFor = (key) => {
+    const all = candidatesFor(key);
+    if (showAll[key] || all.length <= DEFAULT_VISIBLE) {
+      return all;
+    }
+    const head = all.slice(0, DEFAULT_VISIBLE);
+    const kept = new Set(head.map((candidate) => candidate.id));
+    return head.concat(
+      all.slice(DEFAULT_VISIBLE).filter(
+        (candidate) => selected[candidate.id] && !kept.has(candidate.id)
+      )
     );
+  };
 
   const selectedCount = useMemo(
     () => Object.values(selected).filter(Boolean).length,
@@ -306,7 +342,23 @@ const FolderAnalysis = ({ path }) => {
     return items;
   };
 
+  // Consent is asked FRESH every time: the box resets whenever the dialog
+  // opens, and closing it (however) clears it again. There is deliberately
+  // no remembered "always allow".
+  const openAiConsent = () => {
+    setAiConsent(false);
+    setAiNotice("");
+    setAiConsentOpen(true);
+  };
+
+  const closeAiConsent = () => {
+    setAiConsentOpen(false);
+    setAiConsent(false);
+  };
+
   const describeWithAI = async () => {
+    setAiConsentOpen(false);
+    setAiConsent(false);
     const items = aiItems();
     if (items.length > MAX_AI_BATCH) {
       // Refused locally: no request is made at all.
@@ -397,9 +449,32 @@ const FolderAnalysis = ({ path }) => {
           bgcolor: "action.hover",
         }}
       >
-        <Typography variant="caption" color="text.secondary" display="block">
-          AI proposal — not applied
-        </Typography>
+        {/* Deliberately unlike the deterministic evidence chip: an outlined
+            secondary label, always prefixed "AI suggestion", so a model's
+            opinion can never be read as a detected fact. */}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+          <Chip
+            size="small"
+            variant="outlined"
+            color="secondary"
+            label={`AI suggestion: ${suggestion.confidence || "low"}`}
+            data-testid={`ai-confidence-${candidate.id}`}
+          />
+          <Typography variant="caption" color="text.secondary">
+            not applied
+          </Typography>
+        </Box>
+        {suggestion.reason ? (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            display="block"
+            sx={{ mb: 0.5 }}
+            data-testid={`ai-reason-${candidate.id}`}
+          >
+            Based on: {suggestion.reason}
+          </Typography>
+        ) : null}
         {/* A second opinion on the classification, shown only when the
             deterministic pass was itself unsure and the AI disagrees. It is
             a note: Qresp never moves a candidate between groups on its own,
@@ -422,8 +497,12 @@ const FolderAnalysis = ({ path }) => {
             <Typography variant="body2" sx={{ mt: 0.5 }}>
               {description}
             </Typography>
+            {/* Per-field acceptance. Disabled while the curator's own text is
+                in the field: an AI suggestion never overwrites something a
+                person wrote, not even on a click meant for something else. */}
             <Button
               size="small"
+              disabled={Boolean(draft[descriptionField])}
               onClick={() =>
                 setField(candidate.id, descriptionField, description)
               }
@@ -432,7 +511,7 @@ const FolderAnalysis = ({ path }) => {
             </Button>
             {draft[descriptionField] ? (
               <Typography variant="caption" color="text.secondary">
-                replaces what you typed
+                your text is kept — clear the field to use this instead
               </Typography>
             ) : null}
           </Fragment>
@@ -450,6 +529,7 @@ const FolderAnalysis = ({ path }) => {
             {keywordField ? (
               <Button
                 size="small"
+                disabled={Boolean(draft[keywordField])}
                 onClick={() =>
                   setField(candidate.id, keywordField, keywords.join(", "))
                 }
@@ -710,7 +790,37 @@ const FolderAnalysis = ({ path }) => {
                       No {activeGroup.label.toLowerCase()} were proposed.
                     </Typography>
                   )}
-                  {candidatesFor(activeGroup.key).map(renderCandidate)}
+                  {visibleCandidatesFor(activeGroup.key).map(renderCandidate)}
+                  {candidatesFor(activeGroup.key).length >
+                    visibleCandidatesFor(activeGroup.key).length && (
+                    <Box sx={{ mt: 1, mb: 2 }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() =>
+                          setShowAll((current) => ({
+                            ...current,
+                            [activeGroup.key]: true,
+                          }))
+                        }
+                      >
+                        {`Show all ${
+                          candidatesFor(activeGroup.key).length
+                        } candidates`}
+                      </Button>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        display="block"
+                        sx={{ mt: 0.5 }}
+                      >
+                        {candidatesFor(activeGroup.key).length -
+                          visibleCandidatesFor(activeGroup.key).length}{" "}
+                        more with weaker evidence are collapsed, not discarded.
+                        Anything you have already selected stays visible.
+                      </Typography>
+                    </Box>
+                  )}
                   {activeGroup.key === "tools" && hints.length > 0 && (
                     <Alert severity="info">
                       Possible dependencies seen in script imports (not added
@@ -763,39 +873,20 @@ const FolderAnalysis = ({ path }) => {
                 {aiNotice}
               </Alert>
             )}
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={aiConsent}
-                  onChange={(event) => setAiConsent(event.target.checked)}
-                  slotProps={{
-                    input: {
-                      "aria-label":
-                        "Send the selected file and folder names to the AI service",
-                    },
-                  }}
-                />
-              }
-              label={
-                "Send the selected items' file names, folder names and the " +
-                "comments Qresp already read from them to Gemini. No file " +
-                "contents, images, or account details are sent."
-              }
-            />
             <Box sx={{ display: "flex", gap: 2, alignItems: "center" }}>
               <Button
-                onClick={describeWithAI}
-                disabled={!aiConsent || selectedCount === 0 || aiLoading}
+                onClick={openAiConsent}
+                disabled={selectedCount === 0 || aiLoading}
                 sx={{ whiteSpace: "nowrap" }}
               >
                 Enhance selected with AI
               </Button>
               {aiLoading && <CircularProgress size={18} />}
-              {selectedCount === 0 && (
-                <Typography variant="caption">
-                  Select the candidates you want described first.
-                </Typography>
-              )}
+              <Typography variant="caption" color="text.secondary">
+                {selectedCount === 0
+                  ? "Select the candidates you want described first."
+                  : `${selectedCount} selected — you will be asked what gets sent before anything leaves Qresp.`}
+              </Typography>
             </Box>
           </Box>
         )}
@@ -807,6 +898,72 @@ const FolderAnalysis = ({ path }) => {
             onClick={apply}
           >
             Add selected items to Curator
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Consent is a deliberate stop, not a checkbox beside a button: it
+          states the count and the exact scope BEFORE anything is sent, and
+          it is asked again for every request. */}
+      {/* transitionDuration 0: this sits on top of the review dialog, and a
+          lingering exit transition leaves MUI's aria-hidden on the dialog
+          underneath — the suggestions would be invisible to assistive tech
+          for as long as it lasts. */}
+      <Dialog
+        open={aiConsentOpen}
+        onClose={closeAiConsent}
+        maxWidth="sm"
+        fullWidth
+        transitionDuration={0}
+      >
+        <DialogTitle>Send {selectedCount} selected item(s) to Gemini?</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" gutterBottom>
+            Qresp will send, for the {selectedCount} candidate(s) you selected
+            and for nothing else:
+          </Typography>
+          <Box component="ul" sx={{ pl: 3, mt: 0, mb: 2 }}>
+            <Typography component="li" variant="body2">
+              their relative paths, file names and folder names
+            </Typography>
+            <Typography component="li" variant="body2">
+              short text Qresp has already read from this folder — README,
+              docstring and dependency-manifest excerpts
+            </Typography>
+          </Box>
+          <Typography variant="body2" gutterBottom>
+            It will <strong>not</strong> send raw datasets, image bytes,
+            notebook contents, credentials, your account details, or anything
+            from outside the candidates you selected.
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            Gemini returns suggestions only. Nothing is filled in, added,
+            saved or published as a result.
+          </Typography>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={aiConsent}
+                onChange={(event) => setAiConsent(event.target.checked)}
+                slotProps={{
+                  input: {
+                    "aria-label":
+                      "I agree to send this evidence to Gemini for this request",
+                  },
+                }}
+              />
+            }
+            label="Send this evidence to Gemini for this request."
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeAiConsent}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={!aiConsent}
+            onClick={describeWithAI}
+          >
+            Send and get suggestions
           </Button>
         </DialogActions>
       </Dialog>
