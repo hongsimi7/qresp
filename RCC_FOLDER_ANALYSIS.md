@@ -120,6 +120,14 @@ back.
 | Script | description, keywords | `readme` (same) |
 | Tool | description only | `description` (keywords are dropped server-side) |
 
+It may also offer a **second opinion on the classification**, constrained to
+the four record types by the response schema. This is shown as a note on the
+card, and only when the deterministic pass was itself unsure (confidence
+below `high`) and the AI actually disagrees. Qresp never moves a candidate
+between groups on its own — that would change a record the curator has not
+reviewed — so acting on the note means removing the candidate and adding it
+under the other tab by hand.
+
 **Never touched by AI**, on any kind: `imageFile`, chart `number`, `files`,
 `notebookFile`, `packageName`, `version`, `executableName`, `patches`, `urls`,
 and any experiment facility or measurement. These are factual and the schema

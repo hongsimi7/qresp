@@ -719,6 +719,11 @@ AI_RESPONSE_SCHEMA = {
                     "id": {"type": "string"},
                     "description": {"type": "string"},
                     "keywords": {"type": "array", "items": {"type": "string"}},
+                    # A second opinion on the classification, allowed ONLY as
+                    # a note for the curator: it never moves or rewrites a
+                    # candidate here.
+                    "kind": {"type": "string",
+                             "enum": ["chart", "dataset", "script", "tool"]},
                 },
                 "required": ["id"],
             },
@@ -739,6 +744,8 @@ AI_SYSTEM_PROMPT = (
     "versions, executable names, patches, facilities or measurements — those "
     "are factual fields the researcher owns. If the evidence for an item is "
     "insufficient, return an EMPTY description for it rather than guessing. "
+    "Each item states the kind Qresp inferred; include a \"kind\" only when "
+    "the evidence clearly contradicts it, and omit it otherwise. "
     'Respond with ONLY a JSON object of the form {"items": [{"id": "...", '
     '"description": "...", "keywords": ["..."]}]}, one entry per input item, '
     "reusing the given ids, with a description of at most 30 words and at "
@@ -806,11 +813,16 @@ def _parse_ai_items(answer_text):
         if not item_id:
             continue
         keywords = entry.get("keywords")
+        kind = _clip(entry.get("kind"), 16).lower()
         parsed[item_id] = {
             "description": _clip(entry.get("description"),
                                  MAX_AI_DESCRIPTION_CHARS),
             "keywords": _normalize_keywords(
                 keywords if isinstance(keywords, list) else []),
+            # Anything outside the four record types is dropped rather than
+            # passed through for the UI to interpret.
+            "kind": kind if kind in ("chart", "dataset", "script",
+                                     "tool") else "",
         }
     return parsed
 
@@ -873,7 +885,10 @@ def describe_candidates(body):
         if item_id not in kinds:
             continue
         if kinds[item_id] == "tool":
-            value = {"description": value["description"], "keywords": []}
+            value = dict(value, description=value["description"], keywords=[])
+        # A "different kind" note is only interesting when it IS different.
+        if value.get("kind") == kinds[item_id]:
+            value = dict(value, kind="")
         suggestions[item_id] = value
     print("Folder AI suggestions: requested=%d returned=%d"
           % (len(items), len(suggestions)))

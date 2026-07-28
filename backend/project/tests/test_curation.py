@@ -755,8 +755,13 @@ class TestDescribeCandidatesResponse(DescribeCandidatesBase):
         # The schema has no room for factual fields, so a model that tries to
         # set one cannot reach the curator.
         properties = curation.AI_RESPONSE_SCHEMA["properties"]["items"]
-        self.assertEqual({"id", "description", "keywords"},
+        # id + the three reviewable, non-factual suggestions.
+        self.assertEqual({"id", "description", "keywords", "kind"},
                          set(properties["items"]["properties"]))
+        # `kind` is an enum of the four record types, so it cannot become a
+        # free-text field either.
+        self.assertEqual(["chart", "dataset", "script", "tool"],
+                         properties["items"]["properties"]["kind"]["enum"])
         self.login()
         response, _ = self.describe(
             {"consent": True, "items": AI_ITEMS},
@@ -764,7 +769,49 @@ class TestDescribeCandidatesResponse(DescribeCandidatesBase):
                 {"id": "script-0", "description": "ok", "keywords": [],
                  "files": ["invented.py"], "packageName": "fake",
                  "version": "9.9", "number": 3, "imageFile": "fake.png"}])))
-        self.assertEqual({"description", "keywords"},
+        self.assertEqual({"description", "keywords", "kind"},
+                         set(response.json()["suggestions"]["script-0"]))
+
+    def test_a_differing_kind_comes_back_as_a_note(self):
+        self.login()
+        response, _ = self.describe(
+            {"consent": True, "items": AI_ITEMS},
+            reply=MockResponse(gemini_reply([
+                {"id": "script-0", "description": "d", "keywords": [],
+                 "kind": "dataset"}])))
+        self.assertEqual("dataset",
+                         response.json()["suggestions"]["script-0"]["kind"])
+
+    def test_agreeing_with_qresp_is_not_reported_as_a_change(self):
+        self.login()
+        response, _ = self.describe(
+            {"consent": True, "items": AI_ITEMS},
+            reply=MockResponse(gemini_reply([
+                {"id": "script-0", "description": "d", "keywords": [],
+                 "kind": "script"}])))
+        self.assertEqual("", response.json()["suggestions"]["script-0"]["kind"])
+
+    def test_an_invented_kind_is_dropped(self):
+        self.login()
+        for invented in ("experiment", "paper", "<script>", "", None):
+            response, _ = self.describe(
+                {"consent": True, "items": AI_ITEMS},
+                reply=MockResponse(gemini_reply([
+                    {"id": "script-0", "description": "d", "keywords": [],
+                     "kind": invented}])))
+            self.assertEqual(
+                "", response.json()["suggestions"]["script-0"]["kind"],
+                invented)
+
+    def test_the_kind_note_never_touches_a_factual_field(self):
+        self.login()
+        response, _ = self.describe(
+            {"consent": True, "items": AI_ITEMS},
+            reply=MockResponse(gemini_reply([
+                {"id": "script-0", "description": "d", "keywords": [],
+                 "kind": "chart", "imageFile": "invented.png",
+                 "files": ["invented.py"], "number": 3}])))
+        self.assertEqual({"description", "keywords", "kind"},
                          set(response.json()["suggestions"]["script-0"]))
 
     def test_insufficient_evidence_yields_a_blank_description(self):

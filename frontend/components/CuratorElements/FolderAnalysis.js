@@ -400,6 +400,23 @@ const FolderAnalysis = ({ path }) => {
         <Typography variant="caption" color="text.secondary" display="block">
           AI proposal — not applied
         </Typography>
+        {/* A second opinion on the classification, shown only when the
+            deterministic pass was itself unsure and the AI disagrees. It is
+            a note: Qresp never moves a candidate between groups on its own,
+            because that would change records the curator did not review. */}
+        {suggestion.kind &&
+          suggestion.kind !== candidate.kind &&
+          candidate.confidence !== "high" && (
+            <Typography
+              variant="body2"
+              sx={{ mt: 0.5 }}
+              data-testid={`ai-kind-${candidate.id}`}
+            >
+              AI reads this more like a <strong>{suggestion.kind}</strong> than
+              a {candidate.kind}. Nothing has been moved — remove it here and
+              add it under {suggestion.kind}s yourself if you agree.
+            </Typography>
+          )}
         {description ? (
           <Fragment>
             <Typography variant="body2" sx={{ mt: 0.5 }}>
@@ -769,8 +786,9 @@ const FolderAnalysis = ({ path }) => {
               <Button
                 onClick={describeWithAI}
                 disabled={!aiConsent || selectedCount === 0 || aiLoading}
+                sx={{ whiteSpace: "nowrap" }}
               >
-                Generate descriptions and keywords with AI
+                Enhance selected with AI
               </Button>
               {aiLoading && <CircularProgress size={18} />}
               {selectedCount === 0 && (

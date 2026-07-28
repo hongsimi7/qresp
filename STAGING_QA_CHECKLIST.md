@@ -408,8 +408,20 @@ Responsive layout and partial results:
 
 Optional AI descriptions (only with Gemini configured):
 
+- [ ] The action is labelled **Enhance selected with AI** and stays on one
+      line at narrow widths
 - [ ] The consent box is UNCHECKED on every open; the AI button is disabled
       without both consent and a selection
+- [ ] Select an item Qresp classified with MEDIUM confidence → if the AI
+      disagrees about the kind it says so as a NOTE ("reads this more like a
+      dataset … nothing has been moved"); the candidate stays in its original
+      tab and the tab counts do not change
+- [ ] A HIGH-confidence candidate never gets a kind second-opinion
+- [ ] Type your own description first, then run the AI → your text is still
+      there; the proposal sits beside it marked "not applied" until you click
+      to accept it
+- [ ] Factual fields (image file, figure number, files, package name,
+      version, executable, patches) are unchanged before and after the AI run
 - [ ] With consent + selection → descriptions fill the editable fields;
       nothing is applied to the form and nothing is saved
 - [ ] Network: the request body carries only `id/kind/name/paths/context`;

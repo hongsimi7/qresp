@@ -531,7 +531,7 @@ describe("Analyze RCC Folder — optional AI descriptions", () => {
 
   const aiButton = () =>
     screen.getByRole("button", {
-      name: /generate descriptions and keywords with ai/i,
+      name: /enhance selected with ai/i,
     });
 
   const consentBox = () =>
@@ -771,6 +771,69 @@ describe("Analyze RCC Folder — optional AI descriptions", () => {
     expect(axios.post).toHaveBeenCalledTimes(1);
     // Ticking eleven boxes one by one is slower than the 5s default.
   }, 30000);
+
+  it("offers a kind second-opinion as a NOTE, never a reclassification", async () => {
+    const unsure = {
+      ...analysis,
+      candidates: {
+        ...analysis.candidates,
+        scripts: [
+          { ...analysis.candidates.scripts[0], confidence: "medium" },
+        ],
+      },
+    };
+    axios.post.mockResolvedValue({ data: unsure });
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await user.click(analyzeButton());
+    await screen.findByRole("tab", { name: /charts \(1\)/i });
+    await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
+    await user.click(
+      screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
+    );
+    await user.click(consentBox());
+
+    axios.post.mockResolvedValue({
+      data: {
+        suggestions: {
+          "script-0": { description: "d", keywords: [], kind: "dataset" },
+        },
+      },
+    });
+    await user.click(aiButton());
+
+    const note = await screen.findByTestId("ai-kind-script-0");
+    expect(note).toHaveTextContent(/reads this more like a dataset/i);
+    expect(note).toHaveTextContent(/nothing has been moved/i);
+    // The candidate stays exactly where it was, under Scripts.
+    expect(
+      screen.getByRole("tab", { name: /scripts \(1\)/i })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /datasets \(1\)/i })).toBeInTheDocument();
+    expect(addMany).not.toHaveBeenCalled();
+  });
+
+  it("stays quiet about kind when the deterministic pass was confident", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+    );
+    await user.click(consentBox());
+
+    axios.post.mockResolvedValue({
+      data: {
+        suggestions: {
+          "chart-0": { description: "d", keywords: [], kind: "dataset" },
+        },
+      },
+    });
+    await user.click(aiButton());
+    await screen.findByText(/AI proposal — not applied/i);
+    // chart-0 came back "high" confidence: no second-guessing.
+    expect(screen.queryByTestId("ai-kind-chart-0")).toBeNull();
+  });
 
   it("an AI response never adds, saves, or publishes on its own", async () => {
     const user = userEvent.setup();
