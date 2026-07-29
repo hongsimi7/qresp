@@ -634,7 +634,11 @@ class TestCandidateIdentity(CurationTestBase):
         result = self.analyze_tree({"data": ["data"]})
         self.assertEqual(1, len(result["datasets"]))
         candidate = result["datasets"][0]
-        self.assertEqual("data", candidate["label"])
+        # Never a BARE role root: that reads like the container, not a
+        # record, and is exactly what the repeated "data · 1 file" bug
+        # looked like.
+        self.assertNotEqual("data", candidate["label"])
+        self.assertEqual("data (whole folder)", candidate["label"])
         self.assertEqual(5, candidate["file_count"])
         self.assertTrue(candidate["paths"])
         for path in candidate["paths"]:
@@ -854,6 +858,146 @@ class TestExplicitBoundaries(CurationTestBase):
         self.assertEqual(["data"], datasets[0]["proposal"]["files"])
         self.assertEqual({"data": ["data"]},
                          body["candidates"]["applied_boundaries"])
+
+
+class TestCapitalizedLegacyThroughTheRoute(CurationTestBase):
+    """The reported staging regression, driven through the real endpoint.
+
+    Symptom: three different datasets all rendered as "Datasets · 1 file"
+    with no Legacy-compatible badge and no boundary selector. Both halves
+    are asserted here on the wire, not on an internal helper.
+    """
+
+    TREE = {
+        "": (["Datasets", "Figures", "Scripts"], []),
+        "Datasets": (["Run_A", "Run_B"], ["loose.csv"]),
+        "Datasets/Run_A": ([], ["a.csv", "a2.csv"]),
+        "Datasets/Run_B": ([], ["b.csv"]),
+        "Figures": (["Fig1"], []),
+        "Figures/Fig1": ([], ["preview.png"]),
+        "Scripts": ([], ["run.py"]),
+    }
+
+    def request(self, tree=None, body=None):
+        tree = tree or self.TREE
+        self.login()
+        payload = {"path": FOLDER}
+        payload.update(body or {})
+
+        def lister(url):
+            relative = url[len(FOLDER):].strip("/")
+            if relative not in tree:
+                raise AssertionError("unexpected listing: %s" % url)
+            return tree[relative]
+
+        with mock.patch("project.curation._list_directory",
+                        side_effect=lister), \
+                mock.patch("project.curation._fetch_text",
+                           side_effect=lambda url: ""):
+            response = self.client.post(
+                "/api/curation/analyze-folder", json=payload,
+                headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(200, response.status_code, response.text)
+        return response.json()
+
+    def test_capitalized_role_folders_are_legacy_with_full_metadata(self):
+        body = self.request()
+        self.assertEqual("legacy", body["structure_mode"])
+        for key in ("structure_mode", "normalized_roles", "boundary_trees",
+                    "applied_boundaries"):
+            self.assertIn(key, body, key)
+        self.assertEqual({"Datasets": "datasets", "Figures": "charts",
+                          "Scripts": "scripts"}, body["normalized_roles"])
+        self.assertEqual(["Datasets", "Scripts"],
+                         sorted(body["boundary_trees"]))
+
+    def test_each_dataset_is_named_after_its_own_file_or_folder(self):
+        datasets = self.request()["candidates"]["datasets"]
+        identity = sorted((c["label"], c["file_count"]) for c in datasets)
+        self.assertEqual(
+            [("Run_A", 2), ("Run_B", 1), ("loose.csv", 1)], identity)
+
+    def test_no_two_datasets_share_the_role_root_name(self):
+        datasets = self.request()["candidates"]["datasets"]
+        labels = [c["label"] for c in datasets]
+        # The exact regression: three rows all reading "Datasets · 1 file".
+        self.assertEqual(len(labels), len(set(labels)))
+        for label in labels:
+            self.assertNotEqual("Datasets", label)
+        self.assertNotEqual(1, len({c["file_count"] for c in datasets}))
+
+    def test_no_candidate_path_is_the_bare_role_root(self):
+        body = self.request()
+        for kind in ("charts", "datasets", "scripts", "tools"):
+            for candidate in body["candidates"][kind]:
+                self.assertNotIn("Datasets", candidate["paths"], kind)
+                self.assertNotIn("Figures", candidate["paths"], kind)
+                self.assertNotIn("Scripts", candidate["paths"], kind)
+                for path in candidate["paths"]:
+                    self.assertIn("/", path, path)
+
+    def test_a_direct_file_under_the_role_root(self):
+        loose = [c for c in self.request()["candidates"]["datasets"]
+                 if c["label"] == "loose.csv"][0]
+        self.assertEqual(1, loose["file_count"])
+        self.assertEqual(["Datasets/loose.csv"], loose["paths"])
+        self.assertEqual(["Datasets/loose.csv"], loose["proposal"]["files"])
+
+    def test_a_child_folder_under_the_role_root(self):
+        run_a = [c for c in self.request()["candidates"]["datasets"]
+                 if c["label"] == "Run_A"][0]
+        self.assertEqual(2, run_a["file_count"])
+        self.assertEqual(["Datasets/Run_A/a.csv", "Datasets/Run_A/a2.csv"],
+                         sorted(run_a["paths"]))
+        self.assertEqual(["Datasets/Run_A"], run_a["proposal"]["files"])
+
+    def test_a_custom_boundary_keeps_its_own_identity(self):
+        body = self.request(body={"boundaries": {"Datasets": ["Datasets/Run_A"]}})
+        self.assertEqual({"Datasets": ["Datasets/Run_A"]},
+                         body["applied_boundaries"])
+        datasets = body["candidates"]["datasets"]
+        self.assertEqual(1, len(datasets))
+        self.assertEqual("Run_A", datasets[0]["label"])
+        self.assertEqual(2, datasets[0]["file_count"])
+        for path in datasets[0]["paths"]:
+            self.assertTrue(path.startswith("Datasets/Run_A/"), path)
+
+    def test_choosing_the_role_root_never_labels_it_bare(self):
+        body = self.request(body={"boundaries": {"Datasets": ["Datasets"]}})
+        datasets = body["candidates"]["datasets"]
+        self.assertEqual(1, len(datasets))
+        self.assertNotEqual("Datasets", datasets[0]["label"])
+        self.assertEqual("Datasets (whole folder)", datasets[0]["label"])
+        self.assertEqual(4, datasets[0]["file_count"])
+
+    def test_lowercase_aliases_behave_the_same_way(self):
+        tree = {
+            "": (["data", "figures_tables", "scripts", "doc"], []),
+            "data": (["setA"], ["loose.dat"]),
+            "data/setA": ([], ["x.dat", "y.dat"]),
+            "figures_tables": (["fig1"], []),
+            "figures_tables/fig1": ([], ["preview.png"]),
+            "scripts": (["an"], []),
+            "scripts/an": ([], ["run.py"]),
+            "doc": ([], ["notes.md"]),
+        }
+        body = self.request(tree)
+        self.assertEqual("legacy", body["structure_mode"])
+        identity = sorted((c["label"], c["file_count"])
+                          for c in body["candidates"]["datasets"])
+        self.assertEqual([("loose.dat", 1), ("setA", 2)], identity)
+
+    def test_a_standard_lowercase_structure_needs_no_selector(self):
+        tree = {
+            "": (["datasets", "charts", "scripts"], []),
+            "datasets": (["d1"], []), "datasets/d1": ([], ["x.csv"]),
+            "charts": (["f1"], []), "charts/f1": ([], ["preview.png"]),
+            "scripts": (["s1"], []), "scripts/s1": ([], ["run.py"]),
+        }
+        body = self.request(tree)
+        self.assertEqual("standard", body["structure_mode"])
+        self.assertEqual({}, body["boundary_trees"])
+        self.assertEqual("d1", body["candidates"]["datasets"][0]["label"])
 
 
 class TestBoundaryResponseEnvelope(CurationTestBase):

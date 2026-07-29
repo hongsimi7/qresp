@@ -1185,6 +1185,120 @@ describe("Analyze RCC Folder — record boundaries", () => {
   });
 });
 
+describe("Analyze RCC Folder — capitalized legacy folders", () => {
+  // The reported staging screen: Datasets/ Figures/ Scripts/ showed no
+  // Legacy-compatible badge, no selector, and three identical
+  // "Datasets · 1 file" rows.
+  const capitalized = {
+    ...analysis,
+    structure_mode: "legacy",
+    normalized_roles: {
+      Datasets: "datasets",
+      Figures: "charts",
+      Scripts: "scripts",
+    },
+    structure_issues: [
+      { path: "Datasets", reason: "Read as datasets (Qresp Folder Standard name: datasets). Nothing on the file server is renamed." },
+    ],
+    boundary_trees: {
+      Datasets: {
+        role: "datasets",
+        nodes: [
+          { path: "Datasets/Run_A", name: "Run_A", level: 1, file_count: 2,
+            extensions: [".csv"], sample_names: [] },
+        ],
+      },
+      Scripts: { role: "scripts", nodes: [] },
+    },
+    applied_boundaries: {},
+    candidates: {
+      ...analysis.candidates,
+      datasets: [
+        { id: "dataset-0", kind: "dataset", label: "Run_A", file_count: 2,
+          confidence: "medium", evidence: [], needs_input: ["readme"],
+          paths: ["Datasets/Run_A/a.csv", "Datasets/Run_A/a2.csv"],
+          proposal: { files: ["Datasets/Run_A"], readme: "", URLs: [],
+            extraFields: [] } },
+        { id: "dataset-1", kind: "dataset", label: "Run_B", file_count: 1,
+          confidence: "medium", evidence: [], needs_input: ["readme"],
+          paths: ["Datasets/Run_B/b.csv"],
+          proposal: { files: ["Datasets/Run_B"], readme: "", URLs: [],
+            extraFields: [] } },
+        { id: "dataset-2", kind: "dataset", label: "loose.csv",
+          file_count: 1, confidence: "medium", evidence: [],
+          needs_input: ["readme"], paths: ["Datasets/loose.csv"],
+          proposal: { files: ["Datasets/loose.csv"], readme: "", URLs: [],
+            extraFields: [] } },
+      ],
+    },
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: capitalized });
+  });
+
+  it("shows the Legacy-compatible state and the boundary controls", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    expect(screen.getByTestId("structure-mode")).toHaveTextContent(
+      "Legacy-compatible"
+    );
+    await user.click(
+      screen.getByRole("button", { name: /choose record boundaries/i })
+    );
+    expect(await screen.findByTestId("boundary-picker")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /rebuild proposals/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /use default boundaries/i })
+    ).toBeInTheDocument();
+    // Real spelling and case, and the empty root explains itself.
+    expect(screen.getByText("Datasets/Run_A (2 files)")).toBeInTheDocument();
+    expect(screen.getByTestId("no-boundaries-Scripts")).toBeInTheDocument();
+  });
+
+  it("gives each dataset its own name and count", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await user.click(screen.getByRole("tab", { name: /datasets \(3\)/i }));
+
+    expect(screen.getByText("Run_A · 2 files")).toBeInTheDocument();
+    expect(screen.getByText("Run_B · 1 file")).toBeInTheDocument();
+    expect(screen.getByText("loose.csv · 1 file")).toBeInTheDocument();
+    // The regression: the role root repeated for every row.
+    expect(screen.queryByText("Datasets · 1 file")).toBeNull();
+    expect(screen.queryByText("Datasets · 2 files")).toBeNull();
+  });
+
+  it("rebuilds with a capitalized boundary path", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await user.click(
+      screen.getByRole("button", { name: /choose record boundaries/i })
+    );
+    await user.click(
+      await screen.findByRole("checkbox", {
+        name: "Use Datasets/Run_A as one record",
+      })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /rebuild proposals/i })
+    );
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+    expect(axios.post.mock.calls[1][1]).toEqual({
+      path: FOLDER,
+      boundaries: { Datasets: ["Datasets/Run_A"] },
+    });
+  });
+});
+
 describe("Analyze RCC Folder — needs reorganization", () => {
   const invalid = {
     ...analysis,

@@ -642,14 +642,18 @@ def _analyze_by_boundaries(files, dirs, texts, mode, roles, issues,
 def _boundary_label(folder, role_root):
     """A candidate's display name.
 
-    It is the basename of the boundary the curator (or the standard) chose.
-    A role root is only ever the name when it IS the chosen boundary — a
-    label must never fall back to "data" or "datasets" because a derivation
-    walked up to the parent.
+    It is the basename of the boundary that was chosen. A BARE role root is
+    never a label: "Datasets" or "data" names a container, not a record, and
+    three candidates all reading "Datasets · 1 file" is indistinguishable
+    from a bug. When the curator deliberately selects the role root itself as
+    one boundary that is still legitimate, so it is labelled as the whole
+    folder rather than silently reusing the container's name.
     """
     name = posixpath.basename(folder)
     if not name:
-        name = folder or role_root
+        name = folder
+    if folder == role_root:
+        return "%s (whole folder)" % (name or role_root)
     return name
 
 
