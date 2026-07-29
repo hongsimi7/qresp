@@ -766,7 +766,15 @@ paths:
                   that root only. Validated server-side.
       responses:
         200:
-          description: Deterministic candidates returned for curator review
+          description: >-
+            Deterministic candidates for curator review. Structure metadata
+            sits at the TOP level of the envelope — structure_mode,
+            structure_issues, normalized_roles (actual directory name ->
+            canonical role), boundary_trees and applied_boundaries — while
+            the per-kind candidate lists sit under `candidates`.
+            boundary_trees and applied_boundaries are always present; in
+            legacy mode every datasets/scripts role root appears, with an
+            empty `nodes` list when it has no selectable child folders.
         400:
           description: Missing, malformed, or out-of-root folder path
         401:

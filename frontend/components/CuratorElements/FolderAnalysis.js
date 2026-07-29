@@ -949,7 +949,8 @@ const FolderAnalysis = ({ path }) => {
                   author can resolve, so the boundary is theirs to choose.
                   Standard layouts use the deterministic immediate children
                   and never see this. */}
-              {Object.keys(analysis.boundary_trees || {}).length > 0 && (
+              {structureMode === "legacy" &&
+                Object.keys(analysis.boundary_trees || {}).length > 0 && (
                 <Box sx={{ mb: 2 }} data-testid="boundary-picker">
                   <Button
                     size="small"
@@ -982,6 +983,18 @@ const FolderAnalysis = ({ path }) => {
                             <Typography variant="subtitle2">
                               {`${root} → ${tree.role}`}
                             </Typography>
+                            {(tree.nodes || []).length === 0 && (
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                display="block"
+                                data-testid={`no-boundaries-${root}`}
+                              >
+                                No selectable dataset/script boundaries were
+                                found in {root}. Its immediate children are
+                                used as records.
+                              </Typography>
+                            )}
                             {(tree.nodes || []).map((node) => {
                               const isChosen = chosen.includes(node.path);
                               // Mutual exclusion: an ancestor or a descendant
@@ -1021,7 +1034,7 @@ const FolderAnalysis = ({ path }) => {
                                     title={node.path}
                                     sx={{ color: blocked ? "text.disabled" : "inherit" }}
                                   >
-                                    {`${node.name} (${node.file_count} files)`}
+                                    {`${node.path} (${node.file_count} files)`}
                                   </Typography>
                                 </Box>
                               );
@@ -1034,7 +1047,9 @@ const FolderAnalysis = ({ path }) => {
                         size="small"
                         variant="outlined"
                         disabled={
-                          !Object.values(boundaries).some((v) => v.length)
+                          !Object.values(boundaries).some(
+                            (value) => (value || []).length
+                          )
                         }
                         onClick={() => analyze(boundaries)}
                       >

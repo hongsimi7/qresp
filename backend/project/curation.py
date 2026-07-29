@@ -607,9 +607,16 @@ def _analyze_by_boundaries(files, dirs, texts, mode, roles, issues,
     if mode == fs.MODE_LEGACY:
         for top, role in sorted(roles.items()):
             if role in (fs.ROLE_DATASETS, fs.ROLE_SCRIPTS):
-                nodes = fs.boundary_tree(top, files, dirs)
-                if nodes:
-                    boundary_trees[top] = {"role": role, "nodes": nodes}
+                # The ACTUAL directory name is the key, spelling and case
+                # preserved, because that is what a boundary path must use.
+                # The canonical role travels beside it, never in its place.
+                # An empty node list is reported rather than omitted, so the
+                # UI can say "nothing selectable here" instead of silently
+                # hiding the picker.
+                boundary_trees[top] = {
+                    "role": role,
+                    "nodes": fs.boundary_tree(top, files, dirs),
+                }
 
     return {
         "structure_mode": mode,
@@ -990,6 +997,11 @@ def analyze_folder(body):
         "structure_issues": result["structure_issues"],
         "normalized_roles": result["normalized_roles"],
         "standard_roles": list(fs.STANDARD_ROLES),
+        # Part of the STRUCTURE contract, not of a candidate list, and always
+        # present so a client never has to guess whether a missing key means
+        # "no boundaries" or "older server".
+        "boundary_trees": result.get("boundary_trees") or {},
+        "applied_boundaries": result.get("applied_boundaries") or {},
         "candidates": result,
     }, 200
 

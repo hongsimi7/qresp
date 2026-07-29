@@ -1111,9 +1111,72 @@ describe("Analyze RCC Folder — record boundaries", () => {
     expect(axios.post.mock.calls[1][1]).toEqual({ path: FOLDER });
   });
 
+  it("shows the REAL relative path, spelling and case preserved", async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        ...analysis,
+        structure_mode: "legacy",
+        normalized_roles: { Datasets: "datasets", Scripts: "scripts" },
+        boundary_trees: {
+          Datasets: {
+            role: "datasets",
+            nodes: [
+              { path: "Datasets/Run_A", name: "Run_A", level: 1,
+                file_count: 4, extensions: [".csv"], sample_names: [] },
+            ],
+          },
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderWith();
+    await openPicker(user);
+
+    // The path a boundary must be submitted with, not a prettified name.
+    expect(screen.getByText("Datasets/Run_A (4 files)")).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: "Use Datasets/Run_A as one record" })
+    ).toBeInTheDocument();
+    expect(screen.getByText("Datasets → datasets")).toBeInTheDocument();
+  });
+
+  it("says so when a legacy root has nothing selectable", async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        ...analysis,
+        structure_mode: "legacy",
+        boundary_trees: { scripts: { role: "scripts", nodes: [] } },
+      },
+    });
+    const user = userEvent.setup();
+    renderWith();
+    await openPicker(user);
+
+    // Explicit guidance beats a silently hidden control.
+    expect(screen.getByTestId("no-boundaries-scripts")).toHaveTextContent(
+      /no selectable dataset\/script boundaries were found in scripts/i
+    );
+    expect(
+      screen.getByRole("button", { name: /rebuild proposals/i })
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: /use default boundaries/i })
+    ).toBeEnabled();
+  });
+
   it("a standard layout is never asked to pick boundaries", async () => {
     axios.post.mockResolvedValue({
-      data: { ...analysis, structure_mode: "standard", boundary_trees: {} },
+      data: {
+        ...analysis,
+        structure_mode: "standard",
+        // Even if a tree were present, standard layouts do not choose.
+        boundary_trees: {
+          datasets: { role: "datasets", nodes: [
+            { path: "datasets/d1", name: "d1", level: 1, file_count: 1,
+              extensions: [".csv"], sample_names: [] },
+          ] },
+        },
+      },
     });
     const user = userEvent.setup();
     renderWith();

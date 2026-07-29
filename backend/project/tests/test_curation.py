@@ -856,6 +856,164 @@ class TestExplicitBoundaries(CurationTestBase):
                          body["candidates"]["applied_boundaries"])
 
 
+class TestBoundaryResponseEnvelope(CurationTestBase):
+    """The boundary contract as the BROWSER receives it.
+
+    Regression: boundary_trees and applied_boundaries were generated
+    correctly but lived inside `candidates`, while structure_mode and
+    normalized_roles were lifted to the top level. The UI read the top level,
+    got undefined, and the boundary picker never rendered — with unit tests
+    passing the whole time because they called analyze_folder_tree directly.
+    These call the real handler.
+    """
+
+    LOWER = {
+        "": (["data", "figures_tables", "scripts", "doc"], []),
+        "data": (["setA", "setB"], []),
+        "data/setA": ([], ["a.csv"]),
+        "data/setB": ([], ["b.csv"]),
+        "figures_tables": (["fig1"], []),
+        "figures_tables/fig1": ([], ["preview.png"]),
+        "scripts": (["analysis"], []),
+        "scripts/analysis": ([], ["run.py"]),
+        "doc": ([], ["notes.md"]),
+    }
+    UPPER = {
+        "": (["Datasets", "Figures", "Scripts"], []),
+        "Datasets": (["Run_A"], []),
+        "Datasets/Run_A": ([], ["a.csv"]),
+        "Figures": (["Fig1"], []),
+        "Figures/Fig1": ([], ["preview.png"]),
+        "Scripts": (["Analysis"], []),
+        "Scripts/Analysis": ([], ["run.py"]),
+    }
+
+    def request(self, tree, body=None):
+        self.login()
+        payload = {"path": FOLDER}
+        payload.update(body or {})
+
+        def lister(url):
+            relative = url[len(FOLDER):].strip("/")
+            if relative not in tree:
+                raise AssertionError("unexpected listing: %s" % url)
+            return tree[relative]
+
+        with mock.patch("project.curation._list_directory",
+                        side_effect=lister), \
+                mock.patch("project.curation._fetch_text",
+                           side_effect=lambda url: ""):
+            response = self.client.post(
+                "/api/curation/analyze-folder", json=payload,
+                headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(200, response.status_code, response.text)
+        return response.json()
+
+    def test_lowercase_aliases_ship_the_boundary_contract_at_top_level(self):
+        body = self.request(self.LOWER)
+        self.assertEqual("legacy", body["structure_mode"])
+        # TOP LEVEL, beside the other structure fields — this is the bug.
+        self.assertIn("boundary_trees", body)
+        self.assertIn("applied_boundaries", body)
+        self.assertEqual(["data", "scripts"],
+                         sorted(body["boundary_trees"]))
+        self.assertEqual("datasets", body["boundary_trees"]["data"]["role"])
+        self.assertEqual("scripts",
+                         body["boundary_trees"]["scripts"]["role"])
+        # Chart roots are not boundary-selectable.
+        self.assertNotIn("figures_tables", body["boundary_trees"])
+        self.assertNotIn("doc", body["boundary_trees"])
+
+    def test_capitalized_aliases_keep_their_real_spelling(self):
+        body = self.request(self.UPPER)
+        self.assertEqual("legacy", body["structure_mode"])
+        # The ACTUAL directory name is the key; the canonical role rides
+        # beside it and never replaces it.
+        self.assertEqual(["Datasets", "Scripts"],
+                         sorted(body["boundary_trees"]))
+        self.assertEqual({"Datasets": "datasets", "Figures": "charts",
+                          "Scripts": "scripts"}, body["normalized_roles"])
+        paths = [node["path"]
+                 for node in body["boundary_trees"]["Datasets"]["nodes"]]
+        self.assertEqual(["Datasets/Run_A"], paths)
+
+    def test_a_role_root_with_nothing_selectable_is_still_reported(self):
+        tree = {
+            "": (["data", "scripts"], []),
+            "data": (["setA"], []),
+            "data/setA": ([], ["a.csv"]),
+            # No child folders at all: nothing to choose between.
+            "scripts": ([], ["run.py"]),
+        }
+        body = self.request(tree)
+        self.assertIn("scripts", body["boundary_trees"])
+        self.assertEqual([], body["boundary_trees"]["scripts"]["nodes"])
+
+    def test_resubmitting_boundaries_returns_new_candidates_and_echo(self):
+        body = self.request(
+            self.LOWER, {"boundaries": {"data": ["data/setA"]}})
+        # Same envelope, new candidates, new echo.
+        self.assertEqual({"data": ["data/setA"]}, body["applied_boundaries"])
+        datasets = body["candidates"]["datasets"]
+        self.assertEqual(1, len(datasets))
+        self.assertEqual(["data/setA"], datasets[0]["proposal"]["files"])
+        self.assertEqual("setA", datasets[0]["label"])
+        # And the tree is still offered so the choice can be changed again.
+        self.assertIn("data", body["boundary_trees"])
+
+    def test_default_boundaries_echo_nothing_applied(self):
+        body = self.request(self.LOWER)
+        self.assertEqual({}, body["applied_boundaries"])
+        self.assertEqual(
+            ["data/setA", "data/setB"],
+            sorted(f for c in body["candidates"]["datasets"]
+                   for f in c["proposal"]["files"]))
+
+    def test_a_conflicting_boundary_is_refused_by_the_endpoint(self):
+        self.login()
+        tree = self.LOWER
+
+        def lister(url):
+            return tree[url[len(FOLDER):].strip("/")]
+
+        with mock.patch("project.curation._list_directory",
+                        side_effect=lister), \
+                mock.patch("project.curation._fetch_text",
+                           side_effect=lambda url: ""):
+            response = self.client.post(
+                "/api/curation/analyze-folder",
+                json={"path": FOLDER,
+                      "boundaries": {"data": ["data", "data/setA"]}},
+                headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(400, response.status_code)
+        self.assertIn("overlap", response.json()["error"])
+
+    def test_a_standard_layout_needs_no_boundary_picker(self):
+        tree = {
+            "": (["datasets", "charts", "scripts"], []),
+            "datasets": (["d1"], []), "datasets/d1": ([], ["x.csv"]),
+            "charts": (["f1"], []), "charts/f1": ([], ["preview.png"]),
+            "scripts": (["s1"], []), "scripts/s1": ([], ["run.py"]),
+        }
+        body = self.request(tree)
+        self.assertEqual("standard", body["structure_mode"])
+        # Present but empty: the field is never omitted.
+        self.assertEqual({}, body["boundary_trees"])
+        self.assertEqual({}, body["applied_boundaries"])
+
+    def test_an_invalid_layout_offers_no_candidates_to_add(self):
+        tree = {
+            "": (["mystery"], []),
+            "mystery": ([], ["a.png", "b.csv"]),
+        }
+        body = self.request(tree)
+        self.assertEqual("invalid", body["structure_mode"])
+        for kind in ("charts", "datasets", "scripts", "tools"):
+            self.assertEqual([], body["candidates"][kind], kind)
+        self.assertEqual({}, body["boundary_trees"])
+        self.assertTrue(body["candidates"]["grouped_unclassified"])
+
+
 class TestNeedsReorganization(CurationTestBase):
     def test_unknown_roots_produce_grouped_rows_and_no_candidates(self):
         files = ["mystery/%d.png" % i for i in range(120)]
