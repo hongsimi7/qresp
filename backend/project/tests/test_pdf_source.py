@@ -16,6 +16,7 @@ import mongomock
 # and prove no PDF bytes or extracted text leak into responses or logs.
 from project import connexionapp
 from project.manuscript import MAX_PDF_PAGES
+from project.models import Paper
 from project.models import AssistUsage
 
 GEMINI_ENV = {
@@ -188,17 +189,33 @@ class TestPdfImport(PdfSourceTestBase):
         self.assertEqual("Registry Title", body["proposal"]["title"])
         requests_mock.get.assert_called_once()
 
-    def test_text_pdf_without_a_doi_proposes_nothing_and_says_so(self):
+    def test_a_pdf_without_a_doi_still_offers_front_matter_for_review(self):
         self.login()
         response, requests_mock = self.import_pdf(
             text_pdf(["A paper about confined water with no identifier"]))
         self.assertEqual(200, response.status_code, response.text)
         body = response.json()
+        # Read from the layout, so it is offered for review and labelled as a
+        # PDF reading - never applied on its own.
+        self.assertEqual("A paper about confined water with no identifier",
+                         body["proposal"]["title"])
+        self.assertEqual("pdf", body["provenance"]["title"])
+        self.assertTrue(any("first page layout" in w
+                            for w in body["warnings"]))
+        # No DOI means no registry call at all.
+        requests_mock.get.assert_not_called()
+
+    def test_a_pdf_with_no_readable_front_matter_says_so(self):
+        self.login()
+        response, _ = self.import_pdf(
+            text_pdf(["page 1 of 9", "12 34 56", "7 8 9"]))
+        self.assertEqual(200, response.status_code, response.text)
+        body = response.json()
         self.assertEqual({}, body["proposal"])
-        self.assertTrue(any("does not guess" in w for w in body["warnings"]))
+        self.assertTrue(any("Nothing recognizable was found in this PDF"
+                            in w for w in body["warnings"]))
         self.assertTrue(any("AI keyword suggestions" in w
                             for w in body["warnings"]))
-        requests_mock.get.assert_not_called()
 
     def test_scanned_pdf_without_text_is_rejected_mentioning_ocr(self):
         self.login()
@@ -239,16 +256,157 @@ class TestPdfImport(PdfSourceTestBase):
         self.assertEqual(400, response.status_code)
         self.assertIn("too large", response.json()["error"])
 
-    def test_pdf_bytes_and_text_never_appear_in_response_or_logs(self):
+    def test_pdf_bytes_and_body_text_never_appear_in_response_or_logs(self):
+        # The reviewable front matter is deliberately returned; the BODY and
+        # the raw bytes must not be, and nothing at all may be logged.
         self.login()
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            response, _ = self.import_pdf(
-                text_pdf(["SECRET_PDF_BODY_TOKEN confined water study"]))
+            response, _ = self.import_pdf(text_pdf([
+                "Confined water at the interface",
+                "Jane Q. Doe, John Smith",
+                "SECRET_PDF_BODY_TOKEN appears only in the body text",
+                "and is never part of the front matter we propose.",
+            ]))
         self.assertEqual(200, response.status_code, response.text)
         for sink in (response.text, stdout.getvalue()):
             self.assertNotIn("SECRET_PDF_BODY_TOKEN", sink)
             self.assertNotIn("%PDF", sink)
+            self.assertNotIn("endstream", sink)
+        # The log carries no extracted text of any kind.
+        self.assertNotIn("Confined water", stdout.getvalue())
+
+
+class TestPdfFrontMatter(PdfSourceTestBase):
+    """Conservative front-matter reading, and how it meets the registry.
+
+    Everything here is a HEURISTIC on the first page's layout, so each case
+    also checks that the result is labelled as a PDF reading rather than
+    presented as fact.
+    """
+
+    FRONT_MATTER = [
+        "Journal of Chemical Physics 158, 014101 (2023)",
+        "Downloaded from https://example.org on 1 May 2024",
+        "Electronic structure of embedded Pb clusters",
+        "Jane Q. Doe, John Smith, and Alice B. Roe",
+        "Department of Chemistry, University of Example",
+        "ABSTRACT",
+        "We compute the electronic structure of embedded lead clusters using "
+        "hybrid density functionals and compare the densities of states with "
+        "photoemission measurements across the whole series.",
+        "1. Introduction",
+        "Lead clusters have long been studied in the literature.",
+    ]
+
+    def test_title_authors_and_abstract_are_read_from_the_layout(self):
+        self.login()
+        response, _ = self.import_pdf(text_pdf(self.FRONT_MATTER))
+        self.assertEqual(200, response.status_code, response.text)
+        body = response.json()
+        proposal = body["proposal"]
+
+        self.assertEqual("Electronic structure of embedded Pb clusters",
+                         proposal["title"])
+        self.assertEqual("Jane Q. Doe, John Smith, Alice B. Roe",
+                         proposal["authors"])
+        self.assertIn("hybrid density functionals", proposal["abstract"])
+        # The abstract stops at the next section heading.
+        self.assertNotIn("Introduction", proposal["abstract"])
+        self.assertNotIn("long been studied", proposal["abstract"])
+
+        # Provenance says where each value came from...
+        for key in ("title", "authors", "abstract"):
+            self.assertEqual("pdf", body["provenance"][key], key)
+        # ...and the caution is explicit about it being a layout reading.
+        self.assertTrue(any("first page layout" in w
+                            for w in body["warnings"]))
+
+    def test_publisher_furniture_is_never_mistaken_for_a_title(self):
+        self.login()
+        proposal = self.import_pdf(
+            text_pdf(self.FRONT_MATTER))[0].json()["proposal"]
+        for noise in ("Journal of Chemical", "Downloaded from",
+                      "Department of Chemistry"):
+            self.assertNotIn(noise, proposal.get("title", ""))
+            self.assertNotIn(noise, proposal.get("authors", ""))
+
+    def test_a_line_carrying_a_doi_or_url_is_not_a_title(self):
+        self.login()
+        proposal = self.import_pdf(text_pdf([
+            "Cite as J. Chem. Phys. doi:10.1021/acs.jpcc.5c01077 (2023)",
+            "See https://doi.org/10.1021/acs.jpcc.5c01077 for the version",
+        ]))[0].json()["proposal"]
+        self.assertNotIn("title", proposal)
+        # The DOI itself is still the one deterministic signal.
+        self.assertEqual("10.1021/acs.jpcc.5c01077", proposal["doi"])
+
+    def test_a_doi_only_pdf_proposes_only_the_doi(self):
+        self.login()
+        response, requests_mock = self.import_pdf(
+            text_pdf(["12 34", "doi:10.1021/acs.jpcc.5c01077", "7 8 9"]),
+            crossref=None)
+        proposal = response.json()["proposal"]
+        self.assertEqual("10.1021/acs.jpcc.5c01077", proposal["doi"])
+        for key in ("title", "authors", "abstract"):
+            self.assertNotIn(key, proposal, key)
+
+    def test_an_abstract_fragment_is_refused_rather_than_proposed(self):
+        self.login()
+        proposal = self.import_pdf(text_pdf([
+            "A perfectly ordinary paper title about confined water",
+            "ABSTRACT",
+            "Too short.",
+        ]))[0].json()["proposal"]
+        self.assertNotIn("abstract", proposal)
+
+    def test_the_registry_outranks_the_layout_and_the_conflict_is_shown(self):
+        # A PDF's layout is weaker evidence than the publisher's own record,
+        # so Crossref wins - but what we read is kept visible as the
+        # alternative, with its own provenance.
+        self.login()
+        response, _ = self.import_pdf(
+            text_pdf(self.FRONT_MATTER + ["doi:10.1021/acs.jpcc.5c01077"]),
+            crossref={
+                "title": ["Electronic structure of embedded lead clusters"],
+                "author": [{"given": "Jane", "family": "Doe"}],
+                "abstract": "<jats:p>Registry abstract text that is quite "
+                            "long enough to be a real abstract.</jats:p>",
+                "container-title": ["J. Chem. Phys."],
+                "issued": {"date-parts": [[2023]]},
+                "type": "journal-article",
+                "DOI": "10.1021/acs.jpcc.5c01077",
+            })
+        self.assertEqual(200, response.status_code, response.text)
+        body = response.json()
+
+        self.assertEqual("Electronic structure of embedded lead clusters",
+                         body["proposal"]["title"])
+        self.assertEqual("crossref", body["provenance"]["title"])
+        # The layout reading is offered as the alternative, labelled "pdf".
+        self.assertEqual(
+            [{"source": "pdf",
+              "value": "Electronic structure of embedded Pb clusters"}],
+            body["alternatives"]["title"])
+        self.assertEqual("pdf", body["alternatives"]["authors"][0]["source"])
+
+    def test_a_tex_source_still_keeps_its_own_markup_on_conflict(self):
+        # Regression guard: TeX markup is authoritative, so the OLD
+        # preference must not have been flipped for it.
+        from project import manuscript
+        fields, provenance, alternatives = manuscript._merge_with_crossref(
+            {"title": "From TeX", "doi": "10.1/x"},
+            {"title": "From registry"}, source="manuscript")
+        self.assertEqual("From TeX", fields["title"])
+        self.assertEqual("manuscript", provenance["title"])
+        self.assertEqual([{"source": "crossref", "value": "From registry"}],
+                         alternatives["title"])
+
+    def test_nothing_from_the_pdf_is_persisted_anywhere(self):
+        self.login()
+        before = Paper.objects.count()
+        self.import_pdf(text_pdf(self.FRONT_MATTER))
+        self.assertEqual(before, Paper.objects.count())
 
 
 class TestPdfAssist(PdfSourceTestBase):

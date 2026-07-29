@@ -635,14 +635,193 @@ def extract_source_text(filename, data):
 # --------------------------------------------------------------- the merge
 
 # Fields where the manuscript's own text wins over registry metadata.
+# ---- conservative PDF front-matter extraction --------------------------------
+#
+# A PDF has no \title or \author markup, so everything below is a HEURISTIC on
+# the first page's text layout. That is why:
+#   * only the FIRST part of the text is inspected — the front matter is the
+#     only place these fields can legitimately be;
+#   * every rule bails out rather than guessing when the shape is unclear;
+#   * results are reported with provenance "pdf" and a caution, and the DOI
+#     registry outranks them on conflict (a printed layout is weaker evidence
+#     than the publisher's own record).
+# Nothing here is ever auto-applied: the review dialog leaves populated fields
+# untouched and applies only what the curator ticks.
+
+# How much of the extracted text may hold front matter.
+PDF_FRONT_MATTER_CHARS = 6000
+PDF_MAX_TITLE_CHARS = 300
+PDF_MAX_ABSTRACT_CHARS = 4000
+PDF_MAX_AUTHOR_LINES = 4
+
+# Publisher/venue furniture that shares the top of a first page with the
+# title. Matched case-insensitively against a whole line.
+_PDF_NOISE_RE = re.compile(
+    r"(?i)^(?:"
+    r"downloaded\b|received\b|accepted\b|published\b|available online\b|"
+    r"copyright\b|\(c\)\s|all rights reserved\b|licen[cs]e\b|"
+    r"cite this\b|citation\b|open access\b|supporting information\b|"
+    r"supplementary\b|preprint\b|submitted\b|arxiv:|doi:|https?://|www\.|"
+    r"pacs\b|keywords?\b|vol(?:ume)?\.?\s*\d|no\.\s*\d|pp\.\s*\d|"
+    r"page \d|issn\b|isbn\b|journal of\b.*\d{4}|"
+    r"\d{1,4}\s*$|[\W\d_]+$"
+    r")")
+
+# A line that reads like a list of people: capitalised tokens, separated by
+# commas or "and", optionally carrying affiliation markers.
+_PDF_AUTHOR_LINE_RE = re.compile(
+    r"^(?:[A-Z][\w.'À-ɏ-]*\.?\s*){1,4}"
+    r"[†‡*#0-9,;]*"
+    r"(?:\s*(?:,|and|&|;)\s*(?:[A-Z][\w.'À-ɏ-]*\.?\s*){1,4}"
+    r"[†‡*#0-9,;]*)*$")
+
+_PDF_ABSTRACT_START_RE = re.compile(
+    r"(?im)^\s*a\s?b\s?s\s?t\s?r\s?a\s?c\s?t\b[\s:.—-]*")
+_PDF_ABSTRACT_END_RE = re.compile(
+    r"(?im)^\s*(?:1\.?\s+)?(?:introduction|keywords?|"
+    r"i\.\s+introduction|background)\b")
+
+
+def _pdf_lines(text):
+    """Front-matter lines, trimmed and with empties dropped."""
+    head = (text or "")[:PDF_FRONT_MATTER_CHARS]
+    return [line.strip() for line in head.splitlines() if line.strip()]
+
+
+def _looks_like_authors(line):
+    if "@" in line or len(line) > 300:
+        return False
+    # A sentence is not an author list.
+    if line.endswith(".") and line.count(" ") > 12:
+        return False
+    return bool(_PDF_AUTHOR_LINE_RE.match(line))
+
+
+def _pdf_title(lines):
+    """The first line that can only be a title.
+
+    Publisher furniture is skipped, an author-looking line stops the search
+    (the title always precedes the byline), and anything too short or too
+    long is refused rather than guessed at.
+    """
+    for index, line in enumerate(lines[:25]):
+        if _PDF_NOISE_RE.match(line):
+            continue
+        # Furniture is not always at the START of a line: a DOI or a URL
+        # anywhere in it means this is a citation strip, not a title.
+        if DOI_IN_TEXT_RE.search(line) or re.search(r"(?i)https?://|www\.",
+                                                    line):
+            continue
+        if "@" in line:
+            break
+        if _looks_like_authors(line) and index > 0:
+            # We passed the title without recognising one.
+            break
+        if not (20 <= len(line) <= PDF_MAX_TITLE_CHARS):
+            continue
+        # A title is prose, not a data row.
+        letters = sum(1 for c in line if c.isalpha())
+        if letters < len(line) * 0.6:
+            continue
+        # Titles sometimes wrap; join a following line that is clearly a
+        # continuation (no terminal punctuation, still prose).
+        title = line
+        if (index + 1 < len(lines) and not line.endswith((".", "?", "!"))
+                and len(title) < PDF_MAX_TITLE_CHARS):
+            nxt = lines[index + 1]
+            if (20 <= len(nxt) and not _PDF_NOISE_RE.match(nxt)
+                    and not _looks_like_authors(nxt) and "@" not in nxt
+                    and nxt[:1].islower()):
+                title = "%s %s" % (title, nxt)
+        return re.sub(r"\s+", " ", title).strip()[:PDF_MAX_TITLE_CHARS], index
+    return "", -1
+
+
+def _pdf_authors(lines, title_index):
+    """Author names from the lines just below the title."""
+    if title_index < 0:
+        return ""
+    names = []
+    for line in lines[title_index + 1:title_index + 1 + PDF_MAX_AUTHOR_LINES]:
+        if _PDF_ABSTRACT_START_RE.match(line):
+            break
+        if _PDF_NOISE_RE.match(line) or "@" in line:
+            continue
+        if not _looks_like_authors(line):
+            # Affiliations and addresses end the byline.
+            break
+        names.append(line)
+    if not names:
+        return ""
+    joined = " ".join(names)
+    # Strip affiliation markers, then split on the usual separators.
+    joined = re.sub(r"[†‡*#]", "", joined)
+    joined = re.sub(r"(?<=[A-Za-z])\d+", "", joined)
+    parts = [p.strip(" ,;&") for p in re.split(r",|;|\band\b|&", joined)]
+    parts = [re.sub(r"\s+", " ", p) for p in parts if len(p.split()) >= 2]
+    if not parts:
+        return ""
+    return ", ".join(parts[:MAX_TAGS])
+
+
+def _pdf_abstract(text):
+    """Text after an "Abstract" heading, up to the next section heading."""
+    head = (text or "")[:PDF_FRONT_MATTER_CHARS * 2]
+    start = _PDF_ABSTRACT_START_RE.search(head)
+    if not start:
+        return ""
+    body = head[start.end():]
+    end = _PDF_ABSTRACT_END_RE.search(body)
+    if end:
+        body = body[:end.start()]
+    body = re.sub(r"\s+", " ", body).strip()
+    # Too short to be an abstract: refuse rather than propose a fragment.
+    if len(body) < 80:
+        return ""
+    return body[:PDF_MAX_ABSTRACT_CHARS]
+
+
+def extract_from_pdf_text(text):
+    """Conservative front-matter candidates from a PDF's extracted text.
+
+    Returns only the fields it is confident enough to SHOW for review; the
+    curator decides what is applied, and a populated field is never
+    overwritten without an explicit tick.
+    """
+    fields = {}
+    in_text = DOI_IN_TEXT_RE.search(text or "")
+    if in_text:
+        doi = normalize_doi(in_text.group(1))
+        if doi:
+            fields["doi"] = doi
+
+    lines = _pdf_lines(text)
+    title, title_index = _pdf_title(lines)
+    if title:
+        fields["title"] = title
+        authors = _pdf_authors(lines, title_index)
+        if authors:
+            fields["authors"] = authors
+
+    abstract = _pdf_abstract(text)
+    if abstract:
+        fields["abstract"] = abstract
+    return fields
+
+
 _MANUSCRIPT_PREFERRED = ("title", "authors", "abstract")
 
 
-def _merge_with_crossref(fields, crossref_fields):
-    """Source import prefers manuscript title/authors/abstract; DOI metadata
-    fills the missing bibliographic fields. Conflicts are surfaced as
-    alternatives, never silently resolved."""
-    provenance = {key: "manuscript" for key in fields}
+def _merge_with_crossref(fields, crossref_fields, source="manuscript"):
+    """Merge extracted fields with DOI-registry metadata.
+
+    Which side wins for title/authors/abstract depends on how they were
+    obtained: TeX markup is authoritative, so it keeps them; a PDF's front
+    matter is a layout heuristic, so the publisher's own record outranks it.
+    Either way the loser is surfaced as an ALTERNATIVE - a conflict is shown,
+    never silently resolved.
+    """
+    provenance = {key: source for key in fields}
     alternatives = {}
     for key, value in crossref_fields.items():
         if key == "tags":
@@ -658,8 +837,16 @@ def _merge_with_crossref(fields, crossref_fields):
         if key not in fields:
             fields[key] = value
             provenance[key] = "crossref"
-        elif key in _MANUSCRIPT_PREFERRED and fields[key] != value:
-            alternatives[key] = [{"source": "crossref", "value": value}]
+        elif fields[key] != value:
+            if key in _MANUSCRIPT_PREFERRED and source == "manuscript":
+                # TeX markup keeps the field; the registry is the alternative.
+                alternatives[key] = [{"source": "crossref", "value": value}]
+            else:
+                # The registry keeps it; what we read from the layout becomes
+                # the alternative, with its own provenance visible.
+                alternatives[key] = [{"source": source, "value": fields[key]}]
+                fields[key] = value
+                provenance[key] = "crossref"
     return fields, provenance, alternatives
 
 
@@ -696,18 +883,11 @@ def import_manuscript(body):
     try:
         combined, details = extract_source_text(filename, data)
         if details.get("source_kind") == "pdf":
-            # A PDF has no reliable \title/\author/abstract markup, so nothing
-            # is guessed from its layout. The one deterministic signal is a
-            # printed DOI; when present the registry lookup below fills the
-            # bibliography properly. The PDF's real value is as an AI
-            # keyword-suggestion source.
-            fields = {}
-            doi = None
-            in_text = DOI_IN_TEXT_RE.search(combined)
-            if in_text:
-                doi = normalize_doi(in_text.group(1))
-            if doi:
-                fields["doi"] = doi
+            # A PDF carries no \title/\author markup, so these come from
+            # the FRONT MATTER layout and are heuristics: reported for review
+            # with provenance "pdf", outranked by the registry on conflict,
+            # and never applied without a tick.
+            fields = extract_from_pdf_text(combined)
         else:
             fields = _extract_from_tex(combined)
     except ImportError_ as e:
@@ -723,8 +903,16 @@ def import_manuscript(body):
     details.setdefault("doi_candidates", [])
 
     warnings = []
-    provenance = {key: "manuscript" for key in fields}
+    source_label = "pdf" if details.get("source_kind") == "pdf" else "manuscript"
+    provenance = {key: source_label for key in fields}
     alternatives = {}
+    heuristic = [key for key in ("title", "authors", "abstract")
+                 if source_label == "pdf" and key in fields]
+    if heuristic:
+        warnings.append(
+            "Read from this PDF's first page layout (%s). A PDF has no title "
+            "or author markup, so please check each one before applying it."
+            % ", ".join(heuristic))
 
     manuscript_doi = fields.get("doi")
     if manuscript_doi:
@@ -735,7 +923,7 @@ def import_manuscript(body):
                             "are proposed.")
         else:
             fields, provenance, alternatives = _merge_with_crossref(
-                fields, crossref_fields)
+                fields, crossref_fields, source=source_label)
     else:
         warnings.append("No DOI was found in the manuscript itself; if this "
                         "work is published, paste its DOI to fill the "
@@ -743,11 +931,12 @@ def import_manuscript(body):
 
     if not fields:
         if details.get("source_kind") == "pdf":
-            warnings.append("No DOI was found in this PDF, and Qresp does not "
-                            "guess bibliographic fields from a PDF's layout. "
-                            "Paste the DOI above to fill them — the PDF can "
-                            "still be used as a source for AI keyword "
-                            "suggestions.")
+            warnings.append("Nothing recognizable was found in this PDF's "
+                            "front matter: no DOI, and no title, author or "
+                            "abstract block Qresp could read with confidence. "
+                            "Enter the fields by hand, or paste the DOI above "
+                            "— the PDF can still be used as a source for AI "
+                            "keyword suggestions.")
         else:
             warnings.append("Nothing recognizable was found: no \\title, "
                             "\\author, abstract, keywords, or DOI patterns.")

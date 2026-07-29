@@ -104,8 +104,16 @@ const PaperImport = () => {
             or a <strong>.pdf</strong> (10 MB limit). Everything is reviewed
             before anything is applied; nothing is published or overwritten
             silently. To fill fields from a published DOI instead, use the
-            DOI field&rsquo;s Fetch button below. A PDF is read for text only
-            (no OCR) and is never downloaded from a DOI or publisher.
+            DOI field&rsquo;s Fetch button below.
+          </Typography>
+          <Typography variant="body2" color="secondary" gutterBottom>
+            From a <strong>PDF</strong>, Qresp reads the first page&rsquo;s
+            front matter — a printed DOI, and a title, author list and
+            abstract when the layout makes them clear. A PDF carries no title
+            or author markup, so those are readings rather than facts: check
+            each one, and where a DOI registry disagrees you will see both
+            values with their source. Text only, no OCR, and never downloaded
+            from a DOI or publisher.
           </Typography>
           <Box
             sx={{

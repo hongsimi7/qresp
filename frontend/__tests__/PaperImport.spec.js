@@ -395,3 +395,23 @@ describe("PaperImport (manuscript source import)", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("PaperImport — PDF front matter", () => {
+  it("explains what a PDF can and cannot give, without over-claiming", () => {
+    renderImport();
+    const text = document.body.textContent;
+    expect(text).toMatch(/from a pdf, qresp reads the first page/i);
+    expect(text).toMatch(/printed doi/i);
+    expect(text).toMatch(/title, author list and abstract/i);
+    // Honest about the limits.
+    expect(text).toMatch(/readings rather than facts/i);
+    expect(text).toMatch(/no ocr/i);
+    expect(text).toMatch(/never downloaded from a doi or publisher/i);
+  });
+
+  it("accepts a .pdf alongside .tex and .zip", () => {
+    renderImport();
+    const input = document.getElementById("paper-import-file");
+    expect(input).toHaveAttribute("accept", ".tex,.zip,.pdf");
+  });
+});
