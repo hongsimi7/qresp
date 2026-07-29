@@ -563,6 +563,145 @@ class TestLegacyMode(CurationTestBase):
         self.assertEqual([], result["grouped_unclassified"])
 
 
+class TestCandidateIdentity(CurationTestBase):
+    """Every candidate must carry its OWN name, count and real paths.
+
+    The frontend used to derive a name from proposal.files, which since the
+    boundary rewrite holds ONE folder path — so dirname() walked up to the
+    role root and every dataset under data/ displayed as "data · 1 file".
+    Identity is decided here now, and a role root is only ever the name when
+    it IS the chosen boundary.
+    """
+
+    FILES = [
+        "data/DFT/Figure2/a.in",
+        "data/DFT/Figure2/b.out",
+        "data/DFT/Figure3/c.in",
+        "data/other/x.dat",
+        "data/loose.csv",
+        "figures_tables/fig1/panel.png",
+        "figures_tables/loose.png",
+        "scripts/analysis/run.py",
+        "scripts/plot.py",
+    ]
+    DIRS = [
+        "data", "data/DFT", "data/DFT/Figure2", "data/DFT/Figure3",
+        "data/other", "figures_tables", "figures_tables/fig1",
+        "scripts", "scripts/analysis",
+    ]
+
+    def analyze_tree(self, boundaries=None):
+        return curation.analyze_folder_tree(
+            self.FILES, self.DIRS, {}, boundaries=boundaries)
+
+    def identity(self, candidates):
+        return [(c["label"], c["file_count"]) for c in candidates]
+
+    def test_a_direct_file_is_named_after_the_file(self):
+        result = curation.analyze_folder_tree(
+            ["datasets/foo.csv"], ["datasets"], {})
+        self.assertEqual([("foo.csv", 1)], self.identity(result["datasets"]))
+
+    def test_a_boundary_folder_is_named_after_the_folder(self):
+        result = curation.analyze_folder_tree(
+            ["datasets/run-a/x.csv", "datasets/run-a/y.csv"],
+            ["datasets", "datasets/run-a"], {})
+        self.assertEqual([("run-a", 2)], self.identity(result["datasets"]))
+
+    def test_datasets_never_all_collapse_onto_the_role_root(self):
+        result = self.analyze_tree()
+        labels = [c["label"] for c in result["datasets"]]
+        # Three distinct datasets, three distinct names — this is the bug.
+        self.assertEqual(["DFT", "loose.csv", "other"], sorted(labels))
+        self.assertNotIn("data", labels)
+        self.assertEqual(len(labels), len(set(labels)))
+        # And each reports its OWN file count, not 1 for everything.
+        counts = dict(self.identity(result["datasets"]))
+        self.assertEqual(3, counts["DFT"])
+        self.assertEqual(1, counts["other"])
+        self.assertEqual(1, counts["loose.csv"])
+
+    def test_a_chosen_boundary_names_the_candidate(self):
+        result = self.analyze_tree({"data": ["data/DFT/Figure2"]})
+        self.assertEqual([("Figure2", 2)], self.identity(result["datasets"]))
+        self.assertEqual(["data/DFT/Figure2"],
+                         result["datasets"][0]["proposal"]["files"])
+
+    def test_selecting_the_role_root_still_reports_real_files(self):
+        # The special case: `data` IS the chosen boundary, so it may name the
+        # record — but the count and the paths must be real, and there must
+        # be exactly one candidate.
+        result = self.analyze_tree({"data": ["data"]})
+        self.assertEqual(1, len(result["datasets"]))
+        candidate = result["datasets"][0]
+        self.assertEqual("data", candidate["label"])
+        self.assertEqual(5, candidate["file_count"])
+        self.assertTrue(candidate["paths"])
+        for path in candidate["paths"]:
+            self.assertTrue(path.startswith("data/"), path)
+
+    def test_candidate_paths_are_real_files_not_just_the_boundary(self):
+        result = self.analyze_tree()
+        dft = [c for c in result["datasets"] if c["label"] == "DFT"][0]
+        self.assertEqual(
+            ["data/DFT/Figure2/a.in", "data/DFT/Figure2/b.out",
+             "data/DFT/Figure3/c.in"],
+            sorted(dft["paths"]))
+        # The record VALUE stays the folder — that is the boundary contract.
+        self.assertEqual(["data/DFT"], dft["proposal"]["files"])
+
+    def test_charts_and_scripts_are_named_too(self):
+        result = self.analyze_tree()
+        self.assertEqual(
+            ["fig1", "loose.png"],
+            sorted(c["label"] for c in result["charts"]))
+        self.assertEqual(
+            ["analysis", "plot.py"],
+            sorted(c["label"] for c in result["scripts"]))
+
+    def test_a_low_evidence_chart_still_has_a_name_and_paths(self):
+        # No preview image -> LOW classification, but it is still a real
+        # folder and must never render as a blank card.
+        result = curation.analyze_folder_tree(
+            ["charts/fig9/panel_a.png", "charts/fig9/panel_b.png"],
+            ["charts", "charts/fig9"], {})
+        chart = result["charts"][0]
+        self.assertEqual("low", chart["confidence"])
+        self.assertEqual("fig9", chart["label"])
+        self.assertEqual(2, chart["file_count"])
+        self.assertTrue(chart["paths"])
+
+    def test_a_tool_without_a_declaration_is_named_after_its_folder(self):
+        result = curation.analyze_folder_tree(
+            ["tools/west/patches/a.patch"],
+            ["tools", "tools/west", "tools/west/patches"], {})
+        tool = result["tools"][0]
+        self.assertEqual("west", tool["label"])
+        self.assertEqual("", tool["proposal"]["packageName"])
+
+    def test_every_candidate_has_a_label_and_at_least_one_path(self):
+        for boundaries in (None, {"data": ["data/DFT"]}, {"data": ["data"]}):
+            result = self.analyze_tree(boundaries)
+            for kind in ("charts", "datasets", "scripts", "tools"):
+                for candidate in result[kind]:
+                    self.assertTrue(candidate["label"].strip(),
+                                    (kind, boundaries))
+                    self.assertTrue([p for p in candidate["paths"] if p],
+                                    (kind, boundaries))
+
+    def test_an_unusable_candidate_never_reaches_the_response(self):
+        # A boundary folder holding no files produces nothing rather than a
+        # nameless, pathless card the curator could still tick.
+        groups, _ = curation.build_boundary_candidates(
+            [], ["datasets", "datasets/empty"], {"datasets": "datasets"}, {})
+        self.assertEqual([], groups["datasets"])
+        self.assertFalse(curation._usable(
+            {"label": "", "paths": ["datasets/x"]}))
+        self.assertFalse(curation._usable({"label": "x", "paths": []}))
+        self.assertTrue(curation._usable(
+            {"label": "x", "paths": ["datasets/x/y.csv"]}))
+
+
 class TestExplicitBoundaries(CurationTestBase):
     """A curator may choose where one record ends, within strict limits."""
 

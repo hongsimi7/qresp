@@ -318,11 +318,26 @@ def _stem(path):
 HIGH, MEDIUM, LOW, NEEDS_INPUT = "high", "medium", "low", "needs_input"
 
 
+# Real file paths carried per candidate. The record VALUE may be a single
+# folder (that is the boundary contract), but a candidate must still be able
+# to say which files it actually covers.
+MAX_CANDIDATE_PATHS = 200
+
+
 def _candidate(kind, index, proposal, evidence, confidence, paths,
-               needs_input=None, field_evidence=None, hints=None):
+               needs_input=None, field_evidence=None, hints=None,
+               label=None, file_count=None):
     return {
         "id": "%s-%d" % (kind, index),
         "kind": kind,
+        # DISPLAY IDENTITY, decided here rather than re-derived in the
+        # browser. The frontend used to infer a name from proposal.files,
+        # which since the boundary rewrite holds ONE folder path — so
+        # dirname() returned the role root and every dataset in data/ showed
+        # up as "data · 1 file". Identity comes from the actual boundary or
+        # the actual file, never from the role root.
+        "label": label or "",
+        "file_count": len(paths) if file_count is None else file_count,
         # Whole-candidate strength, kept for sorting and the summary chip.
         "confidence": confidence,
         # Per-field strength: an exact image path and an unverifiable figure
@@ -617,10 +632,40 @@ def _analyze_by_boundaries(files, dirs, texts, mode, roles, issues,
     }
 
 
+def _boundary_label(folder, role_root):
+    """A candidate's display name.
+
+    It is the basename of the boundary the curator (or the standard) chose.
+    A role root is only ever the name when it IS the chosen boundary — a
+    label must never fall back to "data" or "datasets" because a derivation
+    walked up to the parent.
+    """
+    name = posixpath.basename(folder)
+    if not name:
+        name = folder or role_root
+    return name
+
+
 def _boundary_candidate(kind, index, proposal, evidence, classification,
-                        paths, needs_input, field_evidence):
+                        paths, needs_input, field_evidence,
+                        label=None, file_count=None):
     return _candidate(kind, index, proposal, evidence, classification, paths,
-                      needs_input=needs_input, field_evidence=field_evidence)
+                      needs_input=needs_input, field_evidence=field_evidence,
+                      label=label, file_count=file_count)
+
+
+def _usable(candidate):
+    """A candidate a curator can actually see and judge.
+
+    Anything without a name or without a real file behind it would render as
+    an empty card that can still be ticked and added, so it is dropped here
+    rather than shipped.
+    """
+    if not (candidate.get("label") or "").strip():
+        return False
+    if not [p for p in candidate.get("paths") or [] if p]:
+        return False
+    return True
 
 
 def build_boundary_candidates(files, dirs, roles, texts, selected=None):
@@ -671,9 +716,11 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                      "as siblings under %s/." % top,
                      "Qresp cannot tell what these files mean — the "
                      "description is left blank for you."],
-                    MEDIUM, [folder], ["readme"],
+                    MEDIUM, members[:MAX_CANDIDATE_PATHS], ["readme"],
                     {"files": HIGH, "readme": NEEDS_INPUT,
-                     "URLs": NEEDS_INPUT}))
+                     "URLs": NEEDS_INPUT},
+                    label=_boundary_label(folder, top),
+                    file_count=len(members)))
                 dataset_i += 1
             for path in child_files:
                 claimed.add(path)
@@ -685,7 +732,8 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                      % (path, top)],
                     MEDIUM, [path], ["readme"],
                     {"files": HIGH, "readme": NEEDS_INPUT,
-                     "URLs": NEEDS_INPUT}))
+                     "URLs": NEEDS_INPUT},
+                    label=posixpath.basename(path), file_count=1))
                 dataset_i += 1
 
         elif role == fs.ROLE_CHARTS:
@@ -716,14 +764,17 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                      "notebookFile": notebook, "number": "", "caption": "",
                      "properties": [], "extraFields": []},
                     evidence,
-                    MEDIUM if preview else LOW, [folder],
+                    MEDIUM if preview else LOW,
+                    members[:MAX_CANDIDATE_PATHS],
                     ["caption", "number", "properties"]
                     + ([] if preview else ["imageFile"]),
                     {"imageFile": HIGH if preview else NEEDS_INPUT,
                      "files": HIGH if data else NEEDS_INPUT,
                      "notebookFile": HIGH if notebook else NEEDS_INPUT,
                      "number": NEEDS_INPUT, "caption": NEEDS_INPUT,
-                     "properties": NEEDS_INPUT}))
+                     "properties": NEEDS_INPUT},
+                    label=_boundary_label(folder, top),
+                    file_count=len(members)))
                 chart_i += 1
             # A loose image directly under charts/ is still one chart.
             for path in child_files:
@@ -740,7 +791,8 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                     MEDIUM, [path], ["caption", "number", "properties"],
                     {"imageFile": HIGH, "files": NEEDS_INPUT,
                      "notebookFile": NEEDS_INPUT, "number": NEEDS_INPUT,
-                     "caption": NEEDS_INPUT, "properties": NEEDS_INPUT}))
+                     "caption": NEEDS_INPUT, "properties": NEEDS_INPUT},
+                    label=posixpath.basename(path), file_count=1))
                 chart_i += 1
 
         elif role == fs.ROLE_SCRIPTS:
@@ -757,9 +809,11 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                      "(%d file(s))." % (folder, len(members))]
                     + (["You chose this folder as the record boundary."]
                        if chosen is not None else []),
-                    MEDIUM, [folder], ["readme"],
+                    MEDIUM, members[:MAX_CANDIDATE_PATHS], ["readme"],
                     {"files": HIGH, "readme": NEEDS_INPUT,
-                     "URLs": NEEDS_INPUT}))
+                     "URLs": NEEDS_INPUT},
+                    label=_boundary_label(folder, top),
+                    file_count=len(members)))
                 script_i += 1
             for path in child_files:
                 claimed.add(path)
@@ -772,7 +826,8 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                     ["One script record: %s directly under %s/." % (path, top)],
                     MEDIUM, [path], ["readme"],
                     {"files": HIGH, "readme": NEEDS_INPUT,
-                     "URLs": NEEDS_INPUT}))
+                     "URLs": NEEDS_INPUT},
+                    label=posixpath.basename(path), file_count=1))
                 script_i += 1
 
         elif role == fs.ROLE_TOOLS:
@@ -806,18 +861,29 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                      "patches": patches, "description": "", "urls": "",
                      "extraFields": []},
                     evidence,
-                    MEDIUM if package else LOW, [folder],
+                    MEDIUM if package else LOW,
+                    members[:MAX_CANDIDATE_PATHS],
                     ["description"] + ([] if package
                                        else ["packageName", "version"]),
                     {"packageName": HIGH if package else NEEDS_INPUT,
                      "version": HIGH if version else NEEDS_INPUT,
                      "executableName": NEEDS_INPUT,
                      "description": NEEDS_INPUT, "urls": NEEDS_INPUT,
-                     "patches": HIGH if patches else NEEDS_INPUT}))
+                     "patches": HIGH if patches else NEEDS_INPUT},
+                    label=(("%s %s" % (package, version)).strip()
+                           or _boundary_label(folder, top)),
+                    file_count=len(members)))
                 tool_i += 1
 
-    return {"charts": charts, "datasets": datasets, "scripts": scripts,
-            "tools": tools}, claimed
+    groups = {"charts": charts, "datasets": datasets, "scripts": scripts,
+              "tools": tools}
+    for kind, items in groups.items():
+        dropped = [c for c in items if not _usable(c)]
+        if dropped:
+            print("Folder analysis dropped %d unusable %s candidate(s)"
+                  % (len(dropped), kind))
+        groups[kind] = [c for c in items if _usable(c)]
+    return groups, claimed
 
 
 def analyze_folder_tree(files, dirs, texts, boundaries=None):

@@ -140,37 +140,62 @@ const toRecord = (kind, draft) => {
   };
 };
 
-// A short, scannable label. The exact relative paths stay in the candidate
-// data (and in the applied record) — they live under Details, not in the
-// card header, so a folder of forty files is still readable.
+// A short, scannable label.
+//
+// The BACKEND owns a candidate's identity (`label` + `file_count`). Deriving
+// it here is what broke: since record boundaries became folders,
+// proposal.files holds ONE folder path, so dirname() returned the role root
+// and every dataset under data/ rendered as "data · 1 file". The fallbacks
+// below only cover an older response shape, and never walk up to a parent.
 const labelOf = (candidate) => {
   const p = candidate.proposal || {};
+  const count = candidate.file_count;
+  const suffix =
+    typeof count === "number" && count > 0
+      ? ` · ${count} file${count === 1 ? "" : "s"}`
+      : "";
+
+  if (candidate.label) {
+    const first = (candidate.paths || [])[0] || "";
+    const boundary = (p.files || [])[0] || p.imageFile || first;
+    return {
+      primary: `${candidate.label}${
+        candidate.kind === "chart" || candidate.kind === "tool" ? "" : suffix
+      }`,
+      secondary: dirname(boundary),
+      full: boundary,
+    };
+  }
+
+  // --- fallbacks for a response without an explicit label ------------------
   if (candidate.kind === "chart") {
-    const path = p.imageFile || "";
+    const path = p.imageFile || (candidate.paths || [])[0] || "";
     const parent = basename(dirname(path));
     return {
       primary: parent ? `${parent} / ${basename(path)}` : basename(path),
-      secondary: "",
+      secondary: dirname(path),
+      full: path,
     };
-  }
-  if (candidate.kind === "script") {
-    const path = (p.files || [])[0] || "";
-    return { primary: basename(path), secondary: dirname(path) };
   }
   if (candidate.kind === "tool") {
     return {
       primary: `${p.packageName || ""} ${p.version || ""}`.trim(),
       secondary: "",
+      full: (candidate.paths || [])[0] || "",
     };
   }
-  const directory = dirname((p.files || [])[0] || "");
-  const count = (p.files || []).length;
-  return {
-    primary: `${directory ? basename(directory) : "folder root"} · ${count} file${
-      count === 1 ? "" : "s"
-    }`,
-    secondary: directory,
-  };
+  const path = (p.files || [])[0] || (candidate.paths || [])[0] || "";
+  return { primary: basename(path), secondary: dirname(path), full: path };
+};
+
+// A candidate a curator can actually see and judge. An unnamed card would
+// render blank yet still be tickable and addable, so it never reaches the
+// list, the selection, or the apply payload.
+const isRenderable = (candidate) => {
+  const { primary } = labelOf(candidate);
+  return Boolean(
+    (primary || "").trim() && ((candidate.paths || [])[0] || "").trim()
+  );
 };
 
 // Evidence vocabulary, shared by the card chip and the per-field chips.
@@ -312,7 +337,7 @@ const FolderAnalysis = ({ path }) => {
   // actually stand behind. Nothing is dropped by this ordering.
   const candidatesFor = (key) =>
     (((analysis || {}).candidates || {})[key] || [])
-      .filter((candidate) => !removed[candidate.id])
+      .filter((candidate) => !removed[candidate.id] && isRenderable(candidate))
       .slice()
       .sort(
         (a, b) =>
@@ -610,7 +635,7 @@ const FolderAnalysis = ({ path }) => {
   const renderCandidate = (candidate) => {
     const draft = drafts[candidate.id] || {};
     const needs = candidate.needs_input || [];
-    const { primary, secondary } = labelOf(candidate);
+    const { primary, secondary, full } = labelOf(candidate);
     const isSelected = Boolean(selected[candidate.id]);
     // Fields appear once the candidate matters: it is selected, or the
     // curator explicitly opened it. An unselected card stays a single line.
@@ -645,7 +670,7 @@ const FolderAnalysis = ({ path }) => {
             slotProps={{ input: { "aria-label": `Select ${primary}` } }}
           />
           <Box sx={{ flexGrow: 1, flexBasis: 200, minWidth: 0 }}>
-            <Typography variant="subtitle2" noWrap title={primary}>
+            <Typography variant="subtitle2" noWrap title={full || primary}>
               {primary}
             </Typography>
             {secondary ? (

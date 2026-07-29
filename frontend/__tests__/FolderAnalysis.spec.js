@@ -22,6 +22,8 @@ const analysis = {
       {
         id: "chart-0",
         kind: "chart",
+        label: "figure1.png",
+        file_count: 1,
         confidence: "high",
         evidence: [
           "figures/figure1.png is a .png image",
@@ -44,6 +46,8 @@ const analysis = {
       {
         id: "dataset-0",
         kind: "dataset",
+        label: "short_traj",
+        file_count: 2,
         confidence: "medium",
         evidence: ["2 data file(s) in data/short_traj"],
         needs_input: ["readme"],
@@ -60,6 +64,8 @@ const analysis = {
       {
         id: "script-0",
         kind: "script",
+        label: "plot_vdos.py",
+        file_count: 1,
         confidence: "high",
         evidence: [
           "scripts/plot_vdos.py is a .py script",
@@ -80,6 +86,8 @@ const analysis = {
       {
         id: "tool-0",
         kind: "tool",
+        label: "numpy 1.26.4",
+        file_count: 1,
         confidence: "high",
         evidence: ["numpy 1.26.4 pinned in requirements.txt"],
         needs_input: ["description"],
@@ -198,7 +206,7 @@ describe("Analyze RCC Folder", () => {
       "High evidence"
     );
     expect(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
     ).toBeInTheDocument();
     // The needs-input chip is a short badge; the field list is its tooltip.
     expect(screen.getByText(/^needs input$/i)).toBeInTheDocument();
@@ -209,8 +217,8 @@ describe("Analyze RCC Folder", () => {
     renderWith();
     await openAnalysis(user);
 
-    // Chart: parent folder / image file — not the whole relative path.
-    expect(screen.getByText("figures / figure1.png")).toBeInTheDocument();
+    // A short name in the header; the exact path stays in Details.
+    expect(screen.getByText("figure1.png")).toBeInTheDocument();
     expect(screen.queryByText(/figure1\.png is a \.png image/i)).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /^details$/i }));
@@ -230,7 +238,7 @@ describe("Analyze RCC Folder", () => {
 
     await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
     // Basename first, parent directory as secondary text.
-    expect(screen.getByText("plot_vdos.py")).toBeInTheDocument();
+    expect(screen.getByText("plot_vdos.py · 1 file")).toBeInTheDocument();
     expect(screen.getByText("scripts")).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: /datasets \(1\)/i }));
@@ -252,7 +260,7 @@ describe("Analyze RCC Folder", () => {
 
     // Selecting reveals them...
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
     expect(await screen.findByLabelText(/^caption$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^image file$/i)).toBeInTheDocument();
@@ -270,7 +278,7 @@ describe("Analyze RCC Folder", () => {
 
     expect(await screen.findByLabelText(/^caption$/i)).toBeInTheDocument();
     expect(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
     ).not.toBeChecked();
     expect(
       screen.getByRole("button", { name: /add selected items to curator/i })
@@ -389,6 +397,148 @@ describe("Analyze RCC Folder", () => {
     expect(screen.getByLabelText(/^properties/i)).toHaveValue("");
   });
 
+  it("a Low evidence candidate still shows its name and path", async () => {
+    // Low confidence is about how sure we are it is a Chart — it must never
+    // cost the candidate its identity.
+    axios.post.mockResolvedValue({
+      data: {
+        ...analysis,
+        candidates: {
+          ...analysis.candidates,
+          charts: [
+            {
+              ...analysis.candidates.charts[0],
+              id: "chart-9",
+              label: "fig9",
+              file_count: 2,
+              confidence: "low",
+              paths: ["charts/fig9/panel_a.png", "charts/fig9/panel_b.png"],
+              proposal: {
+                ...analysis.candidates.charts[0].proposal,
+                imageFile: "",
+                files: [],
+              },
+            },
+          ],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    expect(screen.getByText("fig9")).toBeInTheDocument();
+    expect(screen.getByTestId("confidence-chart-9")).toHaveTextContent(
+      "Low evidence"
+    );
+    expect(
+      screen.getByRole("checkbox", { name: /select fig9/i })
+    ).toBeInTheDocument();
+    // The exact path is reachable, on the header tooltip and in Details.
+    expect(screen.getByText("fig9").closest("[title]")).toHaveAttribute(
+      "title",
+      "charts/fig9/panel_a.png"
+    );
+  });
+
+  it("names each dataset after its own boundary, never the role root", async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        ...analysis,
+        candidates: {
+          ...analysis.candidates,
+          datasets: [
+            {
+              ...analysis.candidates.datasets[0],
+              id: "dataset-0",
+              label: "DFT",
+              file_count: 3,
+              paths: ["data/DFT/Figure2/a.in"],
+              proposal: { files: ["data/DFT"], readme: "", URLs: [],
+                extraFields: [] },
+            },
+            {
+              ...analysis.candidates.datasets[0],
+              id: "dataset-1",
+              label: "other",
+              file_count: 1,
+              paths: ["data/other/x.dat"],
+              proposal: { files: ["data/other"], readme: "", URLs: [],
+                extraFields: [] },
+            },
+            {
+              ...analysis.candidates.datasets[0],
+              id: "dataset-2",
+              label: "loose.csv",
+              file_count: 1,
+              paths: ["data/loose.csv"],
+              proposal: { files: ["data/loose.csv"], readme: "", URLs: [],
+                extraFields: [] },
+            },
+          ],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await user.click(screen.getByRole("tab", { name: /datasets \(3\)/i }));
+
+    // Three distinct names and three real counts — not "data · 1 file"
+    // three times over.
+    expect(screen.getByText("DFT · 3 files")).toBeInTheDocument();
+    expect(screen.getByText("other · 1 file")).toBeInTheDocument();
+    expect(screen.getByText("loose.csv · 1 file")).toBeInTheDocument();
+    expect(screen.queryByText("data · 1 file")).toBeNull();
+  });
+
+  it("a nameless candidate is never rendered, selected, or added", async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        ...analysis,
+        candidates: {
+          ...analysis.candidates,
+          datasets: [
+            analysis.candidates.datasets[0],
+            // Malformed: no label and no paths. It must not reach the UI.
+            {
+              id: "dataset-broken",
+              kind: "dataset",
+              label: "",
+              file_count: 0,
+              confidence: "low",
+              evidence: [],
+              needs_input: [],
+              paths: [],
+              proposal: { files: [], readme: "", URLs: [], extraFields: [] },
+            },
+          ],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await openAnalysis(user);
+
+    // The tab counts only what a curator can actually judge.
+    expect(
+      screen.getByRole("tab", { name: /datasets \(1\)/i })
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+
+    // Select everything on offer and apply: the broken one cannot ride along.
+    await user.click(screen.getByRole("tab", { name: /datasets \(1\)/i }));
+    await user.click(
+      screen.getByRole("checkbox", { name: /select short_traj/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /add selected items to curator/i })
+    );
+    const [[, records]] = addMany.mock.calls;
+    expect(records).toHaveLength(1);
+    expect(JSON.stringify(records)).not.toContain("dataset-broken");
+  });
+
   it("nothing is selected by default", async () => {
     const user = userEvent.setup();
     const { addMany } = renderWith();
@@ -411,6 +561,7 @@ describe("Analyze RCC Folder", () => {
         charts: Array.from({ length: 40 }, (unused, index) => ({
           ...analysis.candidates.charts[0],
           id: `chart-${index}`,
+          label: `figure${index}.png`,
           // Later ones have weaker evidence, so they sort to the back.
           confidence: index < 5 ? "high" : "medium",
           paths: [`figures/figure${index}.png`],
@@ -455,6 +606,7 @@ describe("Analyze RCC Folder", () => {
         charts: Array.from({ length: 30 }, (unused, index) => ({
           ...analysis.candidates.charts[0],
           id: `chart-${index}`,
+          label: `figure${index}.png`,
           paths: [`figures/figure${index}.png`],
           proposal: {
             ...analysis.candidates.charts[0].proposal,
@@ -471,7 +623,7 @@ describe("Analyze RCC Folder", () => {
 
     await user.click(screen.getByRole("button", { name: /show all 30/i }));
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure29\.png/i })
+      screen.getByRole("checkbox", { name: /select figure29\.png/i })
     );
     expect(screen.getAllByRole("checkbox")).toHaveLength(30);
   });
@@ -614,7 +766,7 @@ describe("Analyze RCC Folder", () => {
     await openAnalysis(user);
 
     const box = screen.getByRole("checkbox", {
-      name: /select figures \/ figure1\.png/i,
+      name: /select figure1\.png/i,
     });
     expect(box).not.toBeChecked();
     const apply = screen.getByRole("button", {
@@ -630,7 +782,7 @@ describe("Analyze RCC Folder", () => {
     await openAnalysis(user);
 
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
     await user.type(screen.getByLabelText(/^caption$/i), "Density of states");
     await user.click(
@@ -659,7 +811,7 @@ describe("Analyze RCC Folder", () => {
     await openAnalysis(user);
 
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
     await user.click(screen.getByRole("button", { name: /^remove$/i }));
     expect(screen.getByRole("tab", { name: /charts \(0\)/i })).toBeInTheDocument();
@@ -730,7 +882,7 @@ describe("Analyze RCC Folder", () => {
     renderWith();
     await openAnalysis(user);
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
     await user.click(
       screen.getByRole("button", { name: /add selected items to curator/i })
@@ -746,7 +898,7 @@ describe("Analyze RCC Folder", () => {
     const { addMany } = renderWith();
     await openAnalysis(user);
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));
     expect(addMany).not.toHaveBeenCalled();
@@ -1089,7 +1241,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     expect(axios.post).toHaveBeenCalledTimes(1);
 
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
     expect(enhanceButton()).toBeEnabled();
   });
@@ -1099,7 +1251,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     renderWith();
     await openAnalysis(user);
     await selectAndOpenConsent(
-      user, null, /select figures \/ figure1\.png/i
+      user, null, /select figure1\.png/i
     );
 
     // The dialog states the count and the exact scope BEFORE anything moves.
@@ -1130,7 +1282,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
-    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
+    await selectAndOpenConsent(user, null, /select figure1\.png/i);
 
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));
 
@@ -1142,7 +1294,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
-    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
+    await selectAndOpenConsent(user, null, /select figure1\.png/i);
     await consentAndSend(user, {
       suggestions: {
         "chart-0": { description: "d", keywords: [], confidence: "low" },
@@ -1308,7 +1460,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
-    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
+    await selectAndOpenConsent(user, null, /select figure1\.png/i);
     await consentAndSend(user, {
       suggestions: {
         "chart-0": {
@@ -1411,7 +1563,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
-    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
+    await selectAndOpenConsent(user, null, /select figure1\.png/i);
     await consentAndSend(user, {
       suggestions: {
         "chart-0": {
@@ -1430,7 +1582,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     const user = userEvent.setup();
     const { addMany, setAlert } = renderWith();
     await openAnalysis(user);
-    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
+    await selectAndOpenConsent(user, null, /select figure1\.png/i);
     await consentAndSend(user, {
       suggestions: {
         "chart-0": { description: "x", keywords: [], confidence: "low" },
@@ -1451,7 +1603,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     const user = userEvent.setup();
     const { addMany } = renderWith();
     await openAnalysis(user);
-    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
+    await selectAndOpenConsent(user, null, /select figure1\.png/i);
     await consentAndSend(user, {
       suggestions: {
         "chart-0": {
@@ -1483,6 +1635,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
         charts: Array.from({ length: 11 }, (unused, index) => ({
           ...analysis.candidates.charts[0],
           id: `chart-${index}`,
+          label: `figure${index}.png`,
           paths: [`figures/figure${index}.png`],
           proposal: {
             ...analysis.candidates.charts[0].proposal,
@@ -1500,7 +1653,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     for (let index = 0; index < 11; index += 1) {
       await user.click(
         screen.getByRole("checkbox", {
-          name: new RegExp(`select figures / figure${index}\\.png`, "i"),
+          name: new RegExp(`select figure${index}\\.png`, "i"),
         })
       );
     }
@@ -1519,7 +1672,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
-    await selectAndOpenConsent(user, null, /select figures \/ figure1\.png/i);
+    await selectAndOpenConsent(user, null, /select figure1\.png/i);
 
     axios.post.mockRejectedValue({
       response: {
@@ -1599,6 +1752,7 @@ describe("Analyze RCC Folder applied into real Curator state", () => {
             {
               ...analysis.candidates.charts[0],
               id: "chart-1",
+              label: "figure2.png",
               paths: ["figures/figure2.png"],
               proposal: {
                 ...analysis.candidates.charts[0].proposal,
@@ -1621,10 +1775,10 @@ describe("Analyze RCC Folder applied into real Curator state", () => {
     await user.click(analyzeButton());
     await screen.findByRole("tab", { name: /charts \(2\)/i });
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure1\.png/i })
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
     await user.click(
-      screen.getByRole("checkbox", { name: /select figures \/ figure2\.png/i })
+      screen.getByRole("checkbox", { name: /select figure2\.png/i })
     );
     await user.click(
       screen.getByRole("button", { name: /add selected items to curator/i })
