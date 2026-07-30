@@ -169,6 +169,24 @@ a single server-wide `limit_req` throttled every request, so one page load's
       sign-in hint; the GLOBAL toolbar has no import button);
       "Qresp Curation Information" holds ONLY PIs / PaperStack / Keywords /
       notebook and the gated "Suggest Keywords with AI" action
+- [ ] Publication Information offers NO AI action of any kind: no "Suggest
+      missing publication details with AI" button, no AI dialog, no mention
+      of Gemini in the section. Publication metadata is deterministic --
+      Crossref plus what is printed in the manuscript
+- [ ] Import Review shows no AI keyword and no AI publication block
+- [ ] DOI Fetch fills the inputs and the section stays OPEN and unsaved --
+      it does not collapse into display mode
+- [ ] "Apply to Paper Information" from the import review fills the inputs
+      and the section stays OPEN and unsaved
+- [ ] Opening and closing the Keyword AI dialog does not save or collapse
+      Publication Information, and typed unsaved values survive
+- [ ] ONLY the Publication Information "Save" button commits the section and
+      switches it to display mode
+- [ ] A DOI with no registry URL yields exactly https://doi.org/<doi>; a
+      field neither Crossref nor the manuscript supplies is left BLANK for
+      manual entry, never filled with a guess
+- [ ] Preprint and Dissertation save and publish with no journal / volume /
+      page; Journal Name is required only for kind = Journal
 - [ ] Paste a real DOI → Fetch DOI → proposed fields with provenance (kind
       mapped from the registry); Apply fills only empty fields; a pre-filled
       title stays unless its checkbox is checked (both values shown); the

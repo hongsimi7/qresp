@@ -9,6 +9,28 @@ review dialog, the user picks which fields to apply, and nothing is ever
 published or overwritten automatically. The existing **Upload Metadata**
 (JSON) workflow is unchanged and unrelated.
 
+## Which parts use AI, and which never do
+
+Qresp splits these three deliberately. The split is the design, not an
+implementation detail:
+
+| Area | How values are produced | AI? |
+| --- | --- | --- |
+| **Publication metadata** (kind, title, authors, abstract, journal, volume, page, year, DOI, URL) | Crossref via the DOI registry, plus deterministic extraction from the printed `.tex`/`.pdf` front matter | **Never.** This is factual data with an authoritative source |
+| **Keywords** | Curator's own entry, plus optional Gemini suggestion in *Qresp Curation Information* | Optional, consent-gated, human-approved |
+| **RCC artifacts** (datasets, charts, scripts, tools, docs) | Deterministic folder discovery under Folder Standard v1 | Optional Gemini *enrichment* of descriptions only |
+
+No AI result is ever auto-applied, auto-saved or auto-published. Every
+suggestion arrives unchecked, is applied field by field by the curator, and
+still needs an explicit section **Save**.
+
+A language model is not used for bibliography because bibliography has a
+registry. Asking a model to fill a journal name or a year invites a fluent,
+plausible, wrong answer into a field that looks curated — and Crossref
+already answers the same question exactly. Where the registry and the
+manuscript are both silent, the field is **left blank** for the curator to
+type, never inferred.
+
 ## Data flow (final)
 
 - A Qresp record represents ONE primary paper. Its bibliography is the
@@ -63,11 +85,18 @@ published or overwritten automatically. The existing **Upload Metadata**
   preprint/journal/dissertation; unmapped types propose nothing), title,
   authors, journal, year, volume, issue, pages, abstract, DOI, URL, and
   subject keywords. Missing optional metadata never fails the lookup.
-- From a `.pdf`, **only a DOI that is actually printed in the document** is
-  proposed. A PDF's text layer gives no reliable structure, so Qresp does not
-  guess the title, authors, or abstract from it and says so in the review
-  dialog. Extract the metadata by fetching that DOI; the PDF's value is as an
-  AI source (below).
+- From a `.pdf`, only what is **actually printed in the front matter**: a
+  DOI, the title, the author line, the abstract under its own heading (kept
+  verbatim, never summarized), and a year — but a year only from an
+  unambiguous copyright, citation or publication-date context. Received,
+  revised, accepted and submitted dates are excluded: none of them states
+  when the work was published. A PDF's text layer has no markup, so each of
+  these is a layout reading and is labelled as such in the review dialog for
+  the curator to check. Journal, volume and page are **not** read from a PDF
+  — fetch the DOI for those, or type them.
+- **URL** is computed, never proposed: when a DOI is known and the registry
+  supplied no URL of its own, it becomes `https://doi.org/<normalized-doi>`.
+  Nothing else ever writes this field.
 - For a `.tex`/Overleaf source WITHOUT a DOI, kind defaults to
   **preprint as a suggestion only** (client-side, clearly chipped
   "suggested"); DOI, year, venue and authors are never invented.

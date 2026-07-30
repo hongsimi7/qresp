@@ -5,6 +5,20 @@ frontend Next 16/React 19/MUI 9, all verified locally + staging: `PAPERSTACK_STA
 Direction change 2026-07-03: curation-assistant/AI-workflow-automation work is **paused**;
 `prototypes/` and the validation-sample branches stay untouched and unmerged.
 
+Direction change 2026-07-30: **AI is scoped by what kind of question it answers.**
+
+| Area | Source of values | AI |
+| --- | --- | --- |
+| Publication metadata | Crossref (DOI registry) + deterministic `.tex`/`.pdf` extraction | **None, by design** |
+| Keywords | Curator entry + optional Gemini suggestion in Qresp Curation Information | Optional, consent-gated |
+| RCC artifacts | Deterministic Folder Standard v1 discovery | Optional Gemini description enrichment |
+
+Bibliography is factual data with an authoritative registry, so it is not a
+task for a language model: a fluent wrong journal name or year is worse than
+a blank field a curator fills in. The `POST /api/assist/publication-metadata`
+endpoint and the `PublicationAssist` component were removed accordingly. No
+AI output is auto-applied, auto-saved or auto-published anywhere.
+
 ## Goals → why / MVP / defer
 
 ### 1. Dependency + code modernization — ✅ essentially done
