@@ -1,4 +1,4 @@
-import { Fragment, useContext, useState } from "react";
+import { Fragment, useContext, useRef, useState } from "react";
 import PropTypes from "prop-types";
 
 import axios from "axios";
@@ -92,7 +92,25 @@ const PublicationAssist = ({ reference, sourceText, sourceFilename }) => {
     : "Import a .pdf, .tex or Overleaf .zip manuscript source first — there " +
       "is no extracted text to read yet.";
 
-  const close = () => {
+  // MUI's Button defaults to type="submit" inside a <form>. This component
+  // lives inside the Publication Information form, so every click on the
+  // trigger was submitting that form: the section saved itself and the drawer
+  // collapsed, hiding the very fields the assist exists to fill. Every button
+  // here is type="button", and the handlers stop the click from reaching the
+  // form regardless.
+  const halt = (event) => {
+    if (!event) return;
+    if (event.preventDefault) event.preventDefault();
+    if (event.stopPropagation) event.stopPropagation();
+  };
+
+  // Focus goes back to the action that opened the dialog, not to the top of
+  // the form.
+  const triggerRef = useRef(null);
+
+  const close = (event) => {
+    halt(event);
+    if (triggerRef.current) triggerRef.current.focus();
     setOpen(false);
     setConsent(false);
     setLoading(false);
@@ -103,7 +121,8 @@ const PublicationAssist = ({ reference, sourceText, sourceFilename }) => {
   };
 
   // Consent is asked fresh every time the dialog opens.
-  const start = () => {
+  const start = (event) => {
+    halt(event);
     setConsent(false);
     setError("");
     setResult(null);
@@ -112,7 +131,8 @@ const PublicationAssist = ({ reference, sourceText, sourceFilename }) => {
     setOpen(true);
   };
 
-  const request = async () => {
+  const request = async (event) => {
+    halt(event);
     setLoading(true);
     setError("");
     try {
@@ -150,7 +170,8 @@ const PublicationAssist = ({ reference, sourceText, sourceFilename }) => {
     proposals.find((p) => p.field === field)
   ).filter(Boolean);
 
-  const apply = () => {
+  const apply = (event) => {
+    halt(event);
     const updates = {};
     ordered.forEach((proposal) => {
       if (!selected[proposal.field]) return;
@@ -168,10 +189,27 @@ const PublicationAssist = ({ reference, sourceText, sourceFilename }) => {
 
   const anySelected = ordered.some((p) => selected[p.field]);
 
+  // A per-field verdict, so "nothing appeared for Year" reads as a statement
+  // about the evidence rather than as a bug. Field NAMES only — never any of
+  // the manuscript text they were read from.
+  const label = (field) => FIELD_LABELS[field] || field;
+  const proposedFields = ordered.map((p) => p.field);
+  const missingFields = FIELD_ORDER.filter(
+    (field) =>
+      !proposedFields.includes(field) &&
+      !String(current[field] == null ? "" : current[field]).trim()
+  );
+
   return (
     <Fragment>
       <Box sx={{ mt: 1 }}>
-        <Button size="small" onClick={start} disabled={!eligible}>
+        <Button
+          type="button"
+          size="small"
+          ref={triggerRef}
+          onClick={start}
+          disabled={!eligible}
+        >
           Suggest missing publication details with AI
         </Button>
         <Typography
@@ -188,8 +226,12 @@ const PublicationAssist = ({ reference, sourceText, sourceFilename }) => {
         {blockedBySupplementary && hasText ? (
           <Button
             size="small"
+            type="button"
             color="warning"
-            onClick={() => setSiOverride(true)}
+            onClick={(event) => {
+              halt(event);
+              setSiOverride(true);
+            }}
             data-testid="si-override"
           >
             Use it anyway (results marked low confidence)
@@ -272,6 +314,22 @@ const PublicationAssist = ({ reference, sourceText, sourceFilename }) => {
                   {warning}
                 </Alert>
               ))}
+              <Box sx={{ mb: 1.5 }} data-testid="field-status">
+                {proposedFields.length ? (
+                  <Typography variant="body2">
+                    <strong>Found from source:</strong>{" "}
+                    {proposedFields.map(label).join(", ")}
+                  </Typography>
+                ) : null}
+                {missingFields.length ? (
+                  <Typography variant="body2" color="text.secondary">
+                    <strong>No reliable source evidence:</strong>{" "}
+                    {missingFields.map(label).join(", ")} — left blank rather
+                    than guessed. Enter them yourself if you have the printed
+                    values.
+                  </Typography>
+                ) : null}
+              </Box>
               {ordered.length === 0 && (
                 <Typography variant="body2" data-testid="no-proposals">
                   No reliable value found for the missing fields.
@@ -372,9 +430,10 @@ const PublicationAssist = ({ reference, sourceText, sourceFilename }) => {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={close}>Close</Button>
+          <Button type="button" onClick={close}>Close</Button>
           {!result ? (
             <Button
+              type="button"
               variant="contained"
               disabled={!consent || loading}
               onClick={request}
@@ -382,7 +441,12 @@ const PublicationAssist = ({ reference, sourceText, sourceFilename }) => {
               Send and get suggestions
             </Button>
           ) : (
-            <Button variant="contained" disabled={!anySelected} onClick={apply}>
+            <Button
+              type="button"
+              variant="contained"
+              disabled={!anySelected}
+              onClick={apply}
+            >
               Apply selected fields
             </Button>
           )}

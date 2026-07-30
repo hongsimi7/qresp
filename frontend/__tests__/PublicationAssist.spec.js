@@ -253,6 +253,137 @@ describe("Suggest missing publication details with AI", () => {
   });
 });
 
+describe("the AI action never acts on the form", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  // MUI Buttons default to type="submit". Inside the Publication Information
+  // form that made every click on the assist submit the section: it saved and
+  // collapsed, hiding the fields the curator was about to fill.
+  const renderInForm = (ref = reference()) => {
+    const onSubmit = jest.fn((event) => event.preventDefault());
+    const setReferenceInfo = jest.fn();
+    render(
+      <CuratorContext.Provider value={{ setReferenceInfo }}>
+        <form onSubmit={onSubmit}>
+          <input aria-label="Volume" defaultValue="" />
+          <PublicationAssist
+            reference={ref}
+            sourceText="Published in J. Chem. Phys. 158, 014101 (2023)."
+            sourceFilename="paper.pdf"
+          />
+        </form>
+      </CuratorContext.Provider>
+    );
+    return { onSubmit, setReferenceInfo };
+  };
+
+  it("uses non-submit buttons throughout", async () => {
+    const user = userEvent.setup();
+    renderInForm();
+    expect(trigger()).toHaveAttribute("type", "button");
+    await user.click(trigger());
+    screen.getAllByRole("button").forEach((button) => {
+      expect(button).toHaveAttribute("type", "button");
+    });
+  });
+
+  it("opening it submits nothing and writes nothing", async () => {
+    const user = userEvent.setup();
+    const { onSubmit, setReferenceInfo } = renderInForm();
+
+    await user.click(trigger());
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(setReferenceInfo).not.toHaveBeenCalled();
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it("requesting and closing submits nothing and writes nothing", async () => {
+    const user = userEvent.setup();
+    const { onSubmit, setReferenceInfo } = renderInForm();
+
+    await openAndSend(user, {
+      proposals: [
+        { field: "year", value: "2023", provenance: "ai",
+          confidence: "medium", evidence: "(2023)" },
+      ],
+      warnings: [],
+    });
+    await user.click(screen.getByRole("button", { name: /^close$/i }));
+
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(setReferenceInfo).not.toHaveBeenCalled();
+  });
+
+  it("keeps a typed, unsaved value across open and close", async () => {
+    const user = userEvent.setup();
+    renderInForm();
+    const volume = screen.getByLabelText("Volume");
+
+    await user.type(volume, "158");
+    await user.click(trigger());
+    await user.click(screen.getByRole("button", { name: /^close$/i }));
+
+    expect(volume).toHaveValue("158");
+  });
+
+  it("returns focus to the action after closing", async () => {
+    const user = userEvent.setup();
+    renderInForm();
+
+    await user.click(trigger());
+    await user.click(screen.getByRole("button", { name: /^close$/i }));
+
+    await waitFor(() => expect(trigger()).toHaveFocus());
+  });
+
+  it("only Apply writes to referenceInfo", async () => {
+    const user = userEvent.setup();
+    const { onSubmit, setReferenceInfo } = renderInForm();
+
+    await openAndSend(user, {
+      proposals: [
+        { field: "year", value: "2023", provenance: "ai",
+          confidence: "medium", evidence: "(2023)" },
+      ],
+      warnings: [],
+    });
+    expect(setReferenceInfo).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("checkbox", { name: /apply year/i }));
+    await user.click(
+      screen.getByRole("button", { name: /apply selected fields/i })
+    );
+
+    expect(setReferenceInfo).toHaveBeenCalledTimes(1);
+    // Applying writes the form state; it does not save or publish.
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(axios.put).not.toHaveBeenCalled();
+  });
+
+  it("summarises which fields had evidence and which had none", async () => {
+    const user = userEvent.setup();
+    renderInForm();
+
+    await openAndSend(user, {
+      proposals: [
+        { field: "title", value: "A Title", provenance: "pdf_text",
+          confidence: "high", evidence: "front matter" },
+        { field: "abstract", value: "An abstract.", provenance: "pdf_text",
+          confidence: "high", evidence: "abstract heading" },
+      ],
+      warnings: [],
+    });
+
+    const status = screen.getByTestId("field-status");
+    expect(status).toHaveTextContent(/found from source:.*title.*abstract/i);
+    expect(status).toHaveTextContent(
+      /no reliable source evidence:.*journal name.*volume/i
+    );
+    // Field names only -- no manuscript text.
+    expect(status).not.toHaveTextContent(/published in j\. chem\. phys/i);
+  });
+});
+
 describe("looksSupplementary", () => {
   it("recognizes the usual supplement names", () => {
     ["paper_si_v2.pdf", "acs-si-2023.pdf", "supporting-information.pdf",
