@@ -607,3 +607,97 @@ class TestPdfAssist(PdfSourceTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPublicationYear(unittest.TestCase):
+    """A year is read only where the page actually states a publication year."""
+
+    def test_citation_line_year(self):
+        self.assertEqual(
+            manuscript._pdf_year("J. Chem. Phys. 158, 014101 (2023)"),
+            ("2023", "citation line"))
+
+    def test_copyright_year(self):
+        self.assertEqual(
+            manuscript._pdf_year("Copyright 2021 American Chemical Society")[0],
+            "2021")
+
+    def test_publication_date_year(self):
+        self.assertEqual(
+            manuscript._pdf_year("Publication Date: March 12, 2022")[0], "2022")
+
+    def test_editorial_dates_are_not_a_publication_year(self):
+        # The whole point: these are the dates a manuscript shows most often,
+        # and none of them says when the paper was published.
+        for line in ("Received 3 May 2019; accepted 14 January 2020",
+                     "Revised 2 June 2019",
+                     "Submitted 11 November 2018",
+                     "Available online 4 April 2021"):
+            self.assertEqual(manuscript._pdf_year(line), ("", ""), line)
+
+    def test_a_bare_number_is_never_a_year(self):
+        self.assertEqual(
+            manuscript._pdf_year("We ran 2018 simulations on 4096 cores"),
+            ("", ""))
+
+    def test_extraction_exposes_the_year_as_an_int(self):
+        text = NEWLINE.join([
+            "Pressure Tuning of Layered Chalcogenides",
+            "Jane Q. Doe",
+            "J. Chem. Phys. 158, 014101 (2023)",
+            "ABSTRACT",
+            "We show that pressure tunes the electronic gap of layered "
+            "chalcogenide nanostructures by more than one electronvolt.",
+            "Introduction",
+            "Body text.",
+        ])
+        fields = manuscript.extract_from_pdf_text(text)
+        self.assertEqual(fields["year"], 2023)
+        self.assertTrue(fields["abstract"].startswith("We show that pressure"))
+        self.assertNotIn("Introduction", fields["abstract"])
+
+
+class TestAbstractBoundaries(unittest.TestCase):
+    """Abstracts wrap across lines and do not always precede "Introduction"."""
+
+    def _text(self, body, tail):
+        return NEWLINE.join(["A Title Of Reasonable Length", "Jane Q. Doe",
+                             "ABSTRACT", body, tail, "Body text."])
+
+    BODY = ("We show that pressure tunes the electronic gap" + NEWLINE +
+            "of layered chalcogenide nanostructures by more" + NEWLINE +
+            "than one electronvolt.")
+
+    def test_line_breaks_inside_the_abstract_are_joined(self):
+        got = manuscript._pdf_abstract(self._text(self.BODY, "Introduction"))
+        self.assertEqual(
+            got,
+            "We show that pressure tunes the electronic gap of layered "
+            "chalcogenide nanostructures by more than one electronvolt.")
+
+    def test_stops_at_a_heading_other_than_introduction(self):
+        # Many journals run straight from the abstract into "Results and
+        # Discussion" or "Methods"; the old boundary knew only Introduction
+        # and Keywords and swallowed the paper.
+        for heading in ("Results and Discussion", "II. Methods",
+                        "Materials and Methods", "Experimental Section",
+                        "Significance Statement"):
+            got = manuscript._pdf_abstract(self._text(self.BODY, heading))
+            self.assertTrue(got.endswith("one electronvolt."), heading)
+
+    def test_a_short_but_real_abstract_survives(self):
+        # The previous 80-character floor discarded these silently.
+        short = "A concise abstract of a short communication paper."
+        got = manuscript._pdf_abstract(self._text(short, "Introduction"))
+        self.assertEqual(got, short)
+
+    def test_a_stray_fragment_is_still_refused(self):
+        self.assertEqual(
+            manuscript._pdf_abstract(self._text("See Fig. 1.", "Introduction")),
+            "")
+
+    def test_no_heading_yields_nothing(self):
+        text = NEWLINE.join(["A Title Of Reasonable Length", "Jane Q. Doe",
+                             "We show that pressure tunes the gap.",
+                             "Introduction", "Body."])
+        self.assertEqual(manuscript._pdf_abstract(text), "")

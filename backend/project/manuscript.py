@@ -697,8 +697,16 @@ _PDF_AUTHOR_LINE_RE = re.compile(
 _PDF_ABSTRACT_START_RE = re.compile(
     r"(?im)^\s*a\s?b\s?s\s?t\s?r\s?a\s?c\s?t\b[\s:.—-]*")
 _PDF_ABSTRACT_END_RE = re.compile(
-    r"(?im)^\s*(?:1\.?\s+)?(?:introduction|keywords?|"
-    r"i\.\s+introduction|background)\b")
+    r"(?im)^\s*(?:(?:[1IVX]+)[.)]?\s+)?"
+    r"(?:introduction|keywords?|background|"
+    r"results(?:\s+and\s+discussion)?|methods?|"
+    r"materials\s+and\s+methods|experimental(?:\s+section)?|"
+    r"significance\s+statement|graphical\s+abstract|"
+    r"table\s+of\s+contents)\b")
+
+# An abstract shorter than this is a caption or a stray line, not an abstract.
+# (The previous floor of 80 silently discarded perfectly real short abstracts.)
+PDF_MIN_ABSTRACT_CHARS = 40
 
 
 def _pdf_lines(text):
@@ -833,9 +841,53 @@ def _pdf_abstract(text):
         body = body[:end.start()]
     body = re.sub(r"\s+", " ", body).strip()
     # Too short to be an abstract: refuse rather than propose a fragment.
-    if len(body) < 80:
+    if len(body) < PDF_MIN_ABSTRACT_CHARS:
         return ""
     return body[:PDF_MAX_ABSTRACT_CHARS]
+
+
+
+# A publication year is only read from an unambiguous CITATION or COPYRIGHT
+# context. Editorial dates are the trap: "Received 3 May 2022; accepted 14
+# January 2023" says nothing about when the work was published, and taking
+# the number nearest a date word is how a wrong year gets into a record that
+# looks curated.
+_YEAR_RE = r"(?:19|20)\d{2}"
+
+_PDF_EDITORIAL_DATE_RE = re.compile(
+    r"(?i)\b(?:received|revised|accepted|submitted|resubmitted|"
+    r"available\s+online|in\s+press|published\s+online\s+ahead)\b")
+
+# Contexts that DO state a publication year.
+_PDF_YEAR_PATTERNS = (
+    # "(c) 2023", "Copyright 2023"
+    (re.compile(r"(?i)(?:©|\(c\)|copyright)\s*(?:by\s+)?[^\n]{0,40}?"
+                r"\b(%s)\b" % _YEAR_RE), "copyright line"),
+    # "J. Chem. Phys. 158, 014101 (2023)" — a year in parentheses at the end
+    # of a citation-looking line.
+    (re.compile(r"(?m)^[^\n]{0,160}?\b\d{1,4}\s*,\s*[^\n]{0,40}?"
+                r"\((%s)\)" % _YEAR_RE), "citation line"),
+    # "Published 12 March 2023" / "Publication Date: March 12, 2023"
+    (re.compile(r"(?i)\bpubli(?:shed|cation)\b(?:\s+date)?[^\n]{0,40}?"
+                r"\b(%s)\b" % _YEAR_RE), "publication date"),
+)
+
+
+def _pdf_year(text):
+    """A publication year, or "" when the context is not unambiguous."""
+    head = (text or "")[:PDF_FRONT_MATTER_CHARS * 2]
+    for pattern, source in _PDF_YEAR_PATTERNS:
+        for match in pattern.finditer(head):
+            line_start = head.rfind("\n", 0, match.start()) + 1
+            line_end = head.find("\n", match.end())
+            line = head[line_start:line_end if line_end != -1 else len(head)]
+            # An editorial-date line never yields a publication year, even
+            # when it also happens to contain a citation-shaped fragment.
+            if _PDF_EDITORIAL_DATE_RE.search(line):
+                continue
+            year = match.group(1)
+            return year, source
+    return "", ""
 
 
 def extract_from_pdf_text(text):
@@ -863,6 +915,10 @@ def extract_from_pdf_text(text):
     abstract = _pdf_abstract(text)
     if abstract:
         fields["abstract"] = abstract
+
+    year, _source = _pdf_year(text)
+    if year:
+        fields["year"] = int(year)
     return fields
 
 
