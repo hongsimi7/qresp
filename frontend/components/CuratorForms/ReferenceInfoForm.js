@@ -20,11 +20,13 @@ import CuratorContext from "../../Context/Curator/curatorContext";
 import AlertContext from "../../Context/Alert/alertContext";
 import LoadingContext from "../../Context/Loading/loadingContext";
 import PaperImport from "../CuratorElements/PaperImport";
-import PublicationAssist from "../CuratorElements/PublicationAssist";
 
 const ReferenceInfoForm = ({ editor }) => {
+  // sourceFile is deliberately NOT read here. The runtime-only source excerpt
+  // stays in CuratorState and is consumed by Keyword Assist in Qresp Curation
+  // Information; this section reads nothing from it.
   const { referenceInfo, setReferenceInfo, registerDraftFlusher,
-          reportLiveBiblio, sourceFile } = useContext(CuratorContext);
+          reportLiveBiblio } = useContext(CuratorContext);
   const { setAlert } = useContext(AlertContext);
   const { showLoader, hideLoader } = useContext(LoadingContext);
 
@@ -231,15 +233,13 @@ const ReferenceInfoForm = ({ editor }) => {
       {/* This section IS the primary paper's bibliography (the record's
           `reference` block) — including DOI fetch and manuscript-source
           import. It is not a cited-works list. */}
+      {/* Bibliography comes from two deterministic sources and nothing else:
+          the DOI registry (Fetch, below) and what is actually printed in the
+          manuscript (Import Manuscript Source). Publication metadata is
+          factual data — there is no AI proposal step here, by design. AI
+          stays where interpretation is genuinely needed: keyword suggestion
+          in Qresp Curation Information, and RCC candidate descriptions. */}
       <PaperImport />
-      {/* Bibliography only. Keyword assistance stays in Qresp Curation
-          Information; Fetch DOI stays the preferred deterministic action and
-          this fills what is still missing after it. */}
-      <PublicationAssist
-        reference={referenceInfo}
-        sourceText={(sourceFile && sourceFile.extractedText) || ""}
-        sourceFilename={(sourceFile && sourceFile.name) || ""}
-      />
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container direction="column" spacing={1}>
           <Grid>
