@@ -15,6 +15,7 @@ import mongomock
 # tests pin the safety envelope (encrypted / scanned / oversized / malformed)
 # and prove no PDF bytes or extracted text leak into responses or logs.
 from project import connexionapp
+from project import manuscript
 from project.manuscript import MAX_PDF_PAGES
 from project.models import Paper
 from project.models import AssistUsage
@@ -256,9 +257,12 @@ class TestPdfImport(PdfSourceTestBase):
         self.assertEqual(400, response.status_code)
         self.assertIn("too large", response.json()["error"])
 
-    def test_pdf_bytes_and_body_text_never_appear_in_response_or_logs(self):
-        # The reviewable front matter is deliberately returned; the BODY and
-        # the raw bytes must not be, and nothing at all may be logged.
+    def test_pdf_bytes_never_appear_and_nothing_is_logged(self):
+        # The reviewable front matter AND a bounded text excerpt are returned
+        # on purpose: the browser holds the excerpt in memory for this tab so
+        # Publication Assist can read the missing fields after consent. What
+        # must never happen is the raw FILE travelling back, or anything at
+        # all reaching the log.
         self.login()
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -270,11 +274,16 @@ class TestPdfImport(PdfSourceTestBase):
             ]))
         self.assertEqual(200, response.status_code, response.text)
         for sink in (response.text, stdout.getvalue()):
-            self.assertNotIn("SECRET_PDF_BODY_TOKEN", sink)
             self.assertNotIn("%PDF", sink)
             self.assertNotIn("endstream", sink)
         # The log carries no extracted text of any kind.
+        self.assertNotIn("SECRET_PDF_BODY_TOKEN", stdout.getvalue())
         self.assertNotIn("Confined water", stdout.getvalue())
+        # The excerpt is in the RESPONSE by design, and bounded.
+        excerpt = response.json()["source_excerpt"]
+        self.assertIn("SECRET_PDF_BODY_TOKEN", excerpt)
+        self.assertLessEqual(len(excerpt),
+                             manuscript.MAX_SOURCE_EXCERPT_CHARS)
 
 
 class TestPdfFrontMatter(PdfSourceTestBase):
@@ -407,6 +416,106 @@ class TestPdfFrontMatter(PdfSourceTestBase):
         before = Paper.objects.count()
         self.import_pdf(text_pdf(self.FRONT_MATTER))
         self.assertEqual(before, Paper.objects.count())
+
+
+NEWLINE = chr(10)
+
+
+class TestWrappedTitle(PdfSourceTestBase):
+    """A title wraps over as many lines as the column needs."""
+
+    # The exact staging case: three lines, joined into one sentence.
+    WRAPPED = [
+        "Design of heterogeneous chalcogenide",
+        "nanostructures with pressure-tunable gaps and",
+        "without electronic trap states",
+        "Jane Q. Doe, John Smith",
+        "ABSTRACT",
+        "We show that pressure tunes the gap of heterogeneous chalcogenide "
+        "nanostructures without introducing electronic trap states.",
+        "1. Introduction",
+    ]
+    COMPLETE = ("Design of heterogeneous chalcogenide nanostructures with "
+                "pressure-tunable gaps and without electronic trap states")
+
+    def test_all_continuation_lines_are_joined(self):
+        self.login()
+        proposal = self.import_pdf(
+            text_pdf(self.WRAPPED))[0].json()["proposal"]
+        self.assertEqual(self.COMPLETE, proposal["title"])
+        # Single spaces, no wrap artefacts, and not cut off mid-clause.
+        self.assertNotIn("  ", proposal["title"])
+        self.assertFalse(proposal["title"].endswith(" and"))
+        # The byline still starts AFTER the whole title.
+        self.assertEqual("Jane Q. Doe, John Smith", proposal["authors"])
+
+    def test_a_two_line_title_still_works(self):
+        from project.manuscript import extract_from_pdf_text
+        fields = extract_from_pdf_text(NEWLINE.join([
+            "Pressure-tunable electronic structure of",
+            "layered chalcogenide heterostructures",
+            "Jane Q. Doe",
+        ]))
+        self.assertEqual(
+            "Pressure-tunable electronic structure of layered chalcogenide "
+            "heterostructures", fields["title"])
+
+    def test_a_title_left_hanging_is_refused_not_proposed(self):
+        # If the continuation cannot be followed, a convincing half-sentence
+        # is worse than nothing.
+        from project.manuscript import extract_from_pdf_text
+        fields = extract_from_pdf_text(NEWLINE.join([
+            "Design of heterogeneous chalcogenide nanostructures with gaps and",
+            "Jane Q. Doe, John Smith",
+        ]))
+        self.assertNotIn("title", fields)
+
+    def test_a_new_sentence_does_not_get_absorbed(self):
+        # A capitalised next line is indistinguishable from the byline, so it
+        # is never treated as a continuation.
+        from project.manuscript import extract_from_pdf_text
+        fields = extract_from_pdf_text(NEWLINE.join([
+            "Electronic structure of embedded lead clusters",
+            "Comparison With Photoemission Measurements",
+            "Jane Q. Doe",
+        ]))
+        self.assertEqual("Electronic structure of embedded lead clusters",
+                         fields["title"])
+
+
+class TestSourceExcerpt(PdfSourceTestBase):
+    def test_a_bounded_excerpt_is_returned_for_the_browser_to_hold(self):
+        self.login()
+        body = self.import_pdf(text_pdf([
+            "Electronic structure of embedded lead clusters",
+            "Jane Q. Doe",
+            "ABSTRACT",
+            "We compute the electronic structure of embedded lead clusters "
+            "using hybrid density functionals across the whole series.",
+        ]))[0].json()
+        excerpt = body["source_excerpt"]
+        self.assertIn("embedded lead clusters", excerpt)
+        self.assertLessEqual(len(excerpt),
+                             manuscript.MAX_SOURCE_EXCERPT_CHARS)
+
+    def test_the_excerpt_is_capped(self):
+        self.login()
+        long_body = ["Electronic structure of embedded lead clusters",
+                     "Jane Q. Doe"] + ["filler sentence here." * 40] * 60
+        body = self.import_pdf(text_pdf(long_body))[0].json()
+        self.assertEqual(manuscript.MAX_SOURCE_EXCERPT_CHARS,
+                         len(body["source_excerpt"]))
+
+    def test_the_excerpt_is_never_logged(self):
+        self.login()
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.import_pdf(text_pdf([
+                "Electronic structure of embedded lead clusters",
+                "Jane Q. Doe",
+                "SECRET_BODY_TOKEN in the body",
+            ]))
+        self.assertNotIn("SECRET_BODY_TOKEN", stdout.getvalue())
 
 
 class TestPdfAssist(PdfSourceTestBase):

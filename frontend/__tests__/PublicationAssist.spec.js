@@ -193,27 +193,53 @@ describe("Suggest missing publication details with AI", () => {
     );
   });
 
-  it("warns before sending when the file looks supplementary", async () => {
+  it("is DISABLED for Supporting Information, with an actionable reason", () => {
+    // The old behavior ran the request and returned an empty result, which
+    // blamed the text for a decision we had made.
+    renderAssist({ filename: "nl7b00283_si_001.pdf" });
+    expect(trigger()).toBeDisabled();
+    expect(screen.getByTestId("assist-availability")).toHaveTextContent(
+      "This appears to be Supporting Information. Use the main article PDF " +
+        "or DOI Fetch for publication details."
+    );
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it("an SI override is a distinct action and still warns in the dialog",
+     async () => {
     const user = userEvent.setup();
     renderAssist({ filename: "paper_si_v2.pdf" });
-    await user.click(trigger());
 
-    // The warning is up BEFORE any request is made.
+    await user.click(screen.getByTestId("si-override"));
+    expect(trigger()).toBeEnabled();
+    await user.click(trigger());
     expect(screen.getByTestId("supp-warning")).toHaveTextContent(
       /looks like supporting information, not the article itself/i
     );
     expect(screen.getByTestId("supp-warning")).toHaveTextContent(
       /marked low confidence/i
     );
+    // Still nothing sent without consent.
     expect(axios.post).not.toHaveBeenCalled();
   });
 
-  it("is unavailable with no text and no paper to identify", () => {
-    renderAssist({ ref: reference(), text: "", filename: "" });
+  it("explains accurately when there is no extracted text, and sends nothing",
+     () => {
+    renderAssist({ ref: reference({ title: "Typed by hand" }), text: "",
+                   filename: "" });
     expect(trigger()).toBeDisabled();
-    expect(
-      screen.getByText(/import a manuscript source, or enter a title/i)
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("assist-availability")).toHaveTextContent(
+      /import a .pdf, .tex or overleaf .zip manuscript source first/i
+    );
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it("is enabled for a main-article PDF that has extracted text", () => {
+    renderAssist({ filename: "nl7b00283.pdf", text: "Abstract: we show ..." });
+    expect(trigger()).toBeEnabled();
+    expect(screen.getByTestId("assist-availability")).toHaveTextContent(
+      /fills gaps left after fetch doi/i
+    );
   });
 
   it("never mentions or requests keywords", async () => {

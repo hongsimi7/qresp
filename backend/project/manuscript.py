@@ -54,6 +54,12 @@ MAX_DOI_CANDIDATES = 25
 # enormous file from turning into unbounded work.
 MAX_PDF_PAGES = 100
 MAX_PDF_TEXT_CHARS = 1000000
+# The excerpt returned to the BROWSER so Publication Assist can offer to read
+# the missing bibliographic fields. Deliberately small: only the front matter
+# can hold them, and the smaller the excerpt the less there is to mishandle.
+# It is held in a runtime-only React state for the tab and is never written to
+# MongoDB, a draft, localStorage, a publish payload, a log or a URL.
+MAX_SOURCE_EXCERPT_CHARS = 40000
 
 
 class ImportError_(Exception):
@@ -710,6 +716,31 @@ def _looks_like_authors(line):
     return bool(_PDF_AUTHOR_LINE_RE.match(line))
 
 
+# A wrapped title continues on the next line: prose, no furniture, not the
+# byline, and not the start of a new sentence. A continuation that begins
+# with a capital would be indistinguishable from the author block, so only a
+# lowercase opening (or an obvious hyphen carry-over) counts.
+def _is_title_continuation(line):
+    if not line or len(line) > PDF_MAX_TITLE_CHARS:
+        return False
+    if _PDF_NOISE_RE.match(line) or "@" in line:
+        return False
+    if DOI_IN_TEXT_RE.search(line) or re.search(r"(?i)https?://|www\.", line):
+        return False
+    if _looks_like_authors(line):
+        return False
+    letters = sum(1 for c in line if c.isalpha())
+    if letters < len(line) * 0.6:
+        return False
+    return bool(line[:1].islower())
+
+
+# Ending on a connective means the title was cut off, not finished.
+_TRAILING_CONNECTIVE_RE = re.compile(
+    r"(?i)\b(?:and|or|of|for|with|without|the|a|an|in|on|to|from|by|as|"
+    r"using|via|between|under|over)\s*$")
+
+
 def _pdf_title(lines):
     """The first line that can only be a title.
 
@@ -736,17 +767,30 @@ def _pdf_title(lines):
         letters = sum(1 for c in line if c.isalpha())
         if letters < len(line) * 0.6:
             continue
-        # Titles sometimes wrap; join a following line that is clearly a
-        # continuation (no terminal punctuation, still prose).
+        # A title wraps over as many lines as the column needs, so keep
+        # consuming continuations instead of joining exactly one. Stopping
+        # after the first produced titles cut off mid-clause ("... gaps
+        # and"), which reads like a complete value and is not.
         title = line
-        if (index + 1 < len(lines) and not line.endswith((".", "?", "!"))
-                and len(title) < PDF_MAX_TITLE_CHARS):
-            nxt = lines[index + 1]
-            if (20 <= len(nxt) and not _PDF_NOISE_RE.match(nxt)
-                    and not _looks_like_authors(nxt) and "@" not in nxt
-                    and nxt[:1].islower()):
-                title = "%s %s" % (title, nxt)
-        return re.sub(r"\s+", " ", title).strip()[:PDF_MAX_TITLE_CHARS], index
+        last = index
+        cursor = index + 1
+        while (cursor < len(lines)
+               and len(title) < PDF_MAX_TITLE_CHARS
+               and not title.endswith((".", "?", "!"))):
+            nxt = lines[cursor]
+            if not _is_title_continuation(nxt):
+                break
+            title = "%s %s" % (title, nxt)
+            last = cursor
+            cursor += 1
+
+        title = re.sub(r"\s+", " ", title).strip()[:PDF_MAX_TITLE_CHARS]
+        # A title left hanging on a conjunction or preposition is a fragment,
+        # not a value: the rest of it is somewhere we could not follow, so
+        # propose nothing rather than a convincing half-sentence.
+        if _TRAILING_CONNECTIVE_RE.search(title):
+            return "", -1
+        return title, last
     return "", -1
 
 
@@ -961,6 +1005,10 @@ def import_manuscript(body):
 
     return {
         "proposal": fields,
+        # Bounded, in-memory-only: the browser holds this for THIS TAB so the
+        # curator can later consent to a publication-metadata reading without
+        # re-uploading. Never persisted anywhere on either side.
+        "source_excerpt": combined[:MAX_SOURCE_EXCERPT_CHARS],
         "provenance": provenance,
         "alternatives": alternatives,
         "doi_candidates": doi_candidates,

@@ -78,12 +78,19 @@ const PublicationAssist = ({ reference, sourceText, sourceFilename }) => {
   const current = reference || {};
   const supplementary = looksSupplementary(sourceFilename);
 
-  // Useful when there is text to read, or enough of a paper to identify.
-  const eligible = Boolean(
-    (sourceText || "").trim() ||
-      (current.title || "").trim() ||
-      (current.abstract || "").trim()
-  );
+  const hasText = Boolean((sourceText || "").trim());
+  // Supporting Information describes the wrong document, so the action is
+  // OFF for it by default — showing an empty result instead would blame the
+  // text for a decision we made.
+  const [siOverride, setSiOverride] = useState(false);
+  const blockedBySupplementary = supplementary && !siOverride;
+  const eligible = hasText && !blockedBySupplementary;
+
+  const unavailableReason = supplementary
+    ? "This appears to be Supporting Information. Use the main article PDF " +
+      "or DOI Fetch for publication details."
+    : "Import a .pdf, .tex or Overleaf .zip manuscript source first — there " +
+      "is no extracted text to read yet.";
 
   const close = () => {
     setOpen(false);
@@ -167,12 +174,27 @@ const PublicationAssist = ({ reference, sourceText, sourceFilename }) => {
         <Button size="small" onClick={start} disabled={!eligible}>
           Suggest missing publication details with AI
         </Button>
-        <Typography variant="caption" color="text.secondary" display="block">
+        <Typography
+          variant="caption"
+          color={supplementary ? "warning.main" : "text.secondary"}
+          display="block"
+          data-testid="assist-availability"
+        >
           {eligible
             ? "Fills gaps left after Fetch DOI. Proposals only — nothing is " +
               "applied, saved or published without you."
-            : "Import a manuscript source, or enter a title or abstract, first."}
+            : unavailableReason}
         </Typography>
+        {blockedBySupplementary && hasText ? (
+          <Button
+            size="small"
+            color="warning"
+            onClick={() => setSiOverride(true)}
+            data-testid="si-override"
+          >
+            Use it anyway (results marked low confidence)
+          </Button>
+        ) : null}
       </Box>
 
       <Dialog open={open} onClose={close} maxWidth="md" fullWidth>

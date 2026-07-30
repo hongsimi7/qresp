@@ -13,6 +13,7 @@ from unittest import mock
 # the filesystem, and these tests also assert that raw manuscript content
 # never leaks into responses or stdout.
 from project import connexionapp
+from project import manuscript
 
 CROSSREF_MESSAGE = {
     "type": "journal-article",
@@ -282,7 +283,10 @@ class TestTexImport(ImportTestBase):
         self.assertTrue(
             any("Nothing recognizable" in w for w in body["warnings"]))
 
-    def test_manuscript_content_never_leaks_to_response_or_stdout(self):
+    def test_manuscript_content_never_reaches_the_log(self):
+        # A BOUNDED excerpt is returned to the browser on purpose, so the tab
+        # can hold it in memory and offer it to Publication Assist after
+        # consent. Nothing is logged, and nothing is persisted on either side.
         self.login()
         sentinel = "SUPER_SECRET_MANUSCRIPT_BODY_42"
         tex = TEX_NO_DOI.replace("Draft abstract.",
@@ -291,8 +295,10 @@ class TestTexImport(ImportTestBase):
         with contextlib.redirect_stdout(stdout):
             response, _ = self.import_source("draft.tex", tex)
         self.assertEqual(200, response.status_code)
-        self.assertNotIn(sentinel, response.text)
         self.assertNotIn(sentinel, stdout.getvalue())
+        excerpt = response.json()["source_excerpt"]
+        self.assertLessEqual(len(excerpt),
+                             manuscript.MAX_SOURCE_EXCERPT_CHARS)
 
 
 class TestZipImport(ImportTestBase):

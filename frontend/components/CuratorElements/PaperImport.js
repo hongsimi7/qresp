@@ -32,7 +32,7 @@ const PaperImport = () => {
   // Defensive default: this renders inside PaperInfoForm, which some tests
   // mount without an AuthContext provider.
   const { authenticated } = useContext(AuthContext) || {};
-  const { sourceFile, setSourceFile, clearSourceFile } =
+  const { sourceFile, setSourceFile, setSourceText, clearSourceFile } =
     useContext(CuratorContext) || {};
 
   const [loading, setLoading] = useState(false);
@@ -64,14 +64,18 @@ const PaperImport = () => {
           filename: file.name,
           content_base64: base64,
         })
-        .then((res) =>
+        .then((res) => {
+          // Keep the bounded excerpt the backend already read, for THIS TAB
+          // only, so Publication Assist can offer to fill missing
+          // bibliographic fields without a second upload. It rides on the
+          // runtime-only source handle, never on draft state.
+          if (setSourceText) setSourceText(res.data.source_excerpt || "");
           setResult({
             ...res.data,
             importSource: "manuscript",
-            // Kept in memory only, for the OPT-IN AI keyword analysis in the
-            // review dialog (sent again only after explicit consent).
-            manuscriptFile: { filename: file.name, content_base64: base64 },
-          }))
+            manuscriptFile: { filename: file.name },
+          });
+        })
         .catch((err) =>
           fail(err, "The manuscript could not be imported, please try again."))
         .finally(() => setLoading(false));

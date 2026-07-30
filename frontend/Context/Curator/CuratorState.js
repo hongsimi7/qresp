@@ -209,9 +209,30 @@ const CuratorState = (props) => {
   const setAll = (data) =>
     dispatch({ type: SET_CURATOR_STATE, payload: normalizeState(data) });
 
-  const setSourceFile = useCallback((file) => {
+  const setSourceFile = useCallback((file, extractedText) => {
     setSourceFileState(
-      file ? { name: file.name, size: file.size, file } : null
+      file
+        ? {
+            name: file.name,
+            size: file.size,
+            file,
+            // Bounded text the importer already read, kept for THIS TAB so
+            // Publication Assist can offer to fill missing bibliographic
+            // fields after explicit consent. Runtime-only, exactly like the
+            // File handle: it is outside `state`, so it never reaches
+            // localStorage, an account draft, a publish payload or a URL,
+            // and it is dropped on clear/reset/reload/close.
+            extractedText: extractedText || "",
+          }
+        : null
+    );
+  }, []);
+
+  // The importer learns the text AFTER the file was chosen, so it can attach
+  // it without replacing the handle.
+  const setSourceText = useCallback((extractedText) => {
+    setSourceFileState((current) =>
+      current ? { ...current, extractedText: extractedText || "" } : current
     );
   }, []);
 
@@ -441,6 +462,7 @@ const CuratorState = (props) => {
         reportLiveBiblio,
         sourceFile,
         setSourceFile,
+        setSourceText,
         clearSourceFile,
         saveDraftToServer,
         applyServerDraft,
