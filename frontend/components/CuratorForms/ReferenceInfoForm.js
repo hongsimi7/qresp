@@ -52,12 +52,27 @@ const ReferenceInfoForm = ({ editor }) => {
       .required("Required")
       .min(1, "Minimum of 1 PrincipalInvestigator"),
     title: Yup.string().required("Required"),
-    journal: Yup.string().required("Required"),
-    page: Yup.string().required("Required"),
+    // Journal Name is required only for a journal article. A preprint or a
+    // dissertation has no journal, and requiring one here blocked those
+    // records at a field they can never legitimately fill. This mirrors the
+    // publish schema exactly (backend/project/schema.json) — the two layers
+    // have to agree, or the form calls a record complete and publish rejects
+    // it.
+    journal: Yup.string().when("kind", {
+      is: "journal",
+      then: (s) => s.required("Required for a journal article"),
+      otherwise: (s) => s,
+    }),
+    // Optional for every kind: an article number, an accepted-but-unpaginated
+    // paper, a preprint and a dissertation all legitimately lack these.
+    page: Yup.string(),
     abstract: Yup.string().required("Required"),
     volume: Yup.number()
+      .transform((value, original) =>
+        original === "" || original === null ? undefined : value
+      )
       .min(1, "Minimum volume number is 1")
-      .required("Required"),
+      .notRequired(),
     year: Yup.number()
       .min(1750, "Cannot be less than 1700")
       .integer("Plese enter a valid year")
@@ -109,6 +124,12 @@ const ReferenceInfoForm = ({ editor }) => {
   }, [watchedTitle, watchedAbstract, reportLiveBiblio]);
   // react-hook-form v7: errors moved onto formState.
   const { errors } = formState;
+
+  // Which fields are required depends on what kind of work this is, so the
+  // asterisks have to follow the selected kind rather than be painted on
+  // every bibliographic field.
+  const kind = watch("kind");
+  const journalRequired = kind === "journal";
 
   const { fields, append, remove } = useFieldArray({
     control,
@@ -360,12 +381,16 @@ const ReferenceInfoForm = ({ editor }) => {
               id="journal"
               placeholder="Enter full journal name"
               name="journal"
-              helperText="Enter full journal name"
+              helperText={
+                journalRequired
+                  ? "Enter full journal name"
+                  : "Enter full journal name (optional for this kind)"
+              }
               label="Journal Name"
               register={register}
               error={errors.journal}
               defaultValue={defaults.journal}
-              required
+              required={journalRequired}
             />
           </Grid>
           <Grid>
@@ -373,12 +398,11 @@ const ReferenceInfoForm = ({ editor }) => {
               id="page"
               placeholder="Enter page number"
               name="page"
-              helperText="Enter page number of the journal"
+              helperText="Page or article number (optional)"
               label="Page"
               register={register}
               error={errors.page}
               defaultValue={defaults.page}
-              required
             />
           </Grid>
           <Grid>
@@ -401,12 +425,11 @@ const ReferenceInfoForm = ({ editor }) => {
               id="volume"
               placeholder="Enter volume number"
               name="volume"
-              helperText="Enter volume of the journal"
+              helperText="Volume of the journal (optional)"
               label="Volume"
               register={register}
               error={errors.volume}
               defaultValue={defaults.volume}
-              required
             />
           </Grid>
           <Grid>
