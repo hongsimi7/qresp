@@ -378,3 +378,64 @@ describe("CuratorState draft persistence", () => {
     expect(screen.getByTestId("unsaved-status")).toHaveTextContent("unsaved");
   });
 });
+
+// The runtime-only source excerpt outlived the feature it was first added
+// for. Publication Assist is gone, but Keyword Assist's optional full-source
+// analysis still depends on a manuscript source being held in memory for the
+// session, so this wiring must not be removed with it.
+describe("runtime-only manuscript source", () => {
+  const Probe = () => {
+    const { sourceFile, setSourceFile, setSourceText, clearSourceFile } =
+      useContext(CuratorContext);
+    return (
+      <div>
+        <span data-testid="name">{sourceFile ? sourceFile.name : "none"}</span>
+        <span data-testid="text">
+          {sourceFile ? sourceFile.extractedText : ""}
+        </span>
+        <button
+          type="button"
+          onClick={() => setSourceFile(new File(["x"], "paper.pdf"))}
+        >
+          select
+        </button>
+        <button type="button" onClick={() => setSourceText("Excerpt text.")}>
+          attach
+        </button>
+        <button type="button" onClick={() => clearSourceFile()}>
+          clear
+        </button>
+      </div>
+    );
+  };
+
+  const renderProbe = () =>
+    render(
+      <CuratorState>
+        <Probe />
+      </CuratorState>
+    );
+
+  it("attaches an excerpt to the selected source and can clear it", async () => {
+    const user = userEvent.setup();
+    renderProbe();
+
+    await user.click(screen.getByRole("button", { name: "select" }));
+    expect(screen.getByTestId("name")).toHaveTextContent("paper.pdf");
+
+    await user.click(screen.getByRole("button", { name: "attach" }));
+    expect(screen.getByTestId("text")).toHaveTextContent("Excerpt text.");
+
+    await user.click(screen.getByRole("button", { name: "clear" }));
+    expect(screen.getByTestId("name")).toHaveTextContent("none");
+  });
+
+  it("attaching an excerpt with no source selected is a no-op", async () => {
+    const user = userEvent.setup();
+    renderProbe();
+
+    await user.click(screen.getByRole("button", { name: "attach" }));
+
+    expect(screen.getByTestId("name")).toHaveTextContent("none");
+  });
+});
