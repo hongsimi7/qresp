@@ -159,14 +159,6 @@ const ImportReview = ({ open, result, onClose }) => {
   // Per-author opt-in for "Add selected paper authors as Principal
   // Investigators" — every author UNCHECKED by default.
   const [piSelection, setPiSelection] = useState({});
-  // Opt-in AI keyword analysis of the uploaded manuscript: consent is OFF by
-  // default, suggestions arrive only after an explicit user action, and each
-  // suggestion starts unchecked.
-  const [aiConsent, setAiConsent] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiError, setAiError] = useState("");
-  const [aiSuggestions, setAiSuggestions] = useState(null);
-  const [aiSelected, setAiSelected] = useState({});
   const [applied, setApplied] = useState(null); // missing-info checklist
 
   useEffect(() => {
@@ -174,11 +166,6 @@ const ImportReview = ({ open, result, onClose }) => {
       setRows([]);
       setSelected({});
       setPiSelection({});
-      setAiConsent(false);
-      setAiLoading(false);
-      setAiError("");
-      setAiSuggestions(null);
-      setAiSelected({});
       setApplied(null);
       return;
     }
@@ -192,11 +179,6 @@ const ImportReview = ({ open, result, onClose }) => {
       }, {})
     );
     setPiSelection({});
-    setAiConsent(false);
-    setAiLoading(false);
-    setAiError("");
-    setAiSuggestions(null);
-    setAiSelected({});
     setApplied(null);
     // collectDraftState is stable enough for this open-time snapshot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -216,19 +198,6 @@ const ImportReview = ({ open, result, onClose }) => {
         updates[row.key] = row.applyValue;
       }
     });
-    const chosenAi = (aiSuggestions || []).filter(
-      (keyword, index) => aiSelected[index]);
-    if (chosenAi.length) {
-      const lower = new Set(
-        [...((current.paperInfo || {}).tags || []), ...tags].map((t) =>
-          t.toLowerCase()));
-      chosenAi.forEach((keyword) => {
-        if (!lower.has(keyword.toLowerCase())) {
-          tags = [...tags, keyword];
-          lower.add(keyword.toLowerCase());
-        }
-      });
-    }
     const proposalAuthors = (result && result.proposal
       && result.proposal.authors) || [];
     const selectedAuthors = proposalAuthors.filter(
@@ -241,38 +210,9 @@ const ImportReview = ({ open, result, onClose }) => {
     setApplied(missingForPublish(next));
   };
 
-  const fetchAiSuggestions = () => {
-    // Explicit user action AND explicit consent: only then does the
-    // manuscript file leave the browser again, to our backend, which
-    // re-extracts it in memory and queries the configured AI provider.
-    if (!aiConsent || !result || !result.manuscriptFile) return;
-    setAiLoading(true);
-    setAiError("");
-    axios
-      .post("/api/assist/keywords", {
-        title: (result.proposal && result.proposal.title) || "",
-        abstract: (result.proposal && result.proposal.abstract) || "",
-        filename: result.manuscriptFile.filename,
-        content_base64: result.manuscriptFile.content_base64,
-      })
-      .then((res) => {
-        setAiSuggestions(res.data.keywords || []);
-        setAiSelected({});
-      })
-      .catch((err) => {
-        const res = err && err.response;
-        setAiError(
-          (res && res.data && res.data.error) ||
-            "AI keyword suggestions are unavailable right now."
-        );
-      })
-      .finally(() => setAiLoading(false));
-  };
-
   const anySelected =
     rows.some((row) => selected[row.key]) ||
-    Object.values(piSelection).some(Boolean) ||
-    (aiSuggestions || []).some((keyword, index) => aiSelected[index]);
+    Object.values(piSelection).some(Boolean);
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
@@ -426,92 +366,11 @@ const ImportReview = ({ open, result, onClose }) => {
                 })}
               </Box>
             ) : null}
-            {result.importSource === "manuscript" && result.manuscriptFile ? (
-              <Box sx={{ mt: 3 }}>
-                <Typography color="secondary" sx={{ fontWeight: "bold" }}>
-                  AI keyword suggestions (optional)
-                </Typography>
-                <FormControlLabel
-                  sx={{ display: "block", ml: 0 }}
-                  control={
-                    <Checkbox
-                      checked={aiConsent}
-                      onChange={(event) => setAiConsent(event.target.checked)}
-                      slotProps={{
-                        input: {
-                          "aria-label":
-                            "analyze extracted manuscript text with ai to suggest keywords",
-                        },
-                      }}
-                    />
-                  }
-                  label="Analyze extracted manuscript text with AI to suggest keywords."
-                />
-                <Typography variant="body2" color="secondary">
-                  If you continue, the selected paper metadata plus bounded
-                  excerpts of the text extracted from your upload
-                  (bibliography removed — not the full document and never the
-                  original file) are sent to Gemini, the configured AI
-                  provider, to generate keyword suggestions. Nothing is sent
-                  without this consent, and suggestions are never applied
-                  automatically.
-                </Typography>
-                <RegularStyledButton
-                  sx={{ mt: 1 }}
-                  onClick={fetchAiSuggestions}
-                  disabled={!aiConsent || aiLoading}
-                >
-                  Get AI keyword suggestions
-                </RegularStyledButton>
-                {aiLoading ? (
-                  <Typography variant="body2" color="secondary" sx={{ mt: 1 }}>
-                    Asking the AI provider...
-                  </Typography>
-                ) : null}
-                {aiError ? (
-                  <Typography variant="body2" color="error" sx={{ mt: 1 }}>
-                    {aiError}
-                  </Typography>
-                ) : null}
-                {aiSuggestions && aiSuggestions.length === 0 && !aiError ? (
-                  <Typography variant="body2" color="secondary" sx={{ mt: 1 }}>
-                    No AI keyword suggestions were returned.
-                  </Typography>
-                ) : null}
-                {(aiSuggestions || []).length ? (
-                  <Box sx={{ mt: 1 }}>
-                    <Typography variant="body2" color="secondary">
-                      AI suggestions (Gemini) — separate from the Crossref/TeX
-                      keyword suggestions above; selected ones are appended to
-                      your Keywords on Apply:
-                    </Typography>
-                    {aiSuggestions.map((keyword, index) => (
-                      <FormControlLabel
-                        key={keyword}
-                        sx={{ display: "block", ml: 0 }}
-                        control={
-                          <Checkbox
-                            checked={Boolean(aiSelected[index])}
-                            onChange={(event) =>
-                              setAiSelected((currentSel) => ({
-                                ...currentSel,
-                                [index]: event.target.checked,
-                              }))
-                            }
-                            slotProps={{
-                              input: {
-                                "aria-label": `apply ai keyword ${keyword}`,
-                              },
-                            }}
-                          />
-                        }
-                        label={keyword}
-                      />
-                    ))}
-                  </Box>
-                ) : null}
-              </Box>
-            ) : null}
+            {/* Keyword assistance lives ONLY in Qresp Curation
+                Information. A manuscript review is about this paper's
+                bibliography; mixing a tags feature in here put the same
+                concept in two places and sent manuscript text to the AI from
+                a dialog that is not about tags. */}
             {(result.doi_candidates || []).length ? (
               <Typography variant="body2" color="secondary" sx={{ mt: 2 }}>
                 DOIs found in the bibliography (references, not necessarily

@@ -296,78 +296,43 @@ describe("PaperImport (manuscript source import)", () => {
     );
   });
 
-  it("manuscript AI consent defaults OFF, gates the fetch, and speaks of EXCERPTS", async () => {
-    const user = userEvent.setup();
-    const { setAll } = renderImport();
-
-    await importManuscript(user, bareManuscriptResponse);
-    const consent = screen.getByRole("checkbox", {
-      name: /analyze extracted manuscript text with ai/i,
-    });
-    expect(consent).not.toBeChecked();
-    // The wording is honest and names the provider: selected metadata plus
-    // bounded excerpts, not the full document, never the original file.
-    expect(
-      screen.getByText(/bounded excerpts of the text extracted/i)
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/not the full document and never the original file/i)
-    ).toBeInTheDocument();
-    expect(screen.getByText(/are sent to Gemini/i)).toBeInTheDocument();
-    const fetchButton = screen.getByRole("button", {
-      name: /get ai keyword suggestions/i,
-    });
-    expect(fetchButton).toBeDisabled();
-    expect(axios.post).toHaveBeenCalledTimes(1); // only the import call
-
-    axios.post.mockResolvedValueOnce({
-      data: { keywords: ["Ice Nucleation"], warnings: [] },
-    });
-    await user.click(consent);
-    await user.click(fetchButton);
-    await waitFor(() =>
-      expect(axios.post).toHaveBeenLastCalledWith("/api/assist/keywords", {
-        title: "Zip Title",
-        abstract: "",
-        filename: "paper.tex",
-        content_base64: btoa(TEX_CONTENT),
-      })
-    );
-    const aiBox = await screen.findByRole("checkbox", {
-      name: /apply ai keyword ice nucleation/i,
-    });
-    expect(aiBox).not.toBeChecked();
-    await user.click(aiBox);
-    await user.click(applyButton());
-    expect(setAll.mock.calls[0][0].paperInfo.tags).toEqual([
-      "Ice Nucleation",
-    ]);
-  });
-
-  it("shows the unconfigured-AI message clearly inside the review", async () => {
+  it("offers NO keyword assistance inside the manuscript review", async () => {
+    // Keywords are Qresp curation state and belong to Qresp Curation
+    // Information. A bibliography review that also proposed tags put one
+    // concept in two places and sent manuscript text to the AI from a dialog
+    // that is not about tags.
     const user = userEvent.setup();
     renderImport();
 
     await importManuscript(user, bareManuscriptResponse);
-    axios.post.mockRejectedValueOnce({
-      response: {
-        status: 503,
-        data: {
-          error: "AI keyword suggestions are not configured on this server.",
-        },
-      },
-    });
-    await user.click(
-      screen.getByRole("checkbox", {
+    const text = document.body.textContent;
+    expect(text).not.toMatch(/ai keyword suggestions/i);
+    expect(text).not.toMatch(/analyze extracted manuscript text with ai/i);
+    expect(
+      screen.queryByRole("checkbox", {
         name: /analyze extracted manuscript text with ai/i,
       })
-    );
-    await user.click(
-      screen.getByRole("button", { name: /get ai keyword suggestions/i })
-    );
+    ).toBeNull();
     expect(
-      await screen.findByText(/not configured on this server/i)
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: /get ai keyword suggestions/i })
+    ).toBeNull();
+    // Only the import call was ever made.
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(axios.post.mock.calls[0][0]).toBe("/api/import/manuscript");
+  });
+
+  it("never calls the keyword endpoint from the review, whatever is ticked",
+     async () => {
+    const user = userEvent.setup();
+    renderImport();
+
+    await importManuscript(user, bareManuscriptResponse);
+    for (const box of screen.queryAllByRole("checkbox")) {
+      await user.click(box);
+    }
+    axios.post.mock.calls.forEach(([url]) => {
+      expect(url).not.toBe("/api/assist/keywords");
+    });
   });
 
   it("cancel applies nothing", async () => {

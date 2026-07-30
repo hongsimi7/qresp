@@ -20,10 +20,11 @@ import CuratorContext from "../../Context/Curator/curatorContext";
 import AlertContext from "../../Context/Alert/alertContext";
 import LoadingContext from "../../Context/Loading/loadingContext";
 import PaperImport from "../CuratorElements/PaperImport";
+import PublicationAssist from "../CuratorElements/PublicationAssist";
 
 const ReferenceInfoForm = ({ editor }) => {
   const { referenceInfo, setReferenceInfo, registerDraftFlusher,
-          reportLiveBiblio } = useContext(CuratorContext);
+          reportLiveBiblio, sourceFile } = useContext(CuratorContext);
   const { setAlert } = useContext(AlertContext);
   const { showLoader, hideLoader } = useContext(LoadingContext);
 
@@ -206,6 +207,14 @@ const ReferenceInfoForm = ({ editor }) => {
           `reference` block) — including DOI fetch and manuscript-source
           import. It is not a cited-works list. */}
       <PaperImport />
+      {/* Bibliography only. Keyword assistance stays in Qresp Curation
+          Information; Fetch DOI stays the preferred deterministic action and
+          this fills what is still missing after it. */}
+      <PublicationAssist
+        reference={referenceInfo}
+        sourceText={(sourceFile && sourceFile.extractedText) || ""}
+        sourceFilename={(sourceFile && sourceFile.name) || ""}
+      />
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container direction="column" spacing={1}>
           <Grid>

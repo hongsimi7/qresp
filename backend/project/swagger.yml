@@ -735,6 +735,57 @@ paths:
           description: AI provider failed or answered unreadably
         503:
           description: AI suggestions are not configured on this server
+  /assist/publication-metadata:
+    post:
+      operationId: "project.assist.suggest_publication_metadata"
+      tags:
+        - "Import"
+      summary: "Proposes MISSING bibliographic fields from supplied manuscript
+        text (opt-in; proposals only, never applied)"
+      parameters:
+        - in: body
+          name: body
+          required: true
+          description: Explicit consent, the allowlisted bibliographic fields
+            already known, and a bounded excerpt of extracted manuscript text.
+            No curator state (PIs, tags, PaperStack, notebook, RCC paths,
+            drafts, scripts, datasets, account data) is accepted here.
+          schema:
+            type: object
+            required:
+              - consent
+            properties:
+              consent:
+                type: boolean
+              kind: {type: string}
+              title: {type: string}
+              authors: {type: string}
+              doi: {type: string}
+              publication: {type: string}
+              volume: {type: string}
+              page: {type: string}
+              year: {type: string}
+              url: {type: string}
+              abstract: {type: string}
+              filename: {type: string}
+              source_kind: {type: string}
+              source_text: {type: string}
+      responses:
+        200:
+          description: Per-field proposals with provenance, confidence and
+            evidence; a URL is derived from the DOI rather than proposed
+        400:
+          description: Consent missing
+        401:
+          description: Authentication required
+        403:
+          description: CSRF token missing or invalid
+        429:
+          description: Daily per-user AI suggestion limit reached
+        502:
+          description: AI provider failed or answered unreadably
+        503:
+          description: AI publication suggestions are not configured
   /curation/analyze-folder:
     post:
       operationId: "project.curation.analyze_folder"
