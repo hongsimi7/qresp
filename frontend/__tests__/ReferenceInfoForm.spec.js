@@ -54,7 +54,10 @@ describe("ReferenceInfoForm", () => {
     expect(
       screen.getAllByPlaceholderText(/enter doi of the paper/i)
     ).toHaveLength(1);
-    expect(screen.getByRole("button", { name: /^fetch$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^fetch$/i })).toHaveAttribute(
+      "type",
+      "button"
+    );
     // ...and no duplicate DOI entry point in the import card.
     expect(
       screen.queryByPlaceholderText(/10\.1234\/abcd/i)
@@ -159,7 +162,10 @@ describe("ReferenceInfoForm", () => {
           author: [{ given: "Ada", family: "Lovelace" }],
         },
       });
-      renderForm({ ...filledReference, doi: "" });
+      const { setReferenceInfo, editor } = renderForm({
+        ...filledReference,
+        doi: "",
+      });
       const user = userEvent.setup();
       await user.type(doiField(), `https://doi.org/${BARE}`);
       await user.click(screen.getByRole("button", { name: /^fetch$/i }));
@@ -175,6 +181,9 @@ describe("ReferenceInfoForm", () => {
       expect(screen.getByPlaceholderText(/enter title/i)).toHaveValue(
         "Fetched Title"
       );
+      // Fetch only fills the still-open RHF form. It is not a Save action.
+      expect(setReferenceInfo).not.toHaveBeenCalled();
+      expect(editor).not.toHaveBeenCalled();
     });
 
     it("does not call the registry for an invalid DOI", async () => {

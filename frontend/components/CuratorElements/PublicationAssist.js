@@ -65,7 +65,7 @@ export const looksSupplementary = (filename) => {
 };
 
 const PublicationAssist = ({ reference, sourceText, sourceFilename }) => {
-  const { setReferenceInfo } = useContext(CuratorContext) || {};
+  const { setReferenceInfo, remountForms } = useContext(CuratorContext) || {};
 
   const [open, setOpen] = useState(false);
   const [consent, setConsent] = useState(false);
@@ -183,6 +183,9 @@ const PublicationAssist = ({ reference, sourceText, sourceFilename }) => {
       // referenceInfo is the ONE canonical bibliographic state. This only
       // updates it in the form; it does not save or publish the record.
       setReferenceInfo({ ...current, ...updates });
+      // The bibliography form uses RHF default values. Re-seed it so the
+      // applied proposals become visible while the curator remains editing.
+      if (remountForms) remountForms();
     }
     setApplied(true);
   };

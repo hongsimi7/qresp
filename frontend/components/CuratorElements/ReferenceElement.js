@@ -13,10 +13,14 @@ const ReferenceInfoElement = () => {
   const { editing, setEditing } = useContext(CuratorHelperContext);
 
   useEffect(() => {
-    if (referenceInfo.title) {
-      setEditing("referenceInfo", false);
-    } else setEditing("referenceInfo", true);
-  }, [referenceInfo]);
+    // A blank new record starts in edit mode. Once the curator is editing,
+    // however, importing a manuscript or applying an AI proposal must not
+    // turn a newly populated title into an implicit Save/close action.
+    // Explicit Save is the only action that closes this section.
+    if (!referenceInfo.title && !editing.referenceInfo) {
+      setEditing("referenceInfo", true);
+    }
+  }, [editing.referenceInfo, referenceInfo.title, setEditing]);
 
   return (
     <SwitchFade

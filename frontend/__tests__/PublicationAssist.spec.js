@@ -262,8 +262,9 @@ describe("the AI action never acts on the form", () => {
   const renderInForm = (ref = reference()) => {
     const onSubmit = jest.fn((event) => event.preventDefault());
     const setReferenceInfo = jest.fn();
+    const remountForms = jest.fn();
     render(
-      <CuratorContext.Provider value={{ setReferenceInfo }}>
+      <CuratorContext.Provider value={{ setReferenceInfo, remountForms }}>
         <form onSubmit={onSubmit}>
           <input aria-label="Volume" defaultValue="" />
           <PublicationAssist
@@ -274,7 +275,7 @@ describe("the AI action never acts on the form", () => {
         </form>
       </CuratorContext.Provider>
     );
-    return { onSubmit, setReferenceInfo };
+    return { onSubmit, setReferenceInfo, remountForms };
   };
 
   it("uses non-submit buttons throughout", async () => {
@@ -338,7 +339,7 @@ describe("the AI action never acts on the form", () => {
 
   it("only Apply writes to referenceInfo", async () => {
     const user = userEvent.setup();
-    const { onSubmit, setReferenceInfo } = renderInForm();
+    const { onSubmit, setReferenceInfo, remountForms } = renderInForm();
 
     await openAndSend(user, {
       proposals: [
@@ -355,6 +356,7 @@ describe("the AI action never acts on the form", () => {
     );
 
     expect(setReferenceInfo).toHaveBeenCalledTimes(1);
+    expect(remountForms).toHaveBeenCalledTimes(1);
     // Applying writes the form state; it does not save or publish.
     expect(onSubmit).not.toHaveBeenCalled();
     expect(axios.put).not.toHaveBeenCalled();

@@ -35,7 +35,7 @@ const SubmitAndReset = ({ submitText, reset = false }) => {
     <Box sx={{ mt: 1 }}>
       <Grid container direction="row" spacing={1}>
         <Grid size={{ xs: 6, sm: 2, md: 1 }}>
-          <RegularStyledButton type="save" fullWidth>
+          <RegularStyledButton type="submit" fullWidth>
             {submitText}
           </RegularStyledButton>
         </Grid>

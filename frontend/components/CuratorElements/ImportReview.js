@@ -184,7 +184,9 @@ const ImportReview = ({ open, result, onClose }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, result]);
 
-  const apply = () => {
+  const apply = (event) => {
+    event?.preventDefault();
+    event?.stopPropagation();
     // Snapshot INCLUDING open-form values so nothing typed is lost, then
     // write only the whitelisted primary-paper fields through the adapter.
     const current = collectDraftState();
@@ -382,11 +384,11 @@ const ImportReview = ({ open, result, onClose }) => {
       </DialogContent>
       <DialogActions>
         {applied ? (
-          <RegularStyledButton onClick={onClose}>Close</RegularStyledButton>
+          <RegularStyledButton type="button" onClick={onClose}>Close</RegularStyledButton>
         ) : (
           <Fragment>
-            <RegularStyledButton onClick={onClose}>Cancel</RegularStyledButton>
-            <RegularStyledButton onClick={apply} disabled={!anySelected}>
+            <RegularStyledButton type="button" onClick={onClose}>Cancel</RegularStyledButton>
+            <RegularStyledButton type="button" onClick={apply} disabled={!anySelected}>
               Apply to paper information
             </RegularStyledButton>
           </Fragment>

@@ -151,6 +151,7 @@ const PaperImport = () => {
                 only, never saved to a draft.
               </Typography>
               <RegularStyledButton
+                type="button"
                 size="small"
                 onClick={() => clearSourceFile && clearSourceFile()}
               >

@@ -136,7 +136,11 @@ const ReferenceInfoForm = ({ editor }) => {
     name: "authors",
   });
 
-  const fetchFromDOI = () => {
+  const fetchFromDOI = (event) => {
+    // This action only fills the open form. Without an explicit button type,
+    // a click inside the form follows the Save submit path and closes it.
+    event?.preventDefault();
+    event?.stopPropagation();
     // Resolve whatever shape was pasted down to the bare DOI first: the
     // registry is queried with it, and the field is rewritten to it so what
     // the curator sees matches what will be saved.
@@ -271,6 +275,7 @@ const ReferenceInfoForm = ({ editor }) => {
                   arrow
                 >
                   <RegularStyledButton
+                    type="button"
                     size="small"
                     style={{ padding: "2px", margin: "4px" }}
                     onClick={fetchFromDOI}
