@@ -533,9 +533,22 @@ def _process_pdf(data):
     """
     try:
         from pypdf import PdfReader
-    except Exception as e:  # pragma: no cover - deployment misconfiguration
-        print("PDF support unavailable: %s" % type(e).__name__)
-        raise ImportError_("PDF support is not available on this server.")
+    except Exception as e:
+        # pypdf is a declared dependency (requirements.txt and pinned in
+        # requirements.lock.txt), and both Dockerfiles install from those
+        # files — so reaching this branch means the running image predates
+        # the dependency and needs rebuilding, not that the feature is
+        # optional. The old message said only "not available", which told an
+        # operator nothing and looked like a missing feature rather than a
+        # stale deploy.
+        print("PDF support unavailable: pypdf import failed (%s) — the "
+              "backend image is missing a declared dependency and needs a "
+              "rebuild." % type(e).__name__)
+        raise ImportError_(
+            "PDF reading is not installed on this server. The Qresp backend "
+            "needs to be rebuilt so its declared dependencies are installed; "
+            "please tell your administrator. In the meantime, upload the "
+            ".tex source or paste the DOI.")
 
     try:
         reader = PdfReader(io.BytesIO(data))

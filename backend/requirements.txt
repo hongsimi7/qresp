@@ -30,10 +30,13 @@ requests_oauthlib
 # OIDC ID-token validation for Microsoft Entra sign-in: maintained JWT
 # library with RS256/JWKS support — never hand-roll token verification.
 PyJWT[crypto]
-# In-memory PDF TEXT extraction for the optional manuscript-source import.
-# pypdf is pure Python (no binary wheels, so it follows CPython promptly),
-# maintained, and text-only: Qresp never renders, executes, or opens embedded
-# JavaScript/attachments, and never performs OCR.
+# In-memory PDF TEXT extraction for the manuscript-source import. pypdf is
+# pure Python (no binary wheels, so it follows CPython promptly), maintained,
+# and text-only: Qresp never renders, executes, or opens embedded
+# JavaScript/attachments, and never performs OCR. Requires-Python >=3.9, so
+# the 3.14 images are covered. NOT optional despite the feature being
+# opt-in: without it a valid PDF is refused, so a backend image built before
+# this line was added must be rebuilt (see test_dependencies.py).
 pypdf
 WTForms
 lxml

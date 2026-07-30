@@ -180,6 +180,16 @@ a single server-wide `limit_req` throttled every request, so one page load's
 
 ## PDF manuscript source
 
+- [ ] **Rebuild the backend image before testing this section.** pypdf was
+      added to requirements in `f6f68d9`; an image built before that answers
+      "PDF reading is not installed on this server." for a perfectly good
+      PDF, while the frontend still shows the PDF controls. Confirm with:
+      `docker compose -p qresp_staging exec backend python -c "import pypdf, sys; print(pypdf.__version__, sys.version)"`
+      → prints a version on Python 3.14. If it fails, the image is stale:
+      rebuild it (no compose/env change is needed, the dependency is already
+      declared and both Dockerfiles install it)
+
+
 - [ ] The Import Manuscript Source picker accepts `.tex,.zip,.pdf`
 - [ ] Select a normal text-layer PDF → import succeeds; the review dialog
       proposes ONLY a printed DOI (if any) and states plainly that Qresp does
