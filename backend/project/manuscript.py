@@ -1042,6 +1042,13 @@ def import_manuscript(body):
                         "work is published, paste its DOI to fill the "
                         "bibliographic fields.")
 
+    # A DOI resolves to exactly one address, so the URL is computed rather
+    # than looked up or guessed. Only ever filled in when it is still empty:
+    # the registry's own URL, when there is one, already won above.
+    if fields.get("doi") and not fields.get("url"):
+        fields["url"] = "https://doi.org/%s" % fields["doi"]
+        provenance["url"] = "derived"
+
     if not fields:
         if details.get("source_kind") == "pdf":
             warnings.append("Nothing recognizable was found in this PDF's "
@@ -1062,8 +1069,10 @@ def import_manuscript(body):
     return {
         "proposal": fields,
         # Bounded, in-memory-only: the browser holds this for THIS TAB so the
-        # curator can later consent to a publication-metadata reading without
-        # re-uploading. Never persisted anywhere on either side.
+        # curator can later consent to full-source keyword suggestion in Qresp
+        # Curation Information without re-uploading. Bibliography never uses
+        # it — publication metadata is deterministic. Never persisted anywhere
+        # on either side.
         "source_excerpt": combined[:MAX_SOURCE_EXCERPT_CHARS],
         "provenance": provenance,
         "alternatives": alternatives,
