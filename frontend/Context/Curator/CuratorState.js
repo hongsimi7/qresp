@@ -317,16 +317,25 @@ const CuratorState = (props) => {
     skipNextDirty.current = true;
     setAll(data || {});
     setDraftDirty(false);
+    remountForms();
   };
 
   // Called by the ?draft=<id> loader after fetching a server draft: fills the
   // form without marking it dirty (nothing is unsaved right after a load).
+  //
+  // The remount is not optional. react-hook-form reads defaultValues once, at
+  // mount, and the form tree is already mounted by the time this async fetch
+  // resolves — so updating context alone left every input showing the blank
+  // it had on page load. Worse, the next Save Draft then read those blanks
+  // back out through the draft flusher and overwrote the stored draft with
+  // them. resetAll has always done this; these two paths were missed.
   const applyServerDraft = (draft) => {
     skipNextDirty.current = true;
     setAll((draft && draft.state) || {});
     setActiveDraftId(draft ? draft.id : null);
     setActiveDraftTitle(draft ? draft.title || "" : "");
     setDraftDirty(false);
+    remountForms();
   };
 
   const getSavedDraft = () => (draftKey ? WebStore.get(draftKey) : null);
@@ -335,6 +344,8 @@ const CuratorState = (props) => {
     const data = getSavedDraft();
     if (data !== null) {
       setAll(data);
+      // Same reason as applyServerDraft: the inputs re-seed only on remount.
+      remountForms();
     }
     return data;
   };
