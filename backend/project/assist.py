@@ -55,9 +55,15 @@ GEMINI_DEFAULT_MAX_MANUSCRIPT_CHARS = 60000
 GEMINI_MAX_MANUSCRIPT_CHARS_CEILING = 200000
 GEMINI_DEFAULT_DAILY_LIMIT = 20
 GEMINI_DEFAULT_MAX_OUTPUT_TOKENS = 256
-GEMINI_MAX_OUTPUT_TOKENS_CEILING = 256
+# A keyword list fits in 256 tokens. A batch of folder-candidate descriptions
+# does not: eight candidates of JSON ran past the cap, the answer came back
+# truncated with finishReason=MAX_TOKENS, and the truncated JSON then failed
+# to parse. The ceiling used to be 256 as well, so raising the environment
+# variable had no effect at all.
+GEMINI_MAX_OUTPUT_TOKENS_CEILING = 2048
 
 MAX_SUGGESTIONS = 8
+
 
 def _truthy(value):
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
@@ -227,23 +233,32 @@ def call_gemini(cfg, payload, system_prompt, schema, max_output_tokens=None):
             },
             timeout=cfg["TIMEOUT"],
         )
+    except requests.exceptions.Timeout as e:
+        # Distinct from "unreachable": the provider is there and simply slow,
+        # and the useful advice is different.
+        print("AI assist provider timeout: %s" % type(e).__name__)
+        return None, ("The AI provider did not respond in time. Try again or "
+                      "select fewer items.")
     except Exception as e:
         print("AI assist provider unreachable: %s" % type(e).__name__)
-        return None, "The AI suggestion service could not be reached."
+        return None, "The server could not reach the AI provider."
     if response.status_code == 429:
         print("AI assist provider rate limited")
-        return None, ("The AI suggestion service is rate limited right now, "
-                      "please try again later.")
+        return None, "You have reached the AI usage limit."
+    if response.status_code in (500, 502, 503, 504):
+        print("AI assist provider error: HTTP %s" % response.status_code)
+        return None, ("The AI provider is temporarily unavailable. Try again "
+                      "shortly.")
     if response.status_code != 200:
         print("AI assist provider error: HTTP %s" % response.status_code)
-        return None, "The AI suggestion service returned an error."
+        return None, "The AI provider returned an error."
     try:
         data = response.json()
         if not isinstance(data, dict):
             raise ValueError("body is not an object")
     except Exception as e:
         print("AI assist response unparseable envelope: %s" % type(e).__name__)
-        return None, "The AI suggestion service returned an unreadable answer."
+        return None, "The AI provider returned an unreadable suggestion."
 
     # Sanitized diagnostics only: shapes and category labels, never response
     # text, prompt text, manuscript content, or credentials.
@@ -267,12 +282,18 @@ def call_gemini(cfg, payload, system_prompt, schema, max_output_tokens=None):
     # 2. Nothing usable came back (no candidate at all).
     if not candidates:
         return None, "The AI suggestion service did not return suggestions."
-    # 3. The candidate was terminated by a safety/policy rule.
+    # 3. The answer ran out of output budget. This MUST be caught here: the
+    #    truncated text is often almost-valid JSON, and letting it reach a
+    #    parser turns a budget problem into an unexplained JSONDecodeError.
+    if finish_reason and str(finish_reason).upper() == "MAX_TOKENS":
+        return None, ("The AI response was truncated. Select fewer items or "
+                      "try again.")
+    # 4. The candidate was terminated by a safety/policy rule.
     if finish_reason and str(finish_reason).upper() in _BLOCKING_FINISH_REASONS:
         return None, ("The AI suggestion service declined this request. Try "
                       "again with different text.")
-    # 4. A candidate exists but carries no answer text (e.g. the output budget
-    #    was spent before the answer, or only reasoning parts came back).
+    # 5. A candidate exists but carries no answer text (only reasoning parts
+    #    came back).
     if not answer_text:
         return None, "The AI suggestion service did not return suggestions."
     return answer_text, None
