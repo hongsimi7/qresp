@@ -49,18 +49,29 @@ const referenceUtil = {
   set: ({ journal, year, page, volume }) =>
     `${journal} ${year}, ${volume} ,${page}`,
 
+  // `set` always writes three commas, but a legacy record's publication
+  // string may carry fewer — a journal name with no volume/page, or a value
+  // typed by hand years ago. Indexing straight into the split threw a
+  // TypeError on those and took the whole Curator form down on load, so a
+  // missing component now reads as empty and the record still opens.
   get: (text) => {
-    const values = { journal: "", year: null, page: "", volume: null };
+    // volume is "" rather than null so an empty value and a value whose
+    // volume is missing produce the same shape — both feed a text input.
+    const values = { journal: "", year: null, page: "", volume: "" };
     if (!text) return values;
-    const split1 = text.split(",");
-    const split2 = split1[0].split(" ");
-    values.journal = split2
-      .slice(0, split2.length - 1)
-      .join(" ")
-      .trim();
-    values.year = parseInt(split2[split2.length - 1].trim());
-    values.page = split1[2].trim();
-    values.volume = split1[1].trim();
+    const parts = String(text).split(",");
+    const head = (parts[0] || "").trim().split(" ");
+    // The trailing token of the first component is the year, when it is one.
+    const year = parseInt((head[head.length - 1] || "").trim(), 10);
+    if (Number.isNaN(year)) {
+      // No year to peel off: the whole component is the journal name.
+      values.journal = head.join(" ").trim();
+    } else {
+      values.journal = head.slice(0, -1).join(" ").trim();
+      values.year = year;
+    }
+    values.volume = (parts[1] || "").trim();
+    values.page = (parts[2] || "").trim();
     return values;
   },
 };
