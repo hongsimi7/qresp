@@ -166,7 +166,7 @@ const ChartsInfoForm = () => {
                   placeholder="Enter chart number"
                   name="number"
                   helperText="Enter chart number"
-                  label="Number"
+                  label="Figure Number"
                   error={errors.number}
                   register={register}
                   defaultValue={(def && def.number) || charts.length}

@@ -50,11 +50,11 @@ const ScriptsInfoForm = () => {
   const schema = Yup.object({
     files: Yup.string().required("Required"),
     readme: Yup.string().required("Required"),
-    // Descriptive tags. A SEPARATE field from URLs: the input below used to
-    // be labelled "Keywords" while writing to URLs, so a curator's keywords
-    // were stored as links. Both are optional, and neither feeds the other.
+    // Descriptive tags, in their own field. The input that used to sit here
+    // was labelled "Keywords" and wrote to URLs, so a curator's keywords were
+    // stored as links. URLs is no longer offered on any surface; an existing
+    // record keeps whatever it has (see onSubmit).
     keywords: Yup.string(),
-    URLs: Yup.string(),
     extraFields: extraFieldsSchema,
   });
 
@@ -70,11 +70,6 @@ const ScriptsInfoForm = () => {
         (Array.isArray(item.keywords)
           ? item.keywords.join(", ")
           : item.keywords)) ||
-      "",
-    URLs:
-      (item &&
-        item.URLs &&
-        (Array.isArray(item.URLs) ? item.URLs.join(", ") : item.URLs)) ||
       "",
     extraFields: cleanExtraFields(item && item.extraFields),
   });
@@ -92,10 +87,11 @@ const ScriptsInfoForm = () => {
   const onSubmit = (values) => {
     values.files = values.files.split(",").map((el) => el.trim());
     values.keywords = splitList(values.keywords);
-    values.URLs = splitList(values.URLs);
     const extraFields = cleanExtraFields(values.extraFields);
     values.extraFields = extraFields;
     if (def && scripts.find((el) => el.id == def.id)) {
+      // `...def` first: a legacy URLs list on an existing record is carried
+      // through unchanged. It is never read as, or converted into, keywords.
       edit("script", { ...def, ...values, extraFields: extraFields });
     } else {
       values["id"] = `s${scripts.length}`;
@@ -201,18 +197,6 @@ const ScriptsInfoForm = () => {
                   defaultValue={
                     def && def.keywords && def.keywords.join(", ")
                   }
-                />
-              </Grid>
-              <Grid>
-                <TextInputField
-                  id="scriptUrls"
-                  placeholder="Enter URLs for the scripts"
-                  name="URLs"
-                  helperText="Enter link(s)/URLs of the script, if available. (Comma seperated)"
-                  label="URLs"
-                  error={errors.URLs}
-                  register={register}
-                  defaultValue={def && def.URLs && def.URLs.join(", ")}
                 />
               </Grid>
               <Grid>

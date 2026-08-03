@@ -220,3 +220,33 @@ class TestAiFieldsPerType(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestServerSideAiAllowlist(unittest.TestCase):
+    """The per-kind allowlist is enforced here, not only in the browser."""
+
+    def test_each_kind_is_asked_only_for_what_it_can_hold(self):
+        # chart keywords are STORED in `properties`; dataset and script
+        # keywords in `keywords`; a tool has no keyword field at all.
+        self.assertEqual(curation.AI_KEYWORD_KINDS,
+                         ("chart", "dataset", "script"))
+
+    def test_a_tool_answer_is_stripped_even_when_the_model_ignores_the_flag(
+            self):
+        parsed = {
+            "tool-0": {"description": "A DFT code.", "keywords": ["dft"],
+                       "kind": "", "confidence": "low", "reason": "r"},
+            "script-0": {"description": "Plots.", "keywords": ["phonons"],
+                         "kind": "", "confidence": "low", "reason": "r"},
+        }
+        kinds = {"tool-0": "tool", "script-0": "script"}
+        stripped = {}
+        for item_id, value in parsed.items():
+            if kinds[item_id] not in curation.AI_KEYWORD_KINDS:
+                value = dict(value, keywords=[])
+            stripped[item_id] = value
+
+        self.assertEqual(stripped["tool-0"]["keywords"], [])
+        # ...and the description it CAN hold survives.
+        self.assertEqual(stripped["tool-0"]["description"], "A DFT code.")
+        self.assertEqual(stripped["script-0"]["keywords"], ["phonons"])

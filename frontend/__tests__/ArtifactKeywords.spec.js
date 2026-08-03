@@ -7,10 +7,11 @@ import CuratorContext from "../Context/Curator/curatorContext";
 import CuratorHelperContext from "../Context/CuratorHelpers/curatorHelperContext";
 import SourceTreeContext from "../Context/SourceTree/SourceTreeContext";
 
-// Datasets and Scripts each have TWO optional list fields that were long
-// conflated: the input labelled "Keywords" wrote to `URLs`, so a curator's
-// keywords were stored as links and their links had nowhere to go. They are
-// separate fields now, and nothing may leak between them.
+// A dataset's and a script's "Keywords" input used to write to `URLs`, so a
+// curator's keywords were stored as links. Keywords is a real field now and
+// URLs is gone from the UI entirely -- but it is still a storage key, and a
+// record that has one keeps it. It is never read as, shown as, or converted
+// into keywords.
 
 const FORMS = [
   ["dataset", DatasetsInfoForm, "datasets"],
@@ -20,17 +21,15 @@ const FORMS = [
 const renderForm = (kind, Form, section, { item = null, items = [] } = {}) => {
   const add = jest.fn();
   const edit = jest.fn();
-  const closeForm = jest.fn();
   render(
     <CuratorContext.Provider
       value={{ [section]: items, add, edit, fileServerPath: "" }}
     >
       <CuratorHelperContext.Provider
         value={{
-          // The dialog reads { def, open } off its own helper slice.
           [`${section}Helper`]: { def: item, open: true },
           openForm: jest.fn(),
-          closeForm,
+          closeForm: jest.fn(),
           setDefault: jest.fn(),
         }}
       >
@@ -50,31 +49,31 @@ const renderForm = (kind, Form, section, { item = null, items = [] } = {}) => {
 };
 
 const field = (pattern) => screen.getByPlaceholderText(pattern);
+const files = () => field(/enter files for the/i);
+const description = () => field(/enter descriptions? for/i);
+const keywords = () => field(/enter keywords for the/i);
 
-describe.each(FORMS)("%s form: Keywords and URLs are separate", (
-  kind,
-  Form,
-  section
-) => {
+describe.each(FORMS)("%s form", (kind, Form, section) => {
   beforeEach(() => jest.clearAllMocks());
 
-  it("shows both inputs, and they are different elements", () => {
+  it("offers Files, Description and Keywords -- and no URL input", () => {
     renderForm(kind, Form, section);
-    const keywords = field(/enter keywords for the/i);
-    const urls = field(/enter urls for the/i);
-    expect(keywords).not.toBe(urls);
-    expect(keywords).toHaveAttribute("name", "keywords");
-    expect(urls).toHaveAttribute("name", "URLs");
+
+    expect(files()).toBeInTheDocument();
+    expect(description()).toBeInTheDocument();
+    expect(keywords()).toHaveAttribute("name", "keywords");
+    // The URL input is gone from the UI.
+    expect(screen.queryByPlaceholderText(/enter urls/i)).toBeNull();
+    expect(screen.queryByLabelText(/^urls$/i)).toBeNull();
   });
 
-  it("stores each in its own list on save", async () => {
+  it("stores keywords in the keywords list", async () => {
     const user = userEvent.setup();
     const { add } = renderForm(kind, Form, section);
 
-    await user.type(field(/enter files for the/i), "data/a.xyz, data/b.xyz");
-    await user.type(field(/enter descriptions? for/i), "Relaxed geometries");
-    await user.type(field(/enter keywords for the/i), "density functional theory, silicon");
-    await user.type(field(/enter urls for the/i), "https://example.org/a");
+    await user.type(files(), "data/a.xyz, data/b.xyz");
+    await user.type(description(), "Relaxed geometries");
+    await user.type(keywords(), "density functional theory, silicon");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
@@ -83,37 +82,12 @@ describe.each(FORMS)("%s form: Keywords and URLs are separate", (
       "density functional theory",
       "silicon",
     ]);
-    expect(values.URLs).toEqual(["https://example.org/a"]);
     expect(values.readme).toBe("Relaxed geometries");
+    // A new record does not invent an empty legacy field.
+    expect(values.URLs).toBeUndefined();
   });
 
-  it("round-trips an existing record without mixing the two", async () => {
-    const user = userEvent.setup();
-    const item = {
-      id: "x1",
-      files: ["data/a.xyz"],
-      readme: "Relaxed geometries",
-      keywords: ["silicon"],
-      URLs: ["https://example.org/a"],
-      extraFields: [],
-    };
-    const { edit } = renderForm(kind, Form, section, {
-      item,
-      items: [item],
-    });
-
-    expect(field(/enter keywords for the/i)).toHaveValue("silicon");
-    expect(field(/enter urls for the/i)).toHaveValue("https://example.org/a");
-
-    await user.click(screen.getByRole("button", { name: /^update$/i }));
-
-    await waitFor(() => expect(edit).toHaveBeenCalledTimes(1));
-    const [, values] = edit.mock.calls[0];
-    expect(values.keywords).toEqual(["silicon"]);
-    expect(values.URLs).toEqual(["https://example.org/a"]);
-  });
-
-  it("loads a legacy record with no keywords as empty, keeping its URLs",
+  it("keeps a legacy URLs list through an edit, and never shows it",
      async () => {
     const user = userEvent.setup();
     const legacy = {
@@ -128,25 +102,44 @@ describe.each(FORMS)("%s form: Keywords and URLs are separate", (
       items: [legacy],
     });
 
-    expect(field(/enter keywords for the/i)).toHaveValue("");
-    expect(field(/enter urls for the/i)).toHaveValue("https://example.org/a");
+    // The links are nowhere on screen, and they did NOT become keywords.
+    expect(screen.queryByDisplayValue(/example\.org/i)).toBeNull();
+    expect(keywords()).toHaveValue("");
 
+    await user.type(keywords(), "silicon");
     await user.click(screen.getByRole("button", { name: /^update$/i }));
 
     await waitFor(() => expect(edit).toHaveBeenCalledTimes(1));
     const [, values] = edit.mock.calls[0];
-    expect(values.keywords).toEqual([]);
-    // The existing links survive untouched -- they are never converted.
     expect(values.URLs).toEqual(["https://example.org/a"]);
+    expect(values.keywords).toEqual(["silicon"]);
+  });
+
+  it("round-trips keywords on an existing record", async () => {
+    const user = userEvent.setup();
+    const item = {
+      id: "x1",
+      files: ["data/a.xyz"],
+      readme: "Relaxed geometries",
+      keywords: ["silicon", "band gap"],
+      extraFields: [],
+    };
+    const { edit } = renderForm(kind, Form, section, { item, items: [item] });
+
+    expect(keywords()).toHaveValue("silicon, band gap");
+
+    await user.click(screen.getByRole("button", { name: /^update$/i }));
+
+    await waitFor(() => expect(edit).toHaveBeenCalledTimes(1));
+    expect(edit.mock.calls[0][1].keywords).toEqual(["silicon", "band gap"]);
   });
 
   it("blocks Save while a required field is empty", async () => {
     const user = userEvent.setup();
     const { add } = renderForm(kind, Form, section);
 
-    // Only the optional fields are filled in.
-    await user.type(field(/enter keywords for the/i), "silicon");
-    await user.type(field(/enter urls for the/i), "https://example.org/a");
+    // Only the optional field is filled in.
+    await user.type(keywords(), "silicon");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() =>
@@ -155,17 +148,15 @@ describe.each(FORMS)("%s form: Keywords and URLs are separate", (
     expect(add).not.toHaveBeenCalled();
   });
 
-  it("saves with both optional fields left empty", async () => {
+  it("saves with Keywords left empty", async () => {
     const user = userEvent.setup();
     const { add } = renderForm(kind, Form, section);
 
-    await user.type(field(/enter files for the/i), "data/a.xyz");
-    await user.type(field(/enter descriptions? for/i), "Relaxed geometries");
+    await user.type(files(), "data/a.xyz");
+    await user.type(description(), "Relaxed geometries");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
-    const [, values] = add.mock.calls[0];
-    expect(values.keywords).toEqual([]);
-    expect(values.URLs).toEqual([]);
+    expect(add.mock.calls[0][1].keywords).toEqual([]);
   });
 });
