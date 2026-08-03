@@ -42,9 +42,9 @@ describe("How to organize an RCC folder", () => {
       "datasets/",
       "dataset-id/",
       "charts/",
-      "figure-id/",
-      "preview.png",
-      "notebook.ipynb",
+      "figure_S1/",
+      "figure_S1.png",
+      "figure_S1.ipynb",
       "data/",
       "scripts/",
       "script-id/",
@@ -135,7 +135,7 @@ describe("How to organize an RCC folder", () => {
     const copied = writeText.mock.calls[0][0];
     expect(copied).toContain("paper-folder/");
     expect(copied).toContain("  datasets/");
-    expect(copied).toContain("      preview.png");
+    expect(copied).toContain("      figure_S1.png");
     expect(await screen.findByText(/^copied\.$/i)).toBeInTheDocument();
   });
 
