@@ -1019,6 +1019,26 @@ def analyze_folder(body):
 # analysis above never depends on it: with Gemini unconfigured the folder
 # analysis still succeeds and this endpoint alone reports that it is off.
 
+# What a model may propose, by record type. Everything here maps onto a field
+# the record ACTUALLY HAS: a Tool has no keyword field in Qresp, so keywords
+# are never asked for and never returned for one -- the UI must not be handed
+# a value with nowhere to put it.
+#
+# Chart keywords land in `properties`; dataset and script keywords land in
+# their own `keywords` field, which is separate from URLs.
+AI_KEYWORD_KINDS = ("chart", "dataset", "script")
+
+MAX_KEYWORDS_PER_ITEM = 5
+
+# Too generic to be worth a curator's attention: they describe the folder
+# structure rather than the science, and every candidate would get them.
+AI_KEYWORD_STOPWORDS = frozenset((
+    "data", "dataset", "datasets", "script", "scripts", "file", "files",
+    "folder", "directory", "code", "input", "output", "results", "result",
+    "analysis", "tool", "tools", "chart", "charts", "figure", "figures",
+    "notebook", "notebooks", "readme", "documentation", "docs", "misc",
+))
+
 MAX_AI_ITEMS = 10
 MAX_AI_NAME_CHARS = 300
 MAX_AI_CONTEXT_CHARS = 4000
@@ -1071,6 +1091,12 @@ AI_SYSTEM_PROMPT = (
     "versions, executable names, patches, facilities or measurements — those "
     "are factual fields the researcher owns. If the evidence for an item is "
     "insufficient, return an EMPTY description for it rather than guessing. "
+    "Each item carries a \"wants_keywords\" flag: propose keywords ONLY for "
+    "items where it is true, and return an empty list for the others. Never "
+    "propose a keyword that merely restates the file layout (\"data\", "
+    "\"scripts\", \"files\", \"results\", \"figure\") - a keyword must say "
+    "something about the science. Describe each item from ITS OWN evidence: "
+    "do not repeat one description or keyword set across items. "
     "Each item states the kind Qresp inferred; include a \"kind\" only when "
     "the evidence clearly contradicts it, and omit it otherwise. Propose a "
     "chart caption ONLY when the supplied text actually describes that "
@@ -1089,7 +1115,8 @@ AI_SYSTEM_PROMPT = (
 # contents, image bytes, credentials, user/profile/ownership data and anything
 # outside the selected folder are structurally absent: only these keys are
 # read from the request, each one clipped.
-AI_ALLOWED_KEYS = ("id", "kind", "name", "paths", "context")
+AI_ALLOWED_KEYS = ("id", "kind", "name", "paths", "context",
+                   "wants_keywords")
 
 
 def _clip(value, limit):
@@ -1115,6 +1142,9 @@ def _sanitize_ai_items(raw_items):
         items.append({
             "id": item_id,
             "kind": kind,
+            # Stated per item so the model is never asked for a field the
+            # record cannot hold.
+            "wants_keywords": kind in AI_KEYWORD_KINDS,
             "name": _clip(entry.get("name"), MAX_AI_NAME_CHARS),
             "paths": paths,
             # Locally extracted evidence only: docstrings/comments, manifest
@@ -1124,6 +1154,19 @@ def _sanitize_ai_items(raw_items):
         if len(items) >= MAX_AI_ITEMS:
             break
     return items
+
+
+def _useful_keywords(candidates):
+    """Normalized, deduplicated, capped, and stripped of the words that
+    describe a folder rather than the science."""
+    keywords = []
+    for keyword in _normalize_keywords(candidates):
+        if keyword.lower() in AI_KEYWORD_STOPWORDS:
+            continue
+        keywords.append(keyword)
+        if len(keywords) >= MAX_KEYWORDS_PER_ITEM:
+            break
+    return keywords
 
 
 def _parse_ai_items(answer_text):
@@ -1157,7 +1200,7 @@ def _parse_ai_items(answer_text):
         parsed[item_id] = {
             "description": _clip(entry.get("description"),
                                  MAX_AI_DESCRIPTION_CHARS),
-            "keywords": _normalize_keywords(
+            "keywords": _useful_keywords(
                 keywords if isinstance(keywords, list) else []),
             # Anything outside the four record types is dropped rather than
             # passed through for the UI to interpret.
@@ -1218,16 +1261,16 @@ def describe_candidates(body):
                          "answer."}, 502
 
     # Only ids that were actually sent come back out, and only the fields the
-    # matching record type can actually take: a Tool's descriptive field is
-    # its description, and Qresp has no keyword field on one, so keywords are
-    # dropped rather than shipped for the UI to find a home for.
+    # matching record type can actually take. A Tool has no keyword field in
+    # Qresp, so keywords are dropped HERE rather than hidden by the UI: a
+    # value the record cannot hold must not reach the browser at all.
     kinds = {item["id"]: item["kind"] for item in items}
     suggestions = {}
     for item_id, value in parsed.items():
         if item_id not in kinds:
             continue
-        if kinds[item_id] == "tool":
-            value = dict(value, description=value["description"], keywords=[])
+        if kinds[item_id] not in AI_KEYWORD_KINDS:
+            value = dict(value, keywords=[])
         # A "different kind" note is only interesting when it IS different.
         if value.get("kind") == kinds[item_id]:
             value = dict(value, kind="")
