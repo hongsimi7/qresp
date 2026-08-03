@@ -64,8 +64,8 @@ const renderTopActions = ({ hasDraft = true, authenticated = true } = {}) => {
 describe("TopActions toolbar contents", () => {
   it("no longer offers Import Manuscript Source; the five toolbar controls remain", () => {
     renderTopActions();
-    // Import moved INTO "Add info about your paper" (PaperImport); the
-    // global toolbar must not show it anymore.
+    // Manuscript-source upload is no longer a product feature anywhere;
+    // publication metadata comes from manual entry and DOI Fetch.
     expect(
       screen.queryByRole("button", { name: /import manuscript source/i })
     ).not.toBeInTheDocument();

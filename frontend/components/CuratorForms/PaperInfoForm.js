@@ -21,7 +21,6 @@ import * as Yup from "yup";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
 import SourceTreeContext from "../../Context/SourceTree/SourceTreeContext";
-import KeywordAssist from "../CuratorElements/KeywordAssist";
 
 const PaperInfoForm = ({ editor }) => {
   // Qresp curation metadata ONLY (PIs, PaperStack, keywords, notebook).
@@ -225,20 +224,6 @@ const PaperInfoForm = ({ editor }) => {
               required
               register={register}
               error={errors.tags}
-            />
-          </Grid>
-          <Grid>
-            {/* Opt-in AI keyword suggestions: selected suggestions are
-                APPENDED to the Keywords field above, never replacing it. */}
-            <KeywordAssist
-              onApply={(keywords) => {
-                const current = splitList(getValues("tags"));
-                const existing = current.map((tag) => tag.toLowerCase());
-                const fresh = keywords.filter(
-                  (keyword) => !existing.includes(keyword.toLowerCase())
-                );
-                setValue("tags", [...current, ...fresh].join(", "));
-              }}
             />
           </Grid>
           <Grid>

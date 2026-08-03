@@ -19,14 +19,10 @@ import * as Yup from "yup";
 import CuratorContext from "../../Context/Curator/curatorContext";
 import AlertContext from "../../Context/Alert/alertContext";
 import LoadingContext from "../../Context/Loading/loadingContext";
-import PaperImport from "../CuratorElements/PaperImport";
 
 const ReferenceInfoForm = ({ editor }) => {
-  // sourceFile is deliberately NOT read here. The runtime-only source excerpt
-  // stays in CuratorState and is consumed by Keyword Assist in Qresp Curation
-  // Information; this section reads nothing from it.
-  const { referenceInfo, setReferenceInfo, registerDraftFlusher,
-          reportLiveBiblio } = useContext(CuratorContext);
+  const { referenceInfo, setReferenceInfo, registerDraftFlusher } =
+    useContext(CuratorContext);
   const { setAlert } = useContext(AlertContext);
   const { showLoader, hideLoader } = useContext(LoadingContext);
 
@@ -54,27 +50,16 @@ const ReferenceInfoForm = ({ editor }) => {
       .required("Required")
       .min(1, "Minimum of 1 PrincipalInvestigator"),
     title: Yup.string().required("Required"),
-    // Journal Name is required only for a journal article. A preprint or a
-    // dissertation has no journal, and requiring one here blocked those
-    // records at a field they can never legitimately fill. This mirrors the
-    // publish schema exactly (backend/project/schema.json) — the two layers
-    // have to agree, or the form calls a record complete and publish rejects
-    // it.
-    journal: Yup.string().when("kind", {
-      is: "journal",
-      then: (s) => s.required("Required for a journal article"),
-      otherwise: (s) => s,
-    }),
-    // Optional for every kind: an article number, an accepted-but-unpaginated
-    // paper, a preprint and a dissertation all legitimately lack these.
-    page: Yup.string(),
+    // Every field the UI marks with an asterisk is required for every kind.
+    // A short-lived branch made journal/page/volume conditional on kind while
+    // the PDF-import and AI-assist features were being tried; that scope was
+    // dropped, and so was the relaxation. Only DOI and URL are optional here.
+    journal: Yup.string().required("Required"),
+    page: Yup.string().required("Required"),
     abstract: Yup.string().required("Required"),
     volume: Yup.number()
-      .transform((value, original) =>
-        original === "" || original === null ? undefined : value
-      )
       .min(1, "Minimum volume number is 1")
-      .notRequired(),
+      .required("Required"),
     year: Yup.number()
       .min(1750, "Cannot be less than 1700")
       .integer("Plese enter a valid year")
@@ -114,24 +99,8 @@ const ReferenceInfoForm = ({ editor }) => {
     },
   });
 
-  // Signal the CURRENTLY TYPED title/abstract (before Save) so features like
-  // "Suggest Keywords with AI" can enable immediately. Signal only — saving
-  // still happens exclusively through this form's Save button, and snapshots
-  // still come from the registered draft flusher below.
-  const watchedTitle = watch("title");
-  const watchedAbstract = watch("abstract");
-  useEffect(() => {
-    if (!reportLiveBiblio) return;
-    reportLiveBiblio({ title: watchedTitle, abstract: watchedAbstract });
-  }, [watchedTitle, watchedAbstract, reportLiveBiblio]);
   // react-hook-form v7: errors moved onto formState.
   const { errors } = formState;
-
-  // Which fields are required depends on what kind of work this is, so the
-  // asterisks have to follow the selected kind rather than be painted on
-  // every bibliographic field.
-  const kind = watch("kind");
-  const journalRequired = kind === "journal";
 
   const { fields, append, remove } = useFieldArray({
     control,
@@ -231,15 +200,13 @@ const ReferenceInfoForm = ({ editor }) => {
   return (
     <Drawer heading="Publication Information for This Paper" defaultOpen={true}>
       {/* This section IS the primary paper's bibliography (the record's
-          `reference` block) — including DOI fetch and manuscript-source
-          import. It is not a cited-works list. */}
-      {/* Bibliography comes from two deterministic sources and nothing else:
-          the DOI registry (Fetch, below) and what is actually printed in the
-          manuscript (Import Manuscript Source). Publication metadata is
-          factual data — there is no AI proposal step here, by design. AI
-          stays where interpretation is genuinely needed: keyword suggestion
-          in Qresp Curation Information, and RCC candidate descriptions. */}
-      <PaperImport />
+          `reference` block). It is not a cited-works list.
+
+          Two ways in, and only two: the curator types the fields, or pastes a
+          DOI and presses Fetch. Publication metadata is factual data with an
+          authoritative registry, so no language model is involved and there
+          is no manuscript upload. A value Crossref does not return is left
+          blank for the curator to fill in. */}
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container direction="column" spacing={1}>
           <Grid>
@@ -386,16 +353,12 @@ const ReferenceInfoForm = ({ editor }) => {
               id="journal"
               placeholder="Enter full journal name"
               name="journal"
-              helperText={
-                journalRequired
-                  ? "Enter full journal name"
-                  : "Enter full journal name (optional for this kind)"
-              }
+              helperText="Enter full journal name"
               label="Journal Name"
               register={register}
               error={errors.journal}
               defaultValue={defaults.journal}
-              required={journalRequired}
+              required
             />
           </Grid>
           <Grid>
@@ -403,11 +366,12 @@ const ReferenceInfoForm = ({ editor }) => {
               id="page"
               placeholder="Enter page number"
               name="page"
-              helperText="Page or article number (optional)"
+              helperText="Enter page number of the journal"
               label="Page"
               register={register}
               error={errors.page}
               defaultValue={defaults.page}
+              required
             />
           </Grid>
           <Grid>
@@ -430,11 +394,12 @@ const ReferenceInfoForm = ({ editor }) => {
               id="volume"
               placeholder="Enter volume number"
               name="volume"
-              helperText="Volume of the journal (optional)"
+              helperText="Enter volume of the journal"
               label="Volume"
               register={register}
               error={errors.volume}
               defaultValue={defaults.volume}
+              required
             />
           </Grid>
           <Grid>

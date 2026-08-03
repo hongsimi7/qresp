@@ -43,12 +43,8 @@ const renderForm = (referenceInfo, editor = jest.fn()) => {
 describe("ReferenceInfoForm", () => {
   it("renders exactly ONE primary-paper DOI input (the canonical field with Fetch)", () => {
     renderForm(filledReference);
-    // The section heading says what it is, and hosts the manuscript import.
     expect(
       screen.getByText(/publication information for this paper/i)
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/^import manuscript source$/i)
     ).toBeInTheDocument();
     // One canonical DOI input with its Fetch button...
     expect(
@@ -58,7 +54,7 @@ describe("ReferenceInfoForm", () => {
       "type",
       "button"
     );
-    // ...and no duplicate DOI entry point in the import card.
+    // ...and no second DOI entry point anywhere in the section.
     expect(
       screen.queryByPlaceholderText(/10\.1234\/abcd/i)
     ).not.toBeInTheDocument();
@@ -213,119 +209,5 @@ describe("ReferenceInfoForm", () => {
     );
     expect(setReferenceInfo).not.toHaveBeenCalled();
     expect(editor).not.toHaveBeenCalled();
-  });
-});
-
-// Which bibliographic fields are required depends on the kind of work. The
-// form used to demand Journal Name, Page, Volume, Abstract and Year from
-// everything, so a preprint or a dissertation could never be saved at fields
-// it can never legitimately fill. These rules mirror backend/project/schema.json
-// exactly -- see backend/project/tests/test_publish_validation.py.
-describe("kind-dependent requirements", () => {
-  const base = {
-    kind: "preprint",
-    doi: "",
-    authors: "Alex Gaiduk",
-    title: "Photoelectron Spectra",
-    // A preprint has a year but no journal, volume or page. This is the
-    // shape referenceUtil.set writes for exactly that case.
-    publication: " 2016,  ,",
-    year: 2016,
-    url: "",
-    abstract: "An abstract",
-  };
-
-  const save = async (user) =>
-    user.click(screen.getByRole("button", { name: /^save$/i }));
-
-  it("saves a preprint with no journal, volume or page", async () => {
-    const user = userEvent.setup();
-    const { setReferenceInfo } = renderForm(base);
-
-    await save(user);
-
-    await waitFor(() => expect(setReferenceInfo).toHaveBeenCalledTimes(1));
-    expect(setReferenceInfo.mock.calls[0][0].title).toBe(
-      "Photoelectron Spectra"
-    );
-  });
-
-  it("saves a dissertation with no journal, volume or page", async () => {
-    const user = userEvent.setup();
-    const { setReferenceInfo } = renderForm({ ...base, kind: "dissertation" });
-
-    await save(user);
-
-    await waitFor(() => expect(setReferenceInfo).toHaveBeenCalledTimes(1));
-  });
-
-  it("requires Journal Name for a journal article", async () => {
-    const user = userEvent.setup();
-    const { setReferenceInfo } = renderForm({ ...base, kind: "journal" });
-
-    await save(user);
-
-    await waitFor(() =>
-      expect(
-        screen.getByText(/required for a journal article/i)
-      ).toBeInTheDocument()
-    );
-    expect(setReferenceInfo).not.toHaveBeenCalled();
-  });
-
-  it("still lets a journal article through without volume or page", async () => {
-    const user = userEvent.setup();
-    const { setReferenceInfo } = renderForm({
-      ...base,
-      kind: "journal",
-      publication: "JACS 2016, 138 ,6912-6915",
-    });
-
-    await save(user);
-
-    await waitFor(() => expect(setReferenceInfo).toHaveBeenCalledTimes(1));
-  });
-
-  // The asterisk lives in the field label (FormInputLabel), not on the input.
-  const starred = (forId) =>
-    document.querySelector(`label[for="${forId}"]`).textContent.includes("*");
-
-  it("moves the Journal Name asterisk with the selected kind", async () => {
-    const user = userEvent.setup();
-    renderForm(base);
-    expect(starred("journal")).toBe(false);
-
-    await user.click(screen.getByRole("radio", { name: /journal/i }));
-
-    await waitFor(() => expect(starred("journal")).toBe(true));
-  });
-
-  it("never marks Page or Volume required, for any kind", async () => {
-    const user = userEvent.setup();
-    renderForm(base);
-    expect(starred("page")).toBe(false);
-    expect(starred("volume")).toBe(false);
-
-    await user.click(screen.getByRole("radio", { name: /journal/i }));
-
-    await waitFor(() => expect(starred("journal")).toBe(true));
-    expect(starred("page")).toBe(false);
-    expect(starred("volume")).toBe(false);
-  });
-
-  it("still requires kind, title, an author, abstract and year", async () => {
-    const user = userEvent.setup();
-    const { setReferenceInfo } = renderForm({
-      ...base,
-      title: "",
-      abstract: "",
-    });
-
-    await save(user);
-
-    await waitFor(() =>
-      expect(screen.getAllByText(/^required$/i).length).toBeGreaterThan(0)
-    );
-    expect(setReferenceInfo).not.toHaveBeenCalled();
   });
 });
