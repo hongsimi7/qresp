@@ -186,6 +186,19 @@
         "type": "object",
         "title": "The Items Schema",
         "properties": {
+          "keywords": {
+            "$id": "#/properties/datasets/items/properties/keywords",
+            "type": ["array", "null"],
+            "title": "The Keywords Schema",
+            "items": {
+              "$id": "#/properties/datasets/items/properties/keywords/items",
+              "type": ["string", "null"],
+              "title": "The Items Schema",
+              "default": "",
+              "examples": ["density functional theory"],
+              "pattern": "^(.*)$"
+            }
+          },
           "URLs": {
             "$id": "#/properties/datasets/items/properties/URLs",
             "type": ["array", "null"],
@@ -249,7 +262,8 @@
           },
           "readme": {
             "$id": "#/properties/datasets/items/properties/readme",
-            "type": ["string", "null"],
+            "type": ["string"],
+            "minLength": 1,
             "title": "The Readme Schema",
             "default": "",
             "examples": [
@@ -258,7 +272,7 @@
             "pattern": "^(.*)$"
           }
         },
-        "required": ["files", "id"]
+        "required": ["files", "id", "readme"]
       }
     },
     "heads": {
@@ -623,6 +637,19 @@
         "type": "object",
         "title": "The Items Schema",
         "properties": {
+          "keywords": {
+            "$id": "#/properties/scripts/items/properties/keywords",
+            "type": ["array", "null"],
+            "title": "The Keywords Schema",
+            "items": {
+              "$id": "#/properties/scripts/items/properties/keywords/items",
+              "type": ["string", "null"],
+              "title": "The Items Schema",
+              "default": "",
+              "examples": ["density functional theory"],
+              "pattern": "^(.*)$"
+            }
+          },
           "URLs": {
             "$id": "#/properties/scripts/items/properties/URLs",
             "type": ["array", "null"],
@@ -686,7 +713,8 @@
           },
           "readme": {
             "$id": "#/properties/scripts/items/properties/readme",
-            "type": ["string", "null"],
+            "type": ["string"],
+            "minLength": 1,
             "title": "The Readme Schema",
             "default": "",
             "examples": [
@@ -695,7 +723,7 @@
             "pattern": "^(.*)$"
           }
         },
-        "required": ["files", "id"]
+        "required": ["files", "id", "readme"]
       }
     },
     "tags": {
@@ -720,6 +748,36 @@
         "$id": "#/properties/tools/items",
         "type": "object",
         "title": "The Items Schema",
+        "comment_required": "A tool is either software or an experiment, and the two describe completely different things. Each kind requires only what it can actually have; nothing is required of the other kind's fields.",
+        "required": ["kind"],
+        "allOf": [
+          {
+            "if": {
+              "properties": { "kind": { "const": "software" } },
+              "required": ["kind"]
+            },
+            "then": {
+              "required": ["packageName", "version"],
+              "properties": {
+                "packageName": { "type": "string", "minLength": 1 },
+                "version": { "type": "string", "minLength": 1 }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": { "kind": { "const": "experiment" } },
+              "required": ["kind"]
+            },
+            "then": {
+              "required": ["facilityName", "measurement"],
+              "properties": {
+                "facilityName": { "type": "string", "minLength": 1 },
+                "measurement": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        ],
         "properties": {
           "URLs": {
             "$id": "#/properties/tools/items/properties/URLs",

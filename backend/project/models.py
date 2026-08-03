@@ -72,6 +72,11 @@ class Datasets(DynamicEmbeddedDocument):
     id = StringField()
     files = ListField()
     readme = StringField()
+    # Descriptive tags for this artifact. A SEPARATE field from URLs, which
+    # holds links: the two were conflated in the curator form for a long time
+    # and must never share storage. Optional and absent-safe, so every record
+    # written before it existed loads as an empty list with no migration.
+    keywords = ListField()
     URLs = ListField()
     extraFields = ListField()
     saveas = StringField()
@@ -84,6 +89,11 @@ class Scripts(DynamicEmbeddedDocument):
     id = StringField()
     files = ListField()
     readme = StringField()
+    # Descriptive tags for this artifact. A SEPARATE field from URLs, which
+    # holds links: the two were conflated in the curator form for a long time
+    # and must never share storage. Optional and absent-safe, so every record
+    # written before it existed loads as an empty list with no migration.
+    keywords = ListField()
     URLs = ListField()
     extraFields = ListField()
     saveas = StringField()
