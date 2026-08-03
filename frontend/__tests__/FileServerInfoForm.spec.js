@@ -247,7 +247,8 @@ describe("FileServerInfoForm", () => {
     const setConfirmLabel = jest.fn();
     const handles = renderForm({}, { setConfirmLabel });
     await searchAndGetPicker(user, handles);
-    expect(setConfirmLabel).toHaveBeenCalledWith("Use Folder");
+    // Short: "Use Folder" wrapped onto two lines beside Cancel.
+    expect(setConfirmLabel).toHaveBeenCalledWith("Use");
   });
 });
 
@@ -327,5 +328,114 @@ describe("File Server display card", () => {
     expect(axios.post).toHaveBeenCalledWith("/api/curation/analyze-folder", {
       path: FOLDER,
     });
+  });
+});
+
+// Every chart, dataset, script and tool path is stored RELATIVE to the file
+// server folder. Changing the folder re-points all of them at once, which
+// shows up much later as "the images stopped working".
+describe("changing the file server folder with charts already added", () => {
+  const OTHER = `${ROOT}/10.1021.acs.nanolett.7b00283`;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    getList.mockResolvedValue({
+      files: [{ label: "folder", value: OTHER }],
+      details: {},
+    });
+  });
+
+  const pickOther = async (user, handles) => {
+    const pick = await searchAndGetPicker(user, handles);
+    pick(OTHER);
+    await waitFor(() =>
+      expect(screen.getByTestId("selected-folder")).toHaveTextContent(OTHER)
+    );
+  };
+
+  it("asks first, and commits nothing until the curator agrees", async () => {
+    const user = userEvent.setup();
+    const handles = renderForm({
+      fileServerPath: FOLDER,
+      charts: [{ id: "c0", imageFile: "figures/f1.png" }],
+    });
+    await pickOther(user, handles);
+
+    await user.click(screen.getByRole("button", { name: /save file server/i }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: /change the paper.s file server folder/i,
+      })
+    ).toBeInTheDocument();
+    expect(handles.setFileServerPath).not.toHaveBeenCalled();
+    expect(handles.editor).not.toHaveBeenCalled();
+  });
+
+  it("explains what happens to the existing relative paths", async () => {
+    const user = userEvent.setup();
+    const handles = renderForm({
+      fileServerPath: FOLDER,
+      charts: [{ id: "c0", imageFile: "figures/f1.png" }],
+    });
+    await pickOther(user, handles);
+    await user.click(screen.getByRole("button", { name: /save file server/i }));
+    await screen.findByRole("heading", { name: /file server folder/i });
+
+    const text = document.body.textContent;
+    expect(text).toMatch(/relative to the file server folder/i);
+    expect(text).toMatch(/nothing is rewritten for you/i);
+    expect(text).toMatch(/analyze rcc folder again/i);
+    // Both roots are shown so the change is legible.
+    const paths = screen.getByTestId("root-change-paths");
+    expect(paths).toHaveTextContent(FOLDER);
+    expect(paths).toHaveTextContent(OTHER);
+  });
+
+  it("keeps the current folder when the curator declines", async () => {
+    const user = userEvent.setup();
+    const handles = renderForm({
+      fileServerPath: FOLDER,
+      charts: [{ id: "c0", imageFile: "figures/f1.png" }],
+    });
+    await pickOther(user, handles);
+    await user.click(screen.getByRole("button", { name: /save file server/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /keep the current folder/i })
+    );
+
+    expect(handles.setFileServerPath).not.toHaveBeenCalled();
+    expect(handles.editor).not.toHaveBeenCalled();
+  });
+
+  it("commits on confirmation, without touching any stored path", async () => {
+    const user = userEvent.setup();
+    const charts = [{ id: "c0", imageFile: "figures/f1.png" }];
+    const handles = renderForm({ fileServerPath: FOLDER, charts });
+    await pickOther(user, handles);
+    await user.click(screen.getByRole("button", { name: /save file server/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /change it anyway/i })
+    );
+
+    expect(handles.setFileServerPath).toHaveBeenCalledWith(OTHER);
+    expect(handles.editor).toHaveBeenCalled();
+    // The existing chart is left exactly as it was.
+    expect(charts[0].imageFile).toBe("figures/f1.png");
+  });
+
+  it("does not ask when there is nothing to re-point", async () => {
+    const user = userEvent.setup();
+    const handles = renderForm({ fileServerPath: FOLDER, charts: [] });
+    await pickOther(user, handles);
+
+    await user.click(screen.getByRole("button", { name: /save file server/i }));
+
+    await waitFor(() =>
+      expect(handles.setFileServerPath).toHaveBeenCalledWith(OTHER)
+    );
+    expect(
+      screen.queryByRole("heading", { name: /file server folder\?/i })
+    ).toBeNull();
   });
 });

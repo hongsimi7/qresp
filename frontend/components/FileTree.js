@@ -67,8 +67,28 @@ const FileTree = () => {
   const theme = useTheme();
 
   return (
-    <Dialog open={showSelector} onClose={closeSelector} maxWidth="md" fullWidth>
-      <DialogTitle onClose={closeSelector} disableTypography>
+    <Dialog
+      open={showSelector}
+      onClose={closeSelector}
+      maxWidth="md"
+      fullWidth
+      slotProps={{
+        paper: {
+          sx: {
+            // ONE scroll owner: the folder tree. The Paper and the header
+            // stay put, so there is no outer scrollbar beside the inner one
+            // and the page behind the dialog does not move with the wheel.
+            overflow: "hidden",
+            maxHeight: { xs: "100dvh", sm: "90dvh" },
+          },
+        },
+      }}
+    >
+      <DialogTitle
+        onClose={closeSelector}
+        disableTypography
+        sx={{ flexShrink: 0 }}
+      >
         <Grid container direction="column" spacing={1} justifyContent="center">
           <Grid container spacing={1}>
             <Grid size={{ xs: 12, sm: 9 }}>
@@ -84,6 +104,7 @@ const FileTree = () => {
               <Grid size={6}>
                 <RegularStyledButton
                   fullWidth
+                  sx={{ whiteSpace: "nowrap" }}
                   onClick={() => {
                     if (checked.length == 1) {
                       save(checked[0]);
@@ -98,7 +119,11 @@ const FileTree = () => {
                 </RegularStyledButton>
               </Grid>
               <Grid size={6}>
-                <RegularStyledButton onClick={closeSelector} fullWidth>
+                <RegularStyledButton
+                  onClick={closeSelector}
+                  fullWidth
+                  sx={{ whiteSpace: "nowrap" }}
+                >
                   Cancel
                 </RegularStyledButton>
               </Grid>
@@ -126,7 +151,10 @@ const FileTree = () => {
         </Grid>
       </DialogTitle>
       {loading && <LinearProgress color="primary" />}
-      <DialogContent dividers>
+      <DialogContent
+        dividers
+        sx={{ overflowY: "auto", overscrollBehavior: "contain" }}
+      >
         <CheckboxTree
           nodes={tree}
           checked={checked}

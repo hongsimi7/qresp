@@ -1,7 +1,17 @@
 import PropTypes from "prop-types";
 
 import { useContext, useEffect, useState } from "react";
-import { Box, Grid, Typography } from "@mui/material";
+import {
+  Alert,
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Grid,
+  Typography,
+} from "@mui/material";
 
 import Drawer from "../drawer";
 import FolderAnalysis from "../CuratorElements/FolderAnalysis";
@@ -47,7 +57,7 @@ const FileServerInfoForm = ({ editor }) => {
     SourceTreeContext
   );
   const { showLoader, hideLoader } = useContext(LoadingContext);
-  const { fileServerPath, setFileServerPath, registerDraftFlusher } =
+  const { fileServerPath, setFileServerPath, registerDraftFlusher, charts } =
     useContext(CuratorContext);
 
   // The folder the curator has picked but not yet committed. Seeded from the
@@ -81,7 +91,8 @@ const FileServerInfoForm = ({ editor }) => {
     setSaveMethod(selectFolder);
     if (setConfirmLabel) {
       // Short enough to stay on one line in the selector's narrow header.
-      setConfirmLabel("Use Folder");
+      // Short enough to stay on one line beside Cancel at any width.
+      setConfirmLabel("Use");
     }
     showLoader();
     // Deliberately NOT clearing fileServerPath or the current selection: a
@@ -104,13 +115,30 @@ const FileServerInfoForm = ({ editor }) => {
       .finally(() => hideLoader());
   };
 
+  // Every chart, dataset, script and tool path is stored RELATIVE to this
+  // root. Changing the root silently re-points all of them at a folder they
+  // were never in, which reads as "the images stopped working" long after the
+  // change. Nothing is rewritten automatically -- a relative path may be
+  // perfectly correct under the new root -- so the curator is told what is
+  // about to happen and decides.
+  const [rootChange, setRootChange] = useState(null);
+
+  const commitFileServer = (folder) => {
+    setFileServerPath(folder);
+    editor();
+  };
+
   // The only action that commits the selection.
   const saveFileServer = () => {
     if (!selectedFolder) {
       return;
     }
-    setFileServerPath(selectedFolder);
-    editor();
+    const existing = (charts || []).length;
+    if (existing > 0 && fileServerPath && fileServerPath !== selectedFolder) {
+      setRootChange({ folder: selectedFolder, charts: existing });
+      return;
+    }
+    commitFileServer(selectedFolder);
   };
 
   const watchConnectionType = watch("connectionType");
@@ -252,6 +280,62 @@ const FileServerInfoForm = ({ editor }) => {
           : "Search above, then pick one folder in the file tree to analyze or " +
             "save it."}
       </Typography>
+
+      <Dialog
+        open={Boolean(rootChange)}
+        onClose={() => setRootChange(null)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Change the paper&rsquo;s file server folder?</DialogTitle>
+        <DialogContent dividers>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            This paper already has {rootChange ? rootChange.charts : 0} chart
+            {rootChange && rootChange.charts === 1 ? "" : "s"}.
+          </Alert>
+          <Typography variant="body2" gutterBottom>
+            Chart, dataset, script and tool paths are stored{" "}
+            <strong>relative to the file server folder</strong>. Changing the
+            folder re-reads every one of them under the new root, so an image
+            that resolved before may point somewhere that does not exist.
+          </Typography>
+          <Typography variant="body2" gutterBottom sx={{ mt: 1 }}>
+            Nothing is rewritten for you: your existing paths are left exactly
+            as they are, because a relative path may be perfectly correct under
+            the new folder. Check each chart&rsquo;s image afterwards, and run
+            Analyze RCC Folder again from the new folder if you want fresh
+            proposals.
+          </Typography>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            display="block"
+            sx={{ mt: 2, overflowWrap: "anywhere" }}
+            data-testid="root-change-paths"
+          >
+            From: {fileServerPath}
+            <br />
+            To: {rootChange ? rootChange.folder : ""}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button type="button" onClick={() => setRootChange(null)}>
+            Keep the current folder
+          </Button>
+          <Button
+            type="button"
+            variant="contained"
+            color="warning"
+            onClick={() => {
+              const folder = rootChange.folder;
+              setRootChange(null);
+              commitFileServer(folder);
+            }}
+          >
+            Change it anyway
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Drawer>
   );
 };
