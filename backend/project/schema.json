@@ -431,11 +431,13 @@
       "type": "object",
       "title": "The Reference Schema",
       "required": [
-        "DOI",
         "authors",
+        "journal",
         "kind",
+        "page",
         "publishedAbstract",
         "title",
+        "volume",
         "year"
       ],
       "properties": {
@@ -457,7 +459,8 @@
         },
         "authors": {
           "$id": "#/properties/reference/properties/authors",
-          "type": ["array", "null"],
+          "type": ["array"],
+          "minItems": 1,
           "title": "The Authors Schema",
           "items": {
             "$id": "#/properties/reference/properties/authors/items",
@@ -494,6 +497,7 @@
         "journal": {
           "$id": "#/properties/reference/properties/journal",
           "type": "object",
+          "required": ["fullName"],
           "title": "The Journal Schema",
           "default": null,
           "properties": {
@@ -507,7 +511,8 @@
             },
             "fullName": {
               "$id": "#/properties/reference/properties/journal/properties/fullName",
-              "type": ["string", "null"],
+              "type": ["string"],
+              "minLength": 1,
               "title": "The Fullname Schema",
               "default": "",
               "examples": ["Journal of the American Chemical Society"],
@@ -517,7 +522,8 @@
         },
         "kind": {
           "$id": "#/properties/reference/properties/kind",
-          "type": ["string", "null"],
+          "type": ["string"],
+          "minLength": 1,
           "title": "The Kind Schema",
           "default": "",
           "examples": ["article"],
@@ -525,7 +531,8 @@
         },
         "page": {
           "$id": "#/properties/reference/properties/page",
-          "type": ["string", "null"],
+          "type": ["string"],
+          "minLength": 1,
           "title": "The Page Schema",
           "default": "",
           "examples": ["6912"],
@@ -534,6 +541,7 @@
         "publishedAbstract": {
           "$id": "#/properties/reference/properties/publishedAbstract",
           "type": ["string"],
+          "minLength": 1,
           "title": "The Publishedabstract Schema",
           "default": "",
           "examples": ["Abstract"],
@@ -549,6 +557,7 @@
         "title": {
           "$id": "#/properties/reference/properties/title",
           "type": ["string"],
+          "minLength": 1,
           "title": "The Title Schema",
           "default": "",
           "examples": [
@@ -558,7 +567,8 @@
         },
         "volume": {
           "$id": "#/properties/reference/properties/volume",
-          "type": ["string", "null"],
+          "type": ["string"],
+          "minLength": 1,
           "title": "The Volume Schema",
           "default": "",
           "examples": ["138"],

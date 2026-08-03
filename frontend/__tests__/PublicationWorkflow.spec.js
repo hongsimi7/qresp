@@ -272,3 +272,74 @@ describe("Qresp Curation Information keywords are human-entered", () => {
     });
   });
 });
+
+// The form and backend/project/schema.json enforce ONE rule set. The mirror
+// image of this block is test_publish_validation.py; if either side moves,
+// one of the two fails.
+describe("the required-field contract, identical on both layers", () => {
+  const REQUIRED = [
+    ["title", /enter title/i],
+    ["journal", /enter full journal name/i],
+    ["page", /enter page number/i],
+    ["abstract", /enter abstract/i],
+    ["volume", /enter volume number/i],
+    ["year", /enter year of publication/i],
+  ];
+
+  // Emptying any one of them must stop the commit. The message differs by
+  // field -- yup reports a type error for the two numeric ones rather than
+  // "Required" -- so the assertion is on the behaviour, not the wording.
+  it.each(REQUIRED)("blocks Save when %s is empty", async (field, placeholder) => {
+    const user = userEvent.setup();
+    const { setReferenceInfo, editor } = renderForm();
+
+    await user.clear(screen.getByPlaceholderText(placeholder));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(editor).not.toHaveBeenCalled());
+    expect(setReferenceInfo).not.toHaveBeenCalled();
+  });
+
+  it.each(["preprint", "dissertation"])(
+    "holds a %s to the same rules as a journal article",
+    async (kind) => {
+      const user = userEvent.setup();
+      const { setReferenceInfo, editor } = renderForm({
+        kind,
+        publication: "",
+      });
+
+      await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() =>
+        expect(screen.getAllByText(/^required$/i).length).toBeGreaterThan(0)
+      );
+      expect(setReferenceInfo).not.toHaveBeenCalled();
+      expect(editor).not.toHaveBeenCalled();
+    }
+  );
+
+  it("saves with DOI and URL left empty", async () => {
+    const user = userEvent.setup();
+    const { setReferenceInfo, editor } = renderForm({ doi: "", url: "" });
+
+    expect(screen.getByPlaceholderText(/enter doi of the paper/i)).toHaveValue(
+      ""
+    );
+    expect(screen.getByPlaceholderText(/enter url/i)).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(setReferenceInfo).toHaveBeenCalledTimes(1));
+    expect(editor).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a legacy record whose publication string is short", () => {
+    // This used to throw inside referenceUtil.get while the form built its
+    // defaults, so the section never rendered at all.
+    expect(() => renderForm({ publication: "arXiv:2301.00001" })).not.toThrow();
+    expect(
+      screen.getByPlaceholderText(/enter full journal name/i)
+    ).toBeInTheDocument();
+  });
+});
