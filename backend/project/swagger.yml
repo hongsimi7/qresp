@@ -803,16 +803,19 @@ paths:
       operationId: "project.curation.describe_candidates"
       tags:
         - "Import"
-      summary: "Suggests descriptions and keywords for selected folder
-        candidates via the configured AI provider (opt-in; suggestions only)"
+      summary: "Suggests a description and keywords for ONE folder candidate
+        via the configured AI provider (opt-in; suggestions only)"
       parameters:
         - in: body
           name: body
           required: true
           description: Explicit consent plus the allowlisted, bounded
-            description of each selected candidate (id, kind, name, relative
-            paths, locally extracted text). No file contents, credentials, or
-            user data are accepted here.
+            description of EXACTLY ONE candidate (id, kind, name, relative
+            paths, locally extracted text). Batching produced partial and
+            noticeably worse answers, so zero or more than one item is
+            rejected with 400 before the provider or the quota is touched. No
+            file contents, image bytes, credentials, or user data are
+            accepted here.
           schema:
             type: object
             required:
@@ -823,6 +826,9 @@ paths:
                 type: boolean
               items:
                 type: array
+                minItems: 1
+                maxItems: 1
+                description: Exactly one candidate.
                 items:
                   type: object
                   properties:
@@ -842,7 +848,7 @@ paths:
         200:
           description: Suggestions returned for the curator to review
         400:
-          description: Consent missing or nothing selectable to describe
+          description: Consent missing, or not exactly one candidate
         401:
           description: Authentication required
         403:

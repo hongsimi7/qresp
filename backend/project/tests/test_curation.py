@@ -1428,6 +1428,10 @@ class TestDescribeCandidatesPayload(DescribeCandidatesBase):
         body = requests_mock.post.call_args.kwargs["json"]
         return json.loads(body["contents"][0]["parts"][0]["text"]), body
 
+    def sent_item(self, item):
+        payload, body = self.sent_payload([item])
+        return payload["item"], body
+
     def test_only_allowlisted_fields_travel(self):
         payload, _ = self.sent_payload([dict(
             AI_ITEMS[0],
@@ -1437,8 +1441,7 @@ class TestDescribeCandidatesPayload(DescribeCandidatesBase):
             file_bytes="\x00\x01binary",
             api_key="secret",
         )])
-        for item in payload["items"]:
-            self.assertEqual(set(curation.AI_ALLOWED_KEYS), set(item))
+        self.assertEqual(set(curation.AI_ALLOWED_KEYS), set(payload["item"]))
         serialized = json.dumps(payload)
         self.assertNotIn("curator@example.com", serialized)
         self.assertNotIn("someone", serialized)
@@ -1450,20 +1453,37 @@ class TestDescribeCandidatesPayload(DescribeCandidatesBase):
         payload, _ = self.sent_payload([dict(
             AI_ITEMS[0],
             paths=["scripts/ok.py", "/etc/shadow", "https://evil.com/x"])])
-        self.assertEqual(["scripts/ok.py"], payload["items"][0]["paths"])
+        self.assertEqual(["scripts/ok.py"], payload["item"]["paths"])
 
     def test_context_is_bounded(self):
         payload, _ = self.sent_payload([dict(AI_ITEMS[0], context="x" * 99999)])
         self.assertEqual(curation.MAX_AI_CONTEXT_CHARS,
-                         len(payload["items"][0]["context"]))
+                         len(payload["item"]["context"]))
 
-    def test_item_count_is_bounded(self):
-        payload, _ = self.sent_payload([
-            dict(AI_ITEMS[0], id="script-%d" % i) for i in range(50)])
-        self.assertEqual(curation.MAX_AI_ITEMS, len(payload["items"]))
+    def test_more_than_one_item_is_refused_before_anything_happens(self):
+        self.login()
+        response, requests_mock = self.describe({
+            "consent": True,
+            "items": [dict(AI_ITEMS[0], id="script-%d" % i) for i in range(2)],
+        })
+        # Connexion enforces maxItems from swagger.yml before the handler is
+        # even entered, so the rejection shape is the spec's, not ours. Either
+        # way it is a 400 and the provider was never called.
+        self.assertEqual(400, response.status_code)
+        requests_mock.post.assert_not_called()
 
-    def test_batch_cap_is_ten(self):
-        self.assertEqual(10, curation.MAX_AI_ITEMS)
+    def test_zero_items_is_refused_the_same_way(self):
+        self.login()
+        response, requests_mock = self.describe(
+            {"consent": True, "items": []})
+        self.assertEqual(400, response.status_code)
+        requests_mock.post.assert_not_called()
+
+    def test_one_item_is_the_whole_contract(self):
+        payload, _ = self.sent_payload([AI_ITEMS[0]])
+        self.assertIn("item", payload)
+        self.assertNotIn("items", payload)
+        self.assertEqual(payload["item"]["id"], AI_ITEMS[0]["id"])
 
     def test_unknown_kinds_are_refused(self):
         self.login()
@@ -1474,7 +1494,7 @@ class TestDescribeCandidatesPayload(DescribeCandidatesBase):
         requests_mock.post.assert_not_called()
 
     def test_structured_output_and_header_auth(self):
-        _, body = self.sent_payload(AI_ITEMS)
+        _, body = self.sent_payload([AI_ITEMS[0]])
         self.assertEqual(curation.AI_RESPONSE_SCHEMA,
                          body["generationConfig"]["responseSchema"])
         self.assertEqual("application/json",

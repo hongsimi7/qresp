@@ -187,9 +187,10 @@ class TestAiFieldsPerType(unittest.TestCase):
         self.assertFalse(flags["tool"])
 
     def test_the_prompt_states_the_per_item_rule(self):
+        # One candidate per request now, so the cross-candidate instruction
+        # is gone with the batching it existed for.
         self.assertIn("wants_keywords", curation.AI_SYSTEM_PROMPT)
-        self.assertIn("do not repeat one description",
-                      curation.AI_SYSTEM_PROMPT)
+        self.assertIn("You are given ONE item", curation.AI_SYSTEM_PROMPT)
 
     def test_wants_keywords_is_in_the_allowlist(self):
         self.assertIn("wants_keywords", curation.AI_ALLOWED_KEYS)
