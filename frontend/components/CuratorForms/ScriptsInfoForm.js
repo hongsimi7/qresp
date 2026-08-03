@@ -26,6 +26,14 @@ import CuratorContext from "../../Context/Curator/curatorContext";
 import SourceTreeContext from "../../Context/SourceTree/SourceTreeContext";
 import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperContext";
 
+// Comma-separated text -> a clean list. Empty entries are dropped so a
+// trailing comma does not store a blank keyword or URL.
+const splitList = (value) =>
+  String(value || "")
+    .split(",")
+    .map((el) => el.trim())
+    .filter(Boolean);
+
 const ScriptsInfoForm = () => {
   const { scripts, add, edit } = useContext(CuratorContext);
 
@@ -42,6 +50,10 @@ const ScriptsInfoForm = () => {
   const schema = Yup.object({
     files: Yup.string().required("Required"),
     readme: Yup.string().required("Required"),
+    // Descriptive tags. A SEPARATE field from URLs: the input below used to
+    // be labelled "Keywords" while writing to URLs, so a curator's keywords
+    // were stored as links. Both are optional, and neither feeds the other.
+    keywords: Yup.string(),
     URLs: Yup.string(),
     extraFields: extraFieldsSchema,
   });
@@ -52,6 +64,13 @@ const ScriptsInfoForm = () => {
   const itemFormDefaults = (item) => ({
     files: (item && item.files && item.files.join(", ")) || "",
     readme: (item && item.readme) || "",
+    keywords:
+      (item &&
+        item.keywords &&
+        (Array.isArray(item.keywords)
+          ? item.keywords.join(", ")
+          : item.keywords)) ||
+      "",
     URLs:
       (item &&
         item.URLs &&
@@ -72,7 +91,8 @@ const ScriptsInfoForm = () => {
 
   const onSubmit = (values) => {
     values.files = values.files.split(",").map((el) => el.trim());
-    values.URLs = values.URLs.split(",").map((el) => el.trim());
+    values.keywords = splitList(values.keywords);
+    values.URLs = splitList(values.URLs);
     const extraFields = cleanExtraFields(values.extraFields);
     values.extraFields = extraFields;
     if (def && scripts.find((el) => el.id == def.id)) {
@@ -171,11 +191,25 @@ const ScriptsInfoForm = () => {
               </Grid>
               <Grid>
                 <TextInputField
+                  id="scriptKeywords"
+                  placeholder="Enter keywords for the script"
+                  name="keywords"
+                  helperText="Enter keyword(s) describing the script, if useful. (Comma seperated)"
+                  label="Keywords"
+                  error={errors.keywords}
+                  register={register}
+                  defaultValue={
+                    def && def.keywords && def.keywords.join(", ")
+                  }
+                />
+              </Grid>
+              <Grid>
+                <TextInputField
                   id="scriptUrls"
                   placeholder="Enter URLs for the scripts"
                   name="URLs"
                   helperText="Enter link(s)/URLs of the script, if available. (Comma seperated)"
-                  label="Keywords"
+                  label="URLs"
                   error={errors.URLs}
                   register={register}
                   defaultValue={def && def.URLs && def.URLs.join(", ")}
