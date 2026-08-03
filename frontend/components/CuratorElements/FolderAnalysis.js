@@ -27,6 +27,15 @@ import {
 import { RegularStyledButton } from "../button";
 import CuratorContext from "../../Context/Curator/curatorContext";
 import AlertContext from "../../Context/Alert/alertContext";
+import {
+  aiTargets,
+  fieldsFor,
+  isRequired,
+  labelFor,
+  missingRequired,
+  toDraft,
+  toRecord,
+} from "../../Utils/artifactFields";
 
 // "Analyze RCC Folder" — reads the selected (or saved) file-server folder and
 // proposes Charts/Datasets/Scripts/Tools for review. The backend does the
@@ -55,38 +64,6 @@ const UNCLASSIFIED_ROWS = 25;
 // listed here — image files, figure numbers, file lists, package names,
 // versions, executables, patches, facilities, measurements — is factual and
 // is never touched by AI.
-const AI_TARGETS = {
-  chart: { description: "caption", keywords: "properties" },
-  dataset: { description: "readme", keywords: "keywords" },
-  script: { description: "readme", keywords: "keywords" },
-  // A Tool has no keyword field in Qresp. The server never asks for keywords
-  // for one and strips any that come back, so there is nothing to render.
-  tool: { description: "description", keywords: null },
-};
-
-// What each record type needs before its own Add/Edit form will save it, and
-// before the record can be published. A folder proposal may be added while
-// these are still blank -- that is the point of a review step -- so this is
-// used for marking and for the publish check, never to block adding.
-const REQUIRED_FIELDS = {
-  chart: ["caption", "number", "imageFile", "properties"],
-  dataset: ["files", "readme"],
-  script: ["files", "readme"],
-  // Folder analysis only ever proposes software tools; an experiment is
-  // never inferred, so only the software fields are marked here.
-  tool: ["packageName", "version"],
-};
-
-const isRequired = (kind, field) =>
-  (REQUIRED_FIELDS[kind] || []).includes(field);
-
-// Only a MISSING REQUIRED field needs the curator. An empty Keywords or URLs
-// is a complete record, not an unfinished one.
-const missingRequired = (kind, draft = {}) =>
-  (REQUIRED_FIELDS[kind] || []).filter(
-    (field) => !String(draft[field] || "").trim()
-  );
-
 const list = (value) => (Array.isArray(value) ? value.join(", ") : value || "");
 
 const split = (value) =>
@@ -100,78 +77,6 @@ const basename = (path) => String(path || "").split("/").filter(Boolean).pop() |
 const dirname = (path) => {
   const value = String(path || "");
   return value.includes("/") ? value.slice(0, value.lastIndexOf("/")) : "";
-};
-
-// The proposal as the curator edits it: arrays become comma-separated text so
-// the fields behave like the manual Add forms.
-const toDraft = (candidate) => {
-  const p = candidate.proposal || {};
-  if (candidate.kind === "chart") {
-    return {
-      imageFile: p.imageFile || "",
-      number: String(p.number == null ? "" : p.number),
-      caption: p.caption || "",
-      properties: list(p.properties),
-      files: list(p.files),
-      notebookFile: p.notebookFile || "",
-    };
-  }
-  if (candidate.kind === "tool") {
-    return {
-      packageName: p.packageName || "",
-      version: p.version || "",
-      executableName: p.executableName || "",
-      description: p.description || "",
-      urls: p.urls || "",
-      patches: list(p.patches),
-    };
-  }
-  // keywords is a field of its own. It shares nothing with URLs -- the two
-  // were conflated in the curator form for a long time, and this is where
-  // an AI keyword proposal now lands for a dataset or a script.
-  return {
-    files: list(p.files),
-    readme: p.readme || "",
-    keywords: list(p.keywords),
-    URLs: list(p.URLs),
-  };
-};
-
-// The draft mapped back to the exact shape the manual Add forms store, so an
-// applied candidate is indistinguishable from a hand-entered record (and
-// stays fully editable afterwards). `id` is deliberately absent: the reducer
-// mints collision-safe ids for the whole batch.
-const toRecord = (kind, draft) => {
-  if (kind === "chart") {
-    return {
-      caption: draft.caption,
-      number: draft.number,
-      properties: split(draft.properties),
-      files: split(draft.files),
-      imageFile: draft.imageFile,
-      notebookFile: draft.notebookFile,
-      extraFields: [],
-    };
-  }
-  if (kind === "tool") {
-    return {
-      kind: "software",
-      packageName: draft.packageName,
-      version: draft.version,
-      executableName: draft.executableName,
-      patches: split(draft.patches),
-      description: draft.description,
-      urls: draft.urls,
-      extraFields: [],
-    };
-  }
-  return {
-    files: split(draft.files),
-    readme: draft.readme,
-    keywords: split(draft.keywords),
-    URLs: split(draft.URLs),
-    extraFields: [],
-  };
 };
 
 // A short, scannable label.
@@ -234,7 +139,7 @@ const isRenderable = (candidate) => {
 
 // Evidence vocabulary, shared by the card chip and the per-field chips.
 // "High evidence" is reserved for something a file directly states — an AI
-// suggestion can never earn it (see AI_TARGETS / the suggestion panel).
+// suggestion can never earn it (see the suggestion panel below).
 const HIGH_EVIDENCE = "high";
 
 const EVIDENCE_LABELS = {
@@ -244,23 +149,6 @@ const EVIDENCE_LABELS = {
   needs_input: "Needs input",
 };
 
-const FIELD_LABELS = {
-  imageFile: "Image file",
-  number: "Figure number (proposed order)",
-  caption: "Caption",
-  properties: "Properties (comma separated)",
-  files: "Files (comma separated)",
-  notebookFile: "Notebook file",
-  packageName: "Package name",
-  version: "Version",
-  executableName: "Executable name",
-  description: "Description",
-  urls: "URL",
-  patches: "Patches (comma separated)",
-  readme: "Description",
-  keywords: "Keywords (comma separated)",
-  URLs: "URLs (comma separated)",
-};
 
 const FolderAnalysis = ({ path }) => {
   const { fileServerPath, addMany } = useContext(CuratorContext) || {};
@@ -350,7 +238,8 @@ const FolderAnalysis = ({ path }) => {
       GROUPS.forEach(({ key, type }) => {
         if (!type) return;
         ((data.candidates || {})[key] || []).forEach((candidate) => {
-          initial[candidate.id] = toDraft(candidate);
+          initial[candidate.id] = toDraft(candidate.kind,
+                                          candidate.proposal);
         });
       });
       setDrafts(initial);
@@ -551,7 +440,7 @@ const FolderAnalysis = ({ path }) => {
   const renderAiProposal = (candidate) => {
     const suggestion = aiSuggestions[candidate.id];
     if (!suggestion) return null;
-    const targets = AI_TARGETS[candidate.kind] || {};
+    const targets = aiTargets(candidate.kind);
     const draft = drafts[candidate.id] || {};
     const description = suggestion.description || "";
     const keywords = suggestion.keywords || [];
@@ -627,7 +516,7 @@ const FolderAnalysis = ({ path }) => {
                 setField(candidate.id, descriptionField, description)
               }
             >
-              {`Use as ${FIELD_LABELS[descriptionField] || descriptionField}`}
+              {`Use as ${labelFor(candidate.kind, descriptionField)}`}
             </Button>
             {draft[descriptionField] ? (
               <Typography variant="caption" color="text.secondary">
@@ -656,7 +545,7 @@ const FolderAnalysis = ({ path }) => {
                   setField(candidate.id, keywordField, keywords.join(", "))
                 }
               >
-                {`Use as ${FIELD_LABELS[keywordField] || keywordField}`}
+                {`Use as ${labelFor(candidate.kind, keywordField)}`}
               </Button>
             ) : null}
           </Box>
@@ -732,7 +621,7 @@ const FolderAnalysis = ({ path }) => {
             {needs.length > 0 && (
               <Tooltip
                 title={`Required before Save/Update and Publish: ${needs
-                  .map((field) => FIELD_LABELS[field] || field)
+                  .map((field) => labelFor(candidate.kind, field))
                   .join(", ")}`}
               >
                 <Chip
@@ -839,16 +728,22 @@ const FolderAnalysis = ({ path }) => {
             sx={{ mt: 0.5, pl: { xs: 0, sm: 5 } }}
             data-testid={`fields-${candidate.id}`}
           >
-            {Object.keys(draft).map((field) => {
-              const evidence = (candidate.field_evidence || {})[field];
-              const required = isRequired(candidate.kind, field);
+            {fieldsFor(candidate.kind).map(({ key: field, required }) => {
               const blank = !String(draft[field] || "").trim();
+              // Per-field standing, from the deterministic analysis. The
+              // backend marks a field it could not determine "needs_input"
+              // whether or not the field is required, so an OPTIONAL field
+              // never carries that chip: an empty Keywords or Notebook File
+              // is a complete record, not an unfinished one.
+              const rawEvidence = (candidate.field_evidence || {})[field];
+              const evidence =
+                !required && rawEvidence === "needs_input" ? null : rawEvidence;
               return (
                 <Grid key={field} size={{ xs: 12, md: 6 }}>
                   <TextField
                     fullWidth
                     size="small"
-                    label={FIELD_LABELS[field] || field}
+                    label={labelFor(candidate.kind, field)}
                     // MUI renders the asterisk and sets aria-required, so the
                     // marker is real semantics rather than a character glued
                     // onto the label text.
@@ -863,8 +758,6 @@ const FolderAnalysis = ({ path }) => {
                         : " "
                     }
                   />
-                  {/* Per-field standing, so a detected path and an
-                      unverifiable figure number never look alike. */}
                   {evidence ? (
                     <Chip
                       size="small"

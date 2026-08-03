@@ -399,7 +399,11 @@ describe("Analyze RCC Folder", () => {
 
     // And still not a field value.
     await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
-    expect(screen.getByLabelText(/^properties/i)).toHaveValue("");
+    // A chart's keywords are STORED in `properties` for compatibility, but
+    // every surface calls them Keywords.
+    expect(
+      screen.getByLabelText(/^keywords/i, { selector: "input" })
+    ).toHaveValue("");
   });
 
   it("a Low evidence candidate still shows its name and path", async () => {
@@ -2005,19 +2009,23 @@ describe("Folder Analysis field contract", () => {
   const input = (pattern) =>
     screen.getByLabelText(pattern, { selector: "input" });
 
-  it("gives a dataset a Keywords field separate from URLs", async () => {
+  it("offers a dataset Files, Description and Keywords -- and no URLs",
+     async () => {
     const user = userEvent.setup();
     renderWith();
     await openFields(user, /datasets \(1\)/i, /select short_traj/i,
                      "dataset-0");
 
+    expect(input(/^files/i)).toBeRequired();
+    expect(input(/^description/i)).toBeRequired();
     const keywords = input(/^keywords/i);
-    const urls = input(/^urls/i);
-    expect(keywords).not.toBe(urls);
+    expect(keywords).not.toBeRequired();
 
-    // Typing in one leaves the other alone.
+    // URLs is a legacy storage key. It is preserved on records that have it,
+    // but it is not an input on any current surface.
+    expect(screen.queryByLabelText(/^urls/i)).toBeNull();
+
     await user.type(keywords, "density functional theory");
-    expect(urls).toHaveValue("");
     expect(keywords).toHaveValue("density functional theory");
   });
 
@@ -2055,7 +2063,7 @@ describe("Folder Analysis field contract", () => {
       expect(screen.queryByTestId("needs-input-script-0")).toBeNull()
     );
     expect(input(/^keywords/i)).toHaveValue("");
-    expect(input(/^urls/i)).toHaveValue("");
+    expect(screen.queryByLabelText(/^urls/i)).toBeNull();
   });
 
   it("adds a candidate to the Curator with required fields still blank",
@@ -2075,9 +2083,10 @@ describe("Folder Analysis field contract", () => {
     expect(kind).toBe("script");
     expect(records).toHaveLength(1);
     expect(records[0].readme).toBe("");
-    // ...and it carries the separate keywords list.
+    // ...and it carries the separate keywords list. A brand-new record does
+    // not invent an empty legacy URLs array.
     expect(records[0].keywords).toEqual([]);
-    expect(records[0].URLs).toEqual([]);
+    expect(records[0]).not.toHaveProperty("URLs");
   });
 });
 
@@ -2112,7 +2121,7 @@ describe("AI proposals land only where the record can hold them", () => {
     return screen.findByTestId("ai-confidence-script-0");
   };
 
-  it("accepts script keywords into keywords, never into URLs", async () => {
+  it("accepts script keywords into the keywords field", async () => {
     const user = userEvent.setup();
     renderWith();
     await suggestForScript(user, {
@@ -2126,7 +2135,7 @@ describe("AI proposals land only where the record can hold them", () => {
     await user.click(screen.getByRole("button", { name: /use as keywords/i }));
 
     expect(input(/^keywords/i)).toHaveValue("vibrational spectra, phonons");
-    expect(input(/^urls/i)).toHaveValue("");
+    expect(screen.queryByLabelText(/^urls/i)).toBeNull();
   });
 
   it("accepting a suggestion adds, saves and publishes nothing", async () => {
@@ -2159,6 +2168,6 @@ describe("AI proposals land only where the record can hold them", () => {
     const [kind, records] = addMany.mock.calls[0];
     expect(kind).toBe("script");
     expect(records[0].keywords).toEqual(["phonons"]);
-    expect(records[0].URLs).toEqual([]);
+    expect(records[0]).not.toHaveProperty("URLs");
   });
 });
