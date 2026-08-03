@@ -33,20 +33,6 @@ CROSSREF_MESSAGE = {
     "subject": ["Materials Science", "Computing"],
 }
 
-FULL_TEX = r"""
-% \title{A commented-out decoy title}
-\documentclass{article}
-\title{The \textbf{Manuscript} Title\thanks{Funded by X}}
-\author{Ada B. Lovelace \and Charles Babbage}
-\keywords{simulation, DFT; materials}
-\begin{document}
-\maketitle
-\begin{abstract}
-We study \emph{interesting} things carefully.
-\end{abstract}
-doi: 10.1234/qresp.demo
-\end{document}
-"""
 
 TEX_NO_DOI = r"""
 \documentclass{article}
@@ -124,20 +110,21 @@ class TestImportAuth(ImportTestBase):
     def test_anonymous_rejected(self):
         response = self.post("/api/import/doi", {"doi": "10.1/x"}, csrf=False)
         self.assertEqual(401, response.status_code)
-        response = self.post(
-            "/api/import/manuscript",
-            {"filename": "a.tex", "content_base64": b64("x")}, csrf=False)
-        self.assertEqual(401, response.status_code)
 
     def test_missing_csrf_rejected(self):
         self.login()
         response = self.post("/api/import/doi", {"doi": "10.1234/x"},
                              csrf=False)
         self.assertEqual(403, response.status_code)
+
+    def test_the_manuscript_upload_route_is_gone(self):
+        # Uploading a .pdf/.tex/.zip is no longer a product feature, so the
+        # route must not merely be unused -- it must not exist.
+        self.login()
         response = self.post(
             "/api/import/manuscript",
-            {"filename": "a.tex", "content_base64": b64("x")}, csrf=False)
-        self.assertEqual(403, response.status_code)
+            {"filename": "a.tex", "content_base64": b64("x")})
+        self.assertEqual(404, response.status_code)
 
 
 class TestDoiLookup(ImportTestBase):
@@ -221,215 +208,3 @@ class TestDoiLookup(ImportTestBase):
         self.assertEqual("Only A Title", proposal["title"])
         self.assertNotIn("abstract", proposal)
         self.assertNotIn("authors", proposal)
-
-
-class TestTexImport(ImportTestBase):
-    def test_full_tex_extraction_and_crossref_merge(self):
-        self.login()
-        response, requests_mock = self.import_source(
-            "paper.tex", FULL_TEX, crossref=CROSSREF_MESSAGE)
-        self.assertEqual(200, response.status_code, response.text)
-        body = response.json()
-        proposal = body["proposal"]
-        # Manuscript wins for title/authors/abstract; markup cleaned; the
-        # commented-out decoy title is ignored.
-        self.assertEqual("The Manuscript Title", proposal["title"])
-        self.assertEqual("manuscript", body["provenance"]["title"])
-        self.assertEqual(
-            [{"firstName": "Ada", "middleName": "B.",
-              "lastName": "Lovelace"},
-             {"firstName": "Charles", "middleName": "",
-              "lastName": "Babbage"}],
-            proposal["authors"])
-        self.assertEqual("We study interesting things carefully.",
-                         proposal["abstract"])
-        # Registry fills the bibliographic gaps.
-        self.assertEqual("Journal of Computing", proposal["journal"])
-        self.assertEqual(2021, proposal["year"])
-        self.assertEqual("crossref", body["provenance"]["journal"])
-        self.assertEqual("10.1234/qresp.demo", proposal["doi"])
-        # Conflicting registry title surfaces as an alternative only.
-        self.assertEqual(
-            [{"source": "crossref", "value": "Registry Title"}],
-            body["alternatives"]["title"])
-        # Keywords + registry subjects merged, deduplicated.
-        self.assertEqual(
-            ["simulation", "DFT", "materials", "Materials Science",
-             "Computing"], proposal["tags"])
-        requests_mock.get.assert_called_once()
-
-    def test_tex_without_doi_skips_network_and_warns(self):
-        self.login()
-        response, requests_mock = self.import_source(
-            "draft.tex", TEX_NO_DOI, crossref=None)
-        self.assertEqual(200, response.status_code, response.text)
-        body = response.json()
-        self.assertEqual("Unpublished Manuscript", body["proposal"]["title"])
-        self.assertNotIn("journal", body["proposal"])
-        # The backend never invents kind/year/venue for unpublished sources;
-        # the frontend may SUGGEST kind=preprint, but that stays client-side.
-        self.assertNotIn("kind", body["proposal"])
-        self.assertNotIn("year", body["proposal"])
-        self.assertTrue(any("No DOI" in w for w in body["warnings"]))
-        requests_mock.get.assert_not_called()
-
-    def test_unrecognizable_tex_returns_warning_not_error(self):
-        self.login()
-        response, _ = self.import_source(
-            "notes.tex", "just some plain notes, nothing structured")
-        self.assertEqual(200, response.status_code)
-        body = response.json()
-        self.assertEqual({}, body["proposal"])
-        self.assertTrue(
-            any("Nothing recognizable" in w for w in body["warnings"]))
-
-    def test_manuscript_content_never_reaches_the_log(self):
-        # A BOUNDED excerpt is returned to the browser on purpose, so the tab
-        # can hold it in memory and offer it to Publication Assist after
-        # consent. Nothing is logged, and nothing is persisted on either side.
-        self.login()
-        sentinel = "SUPER_SECRET_MANUSCRIPT_BODY_42"
-        tex = TEX_NO_DOI.replace("Draft abstract.",
-                                 "Public abstract.") + "\n" + sentinel
-        stdout = io.StringIO()
-        with contextlib.redirect_stdout(stdout):
-            response, _ = self.import_source("draft.tex", tex)
-        self.assertEqual(200, response.status_code)
-        self.assertNotIn(sentinel, stdout.getvalue())
-        excerpt = response.json()["source_excerpt"]
-        self.assertLessEqual(len(excerpt),
-                             manuscript.MAX_SOURCE_EXCERPT_CHARS)
-
-
-class TestZipImport(ImportTestBase):
-    def test_overleaf_zip_with_includes_and_bib(self):
-        self.login()
-        data = make_zip({
-            "main.tex": ("\\documentclass{article}\n"
-                         "\\title{Zipped Title}\n"
-                         "\\begin{document}\n"
-                         "\\input{sections/intro}\n"
-                         "\\end{document}\n"),
-            "sections/intro.tex": ("\\begin{abstract}Included abstract."
-                                   "\\end{abstract}\n"),
-            "refs.bib": ("@article{x,\n  doi = {10.5555/ref.one},\n}\n"
-                         "@misc{y, doi = \"10.5555/ref.two\" }\n"),
-            "figures/plot.png": b"\x89PNG not text",
-        })
-        response, requests_mock = self.import_source("project.zip", data)
-        self.assertEqual(200, response.status_code, response.text)
-        body = response.json()
-        self.assertEqual("Zipped Title", body["proposal"]["title"])
-        self.assertEqual("Included abstract.", body["proposal"]["abstract"])
-        self.assertEqual("main.tex", body["main_file"])
-        self.assertEqual(["sections/intro.tex"], body["included_files"])
-        # Bib DOIs are reference candidates, never the manuscript's own DOI.
-        self.assertEqual(["10.5555/ref.one", "10.5555/ref.two"],
-                         body["doi_candidates"])
-        requests_mock.get.assert_not_called()
-
-    def test_two_mains_is_deterministic_and_reports_candidates(self):
-        self.login()
-        data = make_zip({
-            "a_short.tex": ("\\documentclass{article}\\begin{document}"
-                            "\\title{A}\\end{document}"),
-            "b_longer_main.tex": ("\\documentclass{article}"
-                                  "\\begin{document}\\title{B is the one}"
-                                  "some more body text here"
-                                  "\\end{document}"),
-        })
-        response, _ = self.import_source("project.zip", data)
-        self.assertEqual(200, response.status_code)
-        body = response.json()
-        self.assertEqual("b_longer_main.tex", body["main_file"])
-        self.assertEqual(2, len(body["main_candidates"]))
-
-    def test_zip_without_usable_tex_rejected(self):
-        self.login()
-        data = make_zip({"readme.md": "hello", "notes.tex": "no preamble"})
-        response, _ = self.import_source("project.zip", data)
-        self.assertEqual(400, response.status_code)
-        self.assertIn("No usable TeX", response.json()["error"])
-
-    def test_path_traversal_rejected(self):
-        self.login()
-        data = make_zip({"../evil.tex": "\\documentclass{article}"})
-        response, _ = self.import_source("project.zip", data)
-        self.assertEqual(400, response.status_code)
-        self.assertIn("unsafe relative paths", response.json()["error"])
-
-    def test_absolute_path_rejected(self):
-        self.login()
-        data = make_zip({"/abs/evil.tex": "\\documentclass{article}"})
-        response, _ = self.import_source("project.zip", data)
-        self.assertEqual(400, response.status_code)
-        self.assertIn("absolute paths", response.json()["error"])
-
-    def test_symlink_rejected(self):
-        self.login()
-        info = zipfile.ZipInfo("link.tex")
-        info.external_attr = (0o120777 << 16)  # symlink mode bits
-        data = make_zip({"main.tex": "\\documentclass{article}"},
-                        infos=[(info, "/etc/passwd")])
-        response, _ = self.import_source("project.zip", data)
-        self.assertEqual(400, response.status_code)
-        self.assertIn("symbolic links", response.json()["error"])
-
-    def test_too_many_entries_rejected(self):
-        self.login()
-        members = {"f%03d.txt" % i: "x" for i in range(201)}
-        response, _ = self.import_source("project.zip", make_zip(members))
-        self.assertEqual(400, response.status_code)
-        self.assertIn("too many files", response.json()["error"])
-
-    def test_excessive_nesting_rejected(self):
-        self.login()
-        deep = "/".join("d%d" % i for i in range(12)) + "/main.tex"
-        response, _ = self.import_source(
-            "project.zip", make_zip({deep: "\\documentclass{article}"}))
-        self.assertEqual(400, response.status_code)
-        self.assertIn("too deeply", response.json()["error"])
-
-    def test_oversized_uncompressed_contents_rejected(self):
-        self.login()
-        # 51 MB of zeros compresses to almost nothing — the UNCOMPRESSED
-        # size must trip the limit before anything is read.
-        data = make_zip({"main.tex": "\\documentclass{article}",
-                         "huge.dat": b"\0" * (51 * 1024 * 1024)})
-        response, _ = self.import_source("project.zip", data)
-        self.assertEqual(400, response.status_code)
-        self.assertIn("size limit", response.json()["error"])
-
-    def test_corrupt_zip_rejected_with_static_message(self):
-        self.login()
-        response, _ = self.import_source("project.zip", b"PK\x03\x04corrupt")
-        self.assertEqual(400, response.status_code)
-        self.assertIn("not a readable ZIP", response.json()["error"])
-
-
-class TestUploadValidation(ImportTestBase):
-    def test_unsupported_extension_rejected(self):
-        self.login()
-        response, _ = self.import_source("paper.docx", b"PK\x03\x04word")
-        self.assertEqual(400, response.status_code)
-        self.assertIn("Unsupported file type", response.json()["error"])
-
-    def test_bad_base64_rejected(self):
-        self.login()
-        response = self.post(
-            "/api/import/manuscript",
-            {"filename": "a.tex", "content_base64": "!!!not base64!!!"})
-        self.assertEqual(400, response.status_code)
-
-    def test_oversized_payload_rejected_by_encoded_length(self):
-        self.login()
-        huge = "A" * ((10 * 1024 * 1024 * 4) // 3 + 4096)
-        response = self.post(
-            "/api/import/manuscript",
-            {"filename": "a.tex", "content_base64": huge})
-        self.assertEqual(400, response.status_code)
-        self.assertIn("too large", response.json()["error"])
-
-
-if __name__ == "__main__":
-    unittest.main()

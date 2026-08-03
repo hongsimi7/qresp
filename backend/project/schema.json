@@ -430,33 +430,13 @@
       "$id": "#/properties/reference",
       "type": "object",
       "title": "The Reference Schema",
-      "comment_required": "Publish requires kind, title, at least one author, an abstract and a year. DOI came off this list: a preprint or a dissertation legitimately has none, the curator form has never asked for one, and publish was rejecting records the form called complete.",
       "required": [
+        "DOI",
         "authors",
         "kind",
         "publishedAbstract",
         "title",
         "year"
-      ],
-      "comment_allOf": "Journal Name is required only for a journal article. Volume and page stay optional for every kind - an article number, or a paper accepted but not yet paginated, has neither.",
-      "allOf": [
-        {
-          "if": {
-            "properties": { "kind": { "const": "journal" } },
-            "required": ["kind"]
-          },
-          "then": {
-            "required": ["journal"],
-            "properties": {
-              "journal": {
-                "required": ["fullName"],
-                "properties": {
-                  "fullName": { "type": "string", "minLength": 1 }
-                }
-              }
-            }
-          }
-        }
       ],
       "properties": {
         "DOI": {

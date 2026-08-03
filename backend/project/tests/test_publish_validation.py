@@ -1,9 +1,15 @@
-"""Publish validation must agree with what the curator form asks for.
+"""The publish-time validation contract, as it actually stands.
 
-The form and the publish schema are two gates on the same record. When they
-disagree the curator sees a complete, valid form and then a rejection from the
-server -- or worse, the reverse. These tests pin the contract from the server
-side; ReferenceInfoForm.spec.js pins the same rules in the form.
+A short-lived branch made journal/volume/page conditional on the kind of work
+while PDF import and AI assistance were being tried. That scope was dropped,
+and so was the relaxation: `schema.json` is back to the contract that predates
+it, and `ReferenceInfoForm.js` requires every asterisked field again.
+
+Note the asymmetry these tests record rather than hide: the publish schema has
+always required a DOI, while the curator form has always treated DOI as
+optional. The two layers disagree for a record with no DOI. That predates this
+work; it is pinned here so the next person meets it deliberately instead of
+discovering it from a rejected publish.
 """
 import io
 import json
@@ -25,7 +31,8 @@ CHART = {"id": "c1", "caption": "c", "number": "1", "files": ["f"],
 
 def paper(**reference):
     fields = {"kind": "journal", "title": "T", "publishedAbstract": "A",
-              "year": 2023, "page": "", "volume": "",
+              "year": 2023, "page": "100-110", "volume": "12",
+              "DOI": "10.1234/qresp.demo",
               "authors": [{"firstName": "A", "lastName": "B"}],
               "journal": {"fullName": "J. Chem. Phys.",
                           "abbrevName": "JCP"}}
@@ -55,43 +62,39 @@ class TestPublishValidation(unittest.TestCase):
         with self.assertRaises(ValidationError, msg=why):
             validate(document, SCHEMA)
 
-    def test_the_five_universal_requirements(self):
-        for field in ("kind", "title", "publishedAbstract", "year",
-                      "authors"):
+    def test_a_complete_record_publishes(self):
+        self.accepts(paper(), "a fully populated journal article")
+
+    def test_the_publish_required_set(self):
+        # Exactly the six the schema has always listed.
+        for field in ("DOI", "authors", "kind", "publishedAbstract", "title",
+                      "year"):
             document = paper()
             del document["reference"][field]
             self.rejects(document, "publishing without %s" % field)
 
-    def test_doi_is_optional(self):
-        # A preprint or a dissertation may have no DOI at all, and the form
-        # has never required one. Publish used to reject exactly these.
-        document = paper(kind="preprint")
-        self.assertNotIn("DOI", document["reference"])
-        self.accepts(document, "a preprint with no DOI")
-
-    def test_url_is_optional(self):
-        self.accepts(paper(), "no URLs key")
-
-    def test_journal_name_required_only_for_a_journal_article(self):
-        self.rejects(paper(journal={"fullName": "", "abbrevName": ""}),
-                     "a journal article with no journal name")
-        for kind in ("preprint", "dissertation"):
+    def test_no_kind_conditional_rules_remain(self):
+        # The dropped scope added an allOf/if-then requiring a journal name
+        # for kind == "journal". It must be gone: publish validation does not
+        # branch on kind at all.
+        reference = SCHEMA["properties"]["reference"]
+        self.assertNotIn("allOf", reference)
+        self.assertNotIn("if", reference)
+        for kind in ("journal", "preprint", "dissertation"):
             self.accepts(paper(kind=kind,
                                journal={"fullName": "", "abbrevName": ""}),
-                         "a %s with no journal name" % kind)
+                         "publish does not branch on kind (%s)" % kind)
 
-    def test_volume_and_page_never_block_publish(self):
-        for kind in ("journal", "preprint", "dissertation"):
-            self.accepts(paper(kind=kind, volume="", page=""),
-                         "a %s with no volume or page" % kind)
-            document = paper(kind=kind)
-            del document["reference"]["volume"]
-            del document["reference"]["page"]
-            self.accepts(document, "a %s missing volume/page keys" % kind)
+    def test_the_form_is_the_gate_for_journal_volume_and_page(self):
+        # These are required by ReferenceInfoForm's yup schema for every kind
+        # (see PublicationWorkflow.spec.js). The publish schema has never
+        # enforced them, so a record assembled outside the form still passes.
+        self.accepts(paper(volume="", page="",
+                           journal={"fullName": "", "abbrevName": ""}),
+                     "publish itself does not require journal/volume/page")
 
-    def test_a_legacy_record_still_validates(self):
-        # Records published before this change carry DOI, volume and page.
-        # Relaxing the rules must not invalidate anything already stored.
+    def test_a_legacy_record_round_trips(self):
+        # Nothing here migrates or rewrites stored records.
         self.accepts(paper(DOI="10.1021/x", volume="158", page="014101"),
                      "a fully populated legacy record")
 
