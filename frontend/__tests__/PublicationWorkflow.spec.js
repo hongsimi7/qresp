@@ -240,15 +240,18 @@ describe("Qresp Curation Information keywords are human-entered", () => {
       </CuratorContext.Provider>
     );
 
-  it("offers no AI keyword action", () => {
+  it("offers keyword AI, but nothing that reads a manuscript", () => {
     renderPaperInfo();
     const text = document.body.textContent;
-    expect(text).not.toMatch(/suggest keywords with ai/i);
-    expect(text).not.toMatch(/gemini/i);
-    expect(text).not.toMatch(/full-source analysis/i);
+    // Keyword suggestion is back, and it lives here -- not in Publication
+    // Information, and not in any import review.
     expect(
-      screen.queryByRole("button", { name: /suggest keywords/i })
-    ).toBeNull();
+      screen.getByRole("button", { name: /suggest keywords with ai/i })
+    ).toBeInTheDocument();
+    // What is NOT back: the manuscript consent and full-source analysis.
+    expect(text).not.toMatch(/full-source analysis/i);
+    expect(text).not.toMatch(/manuscript source selected/i);
+    expect(text).not.toMatch(/extracted from/i);
   });
 
   it("still has a Keywords field the curator types into", async () => {
