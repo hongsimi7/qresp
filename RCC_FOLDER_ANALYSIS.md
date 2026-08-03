@@ -1,4 +1,12 @@
 # RCC Folder Analysis — assisted curation from a file-server folder
+> **This is the only place Qresp uses a language model.** Publication metadata
+> comes from manual entry and the DOI registry; Qresp keywords are typed by the
+> curator. Here, Gemini may propose a *description*, *keywords*, or a second
+> opinion on an uncertain *kind* for candidates the curator explicitly selected
+> — and nothing else. It never produces file paths, `imageFile`, `files`,
+> `notebookFile`, figure numbers or package versions, and no AI output is ever
+> saved or published without the curator accepting it item by item.
+
 
 A curator who has selected and saved a File Server folder can analyze it and
 get **reviewable candidates** for Charts, Datasets, Scripts and Tools. It is a
@@ -407,7 +415,7 @@ discarded.
 
 The AI action adds **no new configuration**: it reuses `QRESP_GEMINI_ENABLED`,
 `QRESP_GEMINI_API_KEY`, the model/timeout/quota variables and the shared
-per-user daily limit documented in `MANUSCRIPT_IMPORT.md`. With Gemini
+per-user daily limit. With Gemini
 unconfigured the folder analysis still succeeds in full; only the AI action
 reports `503 AI descriptions are not configured on this server.`
 

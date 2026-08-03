@@ -5,19 +5,21 @@ frontend Next 16/React 19/MUI 9, all verified locally + staging: `PAPERSTACK_STA
 Direction change 2026-07-03: curation-assistant/AI-workflow-automation work is **paused**;
 `prototypes/` and the validation-sample branches stay untouched and unmerged.
 
-Direction change 2026-07-30: **AI is scoped by what kind of question it answers.**
+Direction change 2026-08-03 (supervisor): **AI is limited to RCC candidate descriptions.**
 
 | Area | Source of values | AI |
 | --- | --- | --- |
-| Publication metadata | Crossref (DOI registry) + deterministic `.tex`/`.pdf` extraction | **None, by design** |
-| Keywords | Curator entry + optional Gemini suggestion in Qresp Curation Information | Optional, consent-gated |
+| Publication metadata | Manual entry + Crossref via DOI Fetch | **None, by design** |
+| Qresp keywords | Curator entry | **None** |
 | RCC artifacts | Deterministic Folder Standard v1 discovery | Optional Gemini description enrichment |
 
 Bibliography is factual data with an authoritative registry, so it is not a
 task for a language model: a fluent wrong journal name or year is worse than
-a blank field a curator fills in. The `POST /api/assist/publication-metadata`
-endpoint and the `PublicationAssist` component were removed accordingly. No
-AI output is auto-applied, auto-saved or auto-published anywhere.
+a blank field a curator fills in. Keywords are a curator judgement about their
+own work. Both AI endpoints were removed accordingly, along with the
+manuscript upload that fed them. RCC candidate descriptions are the one place
+a model is asked anything, and even there no output is auto-applied,
+auto-saved or auto-published.
 
 ## Goals → why / MVP / defer
 
@@ -49,17 +51,25 @@ AI output is auto-applied, auto-saved or auto-published anywhere.
 - Done — publish/verify hardening: idempotent verify links (re-click lands on the paper, no duplicate), specific verify error messages, staging skip-email vs SMTP paths, publish success offers to delete the source account draft (only after the user verifies).
 - Defer: revision history, ownership transfer, re-publish workflow, hard deletion.
 
-### 4b. Auto-Curation Lite phase 1 — ✅ done (2026-07-13)
-- DOI lookup (`POST /api/import/doi`, Crossref, mocked-network tests) + safe
-  manuscript source import (`POST /api/import/manuscript`, .tex / Overleaf
-  .zip, in-memory only, hardened against zip abuse, never compiled/executed,
-  never stored/logged/echoed). Curator "Import Manuscript Source" dialog with
-  review/provenance/conflict handling, explicit Apply, append-only tag
-  suggestions, and a missing-for-publish checklist; drafts stay saveable
-  while incomplete. Docs: `MANUSCRIPT_IMPORT.md`. PDF sources were added
-  later (text layer only, printed DOI proposed, no OCR, never downloaded by
-  Qresp). Out of scope (future phases): OCR, dataset ZIP inventory, LLM
-  extraction, workflow generation, auto-publication.
+### 4b. Curation assistant — scope reduced by supervisor (2026-08-03)
+- **Kept:** DOI lookup (`POST /api/import/doi`, Crossref, mocked-network
+  tests). Publication Information is manual entry plus DOI Fetch: the registry
+  fills kind, title, authors, journal, volume, page, year, abstract and URL,
+  and a value Crossref does not return is left blank for the curator to type.
+  When the registry supplies no URL, `https://doi.org/<normalized-doi>` is
+  computed from the DOI.
+- **Removed:** manuscript-source upload (`POST /api/import/manuscript`, .pdf /
+  .tex / Overleaf .zip, with its parsers, review dialog and `pypdf`
+  dependency), AI proposal of publication metadata
+  (`POST /api/assist/publication-metadata`), and AI keyword suggestion
+  (`POST /api/assist/keywords`) with its consent and full-source UI.
+  `MANUSCRIPT_IMPORT.md` was deleted with the feature it documented.
+- **Why:** publication metadata is factual data with an authoritative
+  registry, and Qresp keywords are a curator judgement. Neither is a task for
+  a language model, and neither needs a manuscript upload.
+- Validation was restored with the scope: every field the form marks with an
+  asterisk (Kind, Authors, Title, Journal Name, Page, Abstract, Volume, Year)
+  is required again for every kind; DOI and URL stay optional in the form.
 
 ### 4c. RCC folder analysis — ✅ done (2026-07-27)
 - `POST /api/curation/analyze-folder` (authenticated, CSRF-protected,

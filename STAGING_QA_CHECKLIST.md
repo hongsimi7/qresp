@@ -161,171 +161,35 @@ a single server-wide `limit_req` throttled every request, so one page load's
       are independent of account drafts
 - [ ] Anonymous: "Save Draft" prompts to sign in (no server draft is created)
 
-## Manuscript import (Auto-Curation Lite phase 1)
+## Publication Information (manual entry + DOI Fetch)
 
-- [ ] Signed in, /curator → "Publication Information for This Paper" shows
-      ONE canonical DOI field (with Fetch) plus the "Import Manuscript
-      Source" card — no second DOI input anywhere (anonymous users see a
-      sign-in hint; the GLOBAL toolbar has no import button);
-      "Qresp Curation Information" holds ONLY PIs / PaperStack / Keywords /
-      notebook and the gated "Suggest Keywords with AI" action
-- [ ] Publication Information offers NO AI action of any kind: no "Suggest
-      missing publication details with AI" button, no AI dialog, no mention
-      of Gemini in the section. Publication metadata is deterministic --
-      Crossref plus what is printed in the manuscript
-- [ ] Import Review shows no AI keyword and no AI publication block
-- [ ] DOI Fetch fills the inputs and the section stays OPEN and unsaved --
-      it does not collapse into display mode
-- [ ] "Apply to Paper Information" from the import review fills the inputs
-      and the section stays OPEN and unsaved
-- [ ] Opening and closing the Keyword AI dialog does not save or collapse
-      Publication Information, and typed unsaved values survive
-- [ ] ONLY the Publication Information "Save" button commits the section and
-      switches it to display mode
-- [ ] A DOI with no registry URL yields exactly https://doi.org/<doi>; a
-      field neither Crossref nor the manuscript supplies is left BLANK for
-      manual entry, never filled with a guess
-- [ ] Preprint and Dissertation save and publish with no journal / volume /
-      page; Journal Name is required only for kind = Journal
-- [ ] Paste a real DOI → Fetch DOI → proposed fields with provenance (kind
-      mapped from the registry); Apply fills only empty fields; a pre-filled
-      title stays unless its checkbox is checked (both values shown); the
-      values land in Publication Information (the record's reference block)
-- [ ] A .tex without DOI proposes kind=Preprint chipped "suggested"
-- [ ] The per-author "Add selected paper authors as Principal Investigators"
-      picker starts all-unchecked; ticking one APPENDS that author to PIs
-- [ ] Post-apply checklist marks PaperStack / notebook as "(manual)"
+- [ ] Signed in, /curator → "Publication Information for This Paper" shows ONE
+      canonical DOI field with its Fetch button and nothing else automated:
+      no "Import Manuscript Source" card, no file picker, no
+      "Selected source"/Clear controls, no `.pdf`/`.tex`/`.zip` anywhere
+- [ ] The section offers NO AI action: no "Suggest missing publication
+      details with AI", no AI dialog, no mention of Gemini
+- [ ] "Qresp Curation Information" holds PIs / PaperStack / Keywords /
+      notebook, and Keywords is a plain text field — no "Suggest Keywords
+      with AI" button, no manuscript-consent checkbox, no full-source option
+- [ ] Paste a real DOI → Fetch → Kind, Title, Authors, Journal Name, Volume,
+      Page, Year, Abstract and URL fill in from the registry
+- [ ] Fetch a DOI whose registry record lacks a journal or page → those
+      inputs stay BLANK for manual entry; nothing is guessed
+- [ ] A DOI whose registry record has no URL → the URL field shows exactly
+      `https://doi.org/<normalized-doi>`
+- [ ] Paste `doi:10.…` and `https://doi.org/10.…` → both normalize to the
+      bare DOI in the field before fetching
+- [ ] Fetch does NOT close, collapse or save the section — the edit form
+      stays open with its values, and the Save button is still there
+- [ ] Only the section "Save" button commits and switches to display mode
+- [ ] Clearing Journal Name, Page, Abstract, Volume or Year and pressing Save
+      shows "Required" and does not save (every asterisked field is required
+      for Preprint, Journal and Dissertation alike)
+- [ ] DOI and URL may be left empty and Save still succeeds
+- [ ] Upload Metadata (JSON) import/export still works unchanged
+- [ ] Drafts, edit mode and publish are unaffected
 
-## PDF manuscript source
-
-- [ ] **Rebuild the backend image before testing this section.** pypdf was
-      added to requirements in `f6f68d9`; an image built before that answers
-      "PDF reading is not installed on this server." for a perfectly good
-      PDF, while the frontend still shows the PDF controls. Confirm with:
-      `docker compose -p qresp_staging exec backend python -c "import pypdf, sys; print(pypdf.__version__, sys.version)"`
-      → prints a version on Python 3.14. If it fails, the image is stale:
-      rebuild it (no compose/env change is needed, the dependency is already
-      declared and both Dockerfiles install it)
-
-
-- [ ] The Import Manuscript Source picker accepts `.tex,.zip,.pdf`
-- [ ] Select a normal text-layer PDF → import succeeds; the review dialog
-      proposes ONLY a printed DOI (if any) and states plainly that Qresp does
-      not guess title/authors/abstract from a PDF
-- [ ] A scanned/image-only PDF → refused with a message naming the missing
-      text layer (NOT a generic parse error); no OCR is attempted
-- [ ] An encrypted/password-protected PDF → refused cleanly
-- [ ] A >100-page or >10 MB PDF → refused with a size/page message (nginx is
-      at 15M, the importer at 10M — the app-level message must win)
-- [ ] After selecting a source: "Selected source: `<name>` — kept in this
-      browser tab only, never saved to a draft." with a working Clear button
-- [ ] Save Draft, then reload and resume it → the source is GONE (runtime
-      only) while all typed metadata survives
-- [ ] DevTools → Application → Local Storage: the `state` entry contains no
-      file name, no `sourceFile` key, and no PDF bytes
-- [ ] Qresp never downloads a PDF by itself: no request is made to the DOI
-      link, publisher page, `referenceInfo.url`, `fileServerPath`, or
-      `downloadPath` at any point
-
-## AI keyword suggestions (Gemini) — pending provider configuration
-
-Provider: Google Gemini, native `generateContent` REST with structured JSON
-output. The API host
-`https://generativelanguage.googleapis.com/v1beta/models` is fixed in code;
-only the variables below are configurable, and only through the environment
-(never config.ini). The retired `QRESP_KIMI_*` / `QRESP_QWEN_*` variables
-have no effect.
-
-**The credential is NOT the Google sign-in secret.** Create a separate
-**Google AI Studio / Gemini API key** for this. `QRESP_GOOGLE_CLIENT_ID` and
-`QRESP_GOOGLE_CLIENT_SECRET` (the OAuth login client) are never read by this
-feature and must not be reused here — mixing them would hand a login
-credential to a content API.
-
-**Staging secret handling — do this, nothing looser:**
-
-- Put the key in the EXISTING private, git-ignored backend env file on the
-  staging host (the same mechanism the other `QRESP_*` secrets already use),
-  then `chmod 600` it and keep it owned by the deploying user.
-- **Do NOT add a second `env_file:` key to a compose service** — YAML keeps
-  only the last duplicate key, which silently drops every previously
-  referenced env file. Add the variables to the env file that service
-  already references.
-- Never put the key in `config.ini`, a committed compose file, a Dockerfile,
-  a shell history line, or this checklist.
-- Restart the backend container after editing the env file (bind-mounted
-  code, so restart — not rebuild).
-
-**Budget / rate-limit before enabling (paid API):**
-
-- In Google AI Studio / Cloud console, put this key on its own project with
-  a **hard billing budget alert at a small monthly cap** and, if available,
-  a per-minute request quota — the key should be able to do nothing except
-  cheap `generateContent` calls.
-- Keep `QRESP_GEMINI_MAX_REQUESTS_PER_USER_PER_DAY` low (start at 5–10 while
-  testing) and leave `QRESP_GEMINI_MAX_OUTPUT_TOKENS` at 256. Qresp never
-  retries a failed call, so one user action costs at most one provider call
-  per manuscript chunk.
-- Rotate/revoke the staging key when testing is finished.
-
-Env template (placeholders only — never commit real values):
-
-```ini
-QRESP_GEMINI_ENABLED=1
-QRESP_GEMINI_API_KEY=<paste-ai-studio-key-here>
-QRESP_GEMINI_MODEL=gemini-3.6-flash
-QRESP_GEMINI_TIMEOUT_SECONDS=15
-QRESP_GEMINI_MAX_MANUSCRIPT_CHARS=60000
-QRESP_GEMINI_MAX_REQUESTS_PER_USER_PER_DAY=10
-QRESP_GEMINI_MAX_OUTPUT_TOKENS=256
-```
-
-- [ ] Without a title/abstract the "Suggest Keywords with AI" button is
-      DISABLED with the local "Add a title or abstract, fetch a DOI, or
-      import a manuscript source" reason (no request is made); after typing
-      a title it enables immediately (no section Save needed)
-- [ ] Unconfigured: an ELIGIBLE click shows "not configured on this server";
-      import-review AI fetch says the same; nothing else breaks
-- [ ] **First configured test uses PUBLIC data only** — a published paper's
-      title/abstract, never unpublished manuscript content — to confirm the
-      round trip before any manuscript excerpt is ever sent
-- [ ] Configured: metadata-only suggestions return ≤8 deduplicated keywords,
-      all unchecked; Apply appends only the selected ones to Keywords
-- [ ] The dialog names Gemini as the destination before anything is sent
-- [ ] Manuscript import review (only after the public-data test passes):
-      consent checkbox defaults OFF and the fetch button stays disabled
-      until ticked; after fetching, "AI suggestions (Gemini)" appear as a
-      separate unchecked group
-- [ ] Per-user daily limit returns a clear message once exceeded (429)
-- [ ] Upstream rate limiting (429) surfaces a generic "rate limited" message
-      with no quota/project details
-
-What the four distinct AI error messages mean (all safe to show a curator;
-none of them ever contains model output, prompt, manuscript text, headers or
-the key):
-
-| Message | Meaning | Where to look |
-| --- | --- | --- |
-| "…could not be reached." / "…returned an error." / "…is rate limited…" | Upstream HTTP failure (network, non-200, 429) | Backend log line `AI assist provider …` with the HTTP status |
-| "…declined this request. Try again with different text." | The provider blocked the prompt (`promptFeedback.blockReason`) or terminated the candidate on a safety/policy rule (`finishReason` SAFETY/BLOCKLIST/PROHIBITED_CONTENT/SPII/RECITATION) | `AI assist response: … finish=… block=…` |
-| "…did not return suggestions." | A 200 with no usable answer: no candidate, or a candidate whose only parts were reasoning/thought parts (e.g. `finishReason=MAX_TOKENS` spent the budget before the answer) | Same line, `answer_part=False` |
-| "…returned an unreadable answer." | Answer text existed but was not the agreed `{"keywords": [...]}` payload (prose, or a schema mismatch) | `AI assist response unparseable payload: …` |
-
-- [ ] Suggestions still work when the model emits reasoning before the
-      answer (thinking parts are skipped, not concatenated) — this was the
-      staging "unreadable answer" failure
-- [ ] Server logs show only sanitized diagnostics (status, candidate count,
-      finish reason, block reason, whether an answer part existed) — never
-      response text, prompt, or manuscript content
-- [ ] Backend logs contain no API key, x-goog-api-key header, provider error
-      body, block reason, prompt, or manuscript text after these runs
-- [ ] Upload a .tex with \title/\author/abstract → proposals appear;
-      Apply → forms show the values; missing-for-publish checklist lists
-      charts/datasets/license etc.; Save Draft still works while incomplete
-- [ ] Upload an Overleaf .zip (main + \input + .bib) → main file named,
-      included files listed, bib DOIs shown as reference candidates only
-- [ ] A zip with a traversal path / >200 files → clear error, nothing applied
-- [ ] "Upload Metadata" (JSON) still works exactly as before
 
 ## RCC folder analysis (assisted curation)
 
