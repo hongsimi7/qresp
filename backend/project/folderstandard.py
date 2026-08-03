@@ -63,6 +63,16 @@ OPTIONAL_ROOT_FILES = ("main.ipynb", "readme.md", "readme", "readme.txt",
                        "readme.rst", "license", "license.txt", "license.md")
 
 CHART_PREVIEW_EXTENSIONS = (".png", ".jpeg", ".jpg", ".gif")
+
+# Images that decorate a page rather than being the figure. A folder's own
+# figure is never called any of these, and picking one would put a logo in a
+# published record.
+CHART_DECORATIVE_STEMS = frozenset((
+    "logo", "logos", "icon", "icons", "favicon", "banner", "header",
+    "footer", "screenshot", "screenshots", "thumbnail", "thumb",
+    "graphical_abstract", "graphicalabstract", "graphical-abstract",
+    "toc", "toc_graphic", "cover",
+))
 CHART_PREVIEW_STEM = "preview"
 CHART_NOTEBOOK = "notebook.ipynb"
 CHART_DATA_DIR = "data"
@@ -334,23 +344,76 @@ def validate_boundaries(raw, roles, files, dirs):
     return selected
 
 
+def chart_images(folder, files):
+    """Every usable image directly inside `folder`, server spelling intact.
+
+    Decorative images are dropped: a logo is never the figure, and proposing
+    one puts it in a published record.
+    """
+    images = []
+    for path in descendants_of(folder, files):
+        if posixpath.dirname(path) != folder:
+            continue
+        stem, ext = posixpath.splitext(posixpath.basename(path))
+        if ext.lower() not in CHART_PREVIEW_EXTENSIONS:
+            continue
+        if stem.lower().replace(" ", "_") in CHART_DECORATIVE_STEMS:
+            continue
+        images.append(path)
+    return sorted(images)
+
+
+def pick_chart_image(folder, images):
+    """The representative image for a chart folder, or "" when the choice is
+    genuinely ambiguous.
+
+    The old rule was `preview.png`, or a single image and nothing else. Real
+    RCC folders name the figure after the folder -- figure_S1/figure_S1.png
+    next to diagram.png -- so a two-image folder proposed no image at all
+    while happily proposing its notebook. Named-after-the-folder comes first
+    now, and an ambiguous folder proposes nothing rather than guessing.
+
+    Returns (chosen, options): `options` is always every image found, so the
+    curator can pick when we decline to.
+    """
+    if not images:
+        return "", []
+
+    name = posixpath.basename(folder)
+
+    def stem(path):
+        return posixpath.splitext(posixpath.basename(path))[0]
+
+    # 1. The folder's own name, spelled exactly.
+    exact = [p for p in images if stem(p) == name]
+    if len(exact) == 1:
+        return exact[0], images
+
+    # 2. The same name in a different case. The SERVER's spelling is kept --
+    #    the path has to resolve on a case-sensitive file server.
+    lowered = [p for p in images if stem(p).lower() == name.lower()]
+    if len(lowered) == 1:
+        return lowered[0], images
+
+    # 3. The Folder Standard's own preview.png.
+    preview = [p for p in images
+               if stem(p).lower() == CHART_PREVIEW_STEM]
+    if len(preview) == 1:
+        return preview[0], images
+
+    # 4. One image and no ambiguity to resolve.
+    if len(images) == 1:
+        return images[0], images
+
+    # 5. Several images and nothing to choose between them: the curator picks.
+    return "", images
+
+
 def chart_parts(folder, files):
     """preview / data / notebook inside one charts/<child> folder."""
     contents = descendants_of(folder, files)
-    preview = ""
-    for path in contents:
-        name = posixpath.basename(path).lower()
-        stem, ext = posixpath.splitext(name)
-        if stem == CHART_PREVIEW_STEM and ext in CHART_PREVIEW_EXTENSIONS:
-            preview = path
-            break
-    if not preview:
-        # A single image directly in the folder is an acceptable stand-in.
-        images = [p for p in contents
-                  if posixpath.splitext(p)[1].lower() in CHART_PREVIEW_EXTENSIONS
-                  and posixpath.dirname(p) == folder]
-        if len(images) == 1:
-            preview = images[0]
+    images = chart_images(folder, files)
+    preview, _options = pick_chart_image(folder, images)
 
     notebook = ""
     for path in contents:

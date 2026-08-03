@@ -326,7 +326,7 @@ MAX_CANDIDATE_PATHS = 200
 
 def _candidate(kind, index, proposal, evidence, confidence, paths,
                needs_input=None, field_evidence=None, hints=None,
-               label=None, file_count=None):
+               label=None, file_count=None, options=None):
     return {
         "id": "%s-%d" % (kind, index),
         "kind": kind,
@@ -343,6 +343,9 @@ def _candidate(kind, index, proposal, evidence, confidence, paths,
         # Per-field strength: an exact image path and an unverifiable figure
         # number must never wear the same badge.
         "field_evidence": field_evidence or {},
+        # Per-field choices the curator may pick from when the deterministic
+        # pass found several and would have had to guess between them.
+        "options": options or {},
         "evidence": evidence,
         # Filename fragments, explicitly labelled as unverified. Shown in
         # Details only; never a field value.
@@ -659,10 +662,10 @@ def _boundary_label(folder, role_root):
 
 def _boundary_candidate(kind, index, proposal, evidence, classification,
                         paths, needs_input, field_evidence,
-                        label=None, file_count=None):
+                        label=None, file_count=None, options=None):
     return _candidate(kind, index, proposal, evidence, classification, paths,
                       needs_input=needs_input, field_evidence=field_evidence,
-                      label=label, file_count=file_count)
+                      label=label, file_count=file_count, options=options)
 
 
 def _usable(candidate):
@@ -753,15 +756,25 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                 if not members:
                     continue
                 preview, data, notebook = fs.chart_parts(folder, files)
+                # Every image we found, so the curator can choose when we
+                # decline to. The picker only auto-selects when the choice is
+                # unambiguous; it never guesses between two figures.
+                image_options = fs.chart_images(folder, files)
                 claimed.update(members)
                 evidence = ["One chart: the folder %s (%d file(s))."
                             % (folder, len(members))]
                 if preview:
                     evidence.append("Primary image: %s" % preview)
+                elif image_options:
+                    evidence.append(
+                        "Several images here and none named after the folder "
+                        "(%s) — pick the figure yourself."
+                        % ", ".join(posixpath.basename(p)
+                                    for p in image_options))
                 else:
                     evidence.append(
-                        "No preview image found — add preview.png to this "
-                        "folder, or set the image file yourself.")
+                        "No image found in this folder — set the image file "
+                        "yourself.")
                 if data:
                     evidence.append("Chart files: %s" % ", ".join(data))
                 if notebook:
@@ -785,7 +798,8 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                      "number": NEEDS_INPUT, "caption": NEEDS_INPUT,
                      "properties": NEEDS_INPUT},
                     label=_boundary_label(folder, top),
-                    file_count=len(members)))
+                    file_count=len(members),
+                    options={"imageFile": image_options}))
                 chart_i += 1
             # A loose image directly under charts/ is still one chart.
             for path in child_files:
@@ -1043,7 +1057,20 @@ MAX_AI_ITEMS = 10
 MAX_AI_NAME_CHARS = 300
 MAX_AI_CONTEXT_CHARS = 4000
 MAX_AI_DESCRIPTION_CHARS = 400
-AI_OUTPUT_TOKENS = 1024
+# The output budget is per REQUEST, not per feature: a batch of ten
+# candidates needs roughly ten times the JSON of one. A fixed 1024 was enough
+# for a couple of candidates and silently truncated eight, which came back as
+# finishReason=MAX_TOKENS and then as a JSON parse error.
+AI_TOKENS_PER_ITEM = 220
+AI_TOKENS_OVERHEAD = 160
+AI_OUTPUT_TOKENS_CEILING = 2048
+
+
+def _output_budget(item_count):
+    """Enough room for `item_count` descriptions, and never more than the
+    provider ceiling."""
+    return min(AI_TOKENS_OVERHEAD + AI_TOKENS_PER_ITEM * max(item_count, 1),
+               AI_OUTPUT_TOKENS_CEILING)
 
 # The ONLY shape accepted back, so a chatty or injected answer cannot smuggle
 # extra fields into a curation record.
@@ -1107,8 +1134,9 @@ AI_SYSTEM_PROMPT = (
     'Respond with ONLY a JSON object of the form {"items": [{"id": "...", '
     '"description": "...", "keywords": ["..."], "confidence": "...", '
     '"reason": "..."}]}, one entry per input item, '
-    "reusing the given ids, with a description of at most 30 words and at "
-    "most 5 short keywords."
+    "reusing the given ids, with a description of at most 40 words and at "
+    "most 5 short keywords. Return JSON only - no prose, no explanation "
+    "outside the JSON object."
 )
 
 # The allowlist of fields that may travel. Binary datasets, raw .xyz/.h5/.csv
@@ -1250,7 +1278,7 @@ def describe_candidates(body):
 
     answer_text, error = call_gemini(
         cfg, {"items": items}, AI_SYSTEM_PROMPT, AI_RESPONSE_SCHEMA,
-        max_output_tokens=AI_OUTPUT_TOKENS)
+        max_output_tokens=_output_budget(len(items)))
     if error:
         return {"error": error}, 502
     try:
@@ -1267,7 +1295,9 @@ def describe_candidates(body):
     kinds = {item["id"]: item["kind"] for item in items}
     suggestions = {}
     for item_id, value in parsed.items():
-        if item_id not in kinds:
+        # An id we did not send is discarded, and a repeated id keeps only
+        # its first answer: neither may invent or overwrite a candidate.
+        if item_id not in kinds or item_id in suggestions:
             continue
         if kinds[item_id] not in AI_KEYWORD_KINDS:
             value = dict(value, keywords=[])
@@ -1275,6 +1305,12 @@ def describe_candidates(body):
         if value.get("kind") == kinds[item_id]:
             value = dict(value, kind="")
         suggestions[item_id] = value
-    print("Folder AI suggestions: requested=%d returned=%d"
-          % (len(items), len(suggestions)))
-    return {"suggestions": suggestions}, 200
+
+    # A PARTIAL answer is a partial answer, not a failed request. The model
+    # sometimes returns fewer entries than it was given; the ones it did
+    # describe are perfectly usable, and the rest are reported per item
+    # rather than failing everything the curator selected.
+    missing = [item["id"] for item in items if item["id"] not in suggestions]
+    print("Folder AI suggestions: requested=%d returned=%d missing=%d"
+          % (len(items), len(suggestions), len(missing)))
+    return {"suggestions": suggestions, "no_suggestion": missing}, 200
