@@ -373,40 +373,59 @@ def pick_chart_image(folder, images):
     while happily proposing its notebook. Named-after-the-folder comes first
     now, and an ambiguous folder proposes nothing rather than guessing.
 
-    Returns (chosen, options): `options` is always every image found, so the
-    curator can pick when we decline to.
+    Returns (chosen, options): `options` is always EVERY image found, each
+    with the reason it is there, so the curator can pick when we decline to
+    and nothing is silently dropped from the review.
     """
-    if not images:
-        return "", []
-
     name = posixpath.basename(folder)
 
     def stem(path):
         return posixpath.splitext(posixpath.basename(path))[0]
 
+    def described(chosen):
+        """Every image, each labelled with why it is in the list."""
+        listed = []
+        for path in images:
+            if stem(path) == name:
+                reason = "filename matches the chart folder"
+            elif stem(path).lower() == name.lower():
+                reason = "filename matches the chart folder (different case)"
+            elif stem(path).lower() == CHART_PREVIEW_STEM:
+                reason = "standard preview image"
+            elif len(images) == 1:
+                reason = "the only image in this chart folder"
+            else:
+                reason = "image found in this chart folder"
+            listed.append({"path": path, "reason": reason})
+        return chosen, listed
+
+    if not images:
+        return "", []
+
     # 1. The folder's own name, spelled exactly.
     exact = [p for p in images if stem(p) == name]
     if len(exact) == 1:
-        return exact[0], images
+        return described(exact[0])
 
     # 2. The same name in a different case. The SERVER's spelling is kept --
     #    the path has to resolve on a case-sensitive file server.
     lowered = [p for p in images if stem(p).lower() == name.lower()]
     if len(lowered) == 1:
-        return lowered[0], images
+        return described(lowered[0])
 
     # 3. The Folder Standard's own preview.png.
     preview = [p for p in images
                if stem(p).lower() == CHART_PREVIEW_STEM]
     if len(preview) == 1:
-        return preview[0], images
+        return described(preview[0])
 
     # 4. One image and no ambiguity to resolve.
     if len(images) == 1:
-        return images[0], images
+        return described(images[0])
 
-    # 5. Several images and nothing to choose between them: the curator picks.
-    return "", images
+    # 5. Several images and nothing to choose between them: the curator
+    #    picks, and every one of them is offered.
+    return described("")
 
 
 def chart_parts(folder, files):
@@ -421,11 +440,21 @@ def chart_parts(folder, files):
             notebook = path
             break
     if not notebook:
+        name = posixpath.basename(folder)
         notebooks = [p for p in contents
                      if p.lower().endswith(".ipynb")
                      and posixpath.dirname(p) == folder]
-        if len(notebooks) == 1:
-            notebook = notebooks[0]
+        # Exact name first, then the same name in a different case. A lone
+        # notebook with an unrelated name is NOT adopted: that is a guess,
+        # and it is the guess that attached a notebook to a chart whose
+        # image we had just declined to choose.
+        for match in (lambda stem: stem == name,
+                      lambda stem: stem.lower() == name.lower()):
+            hits = [p for p in notebooks
+                    if match(posixpath.splitext(posixpath.basename(p))[0])]
+            if len(hits) == 1:
+                notebook = hits[0]
+                break
 
     data_dir = "%s/%s" % (folder, CHART_DATA_DIR)
     if any(p.startswith(data_dir + "/") for p in contents):

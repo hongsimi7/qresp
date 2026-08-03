@@ -1057,20 +1057,11 @@ MAX_AI_ITEMS = 10
 MAX_AI_NAME_CHARS = 300
 MAX_AI_CONTEXT_CHARS = 4000
 MAX_AI_DESCRIPTION_CHARS = 400
-# The output budget is per REQUEST, not per feature: a batch of ten
-# candidates needs roughly ten times the JSON of one. A fixed 1024 was enough
-# for a couple of candidates and silently truncated eight, which came back as
-# finishReason=MAX_TOKENS and then as a JSON parse error.
-AI_TOKENS_PER_ITEM = 220
-AI_TOKENS_OVERHEAD = 160
+# One candidate, one call, one budget. Batching is gone, so there is no
+# arithmetic here any more: 512 tokens is generous for a 40-word description
+# and five keywords, and stays well inside the configured global cap.
+AI_OUTPUT_TOKENS = 512
 AI_OUTPUT_TOKENS_CEILING = 2048
-
-
-def _output_budget(item_count):
-    """Enough room for `item_count` descriptions, and never more than the
-    provider ceiling."""
-    return min(AI_TOKENS_OVERHEAD + AI_TOKENS_PER_ITEM * max(item_count, 1),
-               AI_OUTPUT_TOKENS_CEILING)
 
 # The ONLY shape accepted back, so a chatty or injected answer cannot smuggle
 # extra fields into a curation record.
@@ -1079,7 +1070,9 @@ AI_RESPONSE_SCHEMA = {
     "properties": {
         "items": {
             "type": "array",
-            "maxItems": MAX_AI_ITEMS,
+            # One request, at most one result. A second entry would have to
+            # belong to a candidate we did not send.
+            "maxItems": 1,
             "items": {
                 "type": "object",
                 "properties": {
@@ -1118,13 +1111,12 @@ AI_SYSTEM_PROMPT = (
     "versions, executable names, patches, facilities or measurements — those "
     "are factual fields the researcher owns. If the evidence for an item is "
     "insufficient, return an EMPTY description for it rather than guessing. "
-    "Each item carries a \"wants_keywords\" flag: propose keywords ONLY for "
-    "items where it is true, and return an empty list for the others. Never "
-    "propose a keyword that merely restates the file layout (\"data\", "
-    "\"scripts\", \"files\", \"results\", \"figure\") - a keyword must say "
-    "something about the science. Describe each item from ITS OWN evidence: "
-    "do not repeat one description or keyword set across items. "
-    "Each item states the kind Qresp inferred; include a \"kind\" only when "
+    "You are given ONE item. The \"wants_keywords\" flag says whether that "
+    "item can hold keywords: propose them only when it is true, and return "
+    "an empty list otherwise. Never propose a keyword that merely restates "
+    "the file layout (\"data\", \"scripts\", \"files\", \"results\", "
+    "\"figure\") - a keyword must say something about the science. "
+    "The item states the kind Qresp inferred; include a \"kind\" only when "
     "the evidence clearly contradicts it, and omit it otherwise. Propose a "
     "chart caption ONLY when the supplied text actually describes that "
     "figure — never from a file name. Give \"confidence\": \"medium\" when "
@@ -1133,10 +1125,9 @@ AI_SYSTEM_PROMPT = (
     "evidence you used. "
     'Respond with ONLY a JSON object of the form {"items": [{"id": "...", '
     '"description": "...", "keywords": ["..."], "confidence": "...", '
-    '"reason": "..."}]}, one entry per input item, '
-    "reusing the given ids, with a description of at most 40 words and at "
-    "most 5 short keywords. Return JSON only - no prose, no explanation "
-    "outside the JSON object."
+    '"reason": "..."}]} containing EXACTLY ONE entry, reusing the given id, '
+    "with a description of at most 40 words and at most 5 short keywords. "
+    "Return JSON only - no prose, no explanation outside the JSON object."
 )
 
 # The allowlist of fields that may travel. Binary datasets, raw .xyz/.h5/.csv
@@ -1257,9 +1248,18 @@ def describe_candidates(body):
         return {"error": "Confirm that these file and folder names may be "
                          "sent to the AI service."}, 400
 
-    items = _sanitize_ai_items(body.get("items"))
-    if not items:
-        return {"error": "Select some candidates to describe first."}, 400
+    # EXACTLY ONE candidate per request. A batch produced partial answers,
+    # truncated output and visibly worse descriptions -- one shared budget
+    # split across candidates, and a prompt that invited the model to compare
+    # them instead of reading each on its own terms. Enforced on the server as
+    # well as the client, and BEFORE the provider or the quota is touched, so
+    # a malformed call costs nothing.
+    raw = body.get("items")
+    if not isinstance(raw, list) or len(raw) != 1:
+        return {"error": "Send exactly one candidate per request."}, 400
+    items = _sanitize_ai_items(raw)
+    if len(items) != 1:
+        return {"error": "That candidate could not be read."}, 400
 
     cfg = _gemini_config()
     if not _gemini_ready(cfg):
@@ -1277,8 +1277,8 @@ def describe_candidates(body):
                          "please try again tomorrow."}, 429
 
     answer_text, error = call_gemini(
-        cfg, {"items": items}, AI_SYSTEM_PROMPT, AI_RESPONSE_SCHEMA,
-        max_output_tokens=_output_budget(len(items)))
+        cfg, {"item": items[0]}, AI_SYSTEM_PROMPT, AI_RESPONSE_SCHEMA,
+        max_output_tokens=AI_OUTPUT_TOKENS)
     if error:
         return {"error": error}, 502
     try:

@@ -54,13 +54,14 @@ class TestRepresentativeImage(unittest.TestCase):
     def test_a_single_image_is_still_accepted(self):
         chosen, options = self.pick("charts/fig1", ["anything.png"])
         self.assertEqual(chosen, "charts/fig1/anything.png")
-        self.assertEqual(options, ["charts/fig1/anything.png"])
+        self.assertEqual([o["path"] for o in options], ["charts/fig1/anything.png"])
 
     def test_several_images_and_no_exact_match_picks_nothing(self):
         chosen, options = self.pick("charts/fig1", ["a.png", "b.png"])
         self.assertEqual(chosen, "")
         # ...but every image is offered for the curator to choose from.
-        self.assertEqual(options, ["charts/fig1/a.png", "charts/fig1/b.png"])
+        self.assertEqual([o["path"] for o in options],
+                         ["charts/fig1/a.png", "charts/fig1/b.png"])
 
     def test_a_case_difference_keeps_the_server_spelling(self):
         # The path has to resolve on a case-sensitive file server, so the
@@ -79,7 +80,8 @@ class TestRepresentativeImage(unittest.TestCase):
             "figures_tables/figure_S3",
             ["logo.png", "figure_S3.png", "graphical_abstract.png"])
         self.assertEqual(chosen, "figures_tables/figure_S3/figure_S3.png")
-        self.assertNotIn("figures_tables/figure_S3/logo.png", options)
+        self.assertNotIn("figures_tables/figure_S3/logo.png",
+                         [o["path"] for o in options])
 
     def test_a_decorative_image_alone_is_not_promoted(self):
         chosen, options = self.pick("charts/fig1", ["logo.png"])
@@ -104,24 +106,21 @@ class TestRepresentativeImage(unittest.TestCase):
         chosen, options = fs.pick_chart_image(folder,
                                               fs.chart_images(folder, files))
         self.assertEqual(chosen, "charts/fig1/fig1.png")
-        self.assertEqual(options, ["charts/fig1/fig1.png"])
+        self.assertEqual([o["path"] for o in options], ["charts/fig1/fig1.png"])
 
 
 class TestOutputBudget(unittest.TestCase):
+    """One candidate, one call, one budget."""
 
-    def test_the_budget_grows_with_the_batch(self):
-        self.assertLess(curation._output_budget(1),
-                        curation._output_budget(8))
+    def test_a_single_candidate_gets_a_generous_fixed_budget(self):
+        # No arithmetic any more: batching is gone, so there is nothing to
+        # divide a shared budget between.
+        self.assertEqual(curation.AI_OUTPUT_TOKENS, 512)
 
-    def test_it_never_exceeds_the_provider_ceiling(self):
-        for count in (10, 50, 500):
-            self.assertLessEqual(curation._output_budget(count),
-                                 curation.AI_OUTPUT_TOKENS_CEILING)
+    def test_it_stays_inside_the_provider_ceiling(self):
+        self.assertLessEqual(curation.AI_OUTPUT_TOKENS,
+                             curation.AI_OUTPUT_TOKENS_CEILING)
         self.assertEqual(curation.AI_OUTPUT_TOKENS_CEILING, 2048)
-
-    def test_an_eight_item_batch_gets_more_than_the_old_fixed_cap(self):
-        # 1024 was the fixed value that truncated eight candidates.
-        self.assertGreater(curation._output_budget(8), 1024)
 
     def test_the_configuration_ceiling_allows_2048(self):
         # It used to clamp to 256, so raising the environment variable had no
@@ -136,6 +135,17 @@ class TestOutputBudget(unittest.TestCase):
 
     def test_a_keyword_request_can_still_be_small(self):
         self.assertEqual(assist.GEMINI_DEFAULT_MAX_OUTPUT_TOKENS, 256)
+
+    def test_the_response_schema_allows_at_most_one_result(self):
+        self.assertEqual(
+            curation.AI_RESPONSE_SCHEMA["properties"]["items"]["maxItems"], 1)
+
+    def test_the_prompt_no_longer_compares_candidates(self):
+        prompt = curation.AI_SYSTEM_PROMPT
+        self.assertIn("You are given ONE item", prompt)
+        self.assertIn("EXACTLY ONE entry", prompt)
+        self.assertNotIn("across items", prompt)
+        self.assertNotIn("one entry per input item", prompt)
 
 
 class Response:
@@ -291,3 +301,86 @@ class TestPartialAnswers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestImageOptionsAreComplete(unittest.TestCase):
+    """A chart folder may hold several legitimate images. None is dropped."""
+
+    def options(self, folder, names):
+        files = ["%s/%s" % (folder, name) for name in names]
+        _chosen, listed = fs.pick_chart_image(
+            folder, fs.chart_images(folder, files))
+        return listed
+
+    def test_every_image_is_exposed_with_a_reason(self):
+        listed = self.options("charts/figure_S1",
+                              ["diagram.png", "figure_S1.ipynb",
+                               "figure_S1.png"])
+        self.assertEqual([o["path"] for o in listed],
+                         ["charts/figure_S1/diagram.png",
+                          "charts/figure_S1/figure_S1.png"])
+        by_path = {o["path"]: o["reason"] for o in listed}
+        self.assertIn("matches the chart folder",
+                      by_path["charts/figure_S1/figure_S1.png"])
+        self.assertIn("image found in this chart folder",
+                      by_path["charts/figure_S1/diagram.png"])
+
+    def test_the_non_primary_image_is_never_discarded(self):
+        # The whole point: the runner-up stays reviewable.
+        listed = self.options("charts/fig", ["fig.png", "extra.png"])
+        self.assertEqual(len(listed), 2)
+
+    def test_an_ambiguous_folder_still_lists_everything(self):
+        listed = self.options("charts/fig", ["a.png", "b.png", "c.png"])
+        self.assertEqual(len(listed), 3)
+        for option in listed:
+            self.assertTrue(option["reason"])
+
+    def test_the_reason_names_a_case_difference(self):
+        listed = self.options("charts/Figure_S2",
+                              ["figure_s2.png", "other.png"])
+        by_path = {o["path"]: o["reason"] for o in listed}
+        self.assertIn("different case",
+                      by_path["charts/Figure_S2/figure_s2.png"])
+
+    def test_folder_basename_matching_is_generic(self):
+        # No hardcoded figure/table/DOI pattern anywhere.
+        for name in ("alpha", "run 7", "Ω_scan", "my.chart"):
+            folder = "charts/%s" % name
+            chosen, _listed = fs.pick_chart_image(
+                folder, fs.chart_images(
+                    folder, ["%s/%s.png" % (folder, name),
+                             "%s/other.png" % folder]))
+            self.assertEqual(chosen, "%s/%s.png" % (folder, name), name)
+
+
+class TestConservativeNotebook(unittest.TestCase):
+
+    def notebook(self, folder, names):
+        files = ["%s/%s" % (folder, name) for name in names]
+        return fs.chart_parts(folder, files)[2]
+
+    def test_an_exact_name_match_is_attached(self):
+        self.assertEqual(
+            self.notebook("charts/fig1", ["fig1.ipynb", "fig1.png"]),
+            "charts/fig1/fig1.ipynb")
+
+    def test_a_case_difference_still_matches(self):
+        self.assertEqual(
+            self.notebook("charts/Fig1", ["fig1.ipynb"]),
+            "charts/Fig1/fig1.ipynb")
+
+    def test_the_standard_notebook_name_matches(self):
+        self.assertEqual(
+            self.notebook("charts/fig1", ["notebook.ipynb"]),
+            "charts/fig1/notebook.ipynb")
+
+    def test_an_unrelated_lone_notebook_is_not_adopted(self):
+        # "the only .ipynb" was a guess, and it is what attached a notebook
+        # to a chart whose image we had just declined to choose.
+        self.assertEqual(
+            self.notebook("charts/fig1", ["analysis_scratch.ipynb"]), "")
+
+    def test_two_notebooks_attach_nothing(self):
+        self.assertEqual(
+            self.notebook("charts/fig1", ["a.ipynb", "b.ipynb"]), "")
