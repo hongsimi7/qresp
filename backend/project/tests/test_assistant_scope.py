@@ -1,10 +1,11 @@
 """The curation assistant's final scope, pinned.
 
-Supervisor decision: no manuscript upload, and no AI for publication metadata
-or for Qresp keywords. A language model is involved in exactly one place --
-descriptions for RCC folder candidates the curator selected. These tests keep
-the removed surface removed, and keep the surviving shared plumbing that RCC
-still depends on.
+Supervisor decision: no manuscript upload, and no AI for publication
+metadata. A language model may be asked two things, both from metadata the
+curator already wrote or reviewed: keywords for the record, and descriptions
+for RCC folder candidates they selected. These tests keep the removed surface
+removed -- above all the manuscript upload and the publication-metadata
+endpoint, which must never come back.
 """
 import io
 import os
@@ -33,8 +34,7 @@ class TestRemovedRoutes(unittest.TestCase):
     def test_manuscript_upload_is_not_routed(self):
         self.assertNotIn("/import/manuscript", self.paths)
 
-    def test_neither_ai_endpoint_is_routed(self):
-        self.assertNotIn("/assist/keywords", self.paths)
+    def test_the_publication_metadata_ai_endpoint_stays_gone(self):
         self.assertNotIn("/assist/publication-metadata", self.paths)
 
     def test_no_handler_survives_for_them(self):
@@ -43,14 +43,15 @@ class TestRemovedRoutes(unittest.TestCase):
                      "_extract_from_tex", "_merge_with_crossref"):
             self.assertFalse(hasattr(manuscript, name),
                              "manuscript.%s should be gone" % name)
-        for name in ("suggest_keywords", "suggest_publication_metadata",
+        for name in ("suggest_publication_metadata",
                      "_prepare_manuscript_text", "_chunk_text",
-                     "_parse_keywords", "_ask_gemini"):
+                     "_ask_gemini"):
             self.assertFalse(hasattr(assist, name),
                              "assist.%s should be gone" % name)
 
     def test_the_routes_that_remain_are_the_intended_ones(self):
-        for kept in ("/import/doi", "/curation/analyze-folder",
+        for kept in ("/import/doi", "/assist/keywords",
+                     "/curation/analyze-folder",
                      "/curation/describe-candidates"):
             self.assertIn(kept, self.paths)
 
@@ -74,6 +75,14 @@ class TestSharedGeminiPlumbingSurvives(unittest.TestCase):
 
 
 class TestNoManuscriptParsingRemains(unittest.TestCase):
+
+    def test_keyword_suggestion_never_accepts_a_file(self):
+        # The endpoint exists again, but not the door the manuscript came
+        # through: no filename, no base64, no extractor.
+        source = read("project", "assist.py")
+        for token in ("content_base64", "extract_source_text",
+                      "MAX_UPLOAD_BYTES", "b64decode"):
+            self.assertNotIn(token, source, token)
 
     def test_no_pdf_or_archive_machinery_is_imported(self):
         source = read("project", "manuscript.py")

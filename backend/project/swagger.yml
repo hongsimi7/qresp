@@ -666,6 +666,88 @@ paths:
           description: DOI not found in the registry
         502:
           description: DOI registry unreachable or erroring
+  /assist/keywords:
+    post:
+      operationId: "project.assist.suggest_keywords"
+      tags:
+        - "Assist"
+      summary: "Suggests Keywords from the record's OWN metadata (opt-in;
+        suggestions only, never applied)"
+      parameters:
+        - in: body
+          name: body
+          required: true
+          description: Explicit consent plus an allowlist of the curator's own
+            metadata - the paper's bibliographic fields, and the descriptive
+            fields of datasets/charts/scripts/tools already accepted into the
+            record. No file content, no manuscript, no paths or URLs, no
+            unclassified files, no unaccepted folder candidates, and no
+            curator, owner, editor or account data is accepted here.
+          schema:
+            type: object
+            required:
+              - consent
+            properties:
+              consent:
+                type: boolean
+              kind: {type: string}
+              title: {type: string}
+              abstract: {type: string}
+              publication: {type: string}
+              doi: {type: string}
+              year: {type: string}
+              basenames:
+                type: array
+                description: File names only, never paths. Bounded server-side.
+                items: {type: string}
+              charts:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    caption: {type: string}
+                    properties:
+                      type: array
+                      items: {type: string}
+              datasets:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    description: {type: string}
+                    keywords: {type: string}
+              scripts:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    description: {type: string}
+                    keywords: {type: string}
+              tools:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    packageName: {type: string}
+                    description: {type: string}
+                    facility: {type: string}
+                    measurement: {type: string}
+      responses:
+        200:
+          description: Up to 8 keyword suggestions, each flagged as an
+            existing Qresp keyword or a new one
+        400:
+          description: Consent missing, or nothing to work from
+        401:
+          description: Authentication required
+        403:
+          description: CSRF token missing or invalid
+        429:
+          description: Daily per-user AI suggestion limit reached
+        502:
+          description: AI provider failed or answered unreadably
+        503:
+          description: AI keyword suggestions are not configured on this server
   /curation/analyze-folder:
     post:
       operationId: "project.curation.analyze_folder"
