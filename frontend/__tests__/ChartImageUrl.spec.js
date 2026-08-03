@@ -133,14 +133,14 @@ describe("Chart image rendering", () => {
     renderCharts([analyzedChart], "");
     expect(screen.queryByTestId("chart-image")).toBeNull();
     expect(screen.getByTestId("chart-image-missing")).toHaveTextContent(
-      /no file server path is saved yet/i
+      /file server path not saved/i
     );
   });
 
   it("says so when the chart has no image file at all", () => {
     renderCharts([{ ...analyzedChart, imageFile: "" }], ROOT);
     expect(screen.getByTestId("chart-image-missing")).toHaveTextContent(
-      /no image file set/i
+      /image file not selected/i
     );
   });
 
@@ -153,5 +153,55 @@ describe("Chart image rendering", () => {
     // Simulate the browser failing to fetch the file.
     image.dispatchEvent(new Event("error", { bubbles: false }));
     expect(note).toHaveTextContent(/could not be loaded/i);
+  });
+});
+
+// Each way an image can fail needs a different thing from the reader, so each
+// says something different. A browser refusing the RCC certificate looks
+// exactly like a 404 from the page's side -- both are named rather than
+// guessed between, and the URL is shown verbatim so it can be tried by hand.
+describe("image failures are told apart", () => {
+  const CASES = [
+    ["File Server path not saved", { imageFile: "figures/f1.png" }, ""],
+    ["Image File not selected", { imageFile: "" }, ROOT],
+    ["Invalid image path", { imageFile: "../../etc/passwd" }, ROOT],
+    ["Invalid image path", { imageFile: "https://elsewhere.example/x.png" },
+     ROOT],
+    ["Invalid image path",
+     { imageFile: "figures" + String.fromCharCode(92) + "f1.png" },
+     ROOT],
+  ];
+
+  it.each(CASES)("says %s", (expected, overrides, server) => {
+    renderCharts([{ ...analyzedChart, ...overrides }], server);
+    expect(screen.queryByTestId("chart-image")).toBeNull();
+    expect(screen.getByTestId("chart-image-missing")).toHaveTextContent(
+      expected
+    );
+  });
+
+  it("names both remote possibilities, with the URL and two actions", () => {
+    renderCharts([analyzedChart], ROOT);
+    const note = screen.getByTestId("chart-image-error");
+
+    expect(note).toHaveTextContent(/remote image could not be loaded/i);
+    expect(note).toHaveTextContent(/may not trust the rcc certificate/i);
+    // Verbatim, never re-cased or hidden.
+    expect(note).toHaveTextContent(
+      `${ROOT}/${analyzedChart.imageFile}`.replace(/ /g, "%20")
+    );
+    // The note starts hidden and is revealed by the img onError handler, so
+    // its links are read from the node rather than by page role.
+    const links = Array.from(note.querySelectorAll("a")).map((anchor) => ({
+      text: anchor.textContent.trim(),
+      href: anchor.getAttribute("href"),
+    }));
+    expect(links.map((link) => link.text)).toEqual([
+      "Open image",
+      "Check file server access",
+    ]);
+    expect(links[0].href).toBe(
+      `${ROOT}/${analyzedChart.imageFile}`.replace(/ /g, "%20")
+    );
   });
 });

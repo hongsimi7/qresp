@@ -17,10 +17,24 @@
 
 const trimSlashes = (value) => String(value || "").replace(/^\/+|\/+$/g, "");
 
+// A stored path is a RELATIVE POSIX path inside the paper's folder. Anything
+// that could escape it, or point somewhere else entirely, is refused rather
+// than pasted onto the root and sent to a server.
+const REJECTED = /(^[a-z][a-z0-9+.-]*:)|\\/i;
+
+export const isSafeRelativePath = (relative) => {
+  const path = String(relative || "");
+  if (!path.trim()) return false;
+  if (REJECTED.test(path)) return false;
+  return !trimSlashes(path)
+    .split("/")
+    .some((segment) => segment === "..");
+};
+
 export const buildFileUrl = (base, relative) => {
   const root = String(base || "").replace(/\/+$/, "");
   const path = trimSlashes(relative);
-  if (!root || !path) {
+  if (!root || !path || !isSafeRelativePath(relative)) {
     return "";
   }
   // Encode each SEGMENT, so separators survive but spaces, #, ? and friends

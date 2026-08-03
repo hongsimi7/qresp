@@ -8,7 +8,7 @@ import Captions from "yet-another-react-lightbox/plugins/captions";
 import "yet-another-react-lightbox/styles.css";
 import "yet-another-react-lightbox/plugins/captions.css";
 
-import { Typography, Button } from "@mui/material";
+import { Box, Typography, Button } from "@mui/material";
 
 import RecordTable from "../Table/Table";
 import Drawer from "../drawer";
@@ -121,9 +121,17 @@ const ChartInfo = ({
     const datatreeLink = buildDirectoryUrl(rowdata.server, rowdata.imageFile);
     const imageUrl = buildFileUrl(rowdata.server, rowdata.imageFile);
 
-    // No file server path saved yet, or no image path stored: say so
-    // instead of rendering a broken image.
+    // Three different reasons produce no URL, and they need three different
+    // things from the reader: save the file server, pick an image, or fix a
+    // path that cannot be resolved. One shared sentence sent people looking
+    // in the wrong place.
     if (!imageUrl) {
+      const reason = !rowdata.imageFile
+        ? "Image File not selected — set it on this chart."
+        : !rowdata.server
+        ? "File Server path not saved — save it in “Where is the paper”."
+        : "Invalid image path — it must be a relative path inside the paper " +
+          "folder, with no “..”, backslash or full URL.";
       return (
         <Typography
           variant="caption"
@@ -131,9 +139,7 @@ const ChartInfo = ({
           data-testid="chart-image-missing"
           sx={{ display: "block", p: 1 }}
         >
-          {rowdata.imageFile
-            ? "No file server path is saved yet, so this chart's image cannot be shown. Save the File Server path in “Where is the paper”."
-            : "This chart has no image file set."}
+          {reason}
         </Typography>
       );
     }
@@ -156,13 +162,30 @@ const ChartInfo = ({
                 if (note) note.style.display = "block";
               }}
             ></img>
+            {/* The URL is shown verbatim, never re-cased or hidden: the
+                reader needs to try it themselves. A browser refusing the RCC
+                certificate looks exactly like a 404 from here, so both are
+                named rather than guessed between. */}
             <Typography
               variant="caption"
               color="error"
+              component="span"
               data-testid="chart-image-error"
-              sx={{ display: "none", p: 1 }}
+              sx={{ display: "none", p: 1, overflowWrap: "anywhere" }}
             >
-              This chart&rsquo;s image could not be loaded from {imageUrl}
+              Remote image could not be loaded:{" "}
+              <Box component="span" sx={{ fontFamily: "monospace" }}>
+                {imageUrl}
+              </Box>{" "}
+              — the file may be missing, or your browser may not trust the RCC
+              certificate.{" "}
+              <a href={imageUrl} rel="noopener noreferrer" target="_blank">
+                Open image
+              </a>{" "}
+              ·{" "}
+              <a href={datatreeLink} rel="noopener noreferrer" target="_blank">
+                Check file server access
+              </a>
             </Typography>
           </Button>
         </StyledTooltip>
