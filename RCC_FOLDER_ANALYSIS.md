@@ -419,6 +419,25 @@ per-user daily limit. With Gemini
 unconfigured the folder analysis still succeeds in full; only the AI action
 reports `503 AI descriptions are not configured on this server.`
 
+### Recommended values for a server that runs folder analysis
+
+```
+QRESP_GEMINI_TIMEOUT_SECONDS=45
+QRESP_GEMINI_MAX_OUTPUT_TOKENS=2048
+```
+
+A keyword request fits comfortably in 256 output tokens; a batch of folder
+candidates does not. Eight candidates of JSON overran the old cap, came back
+`finishReason=MAX_TOKENS`, and the truncated answer then failed to parse —
+and because the configuration ceiling was itself 256, raising the environment
+variable changed nothing. The ceiling is 2048 now, and the request asks for a
+budget scaled to the number of candidates rather than a fixed number.
+
+15 seconds is tight for a batch on a busy provider; 45 leaves room without
+letting a worker hang (the hard ceiling stays 60). Nothing retries
+automatically: a retried call would consume the user's daily quota twice for
+one action.
+
 ## Known limitations
 
 - Listing relies on Apache-style autoindex markup (the same shape `Dtree`
