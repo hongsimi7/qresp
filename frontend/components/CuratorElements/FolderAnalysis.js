@@ -20,6 +20,7 @@ import {
   Tab,
   Tabs,
   MenuItem,
+  Stack,
   TextField,
   Tooltip,
   Typography,
@@ -28,6 +29,7 @@ import {
 import { RegularStyledButton } from "../button";
 import CuratorContext from "../../Context/Curator/curatorContext";
 import AlertContext from "../../Context/Alert/alertContext";
+import { buildFileUrl } from "../../Utils/fileServerUrl";
 import {
   aiTargets,
   fieldsFor,
@@ -53,10 +55,6 @@ const GROUPS = [
   { key: "tools", type: "tool", label: "Tools" },
   { key: "unclassified", type: null, label: "Unclassified", secondary: true },
 ];
-
-// One AI request covers at most this many selected candidates, so a large
-// selection cannot silently turn into an oversized (and expensive) call.
-const MAX_AI_BATCH = 10;
 
 // Grouped Unclassified rows rendered before "Show more".
 const UNCLASSIFIED_ROWS = 25;
@@ -186,13 +184,70 @@ const FolderAnalysis = ({ path }) => {
   // is only ever a SUGGESTION — it is parked here until the curator accepts
   // it into a field.
   const [aiConsent, setAiConsent] = useState(false);
-  const [aiConsentOpen, setAiConsentOpen] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiNotice, setAiNotice] = useState("");
+  // The candidate whose consent dialog is open, or null. Consent is asked
+  // fresh for every candidate and is never remembered.
+  const [aiConsentOpen, setAiConsentOpen] = useState(null);
+  // Both keyed by candidate id: one candidate's request must not blank
+  // another's result or show its spinner.
+  const [aiLoading, setAiLoading] = useState({});
+  const [aiNotice, setAiNotice] = useState({});
   const [aiSuggestions, setAiSuggestions] = useState({});
   // Candidate lists can be long. Nothing is discarded — the rest is one
   // explicit click away, and the count is always on screen.
   const [showAll, setShowAll] = useState({});
+
+  // A chart folder may legitimately hold several images. Each one gets ONE
+  // role, and the roles are mutually exclusive, so a path can never end up
+  // both the primary image and a related file, or duplicated into a separate
+  // chart. Keyed by candidate id, then by image path.
+  const [imageRoles, setImageRoles] = useState({});
+
+  const rolesFor = (candidate) => {
+    const stored = imageRoles[candidate.id];
+    if (stored) return stored;
+    // The backend's suggestion is a starting point, not a decision: the
+    // suggested primary is preselected and everything else is Unused.
+    const primary = (candidate.proposal || {}).imageFile || "";
+    const initial = {};
+    (candidate.image_options || []).forEach((option) => {
+      initial[option.path] = option.path === primary ? "primary" : "unused";
+    });
+    return initial;
+  };
+
+  // A notebook follows an image into its own chart ONLY on an unambiguous
+  // name match, mirroring the backend rule. A shared notebook stays with the
+  // original chart rather than being copied into both.
+  const notebookFor = (candidate, imagePath) => {
+    const notebook = (candidate.proposal || {}).notebookFile || "";
+    if (!notebook) return "";
+    const stem = (value) => basename(value).replace(/\.[^.]+$/, "");
+    return stem(notebook).toLowerCase() === stem(imagePath).toLowerCase()
+      ? notebook
+      : "";
+  };
+
+  const setImageRole = (candidate, path, role) => {
+    setImageRoles((current) => {
+      const roles = { ...rolesFor(candidate), [path]: role };
+      if (role === "primary") {
+        // At most one primary. The previous one becomes Unused rather than
+        // disappearing -- it is still in the folder, and still choosable.
+        Object.keys(roles).forEach((other) => {
+          if (other !== path && roles[other] === "primary") {
+            roles[other] = "unused";
+          }
+        });
+      }
+      return { ...current, [candidate.id]: roles };
+    });
+    if (role === "primary") {
+      setField(candidate.id, "imageFile", path);
+    } else {
+      const draft = drafts[candidate.id] || {};
+      if (draft.imageFile === path) setField(candidate.id, "imageFile", "");
+    }
+  };
 
   const ready = Boolean(target.trim());
 
@@ -300,80 +355,77 @@ const FolderAnalysis = ({ path }) => {
   // and the text Qresp already extracted locally (docstrings, manifest lines,
   // evidence). No unselected candidate, no file contents, no image bytes, no
   // credentials, no profile or ownership data, nothing outside the folder.
-  const aiItems = () => {
-    const items = [];
-    GROUPS.forEach(({ key, type }) => {
-      if (!type) return;
-      candidatesFor(key)
-        .filter((candidate) => selected[candidate.id])
-        .forEach((candidate) => {
-          const draft = drafts[candidate.id] || {};
-          items.push({
-            id: candidate.id,
-            kind: type,
-            name: labelOf(candidate).primary,
-            paths: candidate.paths || [],
-            context: [draft.readme, draft.description]
-              .concat(candidate.evidence || [])
-              .filter(Boolean)
-              .join(" "),
-          });
-        });
-    });
-    return items;
+  // The AI request is built for ONE candidate. The Add checkboxes are a
+  // different concept entirely -- they choose what goes to the Curator -- and
+  // they no longer decide what gets described. A batch shared one output
+  // budget between candidates and invited the model to compare them, which is
+  // what produced partial answers and interchangeable descriptions.
+  const aiItem = (candidate) => {
+    const draft = drafts[candidate.id] || {};
+    return {
+      id: candidate.id,
+      kind: candidate.kind,
+      name: labelOf(candidate).primary,
+      paths: candidate.paths || [],
+      context: [draft.readme, draft.description]
+        .concat(candidate.evidence || [])
+        .filter(Boolean)
+        .join(" "),
+    };
   };
 
   // Consent is asked FRESH every time: the box resets whenever the dialog
   // opens, and closing it (however) clears it again. There is deliberately
   // no remembered "always allow".
-  const openAiConsent = () => {
+  const openAiConsent = (candidate) => {
     setAiConsent(false);
-    setAiNotice("");
-    setAiConsentOpen(true);
+    setAiConsentOpen(candidate);
   };
 
   const closeAiConsent = () => {
-    setAiConsentOpen(false);
+    setAiConsentOpen(null);
     setAiConsent(false);
   };
 
-  const describeWithAI = async () => {
-    setAiConsentOpen(false);
+  const describeWithAI = async (candidate) => {
+    setAiConsentOpen(null);
     setAiConsent(false);
-    const items = aiItems();
-    if (items.length > MAX_AI_BATCH) {
-      // Refused locally: no request is made at all.
-      setAiNotice(
-        `One AI request covers at most ${MAX_AI_BATCH} candidates — you have ` +
-          `${items.length} selected. Uncheck some and try again.`
-      );
-      return;
-    }
-    setAiLoading(true);
-    setAiNotice("");
+    if (!candidate) return;
+    const id = candidate.id;
+    // Loading and failure belong to THIS candidate: another candidate's
+    // suggestion, or its error, is not disturbed by this request.
+    setAiLoading((current) => ({ ...current, [id]: true }));
+    setAiNotice((current) => ({ ...current, [id]: "" }));
     try {
       const response = await axios.post("/api/curation/describe-candidates", {
         consent: true,
-        items,
+        // Exactly one. The server rejects anything else before it calls the
+        // provider or spends a quota unit.
+        items: [aiItem(candidate)],
       });
       const suggestions = (response.data || {}).suggestions || {};
-      const count = Object.keys(suggestions).length;
-      // Parked as proposals ONLY. Nothing the curator typed is touched, and
-      // no field is filled until they accept it below.
-      setAiSuggestions((current) => ({ ...current, ...suggestions }));
-      setAiNotice(
-        count
-          ? `AI proposed text for ${count} item(s). Nothing has been filled in ` +
-            "— review each proposal and accept the ones you want."
-          : "The AI service returned no usable suggestions."
-      );
+      const mine = suggestions[id];
+      if (mine) {
+        // Parked as a proposal ONLY. Nothing the curator typed is touched,
+        // and no field is filled until they accept it below.
+        setAiSuggestions((current) => ({ ...current, [id]: mine }));
+        setAiNotice((current) => ({ ...current, [id]: "" }));
+      } else {
+        setAiNotice((current) => ({
+          ...current,
+          [id]: "No reliable suggestion was returned for this item.",
+        }));
+      }
     } catch (err) {
-      setAiNotice(
-        (err && err.response && err.response.data && err.response.data.error) ||
-          "AI descriptions could not be generated."
-      );
+      setAiNotice((current) => ({
+        ...current,
+        [id]:
+          (err && err.response && err.response.data &&
+            err.response.data.error) ||
+          "AI descriptions could not be generated.",
+      }));
     } finally {
-      setAiLoading(false);
+      setAiLoading((current) => ({ ...current, [id]: false }));
     }
   };
 
@@ -381,9 +433,43 @@ const FolderAnalysis = ({ path }) => {
     let total = 0;
     GROUPS.forEach(({ key, type }) => {
       if (!type) return;
-      const records = candidatesFor(key)
+      const records = [];
+      candidatesFor(key)
         .filter((candidate) => selected[candidate.id])
-        .map((candidate) => toRecord(type, drafts[candidate.id]));
+        .forEach((candidate) => {
+          const record = toRecord(type, drafts[candidate.id]);
+          if (type === "chart") {
+            const roles = rolesFor(candidate);
+            // Related images join this chart's files, deduplicated and never
+            // including the primary or anything promoted to its own chart.
+            const related = Object.keys(roles).filter(
+              (path) => roles[path] === "related" && path !== record.imageFile
+            );
+            record.files = Array.from(
+              new Set((record.files || []).concat(related))
+            ).filter((path) => roles[path] !== "separate");
+            records.push(record);
+            // "Create as separate Chart" makes another INCOMPLETE proposal,
+            // exactly like any other folder proposal: caption, number and
+            // keywords are the curator's to fill in.
+            Object.keys(roles)
+              .filter((path) => roles[path] === "separate")
+              .forEach((path) => {
+                records.push(
+                  toRecord("chart", {
+                    imageFile: path,
+                    number: "",
+                    caption: "",
+                    properties: "",
+                    files: "",
+                    notebookFile: notebookFor(candidate, path),
+                  })
+                );
+              });
+          } else {
+            records.push(record);
+          }
+        });
       if (records.length) {
         total += records.length;
         addMany(type, records);
@@ -439,7 +525,19 @@ const FolderAnalysis = ({ path }) => {
     setter((current) => ({ ...current, [id]: !current[id] }));
 
   const renderAiProposal = (candidate) => {
+    const notice = aiNotice[candidate.id];
     const suggestion = aiSuggestions[candidate.id];
+    if (notice && !suggestion) {
+      return (
+        <Alert
+          severity="warning"
+          sx={{ mt: 1 }}
+          data-testid={`ai-notice-${candidate.id}`}
+        >
+          {notice}
+        </Alert>
+      );
+    }
     if (!suggestion) return null;
     const targets = aiTargets(candidate.kind);
     const draft = drafts[candidate.id] || {};
@@ -555,6 +653,106 @@ const FolderAnalysis = ({ path }) => {
     );
   };
 
+  // A chart folder with more than one image. Every image is listed with the
+  // role it will play, so nothing is hidden and nothing is decided for the
+  // curator: the backend's pick is preselected, everything else is Unused.
+  const renderImageRoles = (candidate) => {
+    const options = candidate.image_options || [];
+    if (candidate.kind !== "chart" || options.length < 2) return null;
+    const roles = rolesFor(candidate);
+
+    return (
+      <Box
+        sx={{ mt: 1.5, pl: { xs: 0, sm: 5 } }}
+        data-testid={`image-roles-${candidate.id}`}
+      >
+        <Typography variant="subtitle2" gutterBottom>
+          {options.length} images found
+        </Typography>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          display="block"
+          sx={{ mb: 1 }}
+        >
+          A chart has one primary image. Give the others a role — nothing is
+          split into separate charts unless you say so.
+        </Typography>
+        <Stack spacing={1.5}>
+          {options.map((option) => (
+            <Box
+              key={option.path}
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: 1.5,
+              }}
+              data-testid={`image-option-${candidate.id}-${basename(
+                option.path
+              )}`}
+            >
+              {/* A thumbnail when the browser can load it. When RCC TLS or
+                  the file itself refuses, the filename and a direct link are
+                  the fallback -- never a blank box. */}
+              {buildFileUrl(fileServerPath, option.path) ? (
+                <Box
+                  component="img"
+                  src={buildFileUrl(fileServerPath, option.path)}
+                  alt=""
+                  sx={{ width: 56, height: 56, objectFit: "contain",
+                        border: 1, borderColor: "divider", borderRadius: 1 }}
+                  onError={(event) => {
+                    event.currentTarget.style.display = "none";
+                  }}
+                />
+              ) : null}
+              <Box sx={{ flexGrow: 1, flexBasis: 180, minWidth: 0 }}>
+                <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+                  {basename(option.path)}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {option.reason}
+                </Typography>
+              </Box>
+              {buildFileUrl(fileServerPath, option.path) ? (
+                <Button
+                  size="small"
+                  href={buildFileUrl(fileServerPath, option.path)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{ whiteSpace: "nowrap" }}
+                >
+                  Open image
+                </Button>
+              ) : null}
+              <TextField
+                select
+                size="small"
+                label="Role"
+                value={roles[option.path] || "unused"}
+                onChange={(event) =>
+                  setImageRole(candidate, option.path, event.target.value)
+                }
+                sx={{ minWidth: 190 }}
+                slotProps={{
+                  htmlInput: {
+                    "aria-label": `Role for ${basename(option.path)}`,
+                  },
+                }}
+              >
+                <MenuItem value="primary">Primary image</MenuItem>
+                <MenuItem value="related">Related file</MenuItem>
+                <MenuItem value="separate">Create as separate Chart</MenuItem>
+                <MenuItem value="unused">Unused</MenuItem>
+              </TextField>
+            </Box>
+          ))}
+        </Stack>
+      </Box>
+    );
+  };
+
   const renderCandidate = (candidate) => {
     const draft = drafts[candidate.id] || {};
     const needs = missingRequired(candidate.kind, draft);
@@ -647,6 +845,22 @@ const FolderAnalysis = ({ path }) => {
               "& .MuiButton-root": { whiteSpace: "nowrap", minWidth: "auto" },
             }}
           >
+            {/* Visually distinct from the Add checkbox on the left: the
+                checkbox chooses what goes to the Curator, this describes
+                THIS candidate and nothing else. A multi-selection can stay
+                exactly as it is while one item is enhanced. */}
+            {Object.keys(aiTargets(candidate.kind)).length > 0 && (
+              <Button
+                size="small"
+                variant="outlined"
+                color="secondary"
+                disabled={Boolean(aiLoading[candidate.id])}
+                onClick={() => openAiConsent(candidate)}
+                data-testid={`enhance-${candidate.id}`}
+              >
+                {aiLoading[candidate.id] ? "Asking AI…" : "Enhance with AI"}
+              </Button>
+            )}
             <Button size="small" onClick={() => toggle(setDetailsOpen, candidate.id)}>
               Details
             </Button>
@@ -715,6 +929,7 @@ const FolderAnalysis = ({ path }) => {
         <Collapse in={fieldsVisible} unmountOnExit>
           {/* Deliberate separation from the header/evidence above. */}
           <Divider sx={{ mt: 2 }} />
+          {renderImageRoles(candidate)}
           <Grid
             container
             spacing={2}
@@ -1241,30 +1456,6 @@ const FolderAnalysis = ({ path }) => {
             </Fragment>
           )}
         </DialogContent>
-        {analysis && (
-          <Box sx={{ px: 3, py: 2, borderTop: 1, borderColor: "divider" }}>
-            {aiNotice && (
-              <Alert severity="info" sx={{ mb: 1 }}>
-                {aiNotice}
-              </Alert>
-            )}
-            <Box sx={{ display: "flex", gap: 2, alignItems: "center" }}>
-              <Button
-                onClick={openAiConsent}
-                disabled={selectedCount === 0 || aiLoading}
-                sx={{ whiteSpace: "nowrap" }}
-              >
-                Enhance selected with AI
-              </Button>
-              {aiLoading && <CircularProgress size={18} />}
-              <Typography variant="caption" color="text.secondary">
-                {selectedCount === 0
-                  ? "Select the candidates you want described first."
-                  : `${selectedCount} selected — you will be asked what gets sent before anything leaves Qresp.`}
-              </Typography>
-            </Box>
-          </Box>
-        )}
         <DialogActions sx={{ flexShrink: 0, flexWrap: "wrap", gap: 1 }}>
           <Button onClick={close}>Cancel</Button>
           <Button
@@ -1291,11 +1482,14 @@ const FolderAnalysis = ({ path }) => {
         fullWidth
         transitionDuration={0}
       >
-        <DialogTitle>Send {selectedCount} selected item(s) to Gemini?</DialogTitle>
+        <DialogTitle>
+          Send “{aiConsentOpen ? labelOf(aiConsentOpen).primary : ""}” to
+          Gemini?
+        </DialogTitle>
         <DialogContent dividers>
           <Typography variant="body2" gutterBottom>
-            Qresp will send, for the {selectedCount} candidate(s) you selected
-            and for nothing else:
+            Qresp will send, for <strong>this one candidate</strong> and for
+            nothing else:
           </Typography>
           <Box component="ul" sx={{ pl: 3, mt: 0, mb: 2 }}>
             <Typography component="li" variant="body2">
@@ -1309,8 +1503,28 @@ const FolderAnalysis = ({ path }) => {
           <Typography variant="body2" gutterBottom>
             It will <strong>not</strong> send raw datasets, image bytes,
             notebook contents, credentials, your account details, or anything
-            from outside the candidates you selected.
+            from outside this candidate.
           </Typography>
+          {aiConsentOpen ? (
+            <Typography
+              variant="body2"
+              sx={{ mb: 1 }}
+              data-testid="ai-consent-fields"
+            >
+              It will ask for:{" "}
+              <strong>
+                {Object.keys(aiTargets(aiConsentOpen.kind))
+                  .map((slot) =>
+                    labelFor(
+                      aiConsentOpen.kind,
+                      aiTargets(aiConsentOpen.kind)[slot]
+                    )
+                  )
+                  .join(" and ")}
+              </strong>
+              .
+            </Typography>
+          ) : null}
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
             Gemini returns suggestions only. Nothing is filled in, added,
             saved or published as a result.
@@ -1336,7 +1550,7 @@ const FolderAnalysis = ({ path }) => {
           <Button
             variant="contained"
             disabled={!aiConsent}
-            onClick={describeWithAI}
+            onClick={() => describeWithAI(aiConsentOpen)}
           >
             Send and get suggestions
           </Button>

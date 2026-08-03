@@ -1389,8 +1389,9 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     axios.post.mockResolvedValue({ data: analysis });
   });
 
-  const enhanceButton = () =>
-    screen.getByRole("button", { name: /enhance selected with ai/i });
+  // AI is per candidate now: the button lives on the card, and the Add
+  // checkboxes no longer decide what gets described.
+  const enhanceButton = (id = "chart-0") => screen.getByTestId(`enhance-${id}`);
 
   const consentBox = () =>
     screen.getByRole("checkbox", {
@@ -1400,13 +1401,20 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
   const sendButton = () =>
     screen.getByRole("button", { name: /send and get suggestions/i });
 
-  // Selects a candidate in the given tab and opens the consent dialog.
-  const selectAndOpenConsent = async (user, tab, name) => {
+  // Opens the consent dialog for ONE candidate. Nothing is selected: the
+  // Add checkbox and the AI action are separate concepts.
+  const selectAndOpenConsent = async (user, tab, _name, id) => {
     if (tab) {
       await user.click(screen.getByRole("tab", { name: tab }));
     }
-    await user.click(screen.getByRole("checkbox", { name }));
-    await user.click(enhanceButton());
+    // The candidate id follows the tab unless one is named explicitly.
+    const target =
+      id || (tab && String(tab).includes("script") ? "script-0" : "chart-0");
+    // Open the fields so an accepted suggestion has somewhere visible to
+    // land. Selecting the candidate is no longer required to enhance it.
+    const edit = screen.queryAllByRole("button", { name: "Edit Proposal" });
+    if (edit.length) await user.click(edit[0]);
+    await user.click(enhanceButton(target));
     return screen.findByRole("heading", { name: /send .* to gemini\?/i });
   };
 
@@ -1416,22 +1424,18 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     await user.click(sendButton());
   };
 
-  it("is disabled until at least one candidate is selected", async () => {
+  it("is available per candidate, without selecting anything", async () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
 
-    expect(enhanceButton()).toBeDisabled();
+    // No Add checkbox needs ticking: the two concepts are separate.
+    expect(enhanceButton("chart-0")).toBeEnabled();
     expect(
-      screen.getByText(/select the candidates you want described first/i)
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: /enhance selected with ai/i })
+    ).toBeNull();
     // Only the analyze call has happened.
     expect(axios.post).toHaveBeenCalledTimes(1);
-
-    await user.click(
-      screen.getByRole("checkbox", { name: /select figure1\.png/i })
-    );
-    expect(enhanceButton()).toBeEnabled();
   });
 
   it("opens a consent dialog that sends nothing by itself", async () => {
@@ -1442,10 +1446,14 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
       user, null, /select figure1\.png/i
     );
 
-    // The dialog states the count and the exact scope BEFORE anything moves.
+    // The dialog names the ONE candidate and the exact scope BEFORE
+    // anything moves.
     expect(
-      screen.getByRole("heading", { name: /send 1 selected item\(s\) to gemini\?/i })
+      screen.getByRole("heading", { name: /send .*figure1\.png.* to gemini\?/i })
     ).toBeInTheDocument();
+    expect(screen.getByTestId("ai-consent-fields")).toHaveTextContent(
+      /caption and keywords/i
+    );
     expect(
       screen.getByText(/relative paths, file names and folder names/i)
     ).toBeInTheDocument();
@@ -1624,7 +1632,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
       screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
     );
     await user.type(screen.getByLabelText(/^description ?\*?$/i), "Mine");
-    await user.click(enhanceButton());
+    await user.click(enhanceButton("script-0"));
     await screen.findByRole("heading", { name: /send .* to gemini\?/i });
     await consentAndSend(user, {
       suggestions: {
@@ -1810,6 +1818,10 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     await screen.findByTestId("ai-confidence-chart-0");
     await user.click(screen.getByRole("button", { name: /use as caption/i }));
 
+    // Enhancing does not select anything, so Add is chosen explicitly.
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    );
     await user.click(
       screen.getByRole("button", { name: /add selected items to curator/i })
     );
@@ -1821,12 +1833,13 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     ]);
   });
 
-  it("refuses an oversized batch locally, without any request", async () => {
+  it("enhances exactly one candidate while several stay selected",
+     async () => {
     const many = {
       ...analysis,
       candidates: {
         ...analysis.candidates,
-        charts: Array.from({ length: 11 }, (unused, index) => ({
+        charts: Array.from({ length: 3 }, (unused, index) => ({
           ...analysis.candidates.charts[0],
           id: `chart-${index}`,
           label: `figure${index}.png`,
@@ -1842,24 +1855,41 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     const user = userEvent.setup();
     renderWith();
     await user.click(analyzeButton());
-    await screen.findByRole("tab", { name: /charts \(11\)/i });
+    await screen.findByRole("tab", { name: /charts \(3\)/i });
 
-    for (let index = 0; index < 11; index += 1) {
+    // Three ticked for Add to Curator...
+    for (let index = 0; index < 3; index += 1) {
       await user.click(
         screen.getByRole("checkbox", {
-          name: new RegExp(`select figure${index}\\.png`, "i"),
+          name: new RegExp(`select figure${index}\.png`, "i"),
         })
       );
     }
-    await user.click(enhanceButton());
+
+    // ...and one enhanced, without clearing any of them.
+    await user.click(enhanceButton("chart-1"));
     await screen.findByRole("heading", { name: /send .* to gemini\?/i });
+    axios.post.mockResolvedValue({
+      data: { suggestions: { "chart-1": { description: "d", keywords: [],
+                                          confidence: "low" } } },
+    });
     await user.click(consentBox());
     await user.click(sendButton());
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
 
-    expect(
-      await screen.findByText(/at most 10 candidates — you have 11 selected/i)
-    ).toBeInTheDocument();
-    expect(axios.post).toHaveBeenCalledTimes(1);
+    const [url, body] = axios.post.mock.calls[1];
+    expect(url).toBe("/api/curation/describe-candidates");
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].id).toBe("chart-1");
+
+    // Every Add checkbox is still ticked.
+    for (let index = 0; index < 3; index += 1) {
+      expect(
+        screen.getByRole("checkbox", {
+          name: new RegExp(`select figure${index}\.png`, "i"),
+        })
+      ).toBeChecked();
+    }
   }, 30000);
 
   it("is non-blocking when Gemini is not configured", async () => {
@@ -1881,6 +1911,11 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
       await screen.findByText(/not configured on this server/i)
     ).toBeInTheDocument();
     // The deterministic review is unaffected and still appliable.
+    // The failure is local to that candidate: the rest of the dialog works,
+    // and Add becomes available as soon as something is ticked.
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    );
     expect(
       screen.getByRole("button", { name: /add selected items to curator/i })
     ).toBeEnabled();
@@ -2108,7 +2143,7 @@ describe("AI proposals land only where the record can hold them", () => {
       screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
     );
     await user.click(
-      screen.getByRole("button", { name: /enhance selected with ai/i })
+      screen.getByTestId("enhance-script-0")
     );
     await screen.findByRole("heading", { name: /send .* to gemini\?/i });
     axios.post.mockResolvedValue({ data: { suggestions } });
@@ -2171,5 +2206,195 @@ describe("AI proposals land only where the record can hold them", () => {
     expect(kind).toBe("script");
     expect(records[0].keywords).toEqual(["phonons"]);
     expect(records[0]).not.toHaveProperty("URLs");
+  });
+});
+
+// A chart folder may hold several legitimate images. None is hidden, none is
+// chosen for the curator, and no path may end up in two places at once.
+describe("multi-image chart folders", () => {
+  const MULTI = {
+    ...analysis,
+    candidates: {
+      ...analysis.candidates,
+      charts: [
+        {
+          ...analysis.candidates.charts[0],
+          id: "chart-0",
+          label: "figure_S1",
+          paths: [
+            "charts/figure_S1/diagram.png",
+            "charts/figure_S1/figure_S1.png",
+            "charts/figure_S1/figure_S1.ipynb",
+          ],
+          proposal: {
+            imageFile: "charts/figure_S1/figure_S1.png",
+            files: [],
+            notebookFile: "charts/figure_S1/figure_S1.ipynb",
+            number: "",
+            caption: "",
+            properties: [],
+            extraFields: [],
+          },
+          image_options: [
+            { path: "charts/figure_S1/diagram.png",
+              reason: "image found in this chart folder" },
+            { path: "charts/figure_S1/figure_S1.png",
+              reason: "filename matches the chart folder" },
+          ],
+        },
+      ],
+    },
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: MULTI });
+  });
+
+  const openRoles = async (user) => {
+    await user.click(analyzeButton());
+    await screen.findByRole("tab", { name: /charts \(1\)/i });
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+    return screen.findByTestId("image-roles-chart-0");
+  };
+
+  const roleSelect = (name) =>
+    screen.getByLabelText(new RegExp(`role for ${name}`, "i"));
+
+  const setRole = async (user, name, label) => {
+    await user.click(roleSelect(name));
+    await user.click(await screen.findByRole("option", { name: label }));
+  };
+
+  const addToCurator = async (user) => {
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure_S1/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /add selected items to curator/i })
+    );
+  };
+
+  it("says how many images it found and names every one", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    const panel = await openRoles(user);
+
+    expect(panel).toHaveTextContent("2 images found");
+    expect(panel).toHaveTextContent("diagram.png");
+    expect(panel).toHaveTextContent("figure_S1.png");
+    // The reason each one is listed is shown too.
+    expect(panel).toHaveTextContent(/filename matches the chart folder/i);
+  });
+
+  it("preselects the suggested primary and nothing else", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openRoles(user);
+
+    expect(roleSelect("figure_S1.png")).toHaveTextContent("Primary image");
+    expect(roleSelect("diagram.png")).toHaveTextContent("Unused");
+  });
+
+  it("lets the curator switch the primary without losing the other image",
+     async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await openRoles(user);
+
+    await setRole(user, "diagram.png", "Primary image");
+
+    // Exactly one primary, and the previous one is still choosable.
+    expect(roleSelect("diagram.png")).toHaveTextContent("Primary image");
+    expect(roleSelect("figure_S1.png")).toHaveTextContent("Unused");
+
+    await addToCurator(user);
+    const [, records] = addMany.mock.calls[0];
+    expect(records).toHaveLength(1);
+    expect(records[0].imageFile).toBe("charts/figure_S1/diagram.png");
+  });
+
+  it("adds a Related image to the chart's files, deduplicated", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await openRoles(user);
+
+    await setRole(user, "diagram.png", "Related file");
+    await addToCurator(user);
+
+    const [, records] = addMany.mock.calls[0];
+    expect(records).toHaveLength(1);
+    expect(records[0].files).toEqual(["charts/figure_S1/diagram.png"]);
+    expect(records[0].imageFile).toBe("charts/figure_S1/figure_S1.png");
+  });
+
+  it("creates a second incomplete chart, without duplicating the path",
+     async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await openRoles(user);
+
+    await setRole(user, "diagram.png", "Create as separate Chart");
+    await addToCurator(user);
+
+    const [kind, records] = addMany.mock.calls[0];
+    expect(kind).toBe("chart");
+    expect(records).toHaveLength(2);
+
+    const [original, separate] = records;
+    expect(original.imageFile).toBe("charts/figure_S1/figure_S1.png");
+    // NOT also a related file of the original.
+    expect(original.files).not.toContain("charts/figure_S1/diagram.png");
+
+    expect(separate.imageFile).toBe("charts/figure_S1/diagram.png");
+    // Incomplete on purpose, like any other folder proposal.
+    expect(separate.caption).toBe("");
+    expect(separate.number).toBe("");
+    expect(separate.properties).toEqual([]);
+    // The notebook name does not match, so it stays with the original.
+    expect(separate.notebookFile).toBe("");
+  });
+
+  it("never lets one path hold two roles at once", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await openRoles(user);
+
+    await setRole(user, "diagram.png", "Related file");
+    await setRole(user, "diagram.png", "Create as separate Chart");
+    await addToCurator(user);
+
+    const [, records] = addMany.mock.calls[0];
+    const everywhere = records.flatMap((record) =>
+      [record.imageFile].concat(record.files || [])
+    );
+    const diagrams = everywhere.filter(
+      (path) => path === "charts/figure_S1/diagram.png"
+    );
+    expect(diagrams).toHaveLength(1);
+  });
+
+  it("shows the filename and an Open image action for every option",
+     async () => {
+    const user = userEvent.setup();
+    renderWith();
+    const panel = await openRoles(user);
+
+    // The file server root is known here, so both images offer a direct link.
+    const links = Array.from(panel.querySelectorAll("a"));
+    expect(links).toHaveLength(2);
+    links.forEach((link) => expect(link).toHaveTextContent(/open image/i));
+    expect(links[0].getAttribute("href")).toContain("diagram.png");
+  });
+
+  it("leaves a single-image chart with no role controls at all", async () => {
+    const user = userEvent.setup();
+    axios.post.mockResolvedValue({ data: analysis });
+    renderWith();
+    await user.click(analyzeButton());
+    await screen.findByRole("tab", { name: /charts \(1\)/i });
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+
+    expect(screen.queryByTestId("image-roles-chart-0")).toBeNull();
   });
 });
