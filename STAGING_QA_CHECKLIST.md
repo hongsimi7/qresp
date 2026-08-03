@@ -170,8 +170,22 @@ a single server-wide `limit_req` throttled every request, so one page load's
 - [ ] The section offers NO AI action: no "Suggest missing publication
       details with AI", no AI dialog, no mention of Gemini
 - [ ] "Qresp Curation Information" holds PIs / PaperStack / Keywords /
-      notebook, and Keywords is a plain text field — no "Suggest Keywords
-      with AI" button, no manuscript-consent checkbox, no full-source option
+      notebook. "Suggest Keywords with AI" sits under the Keywords field —
+      and NOT in Publication Information
+- [ ] The keyword dialog names what it sends before anything leaves: the
+      paper's own fields and the artifacts already added. It states that no
+      file, notebook, image, path or RCC URL is sent. No manuscript-consent
+      checkbox and no full-source option anywhere
+- [ ] Suggestions arrive all unticked, tagged "Existing Qresp keyword" or
+      "New suggestion"; Apply Selected Keywords APPENDS to what you typed
+      (a keyword you already have is not duplicated, and your spelling wins)
+- [ ] Applying keywords does not save or collapse Qresp Curation Information
+- [ ] With the provider unconfigured the button explains that, without
+      calling out; over quota it says so distinctly
+- [ ] Fetch a DOI, do NOT press the section Save, press Save Draft, then
+      Resume the draft: every fetched field comes back
+- [ ] Apply AI keywords, do NOT press the section Save, press Save Draft,
+      then Resume: the keywords come back
 - [ ] Paste a real DOI → Fetch → Kind, Title, Authors, Journal Name, Volume,
       Page, Year, Abstract and URL fill in from the registry
 - [ ] Fetch a DOI whose registry record lacks a journal or page → those

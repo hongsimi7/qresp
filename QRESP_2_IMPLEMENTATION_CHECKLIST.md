@@ -10,7 +10,7 @@ Direction change 2026-08-03 (supervisor): **AI is limited to RCC candidate descr
 | Area | Source of values | AI |
 | --- | --- | --- |
 | Publication metadata | Manual entry + Crossref via DOI Fetch | **None, by design** |
-| Qresp keywords | Curator entry | **None** |
+| Qresp keywords | Curator entry, plus optional Gemini suggestion from the record's OWN metadata | Optional, consent-gated |
 | RCC artifacts | Deterministic Folder Standard v1 discovery | Optional Gemini description enrichment |
 
 Bibliography is factual data with an authoritative registry, so it is not a
@@ -60,10 +60,17 @@ auto-saved or auto-published.
   computed from the DOI.
 - **Removed:** manuscript-source upload (`POST /api/import/manuscript`, .pdf /
   .tex / Overleaf .zip, with its parsers, review dialog and `pypdf`
-  dependency), AI proposal of publication metadata
-  (`POST /api/assist/publication-metadata`), and AI keyword suggestion
-  (`POST /api/assist/keywords`) with its consent and full-source UI.
-  `MANUSCRIPT_IMPORT.md` was deleted with the feature it documented.
+  dependency) and AI proposal of publication metadata
+  (`POST /api/assist/publication-metadata`). `MANUSCRIPT_IMPORT.md` was
+  deleted with the feature it documented.
+- **Keyword AI restored 2026-08-03, without the manuscript:**
+  `POST /api/assist/keywords` reads only the record's own metadata -- the
+  bibliographic fields, and the caption/properties/description/keywords/
+  packageName/facility/measurement of artifacts already accepted into the
+  record. No file, path, RCC URL, unclassified file, unaccepted candidate or
+  account detail is accepted. One provider call per request, the existing
+  quota, and suggestions ranked against the site's existing keyword
+  vocabulary and labelled "Existing Qresp keyword" or "New suggestion".
 - **Why:** publication metadata is factual data with an authoritative
   registry, and Qresp keywords are a curator judgement. Neither is a task for
   a language model, and neither needs a manuscript upload.
