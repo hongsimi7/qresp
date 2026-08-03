@@ -57,10 +57,35 @@ const UNCLASSIFIED_ROWS = 25;
 // is never touched by AI.
 const AI_TARGETS = {
   chart: { description: "caption", keywords: "properties" },
-  dataset: { description: "readme", keywords: null },
-  script: { description: "readme", keywords: null },
+  dataset: { description: "readme", keywords: "keywords" },
+  script: { description: "readme", keywords: "keywords" },
+  // A Tool has no keyword field in Qresp. The server never asks for keywords
+  // for one and strips any that come back, so there is nothing to render.
   tool: { description: "description", keywords: null },
 };
+
+// What each record type needs before its own Add/Edit form will save it, and
+// before the record can be published. A folder proposal may be added while
+// these are still blank -- that is the point of a review step -- so this is
+// used for marking and for the publish check, never to block adding.
+const REQUIRED_FIELDS = {
+  chart: ["caption", "number", "imageFile", "properties"],
+  dataset: ["files", "readme"],
+  script: ["files", "readme"],
+  // Folder analysis only ever proposes software tools; an experiment is
+  // never inferred, so only the software fields are marked here.
+  tool: ["packageName", "version"],
+};
+
+const isRequired = (kind, field) =>
+  (REQUIRED_FIELDS[kind] || []).includes(field);
+
+// Only a MISSING REQUIRED field needs the curator. An empty Keywords or URLs
+// is a complete record, not an unfinished one.
+const missingRequired = (kind, draft = {}) =>
+  (REQUIRED_FIELDS[kind] || []).filter(
+    (field) => !String(draft[field] || "").trim()
+  );
 
 const list = (value) => (Array.isArray(value) ? value.join(", ") : value || "");
 
@@ -101,7 +126,15 @@ const toDraft = (candidate) => {
       patches: list(p.patches),
     };
   }
-  return { files: list(p.files), readme: p.readme || "", URLs: list(p.URLs) };
+  // keywords is a field of its own. It shares nothing with URLs -- the two
+  // were conflated in the curator form for a long time, and this is where
+  // an AI keyword proposal now lands for a dataset or a script.
+  return {
+    files: list(p.files),
+    readme: p.readme || "",
+    keywords: list(p.keywords),
+    URLs: list(p.URLs),
+  };
 };
 
 // The draft mapped back to the exact shape the manual Add forms store, so an
@@ -135,6 +168,7 @@ const toRecord = (kind, draft) => {
   return {
     files: split(draft.files),
     readme: draft.readme,
+    keywords: split(draft.keywords),
     URLs: split(draft.URLs),
     extraFields: [],
   };
@@ -224,6 +258,7 @@ const FIELD_LABELS = {
   urls: "URL",
   patches: "Patches (comma separated)",
   readme: "Description",
+  keywords: "Keywords (comma separated)",
   URLs: "URLs (comma separated)",
 };
 
@@ -611,6 +646,8 @@ const FolderAnalysis = ({ path }) => {
             {keywords.map((keyword) => (
               <Chip key={keyword} size="small" variant="outlined" label={keyword} />
             ))}
+            {/* keywordField is always set when keywords arrive: the server
+                does not return them for a type that cannot hold them. */}
             {keywordField ? (
               <Button
                 size="small"
@@ -621,11 +658,7 @@ const FolderAnalysis = ({ path }) => {
               >
                 {`Use as ${FIELD_LABELS[keywordField] || keywordField}`}
               </Button>
-            ) : (
-              <Typography variant="caption" color="text.secondary">
-                suggested keywords — this record type has no keyword field
-              </Typography>
-            )}
+            ) : null}
           </Box>
         )}
       </Box>
@@ -634,7 +667,7 @@ const FolderAnalysis = ({ path }) => {
 
   const renderCandidate = (candidate) => {
     const draft = drafts[candidate.id] || {};
-    const needs = candidate.needs_input || [];
+    const needs = missingRequired(candidate.kind, draft);
     const { primary, secondary, full } = labelOf(candidate);
     const isSelected = Boolean(selected[candidate.id]);
     // Fields appear once the candidate matters: it is selected, or the
@@ -697,8 +730,17 @@ const FolderAnalysis = ({ path }) => {
               data-testid={`confidence-${candidate.id}`}
             />
             {needs.length > 0 && (
-              <Tooltip title={`Needs your input: ${needs.join(", ")}`}>
-                <Chip size="small" color="warning" label="needs input" />
+              <Tooltip
+                title={`Required before Save/Update and Publish: ${needs
+                  .map((field) => FIELD_LABELS[field] || field)
+                  .join(", ")}`}
+              >
+                <Chip
+                  size="small"
+                  color="warning"
+                  label="needs input"
+                  data-testid={`needs-input-${candidate.id}`}
+                />
               </Tooltip>
             )}
           </Box>
@@ -781,6 +823,16 @@ const FolderAnalysis = ({ path }) => {
         <Collapse in={fieldsVisible} unmountOnExit>
           {/* Deliberate separation from the header/evidence above. */}
           <Divider sx={{ mt: 2 }} />
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            display="block"
+            sx={{ mt: 1, pl: { xs: 0, sm: 5 } }}
+            data-testid={`required-note-${candidate.id}`}
+          >
+            * Required before Save/Update and Publish. Folder proposals may be
+            added incomplete.
+          </Typography>
           <Grid
             container
             spacing={2}
@@ -789,19 +841,25 @@ const FolderAnalysis = ({ path }) => {
           >
             {Object.keys(draft).map((field) => {
               const evidence = (candidate.field_evidence || {})[field];
+              const required = isRequired(candidate.kind, field);
+              const blank = !String(draft[field] || "").trim();
               return (
                 <Grid key={field} size={{ xs: 12, md: 6 }}>
                   <TextField
                     fullWidth
                     size="small"
                     label={FIELD_LABELS[field] || field}
+                    // MUI renders the asterisk and sets aria-required, so the
+                    // marker is real semantics rather than a character glued
+                    // onto the label text.
+                    required={required}
                     value={draft[field]}
                     onChange={(event) =>
                       setField(candidate.id, field, event.target.value)
                     }
                     helperText={
-                      needs.includes(field)
-                        ? "Qresp could not determine this — please fill it in."
+                      required && blank
+                        ? "Required before Save/Update and Publish."
                         : " "
                     }
                   />

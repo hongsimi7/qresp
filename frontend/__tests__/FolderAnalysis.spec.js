@@ -254,18 +254,18 @@ describe("Analyze RCC Folder", () => {
     await openAnalysis(user);
 
     // A compact card: no six empty inputs sitting there by default.
-    expect(screen.queryByLabelText(/^caption$/i)).toBeNull();
-    expect(screen.queryByLabelText(/^image file$/i)).toBeNull();
+    expect(screen.queryByLabelText(/^caption ?\*?$/i)).toBeNull();
+    expect(screen.queryByLabelText(/^image file ?\*?$/i)).toBeNull();
     expect(screen.queryAllByRole("textbox")).toHaveLength(0);
 
     // Selecting reveals them...
     await user.click(
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
-    expect(await screen.findByLabelText(/^caption$/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/^image file$/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/^caption ?\*?$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^image file ?\*?$/i)).toBeInTheDocument();
     expect(
-      screen.getAllByText(/qresp could not determine this/i).length
+      screen.getAllByText(/required before save\/update and publish/i).length
     ).toBeGreaterThan(0);
   });
 
@@ -276,7 +276,7 @@ describe("Analyze RCC Folder", () => {
 
     await user.click(screen.getByRole("button", { name: /edit proposal/i }));
 
-    expect(await screen.findByLabelText(/^caption$/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/^caption ?\*?$/i)).toBeInTheDocument();
     expect(
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     ).not.toBeChecked();
@@ -316,8 +316,13 @@ describe("Analyze RCC Folder", () => {
     const fields = await screen.findByTestId("fields-chart-0");
     // ...and when open it is a spaced grid, visually detached from the
     // header/evidence above (a divider precedes it).
-    expect(fields.previousElementSibling).toHaveClass("MuiDivider-root");
-    expect(screen.getByLabelText(/^caption$/i)).toBeInTheDocument();
+    // Divider, then the one-line required note, then the grid.
+    const note = fields.previousElementSibling;
+    expect(note).toHaveTextContent(
+      /required before save\/update and publish/i
+    );
+    expect(note.previousElementSibling).toHaveClass("MuiDivider-root");
+    expect(screen.getByLabelText(/^caption ?\*?$/i)).toBeInTheDocument();
   });
 
   it("labels evidence per field, not one badge for the whole card", async () => {
@@ -784,7 +789,7 @@ describe("Analyze RCC Folder", () => {
     await user.click(
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
-    await user.type(screen.getByLabelText(/^caption$/i), "Density of states");
+    await user.type(screen.getByLabelText(/^caption ?\*?$/i), "Density of states");
     await user.click(
       screen.getByRole("button", { name: /add selected items to curator/i })
     );
@@ -1556,7 +1561,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     );
     expect(screen.getByText(/not applied/i)).toBeInTheDocument();
     // Nothing was written into the form and nothing was added.
-    expect(screen.getByLabelText(/^description$/i)).toHaveValue("");
+    expect(screen.getByLabelText(/^description ?\*?$/i)).toHaveValue("");
     expect(addMany).not.toHaveBeenCalled();
   });
 
@@ -1596,9 +1601,9 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     });
     await screen.findByTestId("ai-confidence-script-0");
 
-    expect(screen.getByLabelText(/^description$/i)).toHaveValue("");
+    expect(screen.getByLabelText(/^description ?\*?$/i)).toHaveValue("");
     await user.click(screen.getByRole("button", { name: /use as description/i }));
-    expect(screen.getByLabelText(/^description$/i)).toHaveValue("AI text");
+    expect(screen.getByLabelText(/^description ?\*?$/i)).toHaveValue("AI text");
 
     // Accepting is not adding: Curator state is still untouched.
     expect(addMany).not.toHaveBeenCalled();
@@ -1612,7 +1617,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     await user.click(
       screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
     );
-    await user.type(screen.getByLabelText(/^description$/i), "Mine");
+    await user.type(screen.getByLabelText(/^description ?\*?$/i), "Mine");
     await user.click(enhanceButton());
     await screen.findByRole("heading", { name: /send .* to gemini\?/i });
     await consentAndSend(user, {
@@ -1624,7 +1629,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
 
     // The suggestion is visible but cannot be applied over the user's text.
     expect(screen.getByText("AI text")).toBeInTheDocument();
-    expect(screen.getByLabelText(/^description$/i)).toHaveValue("Mine");
+    expect(screen.getByLabelText(/^description ?\*?$/i)).toHaveValue("Mine");
     expect(
       screen.getByRole("button", { name: /use as description/i })
     ).toBeDisabled();
@@ -1656,20 +1661,20 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     });
     await screen.findByTestId("ai-confidence-chart-0");
 
-    expect(screen.getByLabelText(/^image file$/i)).toHaveValue(
+    expect(screen.getByLabelText(/^image file ?\*?$/i)).toHaveValue(
       "figures/figure1.png"
     );
-    expect(screen.getByLabelText(/figure number/i)).toHaveValue("");
-    expect(screen.getByLabelText(/^notebook file$/i)).toHaveValue("");
+    expect(screen.getByLabelText(/figure number/i, { selector: "input" })).toHaveValue("");
+    expect(screen.getByLabelText(/^notebook file ?\*?$/i)).toHaveValue("");
     expect(screen.getByLabelText(/^files/i)).toHaveValue("");
 
     // Only caption/properties are offered, and only on request.
     await user.click(screen.getByRole("button", { name: /use as caption/i }));
-    expect(screen.getByLabelText(/^caption$/i)).toHaveValue("A nice figure");
-    expect(screen.getByLabelText(/^image file$/i)).toHaveValue(
+    expect(screen.getByLabelText(/^caption ?\*?$/i)).toHaveValue("A nice figure");
+    expect(screen.getByLabelText(/^image file ?\*?$/i)).toHaveValue(
       "figures/figure1.png"
     );
-    expect(screen.getByLabelText(/figure number/i)).toHaveValue("");
+    expect(screen.getByLabelText(/figure number/i, { selector: "input" })).toHaveValue("");
   });
 
   it("offers no keyword target where the record type has no keyword field", async () => {
@@ -1691,9 +1696,15 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     await screen.findByTestId("ai-confidence-script-0");
 
     expect(screen.getByText("md")).toBeInTheDocument();
+    // A script stores keywords in its own field, so the suggestion has
+    // somewhere to go and the dead-end message is gone.
     expect(
-      screen.getByText(/this record type has no keyword field/i)
+      screen.queryByText(/this record type has no keyword field/i)
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /use as keywords/i })
     ).toBeInTheDocument();
+    // ...and never into a chart's properties.
     expect(
       screen.queryByRole("button", { name: /use as properties/i })
     ).toBeNull();
@@ -1970,5 +1981,184 @@ describe("Analyze RCC Folder applied into real Curator state", () => {
     expect(ids[0]).toBe("c0:hand-made.png");
     expect(ids.map((entry) => entry.split(":")[0])).toEqual(["c0", "c1", "c2"]);
     expect(new Set(ids).size).toBe(3);
+  });
+});
+
+// The field contract, per record type. Folder analysis is a review step: a
+// proposal may be added while required fields are still blank, because the
+// curator finishes them in the section afterwards. What must NOT happen is a
+// suggestion arriving for a field the record cannot hold, or an optional
+// field being reported as missing.
+describe("Folder Analysis field contract", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: analysis });
+  });
+
+  const openFields = async (user, tab, name, id) => {
+    await openAnalysis(user);
+    if (tab) await user.click(screen.getByRole("tab", { name: tab }));
+    await user.click(screen.getByRole("checkbox", { name }));
+    return screen.findByTestId(`fields-${id}`);
+  };
+
+  const input = (pattern) =>
+    screen.getByLabelText(pattern, { selector: "input" });
+
+  it("gives a dataset a Keywords field separate from URLs", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openFields(user, /datasets \(1\)/i, /select short_traj/i,
+                     "dataset-0");
+
+    const keywords = input(/^keywords/i);
+    const urls = input(/^urls/i);
+    expect(keywords).not.toBe(urls);
+
+    // Typing in one leaves the other alone.
+    await user.type(keywords, "density functional theory");
+    expect(urls).toHaveValue("");
+    expect(keywords).toHaveValue("density functional theory");
+  });
+
+  it("marks only required fields, and says what the marker means", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openFields(user, null, /select figure1\.png/i, "chart-0");
+
+    expect(input(/^caption ?\*?$/i)).toBeRequired();
+    expect(input(/^image file ?\*?$/i)).toBeRequired();
+    // Optional for a chart.
+    expect(input(/^notebook file ?\*?$/i)).not.toBeRequired();
+    expect(input(/^files/i)).not.toBeRequired();
+
+    expect(screen.getByTestId("required-note-chart-0")).toHaveTextContent(
+      "* Required before Save/Update and Publish. Folder proposals may be " +
+        "added incomplete."
+    );
+  });
+
+  it("does not call an empty optional field a missing one", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openFields(user, /scripts \(1\)/i, /select plot_vdos\.py/i,
+                     "script-0");
+
+    // readme is blank and required, so the badge is there...
+    expect(screen.getByTestId("needs-input-script-0")).toBeInTheDocument();
+
+    await user.type(input(/^description ?\*?$/i), "Plots the VDOS");
+
+    // ...and it goes once the REQUIRED field is filled, even though Keywords
+    // and URLs are still empty.
+    await waitFor(() =>
+      expect(screen.queryByTestId("needs-input-script-0")).toBeNull()
+    );
+    expect(input(/^keywords/i)).toHaveValue("");
+    expect(input(/^urls/i)).toHaveValue("");
+  });
+
+  it("adds a candidate to the Curator with required fields still blank",
+     async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await openFields(user, /scripts \(1\)/i, /select plot_vdos\.py/i,
+                     "script-0");
+
+    // The description is required and deliberately left blank.
+    await user.click(
+      screen.getByRole("button", { name: /add selected items to curator/i })
+    );
+
+    expect(addMany).toHaveBeenCalledTimes(1);
+    const [kind, records] = addMany.mock.calls[0];
+    expect(kind).toBe("script");
+    expect(records).toHaveLength(1);
+    expect(records[0].readme).toBe("");
+    // ...and it carries the separate keywords list.
+    expect(records[0].keywords).toEqual([]);
+    expect(records[0].URLs).toEqual([]);
+  });
+});
+
+describe("AI proposals land only where the record can hold them", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: analysis });
+  });
+
+  const input = (pattern) =>
+    screen.getByLabelText(pattern, { selector: "input" });
+
+  const suggestForScript = async (user, suggestions) => {
+    await openAnalysis(user);
+    await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
+    await user.click(
+      screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /enhance selected with ai/i })
+    );
+    await screen.findByRole("heading", { name: /send .* to gemini\?/i });
+    axios.post.mockResolvedValue({ data: { suggestions } });
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /i agree to send this evidence to gemini for this request/i,
+      })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /send and get suggestions/i })
+    );
+    return screen.findByTestId("ai-confidence-script-0");
+  };
+
+  it("accepts script keywords into keywords, never into URLs", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await suggestForScript(user, {
+      "script-0": {
+        description: "Plots the VDOS.",
+        keywords: ["vibrational spectra", "phonons"],
+        confidence: "medium",
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: /use as keywords/i }));
+
+    expect(input(/^keywords/i)).toHaveValue("vibrational spectra, phonons");
+    expect(input(/^urls/i)).toHaveValue("");
+  });
+
+  it("accepting a suggestion adds, saves and publishes nothing", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await suggestForScript(user, {
+      "script-0": { description: "Plots the VDOS.", keywords: ["phonons"],
+                    confidence: "medium" },
+    });
+
+    await user.click(screen.getByRole("button", { name: /use as keywords/i }));
+
+    expect(addMany).not.toHaveBeenCalled();
+    expect(axios.put).not.toHaveBeenCalled();
+  });
+
+  it("carries an accepted keyword through to the applied record", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await suggestForScript(user, {
+      "script-0": { description: "Plots the VDOS.", keywords: ["phonons"],
+                    confidence: "medium" },
+    });
+
+    await user.click(screen.getByRole("button", { name: /use as keywords/i }));
+    await user.click(
+      screen.getByRole("button", { name: /add selected items to curator/i })
+    );
+
+    const [kind, records] = addMany.mock.calls[0];
+    expect(kind).toBe("script");
+    expect(records[0].keywords).toEqual(["phonons"]);
+    expect(records[0].URLs).toEqual([]);
   });
 });
