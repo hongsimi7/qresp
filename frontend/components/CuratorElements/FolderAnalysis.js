@@ -19,6 +19,7 @@ import {
   Grid,
   Tab,
   Tabs,
+  MenuItem,
   TextField,
   Tooltip,
   Typography,
@@ -620,14 +621,16 @@ const FolderAnalysis = ({ path }) => {
             />
             {needs.length > 0 && (
               <Tooltip
-                title={`Required before Save/Update and Publish: ${needs
+                title={`Missing: ${needs
                   .map((field) => labelFor(candidate.kind, field))
                   .join(", ")}`}
               >
                 <Chip
                   size="small"
                   color="warning"
-                  label="needs input"
+                  label={`${needs.length} required field${
+                    needs.length === 1 ? "" : "s"
+                  } missing`}
                   data-testid={`needs-input-${candidate.id}`}
                 />
               </Tooltip>
@@ -712,16 +715,6 @@ const FolderAnalysis = ({ path }) => {
         <Collapse in={fieldsVisible} unmountOnExit>
           {/* Deliberate separation from the header/evidence above. */}
           <Divider sx={{ mt: 2 }} />
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            display="block"
-            sx={{ mt: 1, pl: { xs: 0, sm: 5 } }}
-            data-testid={`required-note-${candidate.id}`}
-          >
-            * Required before Save/Update and Publish. Folder proposals may be
-            added incomplete.
-          </Typography>
           <Grid
             container
             spacing={2}
@@ -735,14 +728,23 @@ const FolderAnalysis = ({ path }) => {
               // whether or not the field is required, so an OPTIONAL field
               // never carries that chip: an empty Keywords or Notebook File
               // is a complete record, not an unfinished one.
-              const rawEvidence = (candidate.field_evidence || {})[field];
-              const evidence =
-                !required && rawEvidence === "needs_input" ? null : rawEvidence;
+              // Standing is only meaningful for a field that HAS a value.
+              // An empty field says "needs input" by being empty and marked
+              // required; a chip repeating it three ways is noise.
+              const evidence = blank
+                ? null
+                : (candidate.field_evidence || {})[field];
+              // When the deterministic pass found several images and refused
+              // to guess between them, the curator picks from what is there.
+              const choices = ((candidate.options || {})[field] || []).filter(
+                Boolean
+              );
               return (
                 <Grid key={field} size={{ xs: 12, md: 6 }}>
                   <TextField
                     fullWidth
                     size="small"
+                    select={choices.length > 1}
                     label={labelFor(candidate.kind, field)}
                     // MUI renders the asterisk and sets aria-required, so the
                     // marker is real semantics rather than a character glued
@@ -757,7 +759,21 @@ const FolderAnalysis = ({ path }) => {
                         ? "Required before Save/Update and Publish."
                         : " "
                     }
-                  />
+                  >
+                    {choices.length > 1
+                      ? [
+                          <MenuItem key="" value="">
+                            <em>Not selected</em>
+                          </MenuItem>,
+                        ].concat(
+                          choices.map((choice) => (
+                            <MenuItem key={choice} value={choice}>
+                              {basename(choice)}
+                            </MenuItem>
+                          ))
+                        )
+                      : null}
+                  </TextField>
                   {evidence ? (
                     <Chip
                       size="small"
@@ -819,9 +835,39 @@ const FolderAnalysis = ({ path }) => {
         </Box>
       </Tooltip>
 
-      <Dialog open={open} onClose={close} maxWidth="md" fullWidth>
-        <DialogTitle>Folder analysis</DialogTitle>
-        <DialogContent dividers>
+      <Dialog
+        open={open}
+        onClose={close}
+        maxWidth="md"
+        fullWidth
+        slotProps={{
+          paper: {
+            sx: {
+              // ONE scroll owner. The Paper must not scroll, or the dialog
+              // shows two nested vertical scrollbars and the page behind it
+              // moves with the wheel.
+              overflow: "hidden",
+              maxHeight: { xs: "100dvh", sm: "90dvh" },
+            },
+          },
+        }}
+      >
+        <DialogTitle sx={{ flexShrink: 0 }}>Folder analysis</DialogTitle>
+        <DialogContent
+          dividers
+          sx={{ overflowY: "auto", overscrollBehavior: "contain" }}
+        >
+          {/* Said ONCE, here, rather than repeated under every candidate. */}
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            display="block"
+            sx={{ mb: 2 }}
+            data-testid="required-note"
+          >
+            * Required before Save/Update and Publish. Folder proposals may be
+            added incomplete.
+          </Typography>
           {loading && (
             <Box sx={{ display: "flex", gap: 2, alignItems: "center" }}>
               <CircularProgress size={20} />
@@ -1219,7 +1265,7 @@ const FolderAnalysis = ({ path }) => {
             </Box>
           </Box>
         )}
-        <DialogActions>
+        <DialogActions sx={{ flexShrink: 0, flexWrap: "wrap", gap: 1 }}>
           <Button onClick={close}>Cancel</Button>
           <Button
             variant="contained"

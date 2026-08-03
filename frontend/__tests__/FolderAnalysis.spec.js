@@ -209,7 +209,9 @@ describe("Analyze RCC Folder", () => {
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     ).toBeInTheDocument();
     // The needs-input chip is a short badge; the field list is its tooltip.
-    expect(screen.getByText(/^needs input$/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/^\d+ required fields? missing$/i)
+    ).toBeInTheDocument();
   });
 
   it("uses compact labels per kind and keeps full paths under Details", async () => {
@@ -316,12 +318,9 @@ describe("Analyze RCC Folder", () => {
     const fields = await screen.findByTestId("fields-chart-0");
     // ...and when open it is a spaced grid, visually detached from the
     // header/evidence above (a divider precedes it).
-    // Divider, then the one-line required note, then the grid.
-    const note = fields.previousElementSibling;
-    expect(note).toHaveTextContent(
-      /required before save\/update and publish/i
-    );
-    expect(note.previousElementSibling).toHaveClass("MuiDivider-root");
+    expect(fields.previousElementSibling).toHaveClass("MuiDivider-root");
+    // The required note is stated ONCE, at the top of the dialog.
+    expect(screen.getAllByTestId("required-note")).toHaveLength(1);
     expect(screen.getByLabelText(/^caption ?\*?$/i)).toBeInTheDocument();
   });
 
@@ -355,15 +354,18 @@ describe("Analyze RCC Folder", () => {
     expect(
       await screen.findByTestId("field-evidence-chart-0-imageFile")
     ).toHaveTextContent("High evidence");
+    // A chip only appears on a field that HAS a value. An empty required
+    // field is already marked by its asterisk and helper text; an empty
+    // optional field says nothing at all.
     expect(
-      screen.getByTestId("field-evidence-chart-0-notebookFile")
-    ).toHaveTextContent("Medium evidence");
+      screen.queryByTestId("field-evidence-chart-0-number")
+    ).toBeNull();
     expect(
-      screen.getByTestId("field-evidence-chart-0-number")
-    ).toHaveTextContent("Needs input");
+      screen.queryByTestId("field-evidence-chart-0-notebookFile")
+    ).toBeNull();
     expect(
-      screen.getByTestId("field-evidence-chart-0-caption")
-    ).toHaveTextContent("Needs input");
+      screen.queryByTestId("field-evidence-chart-0-caption")
+    ).toBeNull();
   });
 
   it("shows filename hints in Details, clearly marked as unverified", async () => {
@@ -2040,7 +2042,7 @@ describe("Folder Analysis field contract", () => {
     expect(input(/^notebook file ?\*?$/i)).not.toBeRequired();
     expect(input(/^files/i)).not.toBeRequired();
 
-    expect(screen.getByTestId("required-note-chart-0")).toHaveTextContent(
+    expect(screen.getByTestId("required-note")).toHaveTextContent(
       "* Required before Save/Update and Publish. Folder proposals may be " +
         "added incomplete."
     );
