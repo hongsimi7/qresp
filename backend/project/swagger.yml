@@ -789,10 +789,12 @@ paths:
                   behaviour. Validated server-side before any candidate is
                   built.
                 items:
+                  # Deliberately not `required`/`enum` here. Every rejection
+                  # a curator can act on comes from validate_chart_plan, in
+                  # one place and in one voice, exactly as `boundaries` does
+                  # -- a raw JSON-schema violation is not a sentence anyone
+                  # can fix a folder from.
                   type: object
-                  required:
-                    - path
-                    - action
                   properties:
                     path:
                       type: string
@@ -802,8 +804,8 @@ paths:
                         any path not listed in chart_image_groups.
                     action:
                       type: string
-                      enum: ["chart", "supporting", "ignore"]
                       description: >-
+                        One of `chart`, `supporting` or `ignore`.
                         `chart` makes this image one Chart candidate of its
                         own; `supporting` appends it to the target Chart's
                         `files`; `ignore` creates nothing from it.

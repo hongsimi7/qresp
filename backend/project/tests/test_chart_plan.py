@@ -367,11 +367,29 @@ class TestPlanRejection(ChartPlanTestBase):
                               "target": DIAGRAM}],
                             "Only a supporting file may name a target")
 
+    def assert_refused_at_the_edge(self, plan):
+        """A shape the OpenAPI schema itself refuses, before the handler.
+
+        The rejection is still a 400 that costs nothing; only the sentence
+        comes from the framework rather than from validate_chart_plan, which
+        is asserted directly below for the same input.
+        """
+        response = self.request({"chart_plan": plan})
+        self.assertEqual(400, response.status_code, plan)
+        self.gemini.assert_not_called()
+        self.quota.assert_not_called()
+
     def test_a_plan_that_is_not_a_list(self):
-        self.assert_refused({"path": FIGURE}, "must be a list of images")
+        self.assert_refused_at_the_edge({"path": FIGURE})
+        with self.assertRaises(folderstandard.ChartPlanError) as caught:
+            folderstandard.validate_chart_plan({"path": FIGURE}, [])
+        self.assertIn("must be a list of images", str(caught.exception))
 
     def test_an_entry_that_is_not_an_object(self):
-        self.assert_refused([FIGURE], "must be an object")
+        self.assert_refused_at_the_edge([FIGURE])
+        with self.assertRaises(folderstandard.ChartPlanError) as caught:
+            folderstandard.validate_chart_plan([FIGURE], [])
+        self.assertIn("must be an object", str(caught.exception))
 
     def test_an_empty_path(self):
         self.assert_refused([{"path": "  ", "action": "chart"}],
