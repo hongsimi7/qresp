@@ -1,5 +1,5 @@
 import { useContext, useEffect } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 jest.mock("axios");
@@ -257,16 +257,16 @@ describe("Analyze RCC Folder", () => {
     await openAnalysis(user);
 
     // A compact card: no six empty inputs sitting there by default.
-    expect(screen.queryByLabelText(/^caption ?\*?$/i)).toBeNull();
-    expect(screen.queryByLabelText(/^image file ?\*?$/i)).toBeNull();
+    expect(screen.queryByLabelText(/^figure caption ?\*?$/i)).toBeNull();
+    expect(screen.queryByLabelText(/^figure image ?\*?$/i)).toBeNull();
     expect(screen.queryAllByRole("textbox")).toHaveLength(0);
 
     // Selecting reveals them...
     await user.click(
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
-    expect(await screen.findByLabelText(/^caption ?\*?$/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/^image file ?\*?$/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/^figure caption ?\*?$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^figure image ?\*?$/i)).toBeInTheDocument();
     expect(
       screen.getAllByText(/required before save\/update and publish/i).length
     ).toBeGreaterThan(0);
@@ -279,7 +279,7 @@ describe("Analyze RCC Folder", () => {
 
     await user.click(screen.getByRole("button", { name: /edit proposal/i }));
 
-    expect(await screen.findByLabelText(/^caption ?\*?$/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/^figure caption ?\*?$/i)).toBeInTheDocument();
     expect(
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     ).not.toBeChecked();
@@ -322,7 +322,7 @@ describe("Analyze RCC Folder", () => {
     expect(fields.previousElementSibling).toHaveClass("MuiDivider-root");
     // The required note is stated ONCE, at the top of the dialog.
     expect(screen.getAllByTestId("required-note")).toHaveLength(1);
-    expect(screen.getByLabelText(/^caption ?\*?$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^figure caption ?\*?$/i)).toBeInTheDocument();
   });
 
   it("labels evidence per field, not one badge for the whole card", async () => {
@@ -796,7 +796,7 @@ describe("Analyze RCC Folder", () => {
     await user.click(
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
-    await user.type(screen.getByLabelText(/^caption ?\*?$/i), "Density of states");
+    await user.type(screen.getByLabelText(/^figure caption ?\*?$/i), "Density of states");
     await user.click(
       screen.getByRole("button", { name: /add selected items to curator/i })
     );
@@ -1676,17 +1676,19 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     });
     await screen.findByTestId("ai-confidence-chart-0");
 
-    expect(screen.getByLabelText(/^image file ?\*?$/i)).toHaveValue(
+    expect(screen.getByLabelText(/^figure image ?\*?$/i)).toHaveValue(
       "figures/figure1.png"
     );
     expect(screen.getByLabelText(/figure number/i, { selector: "input" })).toHaveValue("");
-    expect(screen.getByLabelText(/^notebook file ?\*?$/i)).toHaveValue("");
-    expect(screen.getByLabelText(/^files/i)).toHaveValue("");
+    expect(screen.getByLabelText(/^reproduction notebook ?\*?$/i)).toHaveValue("");
+    expect(
+      screen.getByLabelText(/^input \/ supporting files/i)
+    ).toHaveValue("");
 
     // Only caption/properties are offered, and only on request.
-    await user.click(screen.getByRole("button", { name: /use as caption/i }));
-    expect(screen.getByLabelText(/^caption ?\*?$/i)).toHaveValue("A nice figure");
-    expect(screen.getByLabelText(/^image file ?\*?$/i)).toHaveValue(
+    await user.click(screen.getByRole("button", { name: /use as figure caption/i }));
+    expect(screen.getByLabelText(/^figure caption ?\*?$/i)).toHaveValue("A nice figure");
+    expect(screen.getByLabelText(/^figure image ?\*?$/i)).toHaveValue(
       "figures/figure1.png"
     );
     expect(screen.getByLabelText(/figure number/i, { selector: "input" })).toHaveValue("");
@@ -1817,7 +1819,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
       },
     });
     await screen.findByTestId("ai-confidence-chart-0");
-    await user.click(screen.getByRole("button", { name: /use as caption/i }));
+    await user.click(screen.getByRole("button", { name: /use as figure caption/i }));
 
     // Enhancing does not select anything, so Add is chosen explicitly.
     await user.click(
@@ -2072,11 +2074,11 @@ describe("Folder Analysis field contract", () => {
     renderWith();
     await openFields(user, null, /select figure1\.png/i, "chart-0");
 
-    expect(input(/^caption ?\*?$/i)).toBeRequired();
-    expect(input(/^image file ?\*?$/i)).toBeRequired();
+    expect(input(/^figure caption ?\*?$/i)).toBeRequired();
+    expect(input(/^figure image ?\*?$/i)).toBeRequired();
     // Optional for a chart.
-    expect(input(/^notebook file ?\*?$/i)).not.toBeRequired();
-    expect(input(/^files/i)).not.toBeRequired();
+    expect(input(/^reproduction notebook ?\*?$/i)).not.toBeRequired();
+    expect(input(/^input \/ supporting files/i)).not.toBeRequired();
 
     expect(screen.getByTestId("required-note")).toHaveTextContent(
       "* Required before Save/Update and Publish. Folder proposals may be " +
@@ -2209,265 +2211,468 @@ describe("AI proposals land only where the record can hold them", () => {
     expect(records[0]).not.toHaveProperty("URLs");
   });
 });
+// A Chart stores exactly ONE image, so the unit a curator decides about is the
+// image FILE, not the folder. Every image found is listed under the folder it
+// really sits in, each with one role, and the boundary panel is the only place
+// those roles are chosen — a candidate card shows the resulting Figure Image
+// and nothing else.
+describe("Charts in the record boundary panel", () => {
+  const FIGURE = "figures_tables/figure_S1/figure_S1.png";
+  const DIAGRAM = "figures_tables/figure_S1/diagram.png";
+  const NOTEBOOK = "figures_tables/figure_S1/figure_S1.ipynb";
 
-// A chart folder may hold several legitimate images. None is hidden, none is
-// chosen for the curator, and no path may end up in two places at once.
-describe("multi-image chart folders", () => {
-  const MULTI = {
-    ...analysis,
-    candidates: {
-      ...analysis.candidates,
-      charts: [
+  // Verbatim from the real /api/curation/analyze-folder response; the backend
+  // route test asserts this exact serialization.
+  const CHART_GROUPS = [
+    {
+      folder: "figures_tables/figure_S1",
+      role_root: "figures_tables",
+      images: [
         {
-          ...analysis.candidates.charts[0],
-          id: "chart-0",
-          label: "figure_S1",
-          paths: [
-            "charts/figure_S1/diagram.png",
-            "charts/figure_S1/figure_S1.png",
-            "charts/figure_S1/figure_S1.ipynb",
-          ],
-          proposal: {
-            imageFile: "charts/figure_S1/figure_S1.png",
-            files: [],
-            notebookFile: "charts/figure_S1/figure_S1.ipynb",
-            number: "",
-            caption: "",
-            properties: [],
-            extraFields: [],
-          },
-          // Verbatim from the real /api/curation/analyze-folder response;
-          // the backend route test asserts this exact serialization.
-          image_options: [
-            { path: "charts/figure_S1/diagram.png",
-              reason: "image found in this chart folder" },
-            { path: "charts/figure_S1/figure_S1.png",
-              reason: "filename matches the chart folder" },
-          ],
-          notebook_options: ["charts/figure_S1/figure_S1.ipynb"],
+          path: DIAGRAM,
+          reason: "image found in this chart folder",
+          suggested_action: "review",
+        },
+        {
+          path: FIGURE,
+          reason: "filename matches the chart folder",
+          suggested_action: "chart",
         },
       ],
+      notebooks: [{ path: NOTEBOOK }],
     },
-  };
+  ];
+
+  const chartCandidate = (id, imageFile, extra = {}) => ({
+    id,
+    kind: "chart",
+    label: imageFile.split("/").pop(),
+    file_count: 1,
+    confidence: "medium",
+    evidence: [`One chart: the image ${imageFile}`],
+    needs_input: ["caption", "number", "properties"],
+    paths: [imageFile],
+    proposal: {
+      imageFile,
+      files: [],
+      notebookFile: "",
+      number: "",
+      caption: "",
+      properties: [],
+      extraFields: [],
+      ...extra,
+    },
+  });
+
+  const withCharts = (extra = {}) => ({
+    ...analysis,
+    structure_mode: "standard",
+    boundary_trees: {},
+    chart_image_groups: CHART_GROUPS,
+    applied_chart_plan: [],
+    candidates: {
+      ...analysis.candidates,
+      charts: [chartCandidate("chart-0", FIGURE, { notebookFile: NOTEBOOK })],
+    },
+    ...extra,
+  });
+
+  // A legacy tree, so the Dataset/Script folder picker and the Charts section
+  // are on screen together.
+  const LEGACY = withCharts({
+    structure_mode: "legacy",
+    boundary_trees: {
+      data: {
+        role: "datasets",
+        nodes: [
+          { path: "data/DFT", name: "DFT", level: 1, file_count: 12,
+            extensions: [".in"], sample_names: [] },
+        ],
+      },
+    },
+  });
 
   beforeEach(() => {
     jest.clearAllMocks();
-    axios.post.mockResolvedValue({ data: MULTI });
+    axios.post.mockResolvedValue({ data: withCharts() });
   });
 
-  const openRoles = async (user) => {
-    await user.click(analyzeButton());
-    await screen.findByRole("tab", { name: /charts \(1\)/i });
-    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
-    return screen.findByTestId("image-roles-chart-0");
+  const openPanel = async (user) => {
+    await openAnalysis(user);
+    await user.click(
+      screen.getByRole("button", { name: /choose record boundaries/i })
+    );
+    return screen.findByTestId("chart-plan");
   };
 
   const roleSelect = (name) =>
-    screen.getByLabelText(new RegExp(`role for ${name}`, "i"));
+    screen.getByLabelText(new RegExp(`^role for ${name}`, "i"));
 
   const setRole = async (user, name, label) => {
     await user.click(roleSelect(name));
     await user.click(await screen.findByRole("option", { name: label }));
   };
 
-  const addToCurator = async (user) => {
+  const rebuild = async (user) =>
+    user.click(screen.getByRole("button", { name: /rebuild proposals/i }));
+
+  it("lists every image under the folder it really sits in", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    const panel = await openPanel(user);
+
+    expect(
+      screen.getByTestId("chart-folder-figures_tables/figure_S1")
+    ).toBeInTheDocument();
+    // The real folder path, not a name reconstructed from a candidate.
+    expect(panel).toHaveTextContent("figures_tables/figure_S1");
+    expect(panel).toHaveTextContent("figure_S1.png");
+    // The second image is NOT hidden just because Qresp would not pick it.
+    expect(panel).toHaveTextContent("diagram.png");
+    expect(panel).toHaveTextContent(/filename matches the chart folder/i);
+  });
+
+  it("shows a notebook as an attachment, never as a Chart choice", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPanel(user);
+
+    expect(screen.getByTestId(`chart-notebook-${NOTEBOOK}`)).toHaveTextContent(
+      /figure_S1\.ipynb — Reproduction Notebook/i
+    );
+    // No role control for it: a notebook is never a Chart of its own.
+    expect(screen.queryByLabelText(/^role for figure_S1\.ipynb/i)).toBeNull();
+    expect(screen.getAllByLabelText(/^role for /i)).toHaveLength(2);
+  });
+
+  it("defaults only the folder-named image to Create Chart", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPanel(user);
+
+    expect(roleSelect("figure_S1.png")).toHaveTextContent("Create Chart");
+    // Everything else waits for a decision, and says so on screen.
+    expect(roleSelect("diagram.png")).toHaveTextContent("Ignore");
+    expect(screen.getByTestId(`chart-review-${DIAGRAM}`)).toHaveTextContent(
+      "Review"
+    );
+    expect(screen.queryByTestId(`chart-review-${FIGURE}`)).toBeNull();
+  });
+
+  it("offers the three roles, and a Chart target only for a supporting file",
+     async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPanel(user);
+
+    await user.click(roleSelect("diagram.png"));
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent)
+    ).toEqual(["Create Chart", "Supporting File", "Ignore"]);
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText(/^chart for diagram\.png/i)).toBeNull();
+    await setRole(user, "diagram.png", "Supporting File");
+
+    const attach = screen.getByLabelText(/^chart for diagram\.png/i);
+    // It can only attach to a Chart in the same folder.
+    expect(attach).toHaveTextContent("figure_S1.png");
+  });
+
+  it("says so when a supporting file has no Chart to attach to", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPanel(user);
+
+    await setRole(user, "figure_S1.png", "Ignore");
+    await setRole(user, "diagram.png", "Supporting File");
+
+    expect(
+      screen.getByText(/a supporting file needs a Chart in\s+the same folder/i)
+    ).toBeInTheDocument();
+    // ...and the server is never asked to refuse it.
+    expect(
+      screen.getByRole("button", { name: /rebuild proposals/i })
+    ).toBeDisabled();
+  });
+
+  it("sends the folder boundaries AND the chart plan on Rebuild", async () => {
+    axios.post.mockResolvedValue({ data: LEGACY });
+    const user = userEvent.setup();
+    renderWith();
+    await openPanel(user);
+
     await user.click(
-      screen.getByRole("checkbox", { name: /select figure_S1/i })
+      screen.getByRole("checkbox", { name: "Use data/DFT as one record" })
+    );
+    await setRole(user, "diagram.png", "Supporting File");
+    await rebuild(user);
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+    expect(axios.post.mock.calls[1][1]).toEqual({
+      path: FOLDER,
+      boundaries: { data: ["data/DFT"] },
+      chart_plan: [
+        { path: DIAGRAM, action: "supporting", target: FIGURE },
+        { path: FIGURE, action: "chart" },
+      ],
+    });
+    // The first analysis carried neither: defaults are the default.
+    expect(axios.post.mock.calls[0][1]).toEqual({ path: FOLDER });
+  });
+
+  it("sends a plan with no boundaries when only roles changed", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPanel(user);
+
+    await setRole(user, "diagram.png", "Create Chart");
+    await rebuild(user);
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+    expect(axios.post.mock.calls[1][1]).toEqual({
+      path: FOLDER,
+      chart_plan: [
+        { path: DIAGRAM, action: "chart" },
+        { path: FIGURE, action: "chart" },
+      ],
+    });
+  });
+
+  it("two Create Chart images become two candidates, each with one image",
+     async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await openPanel(user);
+
+    axios.post.mockResolvedValueOnce({
+      data: withCharts({
+        applied_chart_plan: [
+          { path: DIAGRAM, action: "chart", target: "" },
+          { path: FIGURE, action: "chart", target: "" },
+        ],
+        candidates: {
+          ...analysis.candidates,
+          charts: [
+            chartCandidate("chart-0", DIAGRAM),
+            chartCandidate("chart-1", FIGURE, { notebookFile: NOTEBOOK }),
+          ],
+        },
+      }),
+    });
+    await setRole(user, "diagram.png", "Create Chart");
+    await rebuild(user);
+
+    await screen.findByRole("tab", { name: /charts \(2\)/i });
+    await user.click(
+      screen.getByRole("checkbox", { name: /select diagram\.png/i })
+    );
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure_S1\.png/i })
     );
     await user.click(
       screen.getByRole("button", { name: /add selected items to curator/i })
     );
-  };
-
-  it("says how many images it found and names every one", async () => {
-    const user = userEvent.setup();
-    renderWith();
-    const panel = await openRoles(user);
-
-    expect(panel).toHaveTextContent("2 images found");
-    expect(panel).toHaveTextContent("diagram.png");
-    expect(panel).toHaveTextContent("figure_S1.png");
-    // The reason each one is listed is shown too.
-    expect(panel).toHaveTextContent(/filename matches the chart folder/i);
-  });
-
-  it("preselects the suggested primary and nothing else", async () => {
-    const user = userEvent.setup();
-    renderWith();
-    await openRoles(user);
-
-    expect(roleSelect("figure_S1.png")).toHaveTextContent("Primary image");
-    expect(roleSelect("diagram.png")).toHaveTextContent("Unused");
-  });
-
-  it("lets the curator switch the primary without losing the other image",
-     async () => {
-    const user = userEvent.setup();
-    const { addMany } = renderWith();
-    await openRoles(user);
-
-    await setRole(user, "diagram.png", "Primary image");
-
-    // Exactly one primary, and the previous one is still choosable.
-    expect(roleSelect("diagram.png")).toHaveTextContent("Primary image");
-    expect(roleSelect("figure_S1.png")).toHaveTextContent("Unused");
-
-    await addToCurator(user);
-    const [, records] = addMany.mock.calls[0];
-    expect(records).toHaveLength(1);
-    expect(records[0].imageFile).toBe("charts/figure_S1/diagram.png");
-  });
-
-  it("adds a Related image to the chart's files, deduplicated", async () => {
-    const user = userEvent.setup();
-    const { addMany } = renderWith();
-    await openRoles(user);
-
-    await setRole(user, "diagram.png", "Related file");
-    await addToCurator(user);
-
-    const [, records] = addMany.mock.calls[0];
-    expect(records).toHaveLength(1);
-    expect(records[0].files).toEqual(["charts/figure_S1/diagram.png"]);
-    expect(records[0].imageFile).toBe("charts/figure_S1/figure_S1.png");
-  });
-
-  it("creates a second incomplete chart, without duplicating the path",
-     async () => {
-    const user = userEvent.setup();
-    const { addMany } = renderWith();
-    await openRoles(user);
-
-    await setRole(user, "diagram.png", "Create as separate Chart");
-    await addToCurator(user);
 
     const [kind, records] = addMany.mock.calls[0];
     expect(kind).toBe("chart");
     expect(records).toHaveLength(2);
-
-    const [original, separate] = records;
-    expect(original.imageFile).toBe("charts/figure_S1/figure_S1.png");
-    // NOT also a related file of the original.
-    expect(original.files).not.toContain("charts/figure_S1/diagram.png");
-
-    expect(separate.imageFile).toBe("charts/figure_S1/diagram.png");
-    // Incomplete on purpose, like any other folder proposal: with only the
-    // image set it is missing Figure Number, Caption and Keywords -- THREE
-    // required fields, which is what the summary chip will say.
-    expect(separate.caption).toBe("");
-    expect(separate.number).toBe("");
-    expect(separate.properties).toEqual([]);
-    expect(missingRequired("chart", separate)).toEqual([
-      "number",
-      "caption",
-      "properties",
+    expect(records.map((record) => record.imageFile)).toEqual([
+      DIAGRAM,
+      FIGURE,
     ]);
-    // The notebook name does not match, so it stays with the original.
-    expect(separate.notebookFile).toBe("");
-  });
-
-  it("never lets one path hold two roles at once", async () => {
-    const user = userEvent.setup();
-    const { addMany } = renderWith();
-    await openRoles(user);
-
-    await setRole(user, "diagram.png", "Related file");
-    await setRole(user, "diagram.png", "Create as separate Chart");
-    await addToCurator(user);
-
-    const [, records] = addMany.mock.calls[0];
-    const everywhere = records.flatMap((record) =>
-      [record.imageFile].concat(record.files || [])
-    );
-    const diagrams = everywhere.filter(
-      (path) => path === "charts/figure_S1/diagram.png"
-    );
-    expect(diagrams).toHaveLength(1);
-  });
-
-  it("shows the filename and an Open image action for every option",
-     async () => {
-    const user = userEvent.setup();
-    renderWith();
-    const panel = await openRoles(user);
-
-    // The file server root is known here, so both images offer a direct link.
-    const links = Array.from(panel.querySelectorAll("a"));
-    expect(links).toHaveLength(2);
-    links.forEach((link) => expect(link).toHaveTextContent(/open image/i));
-    expect(links[0].getAttribute("href")).toContain("diagram.png");
-  });
-
-  it("shows exactly one control for the primary image", async () => {
-    const user = userEvent.setup();
-    renderWith();
-    const panel = await openRoles(user);
-
-    // The role select is the only primary/related/separate controller. The
-    // generic field renderer used to draw a second Image File dropdown from
-    // a key the backend no longer sends.
-    expect(screen.getAllByLabelText(/^role for /i)).toHaveLength(2);
-    const imageField = screen.getByLabelText(/^image file ?\*?$/i, {
-      selector: "input",
+    records.forEach((record) => {
+      expect(record).not.toHaveProperty("imageFiles");
+      expect(record).not.toHaveProperty("relatedImageFiles");
+      // Incomplete on purpose, like any other folder proposal.
+      expect(missingRequired("chart", record)).toEqual([
+        "number",
+        "caption",
+        "properties",
+      ]);
     });
-    // A plain text input, not a select: no second chooser.
-    expect(imageField.tagName).toBe("INPUT");
-    expect(panel).not.toContainElement(imageField);
+    // Only the image whose name matches keeps the notebook.
+    expect(records[0].notebookFile).toBe("");
+    expect(records[1].notebookFile).toBe(NOTEBOOK);
   });
 
-  it("pairs a separate chart with its OWN notebook, never a shared one",
+  it("keeps a supporting file in the target Chart's files, not as a Chart",
      async () => {
     const user = userEvent.setup();
-    const both = JSON.parse(JSON.stringify(MULTI));
-    both.candidates.charts[0].notebook_options = [
-      "charts/figure_S1/diagram.ipynb",
-      "charts/figure_S1/figure_S1.ipynb",
-    ];
-    axios.post.mockResolvedValue({ data: both });
     const { addMany } = renderWith();
-    await openRoles(user);
+    await openPanel(user);
 
-    await setRole(user, "diagram.png", "Create as separate Chart");
-    await addToCurator(user);
+    axios.post.mockResolvedValueOnce({
+      data: withCharts({
+        applied_chart_plan: [
+          { path: DIAGRAM, action: "supporting", target: FIGURE },
+          { path: FIGURE, action: "chart", target: "" },
+        ],
+        candidates: {
+          ...analysis.candidates,
+          charts: [
+            chartCandidate("chart-0", FIGURE, {
+              files: [DIAGRAM],
+              notebookFile: NOTEBOOK,
+            }),
+          ],
+        },
+      }),
+    });
+    await setRole(user, "diagram.png", "Supporting File");
+    await rebuild(user);
+    await screen.findByRole("tab", { name: /charts \(1\)/i });
 
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure_S1\.png/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /add selected items to curator/i })
+    );
     const [, records] = addMany.mock.calls[0];
-    expect(records[1].imageFile).toBe("charts/figure_S1/diagram.png");
-    expect(records[1].notebookFile).toBe("charts/figure_S1/diagram.ipynb");
-    // ...and the original keeps its own.
-    expect(records[0].notebookFile).toBe("charts/figure_S1/figure_S1.ipynb");
+    expect(records).toHaveLength(1);
+    expect(records[0].imageFile).toBe(FIGURE);
+    expect(records[0].files).toEqual([DIAGRAM]);
   });
 
-  it("forgets image roles when another folder is analyzed", async () => {
+  it("shows the applied roles after a rebuild, not the suggestions", async () => {
     const user = userEvent.setup();
     renderWith();
-    await openRoles(user);
-    await setRole(user, "diagram.png", "Primary image");
-    expect(roleSelect("diagram.png")).toHaveTextContent("Primary image");
+    await openPanel(user);
 
-    // A second analysis replaces the candidates. Ids are positional, so
-    // chart-0 is reused and must not inherit the previous folder's roles.
-    axios.post.mockResolvedValue({ data: MULTI });
+    axios.post.mockResolvedValueOnce({
+      data: withCharts({
+        applied_chart_plan: [
+          { path: DIAGRAM, action: "supporting", target: FIGURE },
+          { path: FIGURE, action: "chart", target: "" },
+        ],
+      }),
+    });
+    await setRole(user, "diagram.png", "Supporting File");
+    await rebuild(user);
+    await screen.findByTestId("chart-plan");
+
+    // What the SERVER applied, not what this component remembered.
+    expect(roleSelect("diagram.png")).toHaveTextContent("Supporting File");
+    expect(screen.queryByTestId(`chart-review-${DIAGRAM}`)).toBeNull();
+  });
+
+  it("Rebuild changes proposals only — nothing is added, saved or published",
+     async () => {
+    const user = userEvent.setup();
+    const { addMany, setAlert } = renderWith();
+    await openPanel(user);
+
+    await setRole(user, "diagram.png", "Create Chart");
+    await rebuild(user);
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+
+    expect(addMany).not.toHaveBeenCalled();
+    expect(setAlert).not.toHaveBeenCalled();
+    const posted = axios.post.mock.calls.map((call) => call[0]);
+    expect(posted.every((url) => url === "/api/curation/analyze-folder")).toBe(
+      true
+    );
+  });
+
+  it("Use default boundaries clears the roles and sends no plan", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPanel(user);
+
+    await setRole(user, "diagram.png", "Create Chart");
+    await user.click(
+      screen.getByRole("button", { name: /use default boundaries/i })
+    );
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+    expect(axios.post.mock.calls[1][1]).toEqual({ path: FOLDER });
+    await screen.findByTestId("chart-plan");
+    expect(roleSelect("diagram.png")).toHaveTextContent("Ignore");
+  });
+
+  it("forgets the roles when the dialog is closed and reopened", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPanel(user);
+    await setRole(user, "diagram.png", "Create Chart");
+    expect(roleSelect("diagram.png")).toHaveTextContent("Create Chart");
+
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));
-    // The dialog unmounts with a transition; wait for the trigger to come
-    // back out from under aria-hidden before re-analyzing.
     await user.click(
       await screen.findByRole("button", { name: /analyze rcc folder/i })
     );
     await screen.findByRole("tab", { name: /charts \(1\)/i });
-    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+    await user.click(
+      screen.getByRole("button", { name: /choose record boundaries/i })
+    );
 
-    expect(roleSelect("figure_S1.png")).toHaveTextContent("Primary image");
-    expect(roleSelect("diagram.png")).toHaveTextContent("Unused");
+    expect(roleSelect("diagram.png")).toHaveTextContent("Ignore");
+    expect(roleSelect("figure_S1.png")).toHaveTextContent("Create Chart");
   });
 
-  it("leaves a single-image chart with no role controls at all", async () => {
+  it("has no second image-role controller on a candidate card", async () => {
     const user = userEvent.setup();
-    axios.post.mockResolvedValue({ data: analysis });
     renderWith();
-    await user.click(analyzeButton());
-    await screen.findByRole("tab", { name: /charts \(1\)/i });
-    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+    const panel = await openPanel(user);
 
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+    const fields = await screen.findByTestId("fields-chart-0");
+
+    // Every role controller on screen lives in the boundary panel. The card
+    // has none: it shows the RESULT, and the panel is the only place a role
+    // is decided.
+    const roles = screen.getAllByLabelText(/^role for /i);
+    expect(roles).toHaveLength(2);
+    roles.forEach((control) => expect(panel).toContainElement(control));
+    expect(within(fields).queryAllByLabelText(/^role for /i)).toHaveLength(0);
     expect(screen.queryByTestId("image-roles-chart-0")).toBeNull();
+
+    const imageField = within(fields).getByLabelText(
+      /^figure image ?\*?$/i,
+      { selector: "input" }
+    );
+    expect(imageField).toHaveValue(FIGURE);
+    // A plain text input, not a second chooser.
+    expect(imageField.tagName).toBe("INPUT");
+  });
+
+  it("still enhances exactly one candidate at a time", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    axios.post.mockResolvedValueOnce({
+      data: { suggestions: { "chart-0": { description: "A figure",
+                                          keywords: [], confidence: "low" } } },
+    });
+    await user.click(screen.getByTestId("enhance-chart-0"));
+    await user.click(
+      screen.getByLabelText(/i agree to send this evidence to gemini/i)
+    );
+    await user.click(
+      screen.getByRole("button", { name: /send and get suggestions/i })
+    );
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+    const [url, body] = axios.post.mock.calls[1];
+    expect(url).toBe("/api/curation/describe-candidates");
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].id).toBe("chart-0");
+  });
+
+  it("wraps its controls instead of overflowing a narrow dialog", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openPanel(user);
+
+    const row = screen.getByTestId(`chart-image-${DIAGRAM}`);
+    // The row wraps rather than pushing the dialog sideways...
+    expect(row).toHaveStyle("flex-wrap: wrap");
+    expect(row).toHaveStyle("max-width: 100%");
+    // ...and the long filename breaks instead of widening the row.
+    expect(screen.getByText("diagram.png")).toHaveStyle(
+      "overflow-wrap: anywhere"
+    );
   });
 });

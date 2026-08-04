@@ -20,7 +20,6 @@ import {
   Tab,
   Tabs,
   MenuItem,
-  Stack,
   TextField,
   Tooltip,
   Typography,
@@ -33,6 +32,7 @@ import { buildFileUrl } from "../../Utils/fileServerUrl";
 import {
   aiTargets,
   fieldsFor,
+  helpFor,
   isRequired,
   labelFor,
   missingRequired,
@@ -148,6 +148,87 @@ const EVIDENCE_LABELS = {
   needs_input: "Needs input",
 };
 
+// ---- chart roles ------------------------------------------------------------
+//
+// A Chart stores exactly ONE image, so the unit of choice is the image file,
+// not the folder. The backend reports every image it found grouped by its real
+// folder (`chart_image_groups`); these helpers turn that plus the curator's
+// choices into the `chart_plan` the backend validates. They are pure functions
+// of their arguments so a role change never reads a stale render closure.
+
+const CHART_ROLES = [
+  { value: "chart", label: "Create Chart" },
+  { value: "supporting", label: "Supporting File" },
+  { value: "ignore", label: "Ignore" },
+];
+
+// The role an image has right now: the curator's own choice first, then the
+// plan the server currently has in force, then the server's suggestion. Only
+// the image the deterministic rule would have picked defaults to Create Chart;
+// every other image defaults to Ignore and is flagged for review, so nothing
+// is proposed that nobody looked at, and nothing is hidden either.
+const roleOf = (overrides, applied, image) => {
+  const chosen = overrides[image.path];
+  if (chosen) return chosen;
+  const inForce = applied[image.path];
+  if (inForce) {
+    return { action: inForce.action, target: inForce.target || "" };
+  }
+  return {
+    action: image.suggested_action === "chart" ? "chart" : "ignore",
+    target: "",
+  };
+};
+
+const needsReview = (overrides, applied, image) =>
+  !overrides[image.path] &&
+  !applied[image.path] &&
+  image.suggested_action !== "chart";
+
+// The images in this folder that a supporting file may attach to.
+const chartTargetsIn = (group, overrides, applied) =>
+  (group.images || [])
+    .filter((image) => roleOf(overrides, applied, image).action === "chart")
+    .map((image) => image.path);
+
+// The exact request field. Every discovered image carries its role explicitly,
+// so the plan is a complete, auditable statement rather than a diff the server
+// has to guess the rest of.
+const buildChartPlan = (groups, overrides, applied) =>
+  groups.reduce((plan, group) => {
+    const targets = chartTargetsIn(group, overrides, applied);
+    return plan.concat(
+      (group.images || []).map((image) => {
+        const { action, target } = roleOf(overrides, applied, image);
+        if (action !== "supporting") return { path: image.path, action };
+        return {
+          path: image.path,
+          action,
+          target: targets.includes(target) ? target : targets[0] || "",
+        };
+      })
+    );
+  }, []);
+
+// A supporting file with nothing to attach to. The server refuses it; saying
+// so here means the curator fixes it before spending a round trip.
+const chartPlanProblems = (groups, overrides, applied) =>
+  groups.reduce((problems, group) => {
+    const targets = chartTargetsIn(group, overrides, applied);
+    return problems.concat(
+      (group.images || [])
+        .filter((image) => {
+          const { action, target } = roleOf(overrides, applied, image);
+          return (
+            action === "supporting" &&
+            !targets.includes(target) &&
+            targets.length === 0
+          );
+        })
+        .map((image) => image.path)
+    );
+  }, []);
+
 
 const FolderAnalysis = ({ path }) => {
   const { fileServerPath, addMany } = useContext(CuratorContext) || {};
@@ -196,66 +277,50 @@ const FolderAnalysis = ({ path }) => {
   // explicit click away, and the count is always on screen.
   const [showAll, setShowAll] = useState({});
 
-  // A chart folder may legitimately hold several images. Each one gets ONE
-  // role, and the roles are mutually exclusive, so a path can never end up
-  // both the primary image and a related file, or duplicated into a separate
-  // chart. Keyed by candidate id, then by image path.
-  const [imageRoles, setImageRoles] = useState({});
+  // The curator's chart-image roles, keyed by IMAGE PATH — the boundary panel
+  // is the only place image roles are decided, so a candidate card never
+  // carries a second controller for the same thing. Only explicit choices
+  // live here; the suggestion and the plan currently in force are read from
+  // the analysis, so a rebuild shows what the server actually applied rather
+  // than what this component remembered.
+  const [chartRoles, setChartRoles] = useState({});
+  const [chartsOpen, setChartsOpen] = useState(true);
 
-  // The backend's suggestion is a starting point, not a decision: the
-  // suggested primary is preselected and everything else is Unused.
-  const defaultRoles = (candidate) => {
-    const primary = (candidate.proposal || {}).imageFile || "";
-    const initial = {};
-    (candidate.image_options || []).forEach((option) => {
-      initial[option.path] = option.path === primary ? "primary" : "unused";
+  const chartGroups = (analysis || {}).chart_image_groups || [];
+  const appliedPlan = useMemo(() => {
+    const inForce = {};
+    ((analysis || {}).applied_chart_plan || []).forEach((entry) => {
+      inForce[entry.path] = entry;
     });
-    return initial;
-  };
+    return inForce;
+  }, [analysis]);
 
-  const rolesFor = (candidate) =>
-    imageRoles[candidate.id] || defaultRoles(candidate);
-
-  // A notebook follows an image into its own chart ONLY on an unambiguous
-  // name match, mirroring the backend rule. A shared notebook stays with the
-  // original chart rather than being copied into both.
-  const notebookFor = (candidate, imagePath) => {
-    const notebooks = candidate.notebook_options || [];
-    const stem = (value) => basename(value).replace(/\.[^.]+$/, "");
-    const want = stem(imagePath);
-    const exact = notebooks.filter((path) => stem(path) === want);
-    if (exact.length === 1) return exact[0];
-    const insensitive = notebooks.filter(
-      (path) => stem(path).toLowerCase() === want.toLowerCase()
-    );
-    return insensitive.length === 1 ? insensitive[0] : "";
-  };
-
-  const setImageRole = (candidate, path, role) => {
-    setImageRoles((current) => {
-      // Derived inside the updater: two role changes in one tick would
-      // otherwise both start from the render-time snapshot and the first
-      // would be lost.
-      const previous = current[candidate.id] || defaultRoles(candidate);
-      const roles = { ...previous, [path]: role };
-      if (role === "primary") {
-        // At most one primary. The previous one becomes Unused rather than
-        // disappearing -- it is still in the folder, and still choosable.
-        Object.keys(roles).forEach((other) => {
-          if (other !== path && roles[other] === "primary") {
-            roles[other] = "unused";
-          }
-        });
+  const setChartRole = (group, path, action) =>
+    // Functional update: the next roles are derived from the CURRENT state,
+    // never from the render-time snapshot, so two changes in one tick cannot
+    // lose the first.
+    setChartRoles((current) => {
+      const next = { ...current, [path]: { action, target: "" } };
+      if (action === "supporting") {
+        const previous = current[path] || {};
+        const targets = chartTargetsIn(group, next, appliedPlan).filter(
+          (candidate) => candidate !== path
+        );
+        next[path] = {
+          action,
+          target: targets.includes(previous.target)
+            ? previous.target
+            : targets[0] || "",
+        };
       }
-      return { ...current, [candidate.id]: roles };
+      return next;
     });
-    if (role === "primary") {
-      setField(candidate.id, "imageFile", path);
-    } else {
-      const draft = drafts[candidate.id] || {};
-      if (draft.imageFile === path) setField(candidate.id, "imageFile", "");
-    }
-  };
+
+  const setChartTarget = (path, chart) =>
+    setChartRoles((current) => ({
+      ...current,
+      [path]: { action: "supporting", target: chart },
+    }));
 
   const ready = Boolean(target.trim());
 
@@ -273,6 +338,8 @@ const FolderAnalysis = ({ path }) => {
     setUnclassifiedFilter("");
     setShowAllUnclassified(false);
     setBoundaries({});
+    setChartRoles({});
+    setChartsOpen(true);
     setPickerOpen(false);
     setTab(0);
     setAiConsent(false);
@@ -280,11 +347,10 @@ const FolderAnalysis = ({ path }) => {
     setAiLoading({});
     setAiNotice({});
     setAiSuggestions({});
-    setImageRoles({});
     setShowAll({});
   };
 
-  const analyze = async (chosen) => {
+  const analyze = async (chosen, plan) => {
     setOpen(true);
     setLoading(true);
     setError("");
@@ -297,6 +363,9 @@ const FolderAnalysis = ({ path }) => {
         ...(chosen && Object.keys(chosen).length
           ? { boundaries: chosen }
           : {}),
+        // Likewise for chart image roles: absent means "use the defaults",
+        // which is exactly what Use default boundaries restores.
+        ...(plan && plan.length ? { chart_plan: plan } : {}),
       });
       const data = response.data || {};
       const initial = {};
@@ -310,9 +379,15 @@ const FolderAnalysis = ({ path }) => {
       // Candidate ids are positional ("chart-0"), so a new analysis reuses
       // them. Everything keyed by id is dropped with the candidates it
       // described, or the new folder's first chart inherits the previous
-      // folder's image roles, AI suggestion and error.
+      // folder's AI suggestion and error. The chart roles go too: what the
+      // server applied comes back in `applied_chart_plan`, and a different
+      // folder's images have nothing to do with this one's.
       setDrafts(initial);
-      setImageRoles({});
+      setChartRoles({});
+      setSelected({});
+      setRemoved({});
+      setEditOpen({});
+      setDetailsOpen({});
       setAiSuggestions({});
       setAiNotice({});
       setAiLoading({});
@@ -454,38 +529,11 @@ const FolderAnalysis = ({ path }) => {
       candidatesFor(key)
         .filter((candidate) => selected[candidate.id])
         .forEach((candidate) => {
-          const record = toRecord(type, drafts[candidate.id]);
-          if (type === "chart") {
-            const roles = rolesFor(candidate);
-            // Related images join this chart's files, deduplicated and never
-            // including the primary or anything promoted to its own chart.
-            const related = Object.keys(roles).filter(
-              (path) => roles[path] === "related" && path !== record.imageFile
-            );
-            record.files = Array.from(
-              new Set((record.files || []).concat(related))
-            ).filter((path) => roles[path] !== "separate");
-            records.push(record);
-            // "Create as separate Chart" makes another INCOMPLETE proposal,
-            // exactly like any other folder proposal: caption, number and
-            // keywords are the curator's to fill in.
-            Object.keys(roles)
-              .filter((path) => roles[path] === "separate")
-              .forEach((path) => {
-                records.push(
-                  toRecord("chart", {
-                    imageFile: path,
-                    number: "",
-                    caption: "",
-                    properties: "",
-                    files: "",
-                    notebookFile: notebookFor(candidate, path),
-                  })
-                );
-              });
-          } else {
-            records.push(record);
-          }
+          // One candidate, one record, for every kind. A Chart's image roles
+          // were decided in the boundary panel and are already reflected in
+          // the proposal the server built, so nothing is split or merged
+          // here.
+          records.push(toRecord(type, drafts[candidate.id]));
         });
       if (records.length) {
         total += records.length;
@@ -670,105 +718,195 @@ const FolderAnalysis = ({ path }) => {
     );
   };
 
-  // A chart folder with more than one image. Every image is listed with the
-  // role it will play, so nothing is hidden and nothing is decided for the
-  // curator: the backend's pick is preselected, everything else is Unused.
-  const renderImageRoles = (candidate) => {
-    const options = candidate.image_options || [];
-    if (candidate.kind !== "chart" || options.length < 2) return null;
-    const roles = rolesFor(candidate);
+  // One image, one role. This is the ONLY place a chart image's role is
+  // chosen: a candidate card shows the resulting Figure Image and nothing
+  // else, so there is never a second controller saying something different.
+  const renderChartImage = (group, image) => {
+    const { action, target: attached } = roleOf(chartRoles, appliedPlan, image);
+    const targets = chartTargetsIn(group, chartRoles, appliedPlan).filter(
+      (path) => path !== image.path
+    );
+    const url = buildFileUrl(fileServerPath, image.path);
+    const name = basename(image.path);
 
     return (
       <Box
-        sx={{ mt: 1.5, pl: { xs: 0, sm: 5 } }}
-        data-testid={`image-roles-${candidate.id}`}
+        key={image.path}
+        // Wraps instead of overflowing: at a narrow width the controls drop
+        // onto their own line rather than pushing the dialog sideways.
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 1.5,
+          mb: 1,
+          maxWidth: "100%",
+        }}
+        data-testid={`chart-image-${image.path}`}
       >
-        <Typography variant="subtitle2" gutterBottom>
-          {options.length} images found
-        </Typography>
+        {/* A thumbnail when the browser can load it. When RCC TLS or the file
+            itself refuses, the filename and a direct link are the fallback --
+            never a blank box. */}
+        {url ? (
+          <Box
+            component="img"
+            src={url}
+            alt=""
+            sx={{ width: 48, height: 48, objectFit: "contain", border: 1,
+                  borderColor: "divider", borderRadius: 1, flexShrink: 0 }}
+            onError={(event) => {
+              event.currentTarget.style.display = "none";
+            }}
+          />
+        ) : null}
+        <Box sx={{ flexGrow: 1, flexBasis: 160, minWidth: 0 }}>
+          <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+            {name}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {image.reason}
+          </Typography>
+        </Box>
+        {/* An image Qresp will not choose for you stays visible and says so,
+            rather than being hidden or quietly turned into a record. */}
+        {needsReview(chartRoles, appliedPlan, image) ? (
+          <Chip
+            size="small"
+            color="warning"
+            variant="outlined"
+            label="Review"
+            data-testid={`chart-review-${image.path}`}
+          />
+        ) : null}
+        {url ? (
+          <Button
+            size="small"
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{ whiteSpace: "nowrap" }}
+          >
+            Open image
+          </Button>
+        ) : null}
+        <TextField
+          select
+          size="small"
+          label="Role"
+          value={action}
+          onChange={(event) =>
+            setChartRole(group, image.path, event.target.value)
+          }
+          sx={{ minWidth: 170, maxWidth: "100%" }}
+          slotProps={{ htmlInput: { "aria-label": `Role for ${name}` } }}
+        >
+          {CHART_ROLES.map((role) => (
+            <MenuItem key={role.value} value={role.value}>
+              {role.label}
+            </MenuItem>
+          ))}
+        </TextField>
+        {action === "supporting" ? (
+          <TextField
+            select
+            size="small"
+            label="Attach to Chart"
+            value={targets.includes(attached) ? attached : ""}
+            onChange={(event) =>
+              setChartTarget(image.path, event.target.value)
+            }
+            error={targets.length === 0}
+            helperText={
+              targets.length === 0
+                ? "Set an image in this folder to Create Chart first."
+                : " "
+            }
+            sx={{ minWidth: 170, maxWidth: "100%" }}
+            slotProps={{
+              htmlInput: { "aria-label": `Chart for ${name}` },
+            }}
+          >
+            {targets.length === 0 ? (
+              <MenuItem value="" disabled>
+                No Chart in this folder yet
+              </MenuItem>
+            ) : null}
+            {targets.map((path) => (
+              <MenuItem key={path} value={path}>
+                {basename(path)}
+              </MenuItem>
+            ))}
+          </TextField>
+        ) : null}
+      </Box>
+    );
+  };
+
+  // Charts, by the folder the images really sit in. Dataset and Script
+  // boundaries are folders; a Chart's is an image, because a Chart stores
+  // exactly one.
+  const renderChartPlan = () => (
+    <Box sx={{ mb: 1.5 }} data-testid="chart-plan">
+      <Button
+        size="small"
+        onClick={() => setChartsOpen((value) => !value)}
+        sx={{ textTransform: "none" }}
+        aria-expanded={chartsOpen}
+      >
+        {`Charts — ${chartGroups.reduce(
+          (total, group) => total + (group.images || []).length,
+          0
+        )} image(s) in ${chartGroups.length} folder(s)`}
+      </Button>
+      <Collapse in={chartsOpen} unmountOnExit>
         <Typography
           variant="caption"
           color="text.secondary"
           display="block"
           sx={{ mb: 1 }}
         >
-          A chart has one primary image. Give the others a role — nothing is
-          split into separate charts unless you say so.
+          Every image found is listed. Each one becomes its own Chart, is
+          attached to another Chart in the same folder as a supporting file,
+          or is ignored — a Chart holds exactly one Figure Image. Images
+          marked <strong>Review</strong> are ignored until you say otherwise.
+          Charts you create separately can be related afterwards in Workflow.
         </Typography>
-        <Stack spacing={1.5}>
-          {options.map((option) => (
-            <Box
-              key={option.path}
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                flexWrap: "wrap",
-                gap: 1.5,
-              }}
-              data-testid={`image-option-${candidate.id}-${basename(
-                option.path
-              )}`}
+        {chartGroups.map((group) => (
+          <Box
+            key={group.folder}
+            sx={{ mb: 1.5 }}
+            data-testid={`chart-folder-${group.folder}`}
+          >
+            <Typography
+              variant="subtitle2"
+              sx={{ overflowWrap: "anywhere" }}
+              title={group.folder}
             >
-              {/* A thumbnail when the browser can load it. When RCC TLS or
-                  the file itself refuses, the filename and a direct link are
-                  the fallback -- never a blank box. */}
-              {buildFileUrl(fileServerPath, option.path) ? (
-                <Box
-                  component="img"
-                  src={buildFileUrl(fileServerPath, option.path)}
-                  alt=""
-                  sx={{ width: 56, height: 56, objectFit: "contain",
-                        border: 1, borderColor: "divider", borderRadius: 1 }}
-                  onError={(event) => {
-                    event.currentTarget.style.display = "none";
-                  }}
-                />
-              ) : null}
-              <Box sx={{ flexGrow: 1, flexBasis: 180, minWidth: 0 }}>
-                <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-                  {basename(option.path)}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {option.reason}
-                </Typography>
-              </Box>
-              {buildFileUrl(fileServerPath, option.path) ? (
-                <Button
-                  size="small"
-                  href={buildFileUrl(fileServerPath, option.path)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  sx={{ whiteSpace: "nowrap" }}
-                >
-                  Open image
-                </Button>
-              ) : null}
-              <TextField
-                select
-                size="small"
-                label="Role"
-                value={roles[option.path] || "unused"}
-                onChange={(event) =>
-                  setImageRole(candidate, option.path, event.target.value)
-                }
-                sx={{ minWidth: 190 }}
-                slotProps={{
-                  htmlInput: {
-                    "aria-label": `Role for ${basename(option.path)}`,
-                  },
-                }}
+              {group.folder}
+            </Typography>
+            {(group.images || []).map((image) =>
+              renderChartImage(group, image)
+            )}
+            {/* Notebooks are attachments, never a Chart of their own: they
+                follow the image whose name they share. */}
+            {(group.notebooks || []).map((notebook) => (
+              <Typography
+                key={notebook.path}
+                variant="caption"
+                color="text.secondary"
+                display="block"
+                sx={{ overflowWrap: "anywhere" }}
+                data-testid={`chart-notebook-${notebook.path}`}
               >
-                <MenuItem value="primary">Primary image</MenuItem>
-                <MenuItem value="related">Related file</MenuItem>
-                <MenuItem value="separate">Create as separate Chart</MenuItem>
-                <MenuItem value="unused">Unused</MenuItem>
-              </TextField>
-            </Box>
-          ))}
-        </Stack>
-      </Box>
-    );
-  };
+                {`${basename(notebook.path)} — Reproduction Notebook, attached
+                  to the Chart whose image has the same name`}
+              </Typography>
+            ))}
+          </Box>
+        ))}
+      </Collapse>
+    </Box>
+  );
 
   const renderCandidate = (candidate) => {
     const draft = drafts[candidate.id] || {};
@@ -946,7 +1084,6 @@ const FolderAnalysis = ({ path }) => {
         <Collapse in={fieldsVisible} unmountOnExit>
           {/* Deliberate separation from the header/evidence above. */}
           <Divider sx={{ mt: 2 }} />
-          {renderImageRoles(candidate)}
           <Grid
             container
             spacing={2}
@@ -980,10 +1117,18 @@ const FolderAnalysis = ({ path }) => {
                     onChange={(event) =>
                       setField(candidate.id, field, event.target.value)
                     }
+                    // The contract's own explanation of the field, so
+                    // Folder Analysis and the Add/Edit form cannot describe
+                    // the same field two different ways.
                     helperText={
-                      required && blank
-                        ? "Required before Save/Update and Publish."
-                        : " "
+                      [
+                        required && blank
+                          ? "Required before Save/Update and Publish."
+                          : "",
+                        helpFor(candidate.kind, field),
+                      ]
+                        .filter(Boolean)
+                        .join(" ") || " "
                     }
                   />
                   {evidence ? (
@@ -1020,6 +1165,26 @@ const FolderAnalysis = ({ path }) => {
   const unclassifiedTotal = candidates.unclassified_total || 0;
   const structureMode = (analysis || {}).structure_mode || "";
   const invalidStructure = structureMode === "invalid";
+
+  // Two independent halves of the same panel. A legacy tree gets the
+  // dataset/script folder picker; ANY tree with chart images gets the Charts
+  // section, because a standard layout still has to say which image is the
+  // figure.
+  const folderBoundariesOffered =
+    structureMode === "legacy" &&
+    Object.keys((analysis || {}).boundary_trees || {}).length > 0;
+  const chartRolesOffered = chartGroups.length > 0;
+  const boundaryPanelOffered = folderBoundariesOffered || chartRolesOffered;
+
+  const chartPlanIssues = chartPlanProblems(
+    chartGroups,
+    chartRoles,
+    appliedPlan
+  );
+  const boundariesChosen = Object.values(boundaries).some(
+    (value) => (value || []).length
+  );
+  const chartRolesChosen = Object.keys(chartRoles).length > 0;
 
   const visibleUnclassified = useMemo(() => {
     const needle = unclassifiedFilter.trim().toLowerCase();
@@ -1154,12 +1319,11 @@ const FolderAnalysis = ({ path }) => {
                   ))}
                 </Box>
               )}
-              {/* Legacy layouts only: their nesting is something only the
-                  author can resolve, so the boundary is theirs to choose.
-                  Standard layouts use the deterministic immediate children
-                  and never see this. */}
-              {structureMode === "legacy" &&
-                Object.keys(analysis.boundary_trees || {}).length > 0 && (
+              {/* Record boundaries. Dataset/Script boundaries are FOLDERS
+                  and only a legacy tree needs to choose them; Chart roles are
+                  IMAGES and every tree that has some needs to choose those,
+                  because a Chart holds exactly one image. */}
+              {boundaryPanelOffered && (
                 <Box sx={{ mb: 2 }} data-testid="boundary-picker">
                   <Button
                     size="small"
@@ -1171,6 +1335,11 @@ const FolderAnalysis = ({ path }) => {
                       : "Choose record boundaries"}
                   </Button>
                   <Collapse in={pickerOpen} unmountOnExit>
+                    {folderBoundariesOffered && (
+                    <Box sx={{ mb: 1.5 }} data-testid="folder-boundaries">
+                    <Typography variant="subtitle2" sx={{ mt: 1 }}>
+                      Datasets and Scripts
+                    </Typography>
                     <Typography
                       variant="caption"
                       color="text.secondary"
@@ -1182,7 +1351,7 @@ const FolderAnalysis = ({ path }) => {
                       beneath it together, or select child folders to split
                       it. Nothing on the file server is changed.
                     </Typography>
-                    {Object.keys(analysis.boundary_trees)
+                    {Object.keys(analysis.boundary_trees || {})
                       .sort()
                       .map((root) => {
                         const tree = analysis.boundary_trees[root];
@@ -1251,16 +1420,34 @@ const FolderAnalysis = ({ path }) => {
                           </Box>
                         );
                       })}
+                    </Box>
+                    )}
+                    {chartRolesOffered && renderChartPlan()}
+                    {chartPlanIssues.length > 0 && (
+                      <Alert severity="warning" sx={{ mb: 1 }}>
+                        {`${chartPlanIssues
+                          .map(basename)
+                          .join(", ")} — a supporting file needs a Chart in
+                          the same folder. Set one image there to Create
+                          Chart.`}
+                      </Alert>
+                    )}
                     <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mt: 1 }}>
+                      {/* Rebuild changes the PROPOSALS only. Nothing is
+                          added, saved or published by it. */}
                       <Button
                         size="small"
                         variant="outlined"
                         disabled={
-                          !Object.values(boundaries).some(
-                            (value) => (value || []).length
+                          (!boundariesChosen && !chartRolesChosen) ||
+                          chartPlanIssues.length > 0
+                        }
+                        onClick={() =>
+                          analyze(
+                            boundaries,
+                            buildChartPlan(chartGroups, chartRoles, appliedPlan)
                           )
                         }
-                        onClick={() => analyze(boundaries)}
                       >
                         Rebuild proposals
                       </Button>
@@ -1268,6 +1455,7 @@ const FolderAnalysis = ({ path }) => {
                         size="small"
                         onClick={() => {
                           setBoundaries({});
+                          setChartRoles({});
                           analyze();
                         }}
                       >
