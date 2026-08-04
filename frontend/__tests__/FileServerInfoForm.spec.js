@@ -250,6 +250,18 @@ describe("FileServerInfoForm", () => {
     // Short: "Use Folder" wrapped onto two lines beside Cancel.
     expect(setConfirmLabel).toHaveBeenCalledWith("Use");
   });
+
+  it("asks the shared picker for ONE folder, whoever used it last", async () => {
+    // The selector is shared, and the chart/dataset/script/tool pickers leave
+    // it in multi-select mode. Inheriting that hid the current-selection line
+    // and let several folders be ticked into one comma-joined path.
+    const user = userEvent.setup();
+    const setMultiple = jest.fn();
+    const handles = renderForm({}, { setMultiple });
+    await searchAndGetPicker(user, handles);
+
+    expect(setMultiple).toHaveBeenCalledWith(false);
+  });
 });
 
 describe("file tree confirmation label", () => {

@@ -53,9 +53,13 @@ const FileServerInfoForm = ({ editor }) => {
     setSelectedHttp,
   } = useContext(ServerContext);
   const { setAlert } = useContext(AlertContext);
-  const { setTree, openSelector, setSaveMethod, setConfirmLabel } = useContext(
-    SourceTreeContext
-  );
+  const {
+    setTree,
+    openSelector,
+    setSaveMethod,
+    setConfirmLabel,
+    setMultiple,
+  } = useContext(SourceTreeContext);
   const { showLoader, hideLoader } = useContext(LoadingContext);
   const { fileServerPath, setFileServerPath, registerDraftFlusher, charts } =
     useContext(CuratorContext);
@@ -89,6 +93,14 @@ const FileServerInfoForm = ({ editor }) => {
 
   const onSubmit = (values) => {
     setSaveMethod(selectFolder);
+    // A paper has ONE file server folder. The selector is shared, and the
+    // chart/dataset/script/tool pickers leave it in multi-select mode, so
+    // without this the file-server picker inherited whichever mode was used
+    // last: it hid the current-selection line and let several folders be
+    // ticked into one comma-joined path.
+    if (setMultiple) {
+      setMultiple(false);
+    }
     if (setConfirmLabel) {
       // Short enough to stay on one line in the selector's narrow header.
       // Short enough to stay on one line beside Cancel at any width.

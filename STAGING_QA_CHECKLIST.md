@@ -244,6 +244,35 @@ Selection vs. saving (these are separate steps on purpose):
 - [ ] Chart / dataset / script / tool / notebook pickers are unchanged: their
       file tree confirmation still reads **Save** and still fills their field
 
+Folder picker layout (check at 1440×900, 900×800 and 390×844 — resize the
+window or use the browser's device toolbar):
+
+- [ ] With the picker open, **USE** and **CANCEL** sit in a fixed row at the
+      BOTTOM of the dialog; the title and the **Current selection** line sit
+      in a fixed area at the top. Only the folder tree scrolls, and there is
+      exactly ONE scrollbar in the dialog
+- [ ] USE is visible and disabled before anything is ticked
+- [ ] Tick a folder → USE enables, and **nothing moves**: the dialog does not
+      change size, the tree does not jump, and USE/CANCEL stay put. Untick →
+      USE disables again
+- [ ] Tick a different folder → the Current selection line shows only the new
+      path; the previous one is gone
+- [ ] Expand several levels and scroll to the bottom of a long tree → the
+      action row stays visible the whole time
+- [ ] A long folder name wraps onto the next line; its checkbox and expand
+      chevron stay on the first line and never overlap the name, and the
+      dialog never scrolls sideways
+- [ ] The long selected path is truncated with `…` on ONE line (hover shows
+      the full path) and never pushes USE/CANCEL out of the dialog
+- [ ] Scroll the wheel over the dialog past the end of the tree → the page
+      behind it does not move
+- [ ] USE fills **Selected folder** in the form and closes only the picker:
+      the "Where is the paper" section stays open and nothing is saved.
+      CANCEL leaves the previous selection untouched
+- [ ] Use a Dataset/Script "files" picker first (multi-select), then Search
+      from File Server → the folder picker is back to ONE folder: the Current
+      selection line is shown and ticking a second folder replaces the first
+
 Deterministic results on the fixture folder:
 
 Only directly evidenced values may be filled in. Everything else must be
