@@ -150,10 +150,12 @@ const ChartsInfoForm = () => {
               <Grid>
                 <TextInputField
                   id="caption"
-                  placeholder="Enter chart caption"
+                  placeholder="Enter the figure caption"
                   name="caption"
-                  helperText="Enter chart caption"
-                  label="Caption"
+                  helperText="Use the paper's caption for this figure. If the
+                    figure has no published caption, write a concise
+                    description of what it shows."
+                  label="Figure Caption"
                   error={errors.caption}
                   register={register}
                   defaultValue={def && def.caption}
@@ -163,9 +165,9 @@ const ChartsInfoForm = () => {
               <Grid>
                 <TextInputField
                   id="number"
-                  placeholder="Enter chart number"
+                  placeholder="Enter the figure number"
                   name="number"
-                  helperText="Enter chart number"
+                  helperText="The figure's number in the paper (e.g. 2, S1)"
                   label="Figure Number"
                   error={errors.number}
                   register={register}
@@ -178,8 +180,8 @@ const ChartsInfoForm = () => {
                   id="files"
                   placeholder="Enter file names used to contruct the chart"
                   name="files"
-                  helperText="Enter file name(s) containing the data displayed in the chart (e.g. a file in CSV format). Use the file picker button to pick files"
-                  label="Files"
+                  helperText="Enter file name(s) containing the data displayed in the chart (e.g. a file in CSV format), or supporting images that belong with it. Use the file picker button to pick files"
+                  label="Input / Supporting Files"
                   error={errors.files}
                   register={register}
                   action={
@@ -198,8 +200,8 @@ const ChartsInfoForm = () => {
                   id="imageFile"
                   placeholder="Enter chart image file name"
                   name="imageFile"
-                  helperText="Enter file name containing the snapshot of the chart. Use the file picker button to pick files. Formats Allowed: jpeg, jpg, png, gif"
-                  label="Image File"
+                  helperText="Enter the file name of the image for this figure — one image per Chart. Use the file picker button to pick files. Formats Allowed: jpeg, jpg, png, gif"
+                  label="Figure Image"
                   error={errors.imageFile}
                   register={register}
                   action={
@@ -219,8 +221,8 @@ const ChartsInfoForm = () => {
                   id="notebookFile"
                   placeholder="Enter notebook file"
                   name="notebookFile"
-                  helperText="Enter file name of the notebook used to generate the chart. Use the file picker button to pick files. Formats Allowed: ipynb"
-                  label="Notebook File"
+                  helperText="Enter the file name of the notebook that reproduces this figure. Use the file picker button to pick files. Formats Allowed: ipynb"
+                  label="Reproduction Notebook"
                   error={errors.notebookFile}
                   action={
                     <IconButton
@@ -237,9 +239,9 @@ const ChartsInfoForm = () => {
               <Grid>
                 <TextInputField
                   id="chartproperties"
-                  placeholder="Enter properties"
+                  placeholder="Enter keywords"
                   name="properties"
-                  helperText="Enter keyword(s) for the content displayed in the chart. e.g. potential energy surface, band gap. (Comma separated values)"
+                  helperText="Enter keyword(s) for the content displayed in the figure. e.g. potential energy surface, band gap. (Comma separated values)"
                   label="Keywords"
                   error={errors.properties}
                   register={register}

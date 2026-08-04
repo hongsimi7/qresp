@@ -140,7 +140,7 @@ describe("Chart image rendering", () => {
   it("says so when the chart has no image file at all", () => {
     renderCharts([{ ...analyzedChart, imageFile: "" }], ROOT);
     expect(screen.getByTestId("chart-image-missing")).toHaveTextContent(
-      /image file not selected/i
+      /figure image not selected/i
     );
   });
 
@@ -163,7 +163,7 @@ describe("Chart image rendering", () => {
 describe("image failures are told apart", () => {
   const CASES = [
     ["File Server path not saved", { imageFile: "figures/f1.png" }, ""],
-    ["Image File not selected", { imageFile: "" }, ROOT],
+    ["Figure Image not selected", { imageFile: "" }, ROOT],
     ["Invalid image path", { imageFile: "../../etc/passwd" }, ROOT],
     ["Invalid image path", { imageFile: "https://elsewhere.example/x.png" },
      ROOT],

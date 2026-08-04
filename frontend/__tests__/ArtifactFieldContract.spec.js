@@ -6,6 +6,7 @@ import {
   TOOL_EXPERIMENT_FIELDS,
   aiTargets,
   carryLegacy,
+  helpFor,
   labelFor,
   missingRequired,
   requiredKeys,
@@ -40,6 +41,50 @@ describe("the contract itself", () => {
     );
     expect(keywords.key).toBe("properties");
     expect(keywords.required).toBe(true);
+  });
+
+  it("names a chart's fields as the figure they describe", () => {
+    // A Chart is a figure. Only the LABELS changed -- every storage key is
+    // still the one every published record already uses.
+    expect(
+      ARTIFACT_FIELDS.chart.map((field) => [field.key, field.label])
+    ).toEqual([
+      ["imageFile", "Figure Image"],
+      ["number", "Figure Number"],
+      ["caption", "Figure Caption"],
+      ["properties", "Keywords"],
+      ["files", "Input / Supporting Files"],
+      ["notebookFile", "Reproduction Notebook"],
+    ]);
+  });
+
+  it("never softens a figure caption into a generic description", () => {
+    expect(
+      ARTIFACT_FIELDS.chart.map((field) => field.label)
+    ).not.toContain("Description");
+    // ...and says where the text should come from.
+    expect(helpFor("chart", "caption")).toMatch(/paper's caption/i);
+    expect(helpFor("chart", "caption")).toMatch(
+      /concise description of what it shows/i
+    );
+  });
+
+  it("keeps a Chart singular: one image, per the stored schema", () => {
+    const keys = ARTIFACT_FIELDS.chart.map((field) => field.key);
+    expect(keys).toContain("imageFile");
+    expect(keys).not.toContain("imageFiles");
+    expect(keys).not.toContain("relatedImageFiles");
+    expect(helpFor("chart", "imageFile")).toMatch(/one image per chart/i);
+  });
+
+  it("leaves dataset and script labels alone", () => {
+    ["dataset", "script"].forEach((kind) =>
+      expect(ARTIFACT_FIELDS[kind].map((field) => field.label)).toEqual([
+        "Files",
+        "Description",
+        "Keywords",
+      ])
+    );
   });
 
   it("calls a dataset's and a script's description readme", () => {
@@ -219,6 +264,10 @@ describe("the Add/Edit forms show exactly the contract's labels", () => {
   it("labelFor answers with what the form shows", () => {
     expect(labelFor("chart", "properties")).toBe("Keywords");
     expect(labelFor("chart", "number")).toBe("Figure Number");
+    expect(labelFor("chart", "imageFile")).toBe("Figure Image");
+    expect(labelFor("chart", "caption")).toBe("Figure Caption");
+    expect(labelFor("chart", "files")).toBe("Input / Supporting Files");
+    expect(labelFor("chart", "notebookFile")).toBe("Reproduction Notebook");
     expect(labelFor("dataset", "readme")).toBe("Description");
     expect(labelFor("tool", "packageName")).toBe("Package Name");
   });

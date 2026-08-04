@@ -13,14 +13,30 @@
 // keywords live in `properties` because every published record already
 // stores them there.
 
+// A Chart is a FIGURE: one image, its number in the paper, the paper's own
+// caption for it, and the files it was made from. The labels say so. The
+// storage keys deliberately do not move -- every published record already
+// uses them -- and `caption` is never softened into a generic "Description",
+// because a figure caption is a specific thing a paper already has.
 const CHART = [
-  { key: "imageFile", label: "Image File", required: true },
-  { key: "number", label: "Figure Number", required: true },
-  { key: "caption", label: "Caption", required: true, ai: "description" },
+  { key: "imageFile", label: "Figure Image", required: true,
+    help: "The image file for this figure. One image per Chart." },
+  { key: "number", label: "Figure Number", required: true,
+    help: "The figure's number in the paper (e.g. 2, S1). Qresp never " +
+      "guesses it." },
+  { key: "caption", label: "Figure Caption", required: true,
+    ai: "description",
+    help: "Use the paper's caption for this figure. If the figure has no " +
+      "published caption, write a concise description of what it shows." },
   { key: "properties", label: "Keywords", required: true, list: true,
-    ai: "keywords" },
-  { key: "files", label: "Files", required: false, list: true },
-  { key: "notebookFile", label: "Notebook File", required: false },
+    ai: "keywords",
+    help: "Keyword(s) for what the figure shows, comma separated." },
+  { key: "files", label: "Input / Supporting Files", required: false,
+    list: true,
+    help: "Data or supporting files this figure was made from, comma " +
+      "separated." },
+  { key: "notebookFile", label: "Reproduction Notebook", required: false,
+    help: "The notebook that reproduces this figure." },
 ];
 
 // Datasets and scripts are the same shape. `URLs` is deliberately ABSENT: it
@@ -68,6 +84,14 @@ export const fieldsFor = fieldsOf;
 export const labelFor = (kind, key) => {
   const field = fieldsOf(kind).find((entry) => entry.key === key);
   return field ? field.label : key;
+};
+
+// The one-line explanation a surface shows under the input, when the contract
+// has one. Kept here so Folder Analysis and the Add/Edit form cannot explain
+// the same field two different ways.
+export const helpFor = (kind, key) => {
+  const field = fieldsOf(kind).find((entry) => entry.key === key);
+  return (field && field.help) || "";
 };
 
 export const isRequired = (kind, key) => {

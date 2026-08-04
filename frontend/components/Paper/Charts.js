@@ -127,7 +127,7 @@ const ChartInfo = ({
     // in the wrong place.
     if (!imageUrl) {
       const reason = !rowdata.imageFile
-        ? "Image File not selected — set it on this chart."
+        ? "Figure Image not selected — set it on this chart."
         : !rowdata.server
         ? "File Server path not saved — save it in “Where is the paper”."
         : "Invalid image path — it must be a relative path inside the paper " +
