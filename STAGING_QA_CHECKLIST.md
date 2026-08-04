@@ -252,11 +252,17 @@ blank and flagged — a generated-looking value is worse than an empty field.
 - [ ] Charts tab lists `figures/*.png` with the exact image path filled in
 - [ ] **Figure number is BLANK** on every chart — not 1, 2, 3 — and flagged
       as needing input. Switch tabs / re-run: it is still blank
-- [ ] **Caption is BLANK** on every chart
-- [ ] **Properties is BLANK.** Open Details: filename tokens appear there as
+- [ ] **Figure Caption is BLANK** on every chart, and its helper text says to
+      use the paper's caption (or a concise description when the figure has
+      none) — it is never labelled a generic "Description"
+- [ ] **Keywords is BLANK.** Open Details: filename tokens appear there as
       `Filename hints (not metadata): …` and NOWHERE in a field
-- [ ] `notebookFile` is filled only for a `.ipynb` in the SAME folder with
-      the same basename, and Details says so; no chart has Extra Fields
+- [ ] The chart fields read **Figure Image, Figure Number, Figure Caption,
+      Keywords, Input / Supporting Files, Reproduction Notebook** — the same
+      labels the Add/Edit Chart form uses. Dataset and Script labels are
+      unchanged
+- [ ] Reproduction Notebook is filled only for a `.ipynb` in the SAME folder
+      with the same basename, and Details says so; no chart has Extra Fields
 - [ ] Datasets tab groups by directory — `data/short_traj` holds both `.xyz`
       files exactly, the **description is BLANK** (no "Files from …"), and
       there is NO invented URL
@@ -278,35 +284,58 @@ blank and flagged — a generated-looking value is worse than an empty field.
 - [ ] Details lists **Filename hints — not verified metadata**; the tokens
       and any name-similar file in another folder appear ONLY there
 
-Folder organization guide:
+Folder organization guide (Qresp Folder Standard v1):
 
 - [ ] A **How to organize an RCC folder** button sits beside the File Server
       actions and opens a dialog; nothing is shown until you click it
 - [ ] The example is a live icon tree (selectable text, scales with the
-      window, scrolls rather than overflowing at phone width) — not an image
-- [ ] It says the layout is optional, that existing folders are analyzed as
-      they are, and never asks for a YAML/JSON/Qresp-specific file
+      window, scrolls rather than overflowing at phone width) — not an image.
+      It shows `charts/figure-id/{preview.png, notebook.ipynb, data/}`
+- [ ] The opening text says Qresp can inspect any folder inside the allowed
+      file server roots, that proposals are deterministic for the standard and
+      recognized legacy names, and that an unsupported structure is left as
+      Needs reorganization / Unclassified rather than guessed at. It does NOT
+      claim any folder is analyzed perfectly
+- [ ] It says the five role folders are optional, that existing folders are
+      never renamed or modified, and never asks for a YAML/JSON/Qresp-specific
+      file
+- [ ] It states the standard's Chart unit: **one `charts/<figure-id>/` folder
+      is one Chart**, `preview.png` is the Figure Image, `notebook.ipynb` the
+      Reproduction Notebook, the chart's `data/` its Input / Supporting Files,
+      and each independent figure gets its own folder
+- [ ] The several-images-in-one-folder guidance is in its OWN section, marked
+      as compatibility review for folders that already exist — not as a second
+      way to lay out a new paper
 - [ ] It warns against storing secrets in an inspected folder
 - [ ] Analyze a folder that follows NONE of the advice → it behaves exactly
       as before; the guide never validates, scores, or blocks anything
 - [ ] No Experiment record is proposed anywhere
 - [ ] `README.md` (or anything unmatched) appears under Unclassified
 
-Folder roles and grouping:
+Record boundaries and grouping:
 
-- [ ] The review dialog offers **Folder roles** listing each top-level folder
-      with a suggested role (`figures_tables` → Figures, `data` → Datasets,
-      `scripts` → Scripts, `doc` → Documentation / Ignore)
-- [ ] Change one and **Re-analyze with these roles** → candidates change
-      accordingly; reopening the dialog shows the SUGGESTED roles again
-      (session-only, nothing persisted)
-- [ ] Set a folder to Documentation / Ignore → it produces no Charts,
-      Datasets, Scripts or Tools; its files still appear under Unclassified
+- [ ] The review dialog reports how the folder was read (`Qresp Standard`,
+      `Legacy-compatible`, `Needs reorganization`) and names each recognized
+      role root (`figures_tables` → charts, `data` → datasets, `doc` → docs);
+      nothing on the file server is renamed
+- [ ] `doc/` produces no Charts, Datasets, Scripts or Tools, and its files do
+      NOT reappear as Unclassified noise
+- [ ] A legacy tree offers **Choose record boundaries** for its dataset/script
+      roots; **Rebuild proposals** re-runs the analysis and changes proposals
+      only — nothing is added to the form, saved or published
 - [ ] A figure folder named after one of its images (e.g.
-      `figure_2/figure_2.png` beside `homo.png`, `lumo.png`) yields **ONE**
-      Chart, with the panels listed as associated files
-- [ ] That folder's `figure_2.ipynb` is the Chart's notebook file, NOT a
-      separate Script
+      `figure_2/figure_2.png` beside `homo.png`, `lumo.png`) proposes **ONE**
+      Chart by default, with `figure_2.png` as the Figure Image. The other
+      images are NOT silently attached: they are listed in the Charts section
+      of Record boundaries, marked `Review`, and create nothing until given a
+      role
+- [ ] In that Charts section, set `homo.png` to **Create Chart** → after
+      Rebuild there are two independent Chart candidates, each with one Figure
+      Image; set it to **Supporting File** instead → one Chart, with
+      `homo.png` in its Input / Supporting Files; **Ignore** → nothing
+- [ ] That folder's `figure_2.ipynb` is the Chart's Reproduction Notebook, NOT
+      a separate Script, and it is attached only to the image whose basename
+      matches
 - [ ] `.sh` / `.py` / `.ipynb` under a Datasets role produce no Scripts;
       `.csv` / `.json` under a Scripts role produce no Datasets
 - [ ] A logo/icon/TOC graphic is never a Chart

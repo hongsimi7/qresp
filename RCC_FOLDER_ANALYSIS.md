@@ -131,17 +131,24 @@ paper-folder/
 - For new Qresp-managed folders the names are **exactly** `datasets`,
   `charts`, `scripts`, `tools`, `docs`, lowercase. The paper root name is
   unrestricted.
-- **Each immediate child of `datasets/`, `scripts/` or `tools/` is ONE
-  record**, and everything beneath it belongs to that record.
+- **By default each immediate child folder of `datasets/`, `charts/`,
+  `scripts/` or `tools/` is ONE Qresp record**, and everything beneath it
+  belongs to that record.
 - A file placed directly under `datasets/` is one dataset on its own.
-- In a chart folder, `preview.png` is the image, `notebook.ipynb` the
-  notebook, `data/` the inputs. A chart folder holding several real figures
-  is not a mistake: **a Chart is one IMAGE**, so the curator gives each image
-  a role and a folder can produce several independent Charts (see *Choosing
-  chart images by hand*).
-- `docs/` is ignored entirely.
+- **Dataset and Script boundaries can be split further** in the boundary
+  review: a nested tree may be declared as several records instead of one.
+- **In the standard, one `charts/<figure-id>/` folder is one Chart.**
+  - `preview.png` is the **Figure Image**;
+  - `notebook.ipynb` is the **Reproduction Notebook**;
+  - the chart's own `data/` holds its **Input / Supporting Files**.
+- **Give each independent figure its own `charts/<figure-id>/` folder.** That
+  is the recommended unit, and it is the layout Qresp reads without asking
+  anything.
+- `docs/` is excluded from the analysis candidates entirely.
 - **No YAML, JSON, metadata manifest or Qresp-specific file is ever
   required.** New artifact ids must be URL-safe (`[A-Za-z0-9._-]+`).
+- **Qresp never renames or modifies an existing RCC folder.** Recognized
+  legacy names keep working exactly as they are.
 
 ### Three modes
 
@@ -149,12 +156,10 @@ paper-folder/
 | --- | --- | --- |
 | **Qresp Standard** | every productive root is already an exact role name | deterministic immediate-child boundaries |
 | **Legacy-compatible** | every productive root matches a known alias | same boundaries, plus a boundary picker for nested dataset/script trees |
-
-The Charts section of the boundary panel is offered in **both** working modes,
-because a standard layout still has to say which image in a folder is the
-figure. A folder that needs reorganizing offers neither, and refuses a
-submitted chart plan.
 | **Needs reorganization** | any productive root is unknown | **no candidates and no extension guessing** — one grouped row per unsupported root, and Add is disabled |
+
+A folder in *Needs reorganization* offers no boundary review at all, and a
+submitted chart plan is refused: there is nothing to review it against.
 
 Legacy aliases, matched case-insensitively. **Nothing on the file server is
 ever renamed** — the mapping only says how to read it.
@@ -201,13 +206,24 @@ The response adds `structure_mode`, `structure_issues[]`, `normalized_roles`,
 reported as grouped folder rows — path, file count, representative extensions
 and a bounded name sample — never as a list of every path.
 
-### Choosing chart images by hand
+### Reviewing a chart folder that holds several images
 
-A Dataset or a Script boundary is a **folder**. A Chart is not: a Chart record
-stores exactly **one** image, so its unit of choice is the image **file**. The
-response therefore reports every chart image it discovered, grouped by the
-folder it really sits in, so the browser never reconstructs that from a
-candidate's internals:
+**The standard's unit is one `charts/<figure-id>/` folder per Chart**, and a
+folder laid out that way needs nothing from this section: its `preview.png` is
+the Figure Image, its `notebook.ipynb` the Reproduction Notebook, its `data/`
+the Input / Supporting Files.
+
+Existing and legacy RCC folders were not written to that rule. A single figure
+folder there routinely holds a figure, its panels, a schematic and a logo, and
+a Chart record stores exactly **one** `imageFile` — so Qresp cannot silently
+pick one and drop the rest. The Charts section of the boundary panel is the
+**compatibility/recovery path** for exactly that case: it makes an existing
+folder reviewable without touching it, and it is not a second, looser way to
+organize a new paper.
+
+Every image discovered is listed — none is hidden — grouped by the folder it
+really sits in, so the browser never reconstructs that from a candidate's
+internals:
 
 ```jsonc
 "chart_image_groups": [
@@ -245,11 +261,16 @@ POST /api/curation/analyze-folder
 }
 ```
 
-| action | result |
+The curator gives every listed image exactly one of three roles:
+
+| role (`action`) | result |
 | --- | --- |
-| `chart` | one independent Chart candidate whose `imageFile` is exactly that path |
-| `supporting` | the image is appended to the target Chart's `files`, deduplicated |
-| `ignore` | no candidate and no attachment |
+| **Create Chart** (`chart`) | one independent Chart candidate whose singular `imageFile` is exactly that path |
+| **Supporting File** (`supporting`) | the image is appended to the `files` of the named Chart **in the same folder**, deduplicated |
+| **Ignore** (`ignore`) | no candidate and no attachment |
+
+Nothing here is saved or published: the roles change **proposals** only, and
+the curator still ticks, edits and adds each candidate by hand afterwards.
 
 Validated server-side before a single candidate is built: the path must be an
 image **this analysis discovered**, relative, normalized POSIX (no URL,
@@ -261,11 +282,16 @@ two Chart records. Anything else is a `400` with a plain reason.
 
 A plan applies **only to the folders it mentions**; a chart folder it does not
 mention keeps its deterministic proposal, and omitting `chart_plan` entirely
-keeps every default. `number`, `caption` and `properties` stay blank as always
-— a figure number is never taken from discovery order — and a notebook is
-attached only when its basename matches the image's, exactly or in case only.
-Independent images become independent Chart proposals; relationships between
-them belong in **Workflow**, not in a second image field.
+keeps every default. Figure Number, Figure Caption and Keywords stay blank as
+always — a figure number is never taken from discovery order — and a
+Reproduction Notebook is attached only when its basename matches the image's,
+exactly or in case only.
+
+Each Create Chart image becomes its **own** Chart proposal with one
+`imageFile`; the relationship between two independent Charts is expressed
+afterwards in **Workflow**, not by a second image field on either of them.
+The stored Chart schema is unchanged: `imageFile`, `number`, `caption`,
+`properties`, `files`, `notebookFile`, singular as they have always been.
 
 A field is filled in **only when a file on the server proves it**. Everything
 else is left blank, flagged in `needs_input`, and the reason is reported as
@@ -274,7 +300,7 @@ cannot tell "Qresp wrote this for you" from "someone checked this".
 
 | Kind | Filled in (directly evidenced) | Left blank for the curator |
 | --- | --- | --- |
-| Chart | `imageFile` (one image, from the folder's own name or the curator's chart plan); `files` only from **same folder + exact basename**, plus any image the plan marked `supporting`; `notebookFile` only when a `.ipynb` sits in the **same folder with the same basename** | `number`, `caption`, `properties` |
+| Chart | Figure Image `imageFile` — one image, from `preview.png`, the folder's own name, or the curator's chart plan; Input / Supporting Files `files` only from **same folder + exact basename**, plus any image the plan marked Supporting File; Reproduction Notebook `notebookFile` only when a `.ipynb` sits in the **same folder with the same basename** | Figure Number `number`, Figure Caption `caption`, Keywords `properties` |
 | Dataset | `files` (exact, grouped by directory) | `readme`; `URLs` stay empty (never invented) |
 | Script | `files` | `readme` — a module docstring is shown as **evidence**, never copied into the description |
 | Tool | `packageName` + `version` from a pinned manifest entry, a `module load pkg/version` line, or a README that states a version outright; `patches` only from real `.patch`/`.diff` files | `description`; `executableName` and `urls` unless a manifest states them |
@@ -302,12 +328,13 @@ a field.
 
 Specifically **never guessed**:
 
-- **Figure number.** Not from discovery order, tab order, or filename order.
+- **Figure Number.** Not from discovery order, tab order, or filename order.
   Reordering the input cannot produce a number. A real figure number needs a
   manuscript mapping (`\includegraphics` → matching image path → nearby
   `\caption` → actual figure order); until that exists the field stays blank.
-- **Chart caption.** Blank unless caption-like source text exists.
-- **Chart properties.** Filename tokens (`embedded`, `Pb`, `dens`, `coord`,
+- **Figure Caption.** Blank unless caption-like source text exists. It is the
+  paper's caption for that figure — not a generic description of the file.
+- **Chart Keywords (`properties`).** Filename tokens (`embedded`, `Pb`, `dens`, `coord`,
   `figure`) appear as `Filename hints (not metadata): …` in Details and
   nowhere else. A token is a fact about a filename, not a property of a
   figure.

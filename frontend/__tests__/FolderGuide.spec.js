@@ -6,9 +6,12 @@ import {
 import userEvent from "@testing-library/user-event";
 
 import FolderGuide from "../components/CuratorElements/FolderGuide";
+import { ARTIFACT_FIELDS } from "../Utils/artifactFields";
 
-// The guide is advice: reachable, optional, and with no power over the
-// analysis. These tests mostly pin what it must NOT do.
+// The guide states the Qresp Folder Standard v1: a recommended contract for
+// accurate automatic analysis, with no power to validate, score or block
+// anything. These tests pin the standard it must state, the compatibility
+// path it must keep clearly separate from it, and what it must NOT claim.
 
 describe("How to organize an RCC folder", () => {
   it("is reachable and closed until asked for", async () => {
@@ -42,9 +45,9 @@ describe("How to organize an RCC folder", () => {
       "datasets/",
       "dataset-id/",
       "charts/",
-      "figure_S1/",
-      "figure_S1.png",
-      "figure_S1.ipynb",
+      "figure-id/",
+      "preview.png",
+      "notebook.ipynb",
       "data/",
       "scripts/",
       "script-id/",
@@ -81,24 +84,151 @@ describe("How to organize an RCC folder", () => {
 
     const text = document.body.textContent;
     expect(text).toMatch(/all five role folders are optional/i);
-    expect(text).toMatch(/existing folders are never renamed/i);
+    expect(text).toMatch(/existing folders are never renamed or modified/i);
     expect(text).toMatch(
       /no yaml, json, metadata manifest or qresp-specific file is ever required/i
     );
-    // The exact standard names, and what a boundary means.
+    // The exact standard names, and what a boundary means by default.
     expect(text).toMatch(/datasets, charts, scripts, tools, docs/i);
-    expect(text).toMatch(/each immediate child of datasets\/, scripts\//i);
-    // A Chart is one image, so its boundary is a file, not a folder.
-    expect(text).toMatch(/a chart is one image/i);
-    expect(text).toMatch(/create chart, supporting file, or ignore/i);
-    expect(text).toMatch(/docs\/ is ignored by the analysis entirely/i);
     expect(text).toMatch(
-      /figure number, caption, scientific description and tool version are never inferred/i
+      /by default each immediate child folder of datasets\/, charts\/, scripts\/ or tools\/ is one qresp record/i
+    );
+    // Dataset/Script records may be split further; that is the ONLY thing
+    // boundary review does to them.
+    expect(text).toMatch(
+      /dataset and script records can be split further in record boundaries/i
+    );
+    expect(text).toMatch(
+      /docs\/ is excluded from the analysis candidates entirely/i
+    );
+    expect(text).toMatch(
+      /figure number, figure caption, scientific descriptions and tool versions are never inferred/i
     );
     // It must not invent a manifest requirement.
     expect(text).not.toMatch(/qresp\.ya?ml/i);
     expect(text).not.toMatch(/manifest file/i);
     expect(text).not.toMatch(/you must|required format|will be rejected/i);
+  });
+
+  it("states the standard's Chart unit: one chart folder, one Chart", async () => {
+    const user = userEvent.setup();
+    render(<FolderGuide />);
+    await user.click(
+      screen.getByRole("button", { name: /how to organize an rcc folder/i })
+    );
+    const standard = await screen.findByTestId("folder-guide-standard");
+
+    expect(standard).toHaveTextContent(
+      /one charts\/<figure-id>\/ folder is one chart/i
+    );
+    // ...and what each file in it is called in the form.
+    expect(standard).toHaveTextContent(
+      /preview\.png is the figure image/i
+    );
+    expect(standard).toHaveTextContent(
+      /notebook\.ipynb is the reproduction notebook/i
+    );
+    expect(standard).toHaveTextContent(
+      /data\/ holds its input \/ supporting files/i
+    );
+    // An independent figure gets its own folder — that is the recommendation,
+    // not "put several in one and sort it out later".
+    expect(standard).toHaveTextContent(
+      /give each independent figure its own charts\/<figure-id>\/ folder/i
+    );
+  });
+
+  it("keeps multi-image review as compatibility, not as a second layout",
+     async () => {
+    const user = userEvent.setup();
+    render(<FolderGuide />);
+    await user.click(
+      screen.getByRole("button", { name: /how to organize an rcc folder/i })
+    );
+    await screen.findByTestId("folder-guide-standard");
+
+    // Its own section, named for the folders it is FOR.
+    expect(
+      screen.getByText(/existing folders with several images in one figure folder/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/compatibility review — for folders that already exist/i)
+    ).toBeInTheDocument();
+
+    const legacy = screen.getByTestId("folder-guide-legacy");
+    expect(legacy).toHaveTextContent(/older folders/i);
+    // Nothing is hidden, and every image gets exactly one of three roles.
+    expect(legacy).toHaveTextContent(/none is hidden/i);
+    expect(legacy).toHaveTextContent(
+      /create chart, supporting file, or ignore/i
+    );
+    expect(legacy).toHaveTextContent(
+      /create chart proposes an independent chart with that single figure image/i
+    );
+    expect(legacy).toHaveTextContent(
+      /supporting file attaches the image to a chart in the same folder/i
+    );
+    expect(legacy).toHaveTextContent(/ignore proposes nothing/i);
+    // It changes proposals only, and relationships live in Workflow.
+    expect(legacy).toHaveTextContent(
+      /nothing is added to the form, saved or published/i
+    );
+    expect(legacy).toHaveTextContent(/belong in workflow/i);
+
+    // The standard section must not be where the roles are explained: it
+    // describes the layout to aim for, not how to rescue an old one.
+    const standard = screen.getByTestId("folder-guide-standard");
+    expect(standard).not.toHaveTextContent(/create chart/i);
+    expect(standard).not.toHaveTextContent(/several images/i);
+  });
+
+  it("describes what the analysis can and cannot do, without overclaiming",
+     async () => {
+    const user = userEvent.setup();
+    render(<FolderGuide />);
+    await user.click(
+      screen.getByRole("button", { name: /how to organize an rcc folder/i })
+    );
+    await screen.findByTestId("folder-guide-tree");
+
+    const text = document.body.textContent;
+    expect(text).toMatch(
+      /can inspect any folder inside the file server roots this server is allowed to read/i
+    );
+    expect(text).toMatch(/deterministic for the qresp folder standard v1/i);
+    expect(text).toMatch(/legacy folder names qresp recognizes/i);
+    expect(text).toMatch(
+      /needs reorganization.*rather than guessed at/is
+    );
+    // A recommended contract, not a storage rule -- and not a promise that
+    // any folder at all is analyzed perfectly.
+    expect(text).toMatch(
+      /not a rule for storing your files — it is the recommended contract/i
+    );
+    expect(text).toMatch(/can always\s*be reviewed by hand/i);
+    expect(text).not.toMatch(/whatever folder you point it at/i);
+    expect(text).not.toMatch(/only suggestions|not requirements/i);
+  });
+
+  it("uses the artifact contract's own field labels", async () => {
+    const user = userEvent.setup();
+    render(<FolderGuide />);
+    await user.click(
+      screen.getByRole("button", { name: /how to organize an rcc folder/i })
+    );
+    await screen.findByTestId("folder-guide-tree");
+
+    const text = document.body.textContent;
+    ["Figure Image", "Figure Number", "Figure Caption",
+     "Input / Supporting Files", "Reproduction Notebook"].forEach((label) => {
+      // Exactly the labels the Add/Edit Chart form shows.
+      expect(ARTIFACT_FIELDS.chart.map((field) => field.label)).toContain(
+        label
+      );
+      expect(text.toLowerCase()).toContain(label.toLowerCase());
+    });
+    // A figure caption is never called a generic Description here.
+    expect(text).not.toMatch(/chart description|image file|notebook file/i);
   });
 
   it("warns about secrets and does not over-promise inference", async () => {
@@ -138,7 +268,9 @@ describe("How to organize an RCC folder", () => {
     const copied = writeText.mock.calls[0][0];
     expect(copied).toContain("paper-folder/");
     expect(copied).toContain("  datasets/");
-    expect(copied).toContain("      figure_S1.png");
+    expect(copied).toContain("    figure-id/");
+    expect(copied).toContain("      preview.png");
+    expect(copied).toContain("      notebook.ipynb");
     expect(await screen.findByText(/^copied\.$/i)).toBeInTheDocument();
   });
 

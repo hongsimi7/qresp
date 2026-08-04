@@ -2332,6 +2332,25 @@ describe("Charts in the record boundary panel", () => {
     expect(panel).toHaveTextContent(/filename matches the chart folder/i);
   });
 
+  it("frames itself as review for folders that already hold several images",
+     async () => {
+    const user = userEvent.setup();
+    renderWith();
+    const panel = await openPanel(user);
+
+    // The standard's unit is stated first, so this never reads as a second,
+    // looser way to lay out a new paper.
+    expect(panel).toHaveTextContent(
+      /in the qresp folder standard one charts\/<figure-id>\/ folder is one chart/i
+    );
+    expect(panel).toHaveTextContent(
+      /for reviewing folders that already hold several images/i
+    );
+    expect(panel).toHaveTextContent(/none is hidden/i);
+    expect(panel).toHaveTextContent(/a chart holds exactly one figure image/i);
+    expect(panel).toHaveTextContent(/related afterwards in workflow/i);
+  });
+
   it("shows a notebook as an attachment, never as a Chart choice", async () => {
     const user = userEvent.setup();
     renderWith();

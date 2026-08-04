@@ -155,6 +155,27 @@ describe("AI may only propose what the type can hold", () => {
 });
 
 describe("Needs input tracks required fields only", () => {
+  it("treats a chart's Keywords as required, and says so consistently", () => {
+    // `required` is per KIND: a chart's Keywords (properties) are required,
+    // a dataset's are not. The contract file used to carry a comment saying
+    // an empty Keywords was a complete record, which was true of datasets
+    // and false of the chart it sat next to.
+    expect(
+      missingRequired("chart", {
+        imageFile: "f.png", number: "1", caption: "c", properties: "",
+      })
+    ).toContain("properties");
+    expect(
+      missingRequired("dataset", { files: "a.csv", readme: "r", keywords: "" })
+    ).not.toContain("keywords");
+
+    const source = fs.readFileSync(
+      path.join(__dirname, "..", "Utils", "artifactFields.js"),
+      "utf8"
+    );
+    expect(source).not.toMatch(/an empty Keywords[^.]*is a complete record/i);
+  });
+
   it("names a blank required field", () => {
     expect(missingRequired("dataset", { files: "a.txt", readme: "" })).toEqual([
       "readme",

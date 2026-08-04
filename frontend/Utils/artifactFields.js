@@ -147,8 +147,12 @@ export const toRecord = (kind, draft = {}) => {
   return record;
 };
 
-// Only a MISSING REQUIRED field needs the curator. An empty Keywords, Files
-// on a chart, or Notebook File is a complete record, not an unfinished one.
+// Only a MISSING REQUIRED field needs the curator, and `required` is per
+// KIND -- there is no field that is optional everywhere. A chart's Keywords
+// (`properties`) ARE required, alongside Figure Image, Figure Number and
+// Figure Caption; a dataset's or script's Keywords are not. Genuinely
+// optional, and never flagged: a chart's Input / Supporting Files and its
+// Reproduction Notebook.
 export const missingRequired = (kind, draft = {}) =>
   requiredKeys(kind).filter((key) => !String(draft[key] || "").trim());
 

@@ -842,9 +842,14 @@ const FolderAnalysis = ({ path }) => {
     );
   };
 
-  // Charts, by the folder the images really sit in. Dataset and Script
-  // boundaries are folders; a Chart's is an image, because a Chart stores
-  // exactly one.
+  // Charts, by the folder the images really sit in.
+  //
+  // In the Folder Standard one charts/<figure-id>/ folder is one Chart, and a
+  // folder written that way needs nothing from here. This is the
+  // COMPATIBILITY path for folders that already exist with several images in
+  // one figure folder: a Chart stores exactly one imageFile, so rather than
+  // silently picking one and dropping the rest, every image is shown and the
+  // curator gives it a role.
   const renderChartPlan = () => (
     <Box sx={{ mb: 1.5 }} data-testid="chart-plan">
       <Button
@@ -865,11 +870,14 @@ const FolderAnalysis = ({ path }) => {
           display="block"
           sx={{ mb: 1 }}
         >
-          Every image found is listed. Each one becomes its own Chart, is
-          attached to another Chart in the same folder as a supporting file,
-          or is ignored — a Chart holds exactly one Figure Image. Images
-          marked <strong>Review</strong> are ignored until you say otherwise.
-          Charts you create separately can be related afterwards in Workflow.
+          In the Qresp Folder Standard one <code>charts/&lt;figure-id&gt;/</code>{" "}
+          folder is one Chart. This is for reviewing folders that already hold
+          several images: every image found is listed — none is hidden — and
+          each one either becomes its own Chart, is attached to a Chart in the
+          same folder as a supporting file, or is ignored, because a Chart
+          holds exactly one Figure Image. Images marked{" "}
+          <strong>Review</strong> are ignored until you say otherwise. Charts
+          you create separately can be related afterwards in Workflow.
         </Typography>
         {chartGroups.map((group) => (
           <Box
@@ -1095,8 +1103,11 @@ const FolderAnalysis = ({ path }) => {
               // Per-field standing, from the deterministic analysis. The
               // backend marks a field it could not determine "needs_input"
               // whether or not the field is required, so an OPTIONAL field
-              // never carries that chip: an empty Keywords or Notebook File
-              // is a complete record, not an unfinished one.
+              // never carries that chip: an empty Input / Supporting Files or
+              // Reproduction Notebook is a complete Chart, not an unfinished
+              // one. (Keywords is NOT one of those on a chart -- it is
+              // required there, and required-and-blank is said once, by the
+              // field's own marker.)
               // Standing is only meaningful for a field that HAS a value.
               // An empty field says "needs input" by being empty and marked
               // required; a chip repeating it three ways is noise.
