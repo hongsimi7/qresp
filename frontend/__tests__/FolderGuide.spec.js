@@ -87,7 +87,10 @@ describe("How to organize an RCC folder", () => {
     );
     // The exact standard names, and what a boundary means.
     expect(text).toMatch(/datasets, charts, scripts, tools, docs/i);
-    expect(text).toMatch(/each immediate child of datasets\/, charts\/,/i);
+    expect(text).toMatch(/each immediate child of datasets\/, scripts\//i);
+    // A Chart is one image, so its boundary is a file, not a folder.
+    expect(text).toMatch(/a chart is one image/i);
+    expect(text).toMatch(/create chart, supporting file, or ignore/i);
     expect(text).toMatch(/docs\/ is ignored by the analysis entirely/i);
     expect(text).toMatch(
       /figure number, caption, scientific description and tool version are never inferred/i

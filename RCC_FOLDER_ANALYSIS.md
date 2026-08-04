@@ -131,11 +131,14 @@ paper-folder/
 - For new Qresp-managed folders the names are **exactly** `datasets`,
   `charts`, `scripts`, `tools`, `docs`, lowercase. The paper root name is
   unrestricted.
-- **Each immediate child of `datasets/`, `charts/`, `scripts/` or `tools/` is
-  ONE record**, and everything beneath it belongs to that record.
+- **Each immediate child of `datasets/`, `scripts/` or `tools/` is ONE
+  record**, and everything beneath it belongs to that record.
 - A file placed directly under `datasets/` is one dataset on its own.
 - In a chart folder, `preview.png` is the image, `notebook.ipynb` the
-  notebook, `data/` the inputs.
+  notebook, `data/` the inputs. A chart folder holding several real figures
+  is not a mistake: **a Chart is one IMAGE**, so the curator gives each image
+  a role and a folder can produce several independent Charts (see *Choosing
+  chart images by hand*).
 - `docs/` is ignored entirely.
 - **No YAML, JSON, metadata manifest or Qresp-specific file is ever
   required.** New artifact ids must be URL-safe (`[A-Za-z0-9._-]+`).
@@ -146,6 +149,11 @@ paper-folder/
 | --- | --- | --- |
 | **Qresp Standard** | every productive root is already an exact role name | deterministic immediate-child boundaries |
 | **Legacy-compatible** | every productive root matches a known alias | same boundaries, plus a boundary picker for nested dataset/script trees |
+
+The Charts section of the boundary panel is offered in **both** working modes,
+because a standard layout still has to say which image in a folder is the
+figure. A folder that needs reorganizing offers neither, and refuses a
+submitted chart plan.
 | **Needs reorganization** | any productive root is unknown | **no candidates and no extension guessing** — one grouped row per unsupported root, and Add is disabled |
 
 Legacy aliases, matched case-insensitively. **Nothing on the file server is
@@ -188,9 +196,76 @@ and no parent/descendant overlap. Duplicates collapse. Anything else is a
 own role root**; every other root keeps its deterministic children.
 
 The response adds `structure_mode`, `structure_issues[]`, `normalized_roles`,
-`boundary_trees`, `applied_boundaries` and `grouped_unclassified`. Unclassified
-files are reported as grouped folder rows — path, file count, representative
-extensions and a bounded name sample — never as a list of every path.
+`boundary_trees`, `applied_boundaries`, `chart_image_groups`,
+`applied_chart_plan` and `grouped_unclassified`. Unclassified files are
+reported as grouped folder rows — path, file count, representative extensions
+and a bounded name sample — never as a list of every path.
+
+### Choosing chart images by hand
+
+A Dataset or a Script boundary is a **folder**. A Chart is not: a Chart record
+stores exactly **one** image, so its unit of choice is the image **file**. The
+response therefore reports every chart image it discovered, grouped by the
+folder it really sits in, so the browser never reconstructs that from a
+candidate's internals:
+
+```jsonc
+"chart_image_groups": [
+  {
+    "folder": "figures_tables/figure_S1",
+    "role_root": "figures_tables",
+    "images": [
+      { "path": "figures_tables/figure_S1/diagram.png",
+        "reason": "image found in this chart folder",
+        "suggested_action": "review" },
+      { "path": "figures_tables/figure_S1/figure_S1.png",
+        "reason": "filename matches the chart folder",
+        "suggested_action": "chart" }
+    ],
+    "notebooks": [{ "path": "figures_tables/figure_S1/figure_S1.ipynb" }]
+  }
+]
+```
+
+`suggested_action` is advisory: `chart` only for the single image the
+deterministic rule would have picked, `review` for every other image (which
+stays visible and creates nothing until the curator decides). The curator's
+decision travels back as `chart_plan`:
+
+```text
+POST /api/curation/analyze-folder
+{
+  "path": "https://notebook.rcc.uchicago.edu/files/<paper>",
+  "boundaries": { "data": ["data/DFT"] },
+  "chart_plan": [
+    { "path": "figures_tables/figure_S1/figure_S1.png", "action": "chart" },
+    { "path": "figures_tables/figure_S1/diagram.png", "action": "supporting",
+      "target": "figures_tables/figure_S1/figure_S1.png" }
+  ]
+}
+```
+
+| action | result |
+| --- | --- |
+| `chart` | one independent Chart candidate whose `imageFile` is exactly that path |
+| `supporting` | the image is appended to the target Chart's `files`, deduplicated |
+| `ignore` | no candidate and no attachment |
+
+Validated server-side before a single candidate is built: the path must be an
+image **this analysis discovered**, relative, normalized POSIX (no URL,
+absolute path, `..`, backslash or percent-encoding), the action must be one of
+the three, no image may appear twice, and a `supporting` entry's target must be
+an image in the **same folder** whose own action is `chart`. So an image can
+never be both a Chart's own image and a supporting file, and no path lands in
+two Chart records. Anything else is a `400` with a plain reason.
+
+A plan applies **only to the folders it mentions**; a chart folder it does not
+mention keeps its deterministic proposal, and omitting `chart_plan` entirely
+keeps every default. `number`, `caption` and `properties` stay blank as always
+— a figure number is never taken from discovery order — and a notebook is
+attached only when its basename matches the image's, exactly or in case only.
+Independent images become independent Chart proposals; relationships between
+them belong in **Workflow**, not in a second image field.
 
 A field is filled in **only when a file on the server proves it**. Everything
 else is left blank, flagged in `needs_input`, and the reason is reported as
@@ -199,7 +274,7 @@ cannot tell "Qresp wrote this for you" from "someone checked this".
 
 | Kind | Filled in (directly evidenced) | Left blank for the curator |
 | --- | --- | --- |
-| Chart | `imageFile`; `files` only from **same folder + exact basename**; `notebookFile` only when a `.ipynb` sits in the **same folder with the same basename** | `number`, `caption`, `properties` |
+| Chart | `imageFile` (one image, from the folder's own name or the curator's chart plan); `files` only from **same folder + exact basename**, plus any image the plan marked `supporting`; `notebookFile` only when a `.ipynb` sits in the **same folder with the same basename** | `number`, `caption`, `properties` |
 | Dataset | `files` (exact, grouped by directory) | `readme`; `URLs` stay empty (never invented) |
 | Script | `files` | `readme` — a module docstring is shown as **evidence**, never copied into the description |
 | Tool | `packageName` + `version` from a pinned manifest entry, a `module load pkg/version` line, or a README that states a version outright; `patches` only from real `.patch`/`.diff` files | `description`; `executableName` and `urls` unless a manifest states them |
