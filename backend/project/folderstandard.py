@@ -275,6 +275,31 @@ class BoundaryError(Exception):
     """A rejected boundary selection. The message is safe to show."""
 
 
+class ChartPlanError(BoundaryError):
+    """A rejected chart plan. The message is safe to show.
+
+    A subclass of BoundaryError so every caller that already turns a rejected
+    boundary into a 400 does the same for a rejected chart plan, rather than
+    letting one of them fall through as a 500.
+    """
+
+
+def check_relative_path(path, noun="folder", error=BoundaryError):
+    """Refuse anything that is not a plain relative POSIX path.
+
+    Shared by the boundary selection and the chart plan so the two can never
+    drift apart on what "relative" means: no URL, no absolute path, no
+    backslash, no percent-encoding (which is how encoded traversal arrives),
+    no `..` segment, and nothing that normalizes to something else.
+    """
+    if (path.startswith("/") or "\\" in path or "://" in path
+            or "%" in path or ".." in path.split("/")):
+        raise error("%r is not a relative %s inside this paper."
+                    % (path[:80], noun))
+    if path != posixpath.normpath(path):
+        raise error("%r is not a normalized path." % path[:80])
+
+
 def validate_boundaries(raw, roles, files, dirs):
     """Turn a browser-supplied boundary selection into trusted paths.
 
@@ -315,12 +340,7 @@ def validate_boundaries(raw, roles, files, dirs):
             path = path.strip()
             if not path:
                 raise BoundaryError("An empty boundary path was submitted.")
-            if (path.startswith("/") or "\\" in path or "://" in path
-                    or "%" in path or ".." in path.split("/")):
-                raise BoundaryError(
-                    "%r is not a relative folder inside this paper." % path[:80])
-            if path != posixpath.normpath(path):
-                raise BoundaryError("%r is not a normalized path." % path[:80])
+            check_relative_path(path, "folder", BoundaryError)
             if path != root and not path.startswith(root + "/"):
                 raise BoundaryError(
                     "%r is not inside %s." % (path[:80], root))
@@ -501,3 +521,173 @@ def chart_parts(folder, files):
             and posixpath.splitext(p)[1].lower() not in CHART_PREVIEW_EXTENSIONS
         )
     return preview, data, notebook
+
+
+# ---- chart images, and the plan the curator makes from them -------------------
+#
+# A Dataset or a Script boundary is a FOLDER. A Chart is not: a Chart record
+# holds exactly ONE image, so the unit a curator has to decide about is the
+# image file itself. `chart_image_groups` reports every image a Chart could be
+# built from, grouped by the folder it really sits in, and `validate_chart_plan`
+# turns the curator's decision about those images into trusted entries.
+#
+# Nothing here fetches, writes or renames anything, and no plan entry may name
+# a path this analysis did not itself list.
+
+# The three roles an image may be given. There is no fourth: "no opinion" is
+# expressed by leaving the image out of the plan, or by `ignore`.
+CHART_ACTIONS = ("chart", "supporting", "ignore")
+
+# A plan describes images the analysis already found, and the crawl is capped
+# at MAX_FILES, so a plan larger than this cannot be about this folder.
+MAX_CHART_PLAN = 1000
+
+
+def chart_image_groups(files, dirs, roles, selected=None):
+    """Every image a Chart record could be built from, grouped by its folder.
+
+    A group's `folder` is the REAL folder the images sit in, spelling and case
+    preserved, so the browser never has to reconstruct it from a candidate's
+    internals. `suggested_action` is advisory and only ever "chart" (the one
+    image the deterministic rule would have picked) or "review" (an image the
+    curator must decide about) — it is not itself a decision, and nothing is
+    created from it until a plan says so.
+
+    Decorative images (logos, banners, screenshots) are not offered: they are
+    never the figure, and the same rule already keeps them out of a proposal.
+    """
+    selected = selected or {}
+    known_dirs, known_files = set(dirs), set(files)
+    groups = []
+
+    for top, role in sorted((roles or {}).items()):
+        if role != ROLE_CHARTS:
+            continue
+        child_dirs, child_files = _children_of(top, files, dirs)
+        chosen = selected.get(top)
+        if chosen is not None:
+            child_dirs = [p for p in chosen if p in known_dirs]
+            child_files = [p for p in chosen if p in known_files]
+
+        folders = list(child_dirs)
+        # Loose images directly under the role root are their own group: the
+        # role root IS their real folder.
+        if any(posixpath.splitext(p)[1].lower() in CHART_PREVIEW_EXTENSIONS
+               for p in child_files):
+            folders.append(top)
+
+        for folder in sorted(set(folders)):
+            images = chart_images(folder, files)
+            if not images:
+                continue
+            suggested, described = pick_chart_image(folder, images)
+            groups.append({
+                "folder": folder,
+                "role_root": top,
+                "images": [{
+                    "path": option["path"],
+                    "reason": option["reason"],
+                    "suggested_action": ("chart" if option["path"] == suggested
+                                         else "review"),
+                } for option in described],
+                # Informational: a notebook is an attachment of the Chart it
+                # matches by name, never a Chart of its own.
+                "notebooks": [{"path": path}
+                              for path in chart_notebooks(folder, files)],
+            })
+    return groups
+
+
+def validate_chart_plan(raw, groups):
+    """Turn a browser-supplied chart plan into trusted entries.
+
+    A plan says, per IMAGE: make this one a Chart, attach that one to a Chart
+    as a supporting file, or ignore it. That decides what records get proposed,
+    so every entry has to survive:
+
+      * the path must be an image THIS analysis discovered (see
+        `chart_image_groups`) — not a URL, not absolute, no `..`, no
+        backslash, no percent-encoding, and no path we never listed;
+      * the action must be one of chart / supporting / ignore;
+      * no image may appear twice, so it can never hold two roles;
+      * a supporting file must name a target whose action is `chart` and
+        which sits in the SAME chart folder — an image can therefore never be
+        both a Chart's own image and a supporting file.
+
+    Returns a list of {path, action, target} sorted by path (so the same plan
+    always produces the same candidates in the same order), or raises
+    ChartPlanError. Nothing here fetches or writes anything.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise ChartPlanError("The chart plan must be a list of images.")
+    if len(raw) > MAX_CHART_PLAN:
+        raise ChartPlanError(
+            "The chart plan is larger than this folder can be.")
+
+    folder_of = {}
+    for group in groups or []:
+        for image in group.get("images") or []:
+            folder_of[image["path"]] = group["folder"]
+
+    cleaned, seen = [], set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ChartPlanError("Each chart plan entry must be an object.")
+
+        path = entry.get("path")
+        path = path.strip() if isinstance(path, str) else ""
+        if not path:
+            raise ChartPlanError("An empty chart image path was submitted.")
+        check_relative_path(path, "image", ChartPlanError)
+        if path not in folder_of:
+            raise ChartPlanError(
+                "%r is not an image found in this folder." % path[:80])
+        if path in seen:
+            raise ChartPlanError(
+                "%r was given more than one role." % path[:80])
+        seen.add(path)
+
+        action = entry.get("action")
+        action = action.strip().lower() if isinstance(action, str) else ""
+        if action not in CHART_ACTIONS:
+            raise ChartPlanError(
+                "%r is not a chart role (chart, supporting, ignore)."
+                % str(entry.get("action"))[:40])
+
+        target = entry.get("target")
+        target = target.strip() if isinstance(target, str) else ""
+        if action == "supporting":
+            if not target:
+                raise ChartPlanError(
+                    "%r is a supporting file with no Chart to attach it to."
+                    % path[:80])
+            check_relative_path(target, "image", ChartPlanError)
+            if target not in folder_of:
+                raise ChartPlanError(
+                    "%r is not an image found in this folder." % target[:80])
+        elif target:
+            raise ChartPlanError(
+                "Only a supporting file may name a target Chart.")
+
+        cleaned.append({
+            "path": path,
+            "action": action,
+            "target": target if action == "supporting" else "",
+        })
+
+    charts = {entry["path"] for entry in cleaned if entry["action"] == "chart"}
+    for entry in cleaned:
+        if entry["action"] != "supporting":
+            continue
+        if entry["target"] not in charts:
+            raise ChartPlanError(
+                "%r must attach to an image whose role is Chart."
+                % entry["path"][:80])
+        if folder_of[entry["target"]] != folder_of[entry["path"]]:
+            raise ChartPlanError(
+                "%r and %r are not in the same chart folder."
+                % (entry["path"][:80], entry["target"][:80]))
+
+    return sorted(cleaned, key=lambda entry: entry["path"])

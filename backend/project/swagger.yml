@@ -777,19 +777,63 @@ paths:
                   folder becomes exactly one candidate containing everything
                   beneath it, replacing the default immediate children for
                   that root only. Validated server-side.
+              chart_plan:
+                type: array
+                description: Optional per-IMAGE chart plan. A Chart record
+                  holds exactly one image, so its unit of choice is the image
+                  file, not a folder. Each entry gives one discovered image
+                  (see chart_image_groups in the response) a single role
+                  and applies only to the folder that image sits in; a folder
+                  no entry mentions keeps its default proposal. Omit the
+                  field entirely, or send an empty list, for the default
+                  behaviour. Validated server-side before any candidate is
+                  built.
+                items:
+                  type: object
+                  required:
+                    - path
+                    - action
+                  properties:
+                    path:
+                      type: string
+                      description: Relative POSIX path of an image this
+                        analysis discovered. URLs, absolute paths, `..`,
+                        backslashes and percent-encoding are refused, as is
+                        any path not listed in chart_image_groups.
+                    action:
+                      type: string
+                      enum: ["chart", "supporting", "ignore"]
+                      description: >-
+                        `chart` makes this image one Chart candidate of its
+                        own; `supporting` appends it to the target Chart's
+                        `files`; `ignore` creates nothing from it.
+                    target:
+                      type: string
+                      description: Required for `supporting`, and forbidden
+                        otherwise. Must be an image in the SAME chart folder
+                        whose own action is `chart`.
       responses:
         200:
           description: >-
             Deterministic candidates for curator review. Structure metadata
             sits at the TOP level of the envelope — structure_mode,
             structure_issues, normalized_roles (actual directory name ->
-            canonical role), boundary_trees and applied_boundaries — while
-            the per-kind candidate lists sit under `candidates`.
+            canonical role), boundary_trees, applied_boundaries,
+            chart_image_groups and applied_chart_plan — while the per-kind
+            candidate lists sit under `candidates`.
             boundary_trees and applied_boundaries are always present; in
             legacy mode every datasets/scripts role root appears, with an
             empty `nodes` list when it has no selectable child folders.
+            chart_image_groups is always present too: one entry per folder
+            that holds chart images, as
+            {folder, role_root, images: [{path, reason, suggested_action}],
+            notebooks: [{path}]}, where suggested_action is advisory and is
+            "chart" only for the single image the deterministic rule would
+            have picked, "review" otherwise. applied_chart_plan echoes the
+            validated plan actually in force, sorted by path.
         400:
-          description: Missing, malformed, or out-of-root folder path
+          description: Missing, malformed, or out-of-root folder path, or a
+            rejected boundary selection or chart plan
         401:
           description: Authentication required
         403:

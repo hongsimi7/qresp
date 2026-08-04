@@ -564,6 +564,8 @@ def _empty_result(mode, roles, issues, unclassified_rows, total,
         "unclassified_total": total,
         "grouped_unclassified": unclassified_rows,
         "boundary_trees": boundary_trees or {},
+        "chart_image_groups": [],
+        "applied_chart_plan": [],
         "notebook_hints": [],
         "ungrouped_images": [],
         "possible_dependencies": [],
@@ -598,10 +600,11 @@ def _analyze_unsupported(files, dirs, roles, issues):
 
 
 def _analyze_by_boundaries(files, dirs, texts, mode, roles, issues,
-                           selected=None):
+                           selected=None, chart_groups=None, chart_plan=None):
     """Standard / legacy-compatible mode: one record per immediate child."""
     groups, claimed = build_boundary_candidates(files, dirs, roles, texts,
-                                                selected=selected)
+                                                selected=selected,
+                                                chart_plan=chart_plan)
 
     # Root files that the standard expects are not a problem, and are not
     # candidates either.
@@ -642,8 +645,13 @@ def _analyze_by_boundaries(files, dirs, texts, mode, roles, issues,
         "unclassified_total": len(leftover),
         "grouped_unclassified": fs.group_unclassified(leftover, files),
         "boundary_trees": boundary_trees,
+        # Every Chart image this analysis found, grouped by its REAL folder.
+        # The browser picks roles from this; it never reconstructs the folder
+        # from a candidate's internals.
+        "chart_image_groups": chart_groups or [],
         # Echoed back so the UI can show what is in force right now.
         "applied_boundaries": selected or {},
+        "applied_chart_plan": chart_plan or [],
         "notebook_hints": [],
         "ungrouped_images": [],
         "possible_dependencies": [],
@@ -693,7 +701,88 @@ def _usable(candidate):
     return True
 
 
-def build_boundary_candidates(files, dirs, roles, texts, selected=None):
+def _plan_chart_candidates(folder, entries, files, start_index,
+                           attach_folder_data=True):
+    """One Chart candidate per `chart` action in this folder's plan.
+
+    A Chart stores exactly ONE image, so an image the curator marked `chart`
+    becomes its own independent proposal — never a second image field, never a
+    gallery. Supporting images are appended to their target Chart's `files`;
+    ignored images produce nothing at all. Independent charts can be related
+    afterwards through Workflow, which is where relationships belong.
+
+    Figure number, caption and keywords stay blank: none of them can be read
+    off a file name, and discovery order is not evidence of a figure number.
+    """
+    notebooks = fs.chart_notebooks(folder, files)
+    picks = sorted(entry["path"] for entry in entries
+                   if entry["action"] == "chart")
+    supporting = {}
+    for entry in entries:
+        if entry["action"] == "supporting":
+            supporting.setdefault(entry["target"], []).append(entry["path"])
+
+    # Non-image, non-notebook files in the folder (or its data/ directory) are
+    # the chart's input data. They belong to the chart only when the plan
+    # produced exactly one: two charts must never claim the same data file.
+    # A loose image sitting directly under the role root has no folder of its
+    # own, so nothing beside it is assumed to belong to it either.
+    folder_data = []
+    if attach_folder_data:
+        _preview, folder_data, _notebook = fs.chart_parts(folder, files)
+    shared_data = ([path for path in folder_data if path not in notebooks]
+                   if len(picks) == 1 else [])
+
+    charts = []
+    index = start_index
+    for image in picks:
+        notebook = fs.notebook_for_image(image, notebooks)
+        attached = sorted(set(supporting.get(image, [])))
+        # Deduplicated, and the image itself can never be one of its own
+        # supporting files (the plan already refuses that).
+        record_files = list(shared_data) + [path for path in attached
+                                            if path not in shared_data]
+        evidence = ["One chart: the image %s, chosen in the Charts section of "
+                    "the record boundaries." % image]
+        if attached:
+            evidence.append("Supporting file(s) attached to this chart: %s"
+                            % ", ".join(attached))
+        if shared_data:
+            evidence.append("Input file(s) from this folder: %s"
+                            % ", ".join(shared_data))
+        elif folder_data and len(picks) > 1:
+            evidence.append(
+                "This folder produced %d charts, so its shared input files "
+                "were not attached to any of them — add them by hand where "
+                "they belong." % len(picks))
+        if notebook:
+            evidence.append(
+                "Reproduction notebook: %s (its name matches the image)."
+                % notebook)
+        evidence.append(
+            "Figure number, caption and keywords are never derived from a "
+            "file name or from discovery order — they are left blank.")
+
+        charts.append(_boundary_candidate(
+            "chart", index,
+            {"imageFile": image, "files": record_files,
+             "notebookFile": notebook, "number": "", "caption": "",
+             "properties": [], "extraFields": []},
+            evidence, MEDIUM,
+            [image] + record_files + ([notebook] if notebook else []),
+            ["caption", "number", "properties"],
+            {"imageFile": HIGH, "files": HIGH if record_files else NEEDS_INPUT,
+             "notebookFile": HIGH if notebook else NEEDS_INPUT,
+             "number": NEEDS_INPUT, "caption": NEEDS_INPUT,
+             "properties": NEEDS_INPUT},
+            label=posixpath.basename(image),
+            file_count=1 + len(record_files) + (1 if notebook else 0)))
+        index += 1
+    return charts, index
+
+
+def build_boundary_candidates(files, dirs, roles, texts, selected=None,
+                              chart_plan=None):
     """One record per IMMEDIATE CHILD of a role directory.
 
     This is the whole point of the Folder Standard: the folder already says
@@ -705,6 +794,15 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
     claimed = set()
     selected = selected or {}
     chart_i = dataset_i = script_i = tool_i = 0
+
+    # The plan, indexed by the folder its images really live in. A folder the
+    # plan mentions is built FROM the plan; a folder it does not mention keeps
+    # the deterministic default, so an older client (or a plan that covers only
+    # part of the tree) loses nothing.
+    plan_by_folder = {}
+    for entry in chart_plan or []:
+        plan_by_folder.setdefault(
+            posixpath.dirname(entry["path"]), []).append(entry)
 
     for top, role in sorted(roles.items()):
         child_dirs, child_files = fs._children_of(top, files, dirs)
@@ -766,6 +864,14 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                 members = fs.descendants_of(folder, files)
                 if not members:
                     continue
+                # The curator decided about this folder's images by hand: one
+                # Chart per image they marked, and nothing else from here.
+                if folder in plan_by_folder:
+                    claimed.update(members)
+                    planned, chart_i = _plan_chart_candidates(
+                        folder, plan_by_folder[folder], files, chart_i)
+                    charts.extend(planned)
+                    continue
                 preview, data, notebook = fs.chart_parts(folder, files)
                 # Every image we found, so the curator can choose when we
                 # decline to. The picker only auto-selects when the choice is
@@ -814,7 +920,18 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                     image_options=image_options,
                     notebook_options=fs.chart_notebooks(folder, files)))
                 chart_i += 1
-            # A loose image directly under charts/ is still one chart.
+            # A loose image directly under charts/ is still one chart. Their
+            # real folder IS the role root, so that is where a plan for them
+            # is keyed.
+            if top in plan_by_folder:
+                for path in child_files:
+                    if _ext(path) in CHART_EXTENSIONS:
+                        claimed.add(path)
+                planned, chart_i = _plan_chart_candidates(
+                    top, plan_by_folder[top], files, chart_i,
+                    attach_folder_data=False)
+                charts.extend(planned)
+                continue
             for path in child_files:
                 if _ext(path) not in CHART_EXTENSIONS:
                     continue
@@ -924,13 +1041,17 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
     return groups, claimed
 
 
-def analyze_folder_tree(files, dirs, texts, boundaries=None):
+def analyze_folder_tree(files, dirs, texts, boundaries=None, chart_plan=None):
     """Pure classification over an inventory — the unit under test.
 
     `roles` maps a directory to its confirmed role. Omitted, the suggested
     roles are used, so a legacy tree with no recognizable directory names
     still analyzes (everything falls to UNCLASSIFIED, which classifies by
     extension at LOW confidence rather than not at all).
+
+    `boundaries` chooses Dataset/Script record folders; `chart_plan` chooses
+    what each discovered Chart IMAGE becomes. Both are optional and both are
+    validated here, before a single candidate is built.
     """
     mode, standard_roles, issues = fs.detect_structure(files, dirs)
 
@@ -939,12 +1060,23 @@ def analyze_folder_tree(files, dirs, texts, boundaries=None):
         # unless the curator chose different boundaries by hand.
         selected = fs.validate_boundaries(boundaries, standard_roles,
                                           files, dirs)
+        # The images are discovered UNDER the boundaries in force, and the
+        # plan is validated against exactly those images.
+        chart_groups = fs.chart_image_groups(files, dirs, standard_roles,
+                                             selected)
+        plan = fs.validate_chart_plan(chart_plan, chart_groups)
         return _analyze_by_boundaries(files, dirs, texts, mode,
                                       standard_roles, issues,
-                                      selected=selected)
+                                      selected=selected,
+                                      chart_groups=chart_groups,
+                                      chart_plan=plan)
     if mode == fs.MODE_INVALID:
         # Deliberately NO extension-based guessing and NO per-file dump: one
         # grouped row per unsupported root, and the guide.
+        if chart_plan:
+            raise fs.ChartPlanError(
+                "This folder needs reorganizing before charts can be chosen "
+                "from it.")
         return _analyze_unsupported(files, dirs, standard_roles, issues)
 
     raise AssertionError("unreachable analysis mode: %s" % mode)
@@ -997,11 +1129,14 @@ def analyze_folder(body):
                 "Only the first %d manifest/script files were read for "
                 "evidence." % MAX_TEXT_FILES)
 
-    # An optional, fully validated record-boundary selection. Rejections are
-    # user-facing and happen before anything is built.
+    # An optional, fully validated record-boundary selection and chart plan.
+    # Rejections are user-facing and happen before anything is built.
+    # (ChartPlanError is a BoundaryError, so both land on the same 400.)
     try:
-        result = analyze_folder_tree(files, dirs, texts,
-                                     boundaries=(body or {}).get("boundaries"))
+        result = analyze_folder_tree(
+            files, dirs, texts,
+            boundaries=(body or {}).get("boundaries"),
+            chart_plan=(body or {}).get("chart_plan"))
     except fs.BoundaryError as e:
         return {"error": str(e)}, 400
     counts = {key: len(value) for key, value in result.items()
@@ -1033,6 +1168,11 @@ def analyze_folder(body):
         # "no boundaries" or "older server".
         "boundary_trees": result.get("boundary_trees") or {},
         "applied_boundaries": result.get("applied_boundaries") or {},
+        # Every Chart image found, grouped by its real folder, plus the plan
+        # actually in force. Always present, so a client never has to guess
+        # whether a missing key means "no images" or "older server".
+        "chart_image_groups": result.get("chart_image_groups") or [],
+        "applied_chart_plan": result.get("applied_chart_plan") or [],
         "candidates": result,
     }, 200
 
