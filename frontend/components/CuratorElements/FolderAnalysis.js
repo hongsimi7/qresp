@@ -202,11 +202,9 @@ const FolderAnalysis = ({ path }) => {
   // chart. Keyed by candidate id, then by image path.
   const [imageRoles, setImageRoles] = useState({});
 
-  const rolesFor = (candidate) => {
-    const stored = imageRoles[candidate.id];
-    if (stored) return stored;
-    // The backend's suggestion is a starting point, not a decision: the
-    // suggested primary is preselected and everything else is Unused.
+  // The backend's suggestion is a starting point, not a decision: the
+  // suggested primary is preselected and everything else is Unused.
+  const defaultRoles = (candidate) => {
     const primary = (candidate.proposal || {}).imageFile || "";
     const initial = {};
     (candidate.image_options || []).forEach((option) => {
@@ -215,21 +213,31 @@ const FolderAnalysis = ({ path }) => {
     return initial;
   };
 
+  const rolesFor = (candidate) =>
+    imageRoles[candidate.id] || defaultRoles(candidate);
+
   // A notebook follows an image into its own chart ONLY on an unambiguous
   // name match, mirroring the backend rule. A shared notebook stays with the
   // original chart rather than being copied into both.
   const notebookFor = (candidate, imagePath) => {
-    const notebook = (candidate.proposal || {}).notebookFile || "";
-    if (!notebook) return "";
+    const notebooks = candidate.notebook_options || [];
     const stem = (value) => basename(value).replace(/\.[^.]+$/, "");
-    return stem(notebook).toLowerCase() === stem(imagePath).toLowerCase()
-      ? notebook
-      : "";
+    const want = stem(imagePath);
+    const exact = notebooks.filter((path) => stem(path) === want);
+    if (exact.length === 1) return exact[0];
+    const insensitive = notebooks.filter(
+      (path) => stem(path).toLowerCase() === want.toLowerCase()
+    );
+    return insensitive.length === 1 ? insensitive[0] : "";
   };
 
   const setImageRole = (candidate, path, role) => {
     setImageRoles((current) => {
-      const roles = { ...rolesFor(candidate), [path]: role };
+      // Derived inside the updater: two role changes in one tick would
+      // otherwise both start from the render-time snapshot and the first
+      // would be lost.
+      const previous = current[candidate.id] || defaultRoles(candidate);
+      const roles = { ...previous, [path]: role };
       if (role === "primary") {
         // At most one primary. The previous one becomes Unused rather than
         // disappearing -- it is still in the folder, and still choosable.
@@ -268,10 +276,11 @@ const FolderAnalysis = ({ path }) => {
     setPickerOpen(false);
     setTab(0);
     setAiConsent(false);
-    setAiConsentOpen(false);
-    setAiLoading(false);
-    setAiNotice("");
+    setAiConsentOpen(null);
+    setAiLoading({});
+    setAiNotice({});
     setAiSuggestions({});
+    setImageRoles({});
     setShowAll({});
   };
 
@@ -298,7 +307,15 @@ const FolderAnalysis = ({ path }) => {
                                           candidate.proposal);
         });
       });
+      // Candidate ids are positional ("chart-0"), so a new analysis reuses
+      // them. Everything keyed by id is dropped with the candidates it
+      // described, or the new folder's first chart inherits the previous
+      // folder's image roles, AI suggestion and error.
       setDrafts(initial);
+      setImageRoles({});
+      setAiSuggestions({});
+      setAiNotice({});
+      setAiLoading({});
       setAnalysis(data);
     } catch (err) {
       setError(
@@ -949,17 +966,11 @@ const FolderAnalysis = ({ path }) => {
               const evidence = blank
                 ? null
                 : (candidate.field_evidence || {})[field];
-              // When the deterministic pass found several images and refused
-              // to guess between them, the curator picks from what is there.
-              const choices = ((candidate.options || {})[field] || []).filter(
-                Boolean
-              );
               return (
                 <Grid key={field} size={{ xs: 12, md: 6 }}>
                   <TextField
                     fullWidth
                     size="small"
-                    select={choices.length > 1}
                     label={labelFor(candidate.kind, field)}
                     // MUI renders the asterisk and sets aria-required, so the
                     // marker is real semantics rather than a character glued
@@ -974,21 +985,7 @@ const FolderAnalysis = ({ path }) => {
                         ? "Required before Save/Update and Publish."
                         : " "
                     }
-                  >
-                    {choices.length > 1
-                      ? [
-                          <MenuItem key="" value="">
-                            <em>Not selected</em>
-                          </MenuItem>,
-                        ].concat(
-                          choices.map((choice) => (
-                            <MenuItem key={choice} value={choice}>
-                              {basename(choice)}
-                            </MenuItem>
-                          ))
-                        )
-                      : null}
-                  </TextField>
+                  />
                   {evidence ? (
                     <Chip
                       size="small"
@@ -1476,7 +1473,7 @@ const FolderAnalysis = ({ path }) => {
           underneath — the suggestions would be invisible to assistive tech
           for as long as it lasts. */}
       <Dialog
-        open={aiConsentOpen}
+        open={Boolean(aiConsentOpen)}
         onClose={closeAiConsent}
         maxWidth="sm"
         fullWidth

@@ -7,6 +7,7 @@ import axios from "axios";
 
 import FolderAnalysis from "../components/CuratorElements/FolderAnalysis";
 import CuratorState from "../Context/Curator/CuratorState";
+import { missingRequired } from "../Utils/artifactFields";
 import CuratorContext from "../Context/Curator/curatorContext";
 import AlertContext from "../Context/Alert/alertContext";
 
@@ -2235,12 +2236,15 @@ describe("multi-image chart folders", () => {
             properties: [],
             extraFields: [],
           },
+          // Verbatim from the real /api/curation/analyze-folder response;
+          // the backend route test asserts this exact serialization.
           image_options: [
             { path: "charts/figure_S1/diagram.png",
               reason: "image found in this chart folder" },
             { path: "charts/figure_S1/figure_S1.png",
               reason: "filename matches the chart folder" },
           ],
+          notebook_options: ["charts/figure_S1/figure_S1.ipynb"],
         },
       ],
     },
@@ -2347,10 +2351,17 @@ describe("multi-image chart folders", () => {
     expect(original.files).not.toContain("charts/figure_S1/diagram.png");
 
     expect(separate.imageFile).toBe("charts/figure_S1/diagram.png");
-    // Incomplete on purpose, like any other folder proposal.
+    // Incomplete on purpose, like any other folder proposal: with only the
+    // image set it is missing Figure Number, Caption and Keywords -- THREE
+    // required fields, which is what the summary chip will say.
     expect(separate.caption).toBe("");
     expect(separate.number).toBe("");
     expect(separate.properties).toEqual([]);
+    expect(missingRequired("chart", separate)).toEqual([
+      "number",
+      "caption",
+      "properties",
+    ]);
     // The notebook name does not match, so it stays with the original.
     expect(separate.notebookFile).toBe("");
   });
@@ -2385,6 +2396,68 @@ describe("multi-image chart folders", () => {
     expect(links).toHaveLength(2);
     links.forEach((link) => expect(link).toHaveTextContent(/open image/i));
     expect(links[0].getAttribute("href")).toContain("diagram.png");
+  });
+
+  it("shows exactly one control for the primary image", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    const panel = await openRoles(user);
+
+    // The role select is the only primary/related/separate controller. The
+    // generic field renderer used to draw a second Image File dropdown from
+    // a key the backend no longer sends.
+    expect(screen.getAllByLabelText(/^role for /i)).toHaveLength(2);
+    const imageField = screen.getByLabelText(/^image file ?\*?$/i, {
+      selector: "input",
+    });
+    // A plain text input, not a select: no second chooser.
+    expect(imageField.tagName).toBe("INPUT");
+    expect(panel).not.toContainElement(imageField);
+  });
+
+  it("pairs a separate chart with its OWN notebook, never a shared one",
+     async () => {
+    const user = userEvent.setup();
+    const both = JSON.parse(JSON.stringify(MULTI));
+    both.candidates.charts[0].notebook_options = [
+      "charts/figure_S1/diagram.ipynb",
+      "charts/figure_S1/figure_S1.ipynb",
+    ];
+    axios.post.mockResolvedValue({ data: both });
+    const { addMany } = renderWith();
+    await openRoles(user);
+
+    await setRole(user, "diagram.png", "Create as separate Chart");
+    await addToCurator(user);
+
+    const [, records] = addMany.mock.calls[0];
+    expect(records[1].imageFile).toBe("charts/figure_S1/diagram.png");
+    expect(records[1].notebookFile).toBe("charts/figure_S1/diagram.ipynb");
+    // ...and the original keeps its own.
+    expect(records[0].notebookFile).toBe("charts/figure_S1/figure_S1.ipynb");
+  });
+
+  it("forgets image roles when another folder is analyzed", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openRoles(user);
+    await setRole(user, "diagram.png", "Primary image");
+    expect(roleSelect("diagram.png")).toHaveTextContent("Primary image");
+
+    // A second analysis replaces the candidates. Ids are positional, so
+    // chart-0 is reused and must not inherit the previous folder's roles.
+    axios.post.mockResolvedValue({ data: MULTI });
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    // The dialog unmounts with a transition; wait for the trigger to come
+    // back out from under aria-hidden before re-analyzing.
+    await user.click(
+      await screen.findByRole("button", { name: /analyze rcc folder/i })
+    );
+    await screen.findByRole("tab", { name: /charts \(1\)/i });
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+
+    expect(roleSelect("figure_S1.png")).toHaveTextContent("Primary image");
+    expect(roleSelect("diagram.png")).toHaveTextContent("Unused");
   });
 
   it("leaves a single-image chart with no role controls at all", async () => {
