@@ -363,6 +363,40 @@ def chart_images(folder, files):
     return sorted(images)
 
 
+def chart_notebooks(folder, files):
+    """Every notebook directly inside `folder`, server spelling intact.
+
+    A chart boundary may hold more than one. Returning all of them lets an
+    image promoted to its own chart be matched against the whole set, rather
+    than against whichever notebook the original chart happened to take.
+    """
+    return sorted(
+        path for path in descendants_of(folder, files)
+        if posixpath.dirname(path) == folder
+        and posixpath.splitext(path)[1].lower() == ".ipynb"
+    )
+
+
+def notebook_for_image(image, notebooks):
+    """The notebook that unambiguously belongs to `image`, or "".
+
+    Unambiguous means the basenames match -- exactly, or differing only in
+    case. A lone notebook with an unrelated name is NOT adopted: that is a
+    guess, and guessing is what attached a notebook to a chart whose image we
+    had just declined to choose.
+    """
+    stem = posixpath.splitext(posixpath.basename(image or ""))[0]
+    if not stem:
+        return ""
+    for matches in (lambda other: other == stem,
+                    lambda other: other.lower() == stem.lower()):
+        hits = [path for path in notebooks
+                if matches(posixpath.splitext(posixpath.basename(path))[0])]
+        if len(hits) == 1:
+            return hits[0]
+    return ""
+
+
 def pick_chart_image(folder, images):
     """The representative image for a chart folder, or "" when the choice is
     genuinely ambiguous.

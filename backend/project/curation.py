@@ -326,7 +326,8 @@ MAX_CANDIDATE_PATHS = 200
 
 def _candidate(kind, index, proposal, evidence, confidence, paths,
                needs_input=None, field_evidence=None, hints=None,
-               label=None, file_count=None, options=None):
+               label=None, file_count=None, image_options=None,
+               notebook_options=None):
     return {
         "id": "%s-%d" % (kind, index),
         "kind": kind,
@@ -345,7 +346,14 @@ def _candidate(kind, index, proposal, evidence, confidence, paths,
         "field_evidence": field_evidence or {},
         # Per-field choices the curator may pick from when the deterministic
         # pass found several and would have had to guess between them.
-        "options": options or {},
+        # EVERY image found in this chart boundary, each with the reason it
+        # is listed. Always complete: a non-primary image is never dropped,
+        # so the curator reviews the whole folder rather than our choice.
+        "image_options": image_options or [],
+        # Every notebook in the boundary, so an image promoted to its own
+        # chart can be matched against all of them rather than against
+        # whichever one the original chart happened to take.
+        "notebook_options": notebook_options or [],
         "evidence": evidence,
         # Filename fragments, explicitly labelled as unverified. Shown in
         # Details only; never a field value.
@@ -662,10 +670,13 @@ def _boundary_label(folder, role_root):
 
 def _boundary_candidate(kind, index, proposal, evidence, classification,
                         paths, needs_input, field_evidence,
-                        label=None, file_count=None, options=None):
+                        label=None, file_count=None, image_options=None,
+                        notebook_options=None):
     return _candidate(kind, index, proposal, evidence, classification, paths,
                       needs_input=needs_input, field_evidence=field_evidence,
-                      label=label, file_count=file_count, options=options)
+                      label=label, file_count=file_count,
+                      image_options=image_options,
+                      notebook_options=notebook_options)
 
 
 def _usable(candidate):
@@ -759,7 +770,8 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                 # Every image we found, so the curator can choose when we
                 # decline to. The picker only auto-selects when the choice is
                 # unambiguous; it never guesses between two figures.
-                image_options = fs.chart_images(folder, files)
+                _suggested, image_options = fs.pick_chart_image(
+                    folder, fs.chart_images(folder, files))
                 claimed.update(members)
                 evidence = ["One chart: the folder %s (%d file(s))."
                             % (folder, len(members))]
@@ -769,8 +781,8 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                     evidence.append(
                         "Several images here and none named after the folder "
                         "(%s) — pick the figure yourself."
-                        % ", ".join(posixpath.basename(p)
-                                    for p in image_options))
+                        % ", ".join(posixpath.basename(o["path"])
+                                    for o in image_options))
                 else:
                     evidence.append(
                         "No image found in this folder — set the image file "
@@ -799,7 +811,8 @@ def build_boundary_candidates(files, dirs, roles, texts, selected=None):
                      "properties": NEEDS_INPUT},
                     label=_boundary_label(folder, top),
                     file_count=len(members),
-                    options={"imageFile": image_options}))
+                    image_options=image_options,
+                    notebook_options=fs.chart_notebooks(folder, files)))
                 chart_i += 1
             # A loose image directly under charts/ is still one chart.
             for path in child_files:
