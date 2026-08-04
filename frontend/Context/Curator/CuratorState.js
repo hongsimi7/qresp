@@ -50,6 +50,14 @@ const CuratorState = (props) => {
   // keyword assist can re-read the file after explicit consent.
   const [draftDirty, setDraftDirty] = useState(false);
   const [resetVersion, setResetVersion] = useState(0);
+  // Runtime-only RCC analysis. It is deliberately outside `state`, so it is
+  // never serialized into browser/account drafts, metadata exports or a
+  // publish payload. Artifact sections share it to avoid crawling the same
+  // saved folder once per Chart/Dataset/Script/Tool dialog.
+  const [rccAnalysisCache, setRccAnalysisCache] = useState({
+    path: "",
+    data: null,
+  });
   const firstDirtyCheck = useRef(true);
   const skipNextDirty = useRef(false);
   const stateRef = useRef(null);
@@ -96,6 +104,14 @@ const CuratorState = (props) => {
   };
 
   const [state, dispatch] = useReducer(CuratorReducer, initialState);
+
+  const clearRccAnalysis = useCallback(() => {
+    setRccAnalysisCache({ path: "", data: null });
+  }, []);
+
+  const cacheRccAnalysis = useCallback((path, data) => {
+    setRccAnalysisCache({ path: path || "", data: data || null });
+  }, []);
 
   useEffect(() => {
     stateRef.current = state;
@@ -204,8 +220,10 @@ const CuratorState = (props) => {
     heads: data.heads || initialState.heads,
   });
 
-  const setAll = (data) =>
+  const setAll = (data) => {
+    clearRccAnalysis();
     dispatch({ type: SET_CURATOR_STATE, payload: normalizeState(data) });
+  };
 
 
   const registerDraftFlusher = useCallback((key, flusher) => {
@@ -273,6 +291,7 @@ const CuratorState = (props) => {
     setActiveDraftId(null);
     setActiveDraftTitle("");
     setDraftDirty(false);
+    clearRccAnalysis();
     // Remount the form tree: context reset alone leaves stale values in the
     // always-mounted uncontrolled form inputs.
     setResetVersion((version) => version + 1);
@@ -353,8 +372,10 @@ const CuratorState = (props) => {
   const setCuratorInfo = (info) =>
     dispatch({ type: SET_CURATORINFO, payload: info });
 
-  const setFileServerPath = (path) =>
+  const setFileServerPath = (path) => {
+    if (path !== state.fileServerPath) clearRccAnalysis();
     dispatch({ type: SET_FILESERVERPATH, payload: path });
+  };
 
   const setPaperInfo = (data) =>
     dispatch({ type: SET_PAPERINFO, payload: data });
@@ -422,6 +443,9 @@ const CuratorState = (props) => {
         draftDirty,
         resetVersion,
         remountForms,
+        rccAnalysisCache,
+        cacheRccAnalysis,
+        clearRccAnalysis,
         collectDraftState,
         getDraftTitle,
         registerDraftFlusher,

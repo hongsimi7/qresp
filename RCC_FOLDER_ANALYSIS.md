@@ -15,20 +15,25 @@ silently written.
 
 ## Where it lives
 
-**Analyze RCC Folder** appears in both states of the File Server section, and
-only one of them is mounted at a time, so there is never a duplicate button:
+RCC import actions live beside the existing manual Add action in each artifact
+section:
 
-- while editing (`Where is the paper`), it analyzes the folder currently
-  **selected** in the form — even before that selection is committed;
-- on the saved **File Server Information** card, it analyzes the saved
-  `fileServerPath`, so analysing an already-saved folder never requires
-  clicking the pencil first.
+- **Import Charts from RCC** beside **Add a Chart**;
+- **Import Datasets from RCC** beside **Add a Dataset**;
+- **Import Scripts from RCC** beside **Add a Script**;
+- **Import Tools from RCC** beside **Add a Tool**.
 
-Selecting and saving are deliberately separate steps. Confirming a folder in
-the file tree ("Use Folder") only records the choice — it does not
-write Curator state and does not close the section. **Save File Server** is
-the only action that calls `setFileServerPath`. A search that is cancelled or
-fails leaves an existing saved path and the current selection untouched.
+Each dialog shows only the requested record type. The File Server section is
+responsible only for selecting and saving the source folder; it no longer
+contains an all-in-one analysis action. Confirming a folder in the file tree
+with **Use** records the choice in the open form, and **Save File Server** is
+the only action that commits `fileServerPath` to Curator state.
+
+The first type-specific import scans the saved folder. Its complete response
+is cached only in the current browser runtime and reused when another artifact
+section is opened. Changing the saved File Server path, resetting/loading the
+curator, or explicitly rebuilding proposals clears or replaces this cache. It
+is never serialized into a draft, metadata export, publish request, or MongoDB.
 
 There is deliberately **no second URL input** in either state: the browser
 never supplies a fetchable location, and the backend validates whatever is
@@ -37,29 +42,30 @@ sent against its own allowed roots regardless.
 ## Data flow
 
 ```text
-selected (or saved) file server folder
+saved file server folder
   → POST /api/curation/analyze-folder   (authenticated, CSRF-protected)
       → path validated against the server's OWN allowed roots
       → bounded recursive autoindex listing
       → bounded evidence reads (manifests + script headers only)
       → deterministic classification
-  → review dialog: Charts | Datasets | Scripts | Tools | Unclassified
+  → runtime-only shared analysis response
+  → one review dialog for the requested type
   → curator selects / edits / removes
-  → "Add selected items to Curator" → Curator state only
+  → "Add selected <type> to Curator" → Curator state only
 ```
 
 Optional, separate, consented:
 
 ```text
-curator selects candidates (nothing is selected by default)
-  → "Enhance selected with AI"  (disabled until something is selected)
-  → CONSENT DIALOG: states the count and the exact scope; the checkbox is
+curator chooses one candidate (nothing is selected by default)
+  → "Enhance with AI" on that candidate
+  → CONSENT DIALOG: names that candidate and the exact scope; the checkbox is
     unchecked, and is asked again for every request — never remembered
-  → POST /api/curation/describe-candidates   (max 10 selected candidates)
+  → POST /api/curation/describe-candidates   (exactly one item)
       → allowlisted names/paths/local text → Gemini
-  → proposals shown per candidate, labelled "AI suggestion", NOT applied
+  → proposals shown on that candidate, labelled "AI suggestion", NOT applied
   → curator accepts a single field, or ignores it
-  → "Add selected items to Curator" remains a separate, final action
+  → "Add selected <type> to Curator" remains a separate, final action
 ```
 
 ## Endpoints
@@ -422,10 +428,11 @@ A chart renders as the paper's `fileServerPath` joined to the chart's
 relative `imageFile`. That join used to be `server + "/" + imageFile` at four
 call sites, which broke three ways:
 
-- **No saved path.** Analysis runs on the *selected* folder, so a chart could
-  be applied before **Save File Server**. `"" + "/" + "figures/x.png"` is a
-  path on the Qresp origin — a silent 404 and a blank figure. This was the
-  main cause.
+- **No saved path.** Older analysis flows could add a chart before
+  **Save File Server**. `"" + "/" + "figures/x.png"` then became a path on
+  the Qresp origin — a silent 404 and a blank figure. Type-specific RCC import
+  is now disabled until the File Server path is saved, while the renderer still
+  handles legacy/incomplete state explicitly.
 - **Inconsistent leading slash.** `Utils/Scraper.node` strips the server
   prefix from a manually picked file and leaves `/figures/x.png`, so manual
   charts produced `…/DOI//figures/x.png` while analyzed ones did not.
@@ -490,8 +497,8 @@ not inherited here.**
 
 ### What can leave the server (AI action only)
 
-Sent, per selected candidate, after an explicit consent checkbox that is
-unchecked every time the dialog opens:
+Sent for the one candidate whose AI action was clicked, after an explicit
+consent checkbox that is unchecked every time the dialog opens:
 
 - `id`, `kind`, display `name`
 - relative `paths` (absolute paths and anything with a scheme are dropped)
@@ -501,8 +508,9 @@ unchecked every time the dialog opens:
 
 Never sent: binary datasets, raw `.xyz`/`.h5`/`.csv` contents, image bytes,
 credentials/`.env`/keys, user profile, email or ownership data, and anything
-outside the selected folder. At most 10 items per request, and only
-candidates the curator has SELECTED.
+outside the selected folder. The endpoint requires exactly one item per
+request; zero-item and batched requests are rejected before Gemini or quota
+consumption.
 
 The response is schema-constrained (`{"items":[{"id","description",
 "keywords"}]}`), re-clipped server-side, and ids that were never sent are

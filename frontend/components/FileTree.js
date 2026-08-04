@@ -1,4 +1,10 @@
-import { useContext, useState, useEffect } from "react";
+import {
+  useContext,
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+} from "react";
 
 import {
   Dialog,
@@ -56,12 +62,25 @@ const FileTree = () => {
 
   const [expanded, setExpanded] = useState([]);
   const [loading, setLoading] = useState(false);
+  const contentRef = useRef(null);
+  const pendingScrollTop = useRef(null);
 
   useEffect(() => {
     if (!selectorOpen) {
       setChecked([]);
+      pendingScrollTop.current = null;
     }
   }, [selectorOpen]);
+
+  // react-checkbox-tree re-renders its complete node list when `checked`
+  // changes. Large RCC trees can briefly recalculate their intrinsic height
+  // during that render, which used to move the row under the pointer. Keep
+  // the tree viewport anchored to the exact position the curator was using.
+  useLayoutEffect(() => {
+    if (pendingScrollTop.current == null || !contentRef.current) return;
+    contentRef.current.scrollTop = pendingScrollTop.current;
+    pendingScrollTop.current = null;
+  }, [checked]);
 
   const theme = useTheme();
 
@@ -94,6 +113,9 @@ const FileTree = () => {
             // second scrollbar beside the tree's own, and the page behind the
             // dialog does not move with the wheel.
             overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
             // The Paper carries a margin on every side, and the dialog's
             // container is exactly the viewport with NO overflow of its own.
             // A max-height that ignores that margin makes the Paper taller
@@ -102,6 +124,10 @@ const FileTree = () => {
             // no way to scroll it back. Height and margin are stated together
             // so they can never drift apart again.
             m: { xs: 2, sm: 4 },
+            height: {
+              xs: "calc(100dvh - 32px)",
+              sm: "min(760px, calc(100dvh - 64px))",
+            },
             maxHeight: { xs: "calc(100% - 32px)", sm: "calc(100% - 64px)" },
           },
         },
@@ -163,9 +189,12 @@ const FileTree = () => {
         {loading && <LinearProgress color="primary" />}
       </Box>
       <DialogContent
+        ref={contentRef}
         dividers
         data-testid="filetree-content"
         sx={{
+          flex: "1 1 0",
+          minHeight: 0,
           overflowY: "auto",
           overscrollBehavior: "contain",
           // The tree is the only thing that scrolls, and only vertically.
@@ -200,6 +229,9 @@ const FileTree = () => {
           checked={checked}
           expanded={expanded}
           onCheck={(newChecked) => {
+            pendingScrollTop.current = contentRef.current
+              ? contentRef.current.scrollTop
+              : 0;
             if (!multiple) {
               setChecked(newChecked.filter((el) => !checked.includes(el)));
               return;

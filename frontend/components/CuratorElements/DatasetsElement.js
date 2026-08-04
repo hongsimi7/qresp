@@ -6,6 +6,7 @@ import { EditAndRemove } from "../Form/Util";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
 import Drawer from "../drawer";
+import ArtifactActionBar from "./ArtifactActionBar";
 
 import { Typography } from "@mui/material";
 
@@ -14,7 +15,9 @@ const DatasetsInfoElement = () => {
 
   return (
     <Drawer heading="Add Datasets from your paper" defaultOpen={true}>
-      <DatasetsInfoForm />
+      <ArtifactActionBar artifactType="dataset">
+        <DatasetsInfoForm />
+      </ArtifactActionBar>
       {datasets.length > 0 ? (
         <DatasetInfo
           datasets={datasets}

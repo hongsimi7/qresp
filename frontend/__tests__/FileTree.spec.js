@@ -282,6 +282,26 @@ describe("FileTree picker", () => {
     // unit that ignores it.
     expect(getComputedStyle(paper).maxHeight).toMatch(/^calc\(100% - \d+px\)$/);
     expect(paper).toHaveStyle("overflow: hidden");
+    expect(paper).toHaveStyle("display: flex");
+    expect(paper).toHaveStyle("flex-direction: column");
+    expect(screen.getByTestId("filetree-content")).toHaveStyle(
+      "flex: 1 1 0"
+    );
+    expect(screen.getByTestId("filetree-content")).toHaveStyle(
+      "min-height: 0"
+    );
+  });
+
+  it("keeps the tree viewport anchored when a checkbox changes", async () => {
+    const user = userEvent.setup();
+    renderTree();
+    const content = screen.getByTestId("filetree-content");
+    content.scrollTop = 240;
+
+    await user.click(folderCheckbox("figures_tables"));
+
+    expect(content.scrollTop).toBe(240);
+    expect(confirmButton()).toBeEnabled();
   });
 
   it("still multi-selects, and labels itself, for the other pickers",

@@ -125,6 +125,43 @@ const UnsavedOpenFormProbe = () => {
   );
 };
 
+const RccCacheProbe = () => {
+  const {
+    rccAnalysisCache,
+    cacheRccAnalysis,
+    setFileServerPath,
+    collectDraftState,
+  } = useContext(CuratorContext);
+  const [snapshot, setSnapshot] = useState(null);
+
+  return (
+    <div>
+      <span data-testid="rcc-cache-path">
+        {rccAnalysisCache.path || "empty"}
+      </span>
+      <span data-testid="rcc-snapshot">
+        {snapshot ? JSON.stringify(snapshot) : "none"}
+      </span>
+      <button onClick={() => setFileServerPath("https://rcc.test/files/a")}>
+        Path A
+      </button>
+      <button
+        onClick={() =>
+          cacheRccAnalysis("https://rcc.test/files/a", { candidates: {} })
+        }
+      >
+        Cache analysis
+      </button>
+      <button onClick={() => setSnapshot(collectDraftState())}>
+        Snapshot draft
+      </button>
+      <button onClick={() => setFileServerPath("https://rcc.test/files/b")}>
+        Path B
+      </button>
+    </div>
+  );
+};
+
 describe("CuratorState draft persistence", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -318,5 +355,28 @@ describe("CuratorState draft persistence", () => {
     await user.click(screen.getByRole("button", { name: /check unsaved/i }));
 
     expect(screen.getByTestId("unsaved-status")).toHaveTextContent("unsaved");
+  });
+
+  it("keeps RCC analysis runtime-only and clears it when the saved path changes", async () => {
+    const user = userEvent.setup();
+    render(
+      <CuratorState draftKey={null}>
+        <RccCacheProbe />
+      </CuratorState>
+    );
+
+    await user.click(screen.getByRole("button", { name: "Path A" }));
+    await user.click(screen.getByRole("button", { name: /cache analysis/i }));
+    expect(screen.getByTestId("rcc-cache-path")).toHaveTextContent(
+      "https://rcc.test/files/a"
+    );
+
+    await user.click(screen.getByRole("button", { name: /snapshot draft/i }));
+    expect(screen.getByTestId("rcc-snapshot")).not.toHaveTextContent(
+      "rccAnalysisCache"
+    );
+
+    await user.click(screen.getByRole("button", { name: "Path B" }));
+    expect(screen.getByTestId("rcc-cache-path")).toHaveTextContent("empty");
   });
 });

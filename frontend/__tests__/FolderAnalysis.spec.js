@@ -1,5 +1,11 @@
-import { useContext, useEffect } from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { useContext, useEffect, useState } from "react";
+import {
+  render,
+  screen,
+  waitFor,
+  waitForElementToBeRemoved,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 jest.mock("axios");
@@ -985,6 +991,99 @@ describe("Analyze RCC Folder", () => {
     expect(
       screen.queryByRole("checkbox", { name: /select ase/i })
     ).toBeNull();
+  });
+});
+
+describe("type-specific RCC imports", () => {
+  const TypedHarness = () => {
+    const [cache, setCache] = useState({ path: "", data: null });
+    const value = {
+      fileServerPath: FOLDER,
+      addMany: jest.fn(),
+      rccAnalysisCache: cache,
+      cacheRccAnalysis: (path, data) => setCache({ path, data }),
+    };
+    return (
+      <AlertContext.Provider value={{ setAlert: jest.fn() }}>
+        <CuratorContext.Provider value={value}>
+          <FolderAnalysis artifactType="chart" />
+          <FolderAnalysis artifactType="dataset" />
+          <FolderAnalysis artifactType="script" />
+          <FolderAnalysis artifactType="tool" />
+        </CuratorContext.Provider>
+      </AlertContext.Provider>
+    );
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: analysis });
+  });
+
+  it("offers one import action beside each artifact type", () => {
+    render(<TypedHarness />);
+    expect(
+      screen.getByRole("button", { name: /import charts from rcc/i })
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: /import datasets from rcc/i })
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: /import scripts from rcc/i })
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: /import tools from rcc/i })
+    ).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: /analyze rcc folder/i })
+    ).toBeNull();
+  });
+
+  it("shows only the requested type and reuses the runtime scan", async () => {
+    const user = userEvent.setup();
+    render(<TypedHarness />);
+
+    await user.click(
+      screen.getByRole("button", { name: /import charts from rcc/i })
+    );
+    expect(
+      await screen.findByRole("heading", { name: /import charts from rcc/i })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.getByText("figure1.png")).toBeInTheDocument();
+    expect(screen.queryByText("short_traj")).toBeNull();
+    expect(axios.post).toHaveBeenCalledTimes(1);
+
+    const chartDialog = screen.getByRole("dialog", {
+      name: /import charts from rcc/i,
+    });
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await waitForElementToBeRemoved(chartDialog);
+    await user.click(
+      screen.getByRole("button", { name: /import datasets from rcc/i })
+    );
+    expect(
+      await screen.findByRole("heading", { name: /import datasets from rcc/i })
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(/short_traj/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText("figure1.png")).toBeNull();
+    expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires a saved file server path", () => {
+    render(
+      <AlertContext.Provider value={{ setAlert: jest.fn() }}>
+        <CuratorContext.Provider
+          value={{ fileServerPath: "", addMany: jest.fn() }}
+        >
+          <FolderAnalysis artifactType="chart" />
+        </CuratorContext.Provider>
+      </AlertContext.Provider>
+    );
+    expect(
+      screen.getByRole("button", { name: /import charts from rcc/i })
+    ).toBeDisabled();
+    expect(axios.post).not.toHaveBeenCalled();
   });
 });
 

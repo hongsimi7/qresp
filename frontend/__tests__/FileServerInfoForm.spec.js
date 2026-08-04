@@ -1,9 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-jest.mock("axios");
-import axios from "axios";
-
 jest.mock("../Utils/Scraper", () => ({ getList: jest.fn() }));
 import { getList } from "../Utils/Scraper";
 
@@ -84,7 +81,6 @@ describe("FileServerInfoForm", () => {
       files: [{ label: "folder", value: FOLDER }],
       details: {},
     });
-    axios.post.mockResolvedValue({ data: { candidates: {} } });
   });
 
   it("registers the default File Server radio value without crashing", () => {
@@ -119,7 +115,7 @@ describe("FileServerInfoForm", () => {
     );
     expect(handles.setFileServerPath).not.toHaveBeenCalled();
     expect(handles.editor).not.toHaveBeenCalled();
-    // The form is still on screen and still offers both next steps.
+    // The form is still on screen and offers the explicit save step.
     expect(
       screen.getByRole("button", { name: /^search$/i })
     ).toBeInTheDocument();
@@ -137,7 +133,7 @@ describe("FileServerInfoForm", () => {
       screen.getByRole("button", { name: /save file server/i })
     ).toBeDisabled();
     expect(
-      screen.getByText(/search above, then pick one folder/i)
+      screen.getByText(/search above, then pick and save one folder/i)
     ).toBeInTheDocument();
   });
 
@@ -151,45 +147,29 @@ describe("FileServerInfoForm", () => {
     expect(preview.textContent).not.toMatch(/analyze|save|search/i);
   });
 
-  it("puts both actions in one row with the explanation below it", () => {
+  it("keeps folder saving separate from artifact imports", () => {
     renderForm({ fileServerPath: FOLDER });
-    const analyze = screen.getByRole("button", {
-      name: /analyze rcc folder/i,
-    });
     const save = screen.getByRole("button", { name: /save file server/i });
-    // Same action row.
     const row = screen.getByTestId("fileserver-actions");
-    expect(row).toContainElement(analyze);
     expect(row).toContainElement(save);
-    // The long copy is a separate muted caption, not a sibling of the button.
-    const caption = screen.getByText(/analyze proposes charts, datasets/i);
+    expect(
+      screen.queryByRole("button", { name: /analyze rcc folder/i })
+    ).toBeNull();
+    const caption = screen.getByText(/use the rcc import button/i);
     expect(row).not.toContainElement(caption);
     expect(caption).toHaveClass("MuiTypography-caption");
   });
 
-  it("analyzes the UNSAVED selected folder without committing it", async () => {
+  it("does not offer artifact import for an unsaved selection", async () => {
     const user = userEvent.setup();
     const handles = renderForm();
     const pick = await searchAndGetPicker(user, handles);
 
-    // Not analyzable until something is picked.
-    expect(
-      screen.getByRole("button", { name: /analyze rcc folder/i })
-    ).toBeDisabled();
-
     pick(FOLDER);
     await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: /analyze rcc folder/i })
-      ).toBeEnabled()
+      expect(screen.getByTestId("selected-folder")).toHaveTextContent(FOLDER)
     );
-
-    await user.click(screen.getByRole("button", { name: /analyze rcc folder/i }));
-    await waitFor(() => expect(axios.post).toHaveBeenCalled());
-    expect(axios.post).toHaveBeenCalledWith("/api/curation/analyze-folder", {
-      path: FOLDER,
-    });
-    // Analysis is not a commit.
+    expect(screen.queryByText(/import charts from rcc/i)).toBeNull();
     expect(handles.setFileServerPath).not.toHaveBeenCalled();
     expect(handles.editor).not.toHaveBeenCalled();
   });
@@ -213,7 +193,7 @@ describe("FileServerInfoForm", () => {
     renderForm({ fileServerPath: FOLDER });
     expect(screen.getByTestId("selected-folder")).toHaveTextContent(FOLDER);
     expect(
-      screen.getByRole("button", { name: /analyze rcc folder/i })
+      screen.getByRole("button", { name: /save file server/i })
     ).toBeEnabled();
   });
 
@@ -291,7 +271,6 @@ describe("file tree confirmation label", () => {
 describe("File Server display card", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    axios.post.mockResolvedValue({ data: { candidates: {} } });
   });
 
   const renderElement = (fileServerPath) =>
@@ -312,34 +291,15 @@ describe("File Server display card", () => {
       </AlertContext.Provider>
     );
 
-  it("offers Analyze RCC Folder on the saved path without entering edit mode", async () => {
+  it("shows only the saved path and edit action", async () => {
     renderElement(FOLDER);
-
-    const analyze = await screen.findByRole("button", {
-      name: /analyze rcc folder/i,
-    });
-    expect(analyze).toBeEnabled();
-    // Exactly one Analyze button: the form side is unmounted.
     expect(
-      screen.getAllByRole("button", { name: /analyze rcc folder/i })
-    ).toHaveLength(1);
-    // And no editing was required to get here.
+      screen.queryByRole("button", { name: /analyze rcc folder/i })
+    ).toBeNull();
     expect(
       screen.queryByRole("button", { name: /save file server/i })
     ).toBeNull();
-  });
-
-  it("analyzes the SAVED path from the display card", async () => {
-    const user = userEvent.setup();
-    renderElement(FOLDER);
-
-    await user.click(
-      await screen.findByRole("button", { name: /analyze rcc folder/i })
-    );
-    await waitFor(() => expect(axios.post).toHaveBeenCalled());
-    expect(axios.post).toHaveBeenCalledWith("/api/curation/analyze-folder", {
-      path: FOLDER,
-    });
+    expect(await screen.findByText(FOLDER)).toBeInTheDocument();
   });
 });
 
@@ -397,7 +357,7 @@ describe("changing the file server folder with charts already added", () => {
     const text = document.body.textContent;
     expect(text).toMatch(/relative to the file server folder/i);
     expect(text).toMatch(/nothing is rewritten for you/i);
-    expect(text).toMatch(/analyze rcc folder again/i);
+    expect(text).toMatch(/type-specific rcc import buttons/i);
     // Both roots are shown so the change is legible.
     const paths = screen.getByTestId("root-change-paths");
     expect(paths).toHaveTextContent(FOLDER);

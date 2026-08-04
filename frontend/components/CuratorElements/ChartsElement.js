@@ -6,6 +6,7 @@ import { EditAndRemove } from "../Form/Util";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
 import Drawer from "../drawer";
+import ArtifactActionBar from "./ArtifactActionBar";
 
 import { Typography } from "@mui/material";
 
@@ -14,7 +15,9 @@ const ChartsInfoElement = () => {
 
   return (
     <Drawer heading="Add Charts from your paper" defaultOpen={true}>
-      <ChartsInfoForm />
+      <ArtifactActionBar artifactType="chart">
+        <ChartsInfoForm />
+      </ArtifactActionBar>
       {charts.length > 0 ? (
         // yet-another-react-lightbox needs no provider wrapper.
         <ChartsInfo

@@ -220,29 +220,45 @@ QRESP_FILESERVER_ROOTS=https://notebook.rcc.uchicago.edu/files
 QRESP_FILESERVER_INSECURE_TLS_HOSTS=notebook.rcc.uchicago.edu
 ```
 
-Selection vs. saving (these are separate steps on purpose):
+Selection, saving, and type-specific import:
 
-- [ ] Signed in, /curator → "Where is the paper": **Analyze RCC Folder** is
-      DISABLED with the "pick a file server folder first" hint, and
-      "Selected folder" reads "None yet"
+- [ ] Signed in, `/curator` → "Where is the paper": "Selected folder" reads
+      "None yet" and there is no **Analyze RCC Folder** button
 - [ ] Choose the RCC root → Search → the file tree opens; its confirmation
-      button reads **Use Folder**
+      button reads **Use**
 - [ ] Pick the DOI folder and confirm → the dialog closes, the form STAYS
       OPEN, "Selected folder" shows the full path, and nothing was committed
       (the section did NOT collapse to the display card)
-- [ ] Analyze RCC Folder is now enabled and analyzes that UNSAVED folder
+- [ ] The four RCC import buttons remain disabled until **Save File Server**
 - [ ] Search again / cancel the tree → the previous selection is still shown
 - [ ] With a folder already saved, click the pencil → the form opens with the
       saved path already in "Selected folder" (not empty); a search that
       fails (bad URL → error alert) does NOT erase it
 - [ ] **Save File Server** is the only thing that commits: after clicking it
       the section switches to the display card with the saved path
-- [ ] The saved display card itself offers **Analyze RCC Folder** — no pencil
-      click needed — and exactly one such button is visible in either state
-- [ ] There is NO second URL box in either state (DevTools → Network: the
-      POST body is `{"path": "<the selected or saved path>"}`)
+- [ ] The File Server form and display card contain no folder-analysis action
+- [ ] There is NO second URL box in either state
 - [ ] Chart / dataset / script / tool / notebook pickers are unchanged: their
       file tree confirmation still reads **Save** and still fills their field
+
+Artifact section actions and shared scan:
+
+- [ ] Beside each manual Add action is exactly one matching action:
+      **Import Charts/Datasets/Scripts/Tools from RCC**
+- [ ] At desktop width the two actions share one row with equal widths; at
+      phone width they stack without clipped text or horizontal scrolling
+- [ ] Open **Import Charts from RCC** → the dialog contains Charts only: no
+      Datasets/Scripts/Tools tabs or candidates
+- [ ] Select/apply/cancel in a typed dialog affects only that artifact type
+- [ ] After one import has scanned the folder, open a different type → the
+      existing analysis is reused (Network shows no second default
+      `/api/curation/analyze-folder` request)
+- [ ] Rebuild proposals or use custom record boundaries → a fresh analysis
+      request is made and the runtime cache is replaced
+- [ ] Change and save the File Server path → the next import scans the new
+      path instead of showing candidates from the old folder
+- [ ] Save Draft / Export Metadata / Publish payloads contain no RCC analysis
+      cache or raw analysis response
 
 Folder picker layout (check at 1440×900, 900×800 and 390×844 — resize the
 window or use the browser's device toolbar):
@@ -383,8 +399,9 @@ Chart images:
 - [ ] Apply a Chart from folder analysis with the folder SAVED → the PNG
       renders; the URL is `fileServerPath/figures/....png` with no double
       slash
-- [ ] Apply one BEFORE saving the File Server path → the alert warns, and the
-      chart shows "No file server path is saved yet…" instead of a blank box
+- [ ] Before saving the File Server path, RCC import is disabled; a legacy or
+      manually constructed chart with no saved path still shows "No file
+      server path is saved yet" instead of a blank box
 - [ ] A chart whose file was moved/deleted shows "could not be loaded from
       `<url>`" rather than an empty frame
 - [ ] A manually curated chart (picked through the file tree) renders exactly
@@ -403,8 +420,8 @@ Candidate visibility (the DOI folder has ~2000 files):
 
 Review, apply, and non-destructiveness:
 
-- [ ] Everything starts UNCHECKED and "Add selected items to Curator" is
-      disabled until something is selected
+- [ ] Every typed dialog starts UNCHECKED and its "Add selected <type> to
+      Curator" action is disabled until something is selected
 - [ ] Edit a caption/description in the dialog → the edited value is what
       gets added
 - [ ] Remove a candidate → its tab count drops and it cannot be added
@@ -453,10 +470,11 @@ Responsive layout and partial results:
 
 Optional AI descriptions (only with Gemini configured):
 
-- [ ] **Enhance selected with AI** is DISABLED until at least one candidate is
-      selected, and says "Select the candidates you want described first."
-- [ ] Clicking it opens a CONSENT DIALOG that sends nothing: it names the
-      count, lists what travels (relative paths, file/folder names, README /
+- [ ] Each candidate has its own **Enhance with AI** action; selecting several
+      Add checkboxes does not batch them or alter which item is enhanced
+- [ ] Clicking one candidate's action opens a CONSENT DIALOG that sends
+      nothing: it names exactly that item, lists what travels (relative paths,
+      file/folder names, README /
       docstring / manifest excerpts) and what does not (raw datasets, image
       bytes, notebook contents, credentials, account data)
 - [ ] The consent checkbox is UNCHECKED and "Send and get suggestions" is
@@ -489,7 +507,8 @@ Optional AI descriptions (only with Gemini configured):
 - [ ] Network: the request body carries only `id/kind/name/paths/context`;
       no file contents, no image bytes, no email/account fields, and every
       path is relative
-- [ ] Then "Add selected items to Curator" still adds the reviewed records
+- [ ] Then the typed "Add selected <type> to Curator" action still adds the
+      reviewed records
 - [ ] With Gemini NOT configured → the folder analysis still completes in
       full and only the AI action reports "not configured on this server"
 

@@ -14,7 +14,6 @@ import {
 } from "@mui/material";
 
 import Drawer from "../drawer";
-import FolderAnalysis from "../CuratorElements/FolderAnalysis";
 import FolderGuide from "../CuratorElements/FolderGuide";
 import RadioInput from "../Form/RadioInput";
 import { SelectInputField, TextInputField } from "../Form/InputFields";
@@ -38,7 +37,8 @@ import CuratorContext from "../../Context/Curator/curatorContext";
 //   Search  — browse a file server and PICK a folder (nothing is committed)
 //   Save    — commit the picked folder to Curator state and close the section
 // Picking a folder in the file tree only fills in the selection here, so the
-// curator can see what they chose, analyze it, or pick again before saving.
+// curator can see what they chose or pick again before saving. RCC import is
+// intentionally scoped to the Chart/Dataset/Script/Tool sections.
 
 const FileServerInfoForm = ({ editor }) => {
   const schema = Yup.object({
@@ -258,16 +258,12 @@ const FileServerInfoForm = ({ editor }) => {
         </Box>
       </Box>
 
-      {/* Deliberate action row: the two things a curator does with a
-          selection, side by side and nothing else. Assisted curation runs on
-          the CURRENT selection, before it is committed, and adds nothing on
-          its own; there is no second URL box, so no browser-supplied location
-          can be fetched. */}
+      {/* Saving is the only action that commits the selected root. Artifact
+          imports appear in their own sections after this path is saved. */}
       <Box
         data-testid="fileserver-actions"
         sx={{ mt: 2, display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}
       >
-        <FolderAnalysis path={selectedFolder} />
         <RegularStyledButton
           type="button"
           onClick={saveFileServer}
@@ -286,11 +282,9 @@ const FileServerInfoForm = ({ editor }) => {
         sx={{ mt: 1 }}
       >
         {selectedFolder
-          ? "Analyze proposes charts, datasets, scripts and tools for you to " +
-            "review — nothing is saved or published. Save File Server commits " +
-            "this path to the paper."
-          : "Search above, then pick one folder in the file tree to analyze or " +
-            "save it."}
+          ? "Save this folder, then use the RCC import button in the Chart, " +
+            "Dataset, Script or Tool section you want to work on."
+          : "Search above, then pick and save one folder."}
       </Typography>
 
       <Dialog
@@ -314,9 +308,8 @@ const FileServerInfoForm = ({ editor }) => {
           <Typography variant="body2" gutterBottom sx={{ mt: 1 }}>
             Nothing is rewritten for you: your existing paths are left exactly
             as they are, because a relative path may be perfectly correct under
-            the new folder. Check each chart&rsquo;s image afterwards, and run
-            Analyze RCC Folder again from the new folder if you want fresh
-            proposals.
+            the new folder. Check each chart&rsquo;s image afterwards, then use the
+            type-specific RCC import buttons if you want fresh proposals.
           </Typography>
           <Typography
             variant="caption"

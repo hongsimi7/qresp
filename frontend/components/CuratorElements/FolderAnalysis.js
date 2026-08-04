@@ -40,13 +40,11 @@ import {
   toRecord,
 } from "../../Utils/artifactFields";
 
-// "Analyze RCC Folder" — reads the selected (or saved) file-server folder and
-// proposes Charts/Datasets/Scripts/Tools for review. The backend does the
-// fetching (it is the only side that knows which roots are readable), returns
-// an analysis and stores nothing. Here every candidate starts UNCHECKED and
-// stays editable; "Add selected items to Curator" appends to Curator state
-// only — it never saves a draft, never publishes, and never touches records
-// the curator already created.
+// Each artifact section can review just its own RCC candidates. The first
+// import scans the saved file-server folder on the backend; later sections
+// reuse that runtime-only response until the saved path changes or a rebuild
+// is requested. Candidates start unchecked, and applying them changes Curator
+// state only: it never saves a draft, publishes, or edits existing records.
 
 const GROUPS = [
   { key: "charts", type: "chart", label: "Charts" },
@@ -55,6 +53,18 @@ const GROUPS = [
   { key: "tools", type: "tool", label: "Tools" },
   { key: "unclassified", type: null, label: "Unclassified", secondary: true },
 ];
+
+const GROUP_BY_TYPE = GROUPS.reduce((groups, group) => {
+  if (group.type) groups[group.type] = group;
+  return groups;
+}, {});
+
+const IMPORT_LABELS = {
+  chart: "Import Charts from RCC",
+  dataset: "Import Datasets from RCC",
+  script: "Import Scripts from RCC",
+  tool: "Import Tools from RCC",
+};
 
 // Grouped Unclassified rows rendered before "Show more".
 const UNCLASSIFIED_ROWS = 25;
@@ -230,14 +240,19 @@ const chartPlanProblems = (groups, overrides, applied) =>
   }, []);
 
 
-const FolderAnalysis = ({ path }) => {
-  const { fileServerPath, addMany } = useContext(CuratorContext) || {};
+const FolderAnalysis = ({ path, artifactType }) => {
+  const {
+    fileServerPath,
+    addMany,
+    rccAnalysisCache,
+    cacheRccAnalysis,
+  } = useContext(CuratorContext) || {};
   const { setAlert } = useContext(AlertContext) || {};
+  const typedGroup = artifactType ? GROUP_BY_TYPE[artifactType] : null;
 
-  // The folder to analyze. An explicit `path` wins even when it is empty —
-  // that is the File Server form telling us "nothing is selected yet" — while
-  // omitting it (the saved display card) falls back to Curator state. The
-  // backend still validates whatever is sent against its own allowed roots.
+  // Type-specific imports use the saved Curator path. The optional explicit
+  // path remains for compatible embedders and tests; the backend validates
+  // either form against its own allowed roots.
   const target = (path === undefined ? fileServerPath : path) || "";
 
   const [open, setOpen] = useState(false);
@@ -350,10 +365,49 @@ const FolderAnalysis = ({ path }) => {
     setShowAll({});
   };
 
-  const analyze = async (chosen, plan) => {
+  const hydrateAnalysis = (data) => {
+    const initial = {};
+    GROUPS.forEach(({ key, type }) => {
+      if (!type) return;
+      ((data.candidates || {})[key] || []).forEach((candidate) => {
+        initial[candidate.id] = toDraft(candidate.kind, candidate.proposal);
+      });
+    });
+    // Candidate ids are positional ("chart-0"), so every view keyed by id
+    // is reset when a scan is loaded, including when it came from the shared
+    // runtime cache.
+    setDrafts(initial);
+    setBoundaries(data.applied_boundaries || {});
+    setChartRoles({});
+    setSelected({});
+    setRemoved({});
+    setEditOpen({});
+    setDetailsOpen({});
+    setAiSuggestions({});
+    setAiNotice({});
+    setAiLoading({});
+    setAnalysis(data);
+  };
+
+  const analyze = async (chosen, plan, options = {}) => {
     setOpen(true);
-    setLoading(true);
     setError("");
+
+    const canUseCache =
+      !options.force &&
+      chosen === undefined &&
+      plan === undefined &&
+      rccAnalysisCache &&
+      rccAnalysisCache.path === target &&
+      rccAnalysisCache.data;
+
+    if (canUseCache) {
+      setLoading(false);
+      hydrateAnalysis(rccAnalysisCache.data);
+      return;
+    }
+
+    setLoading(true);
     setAnalysis(null);
     try {
       const response = await axios.post("/api/curation/analyze-folder", {
@@ -368,30 +422,8 @@ const FolderAnalysis = ({ path }) => {
         ...(plan && plan.length ? { chart_plan: plan } : {}),
       });
       const data = response.data || {};
-      const initial = {};
-      GROUPS.forEach(({ key, type }) => {
-        if (!type) return;
-        ((data.candidates || {})[key] || []).forEach((candidate) => {
-          initial[candidate.id] = toDraft(candidate.kind,
-                                          candidate.proposal);
-        });
-      });
-      // Candidate ids are positional ("chart-0"), so a new analysis reuses
-      // them. Everything keyed by id is dropped with the candidates it
-      // described, or the new folder's first chart inherits the previous
-      // folder's AI suggestion and error. The chart roles go too: what the
-      // server applied comes back in `applied_chart_plan`, and a different
-      // folder's images have nothing to do with this one's.
-      setDrafts(initial);
-      setChartRoles({});
-      setSelected({});
-      setRemoved({});
-      setEditOpen({});
-      setDetailsOpen({});
-      setAiSuggestions({});
-      setAiNotice({});
-      setAiLoading({});
-      setAnalysis(data);
+      if (cacheRccAnalysis) cacheRccAnalysis(target, data);
+      hydrateAnalysis(data);
     } catch (err) {
       setError(
         (err && err.response && err.response.data && err.response.data.error) ||
@@ -523,7 +555,7 @@ const FolderAnalysis = ({ path }) => {
 
   const apply = () => {
     let total = 0;
-    GROUPS.forEach(({ key, type }) => {
+    (typedGroup ? [typedGroup] : GROUPS).forEach(({ key, type }) => {
       if (!type) return;
       const records = [];
       candidatesFor(key)
@@ -1167,7 +1199,7 @@ const FolderAnalysis = ({ path }) => {
     );
   };
 
-  const activeGroup = GROUPS[tab];
+  const activeGroup = typedGroup || GROUPS[tab];
   const hints = ((analysis || {}).candidates || {}).possible_dependencies || [];
   const candidates = (analysis || {}).candidates || {};
   // Grouped folder ROWS from the backend — never the raw path list, which is
@@ -1181,10 +1213,18 @@ const FolderAnalysis = ({ path }) => {
   // dataset/script folder picker; ANY tree with chart images gets the Charts
   // section, because a standard layout still has to say which image is the
   // figure.
+  const boundaryRoots = Object.keys((analysis || {}).boundary_trees || {})
+    .filter((root) => {
+      if (!typedGroup) return true;
+      const tree = analysis.boundary_trees[root] || {};
+      return tree.role === typedGroup.key;
+    })
+    .sort();
   const folderBoundariesOffered =
     structureMode === "legacy" &&
-    Object.keys((analysis || {}).boundary_trees || {}).length > 0;
-  const chartRolesOffered = chartGroups.length > 0;
+    boundaryRoots.length > 0;
+  const chartRolesOffered =
+    chartGroups.length > 0 && (!typedGroup || typedGroup.type === "chart");
   const boundaryPanelOffered = folderBoundariesOffered || chartRolesOffered;
 
   const chartPlanIssues = chartPlanProblems(
@@ -1212,13 +1252,25 @@ const FolderAnalysis = ({ path }) => {
       <Tooltip
         title={
           ready
-            ? "Propose charts, datasets, scripts and tools from this folder"
+            ? typedGroup
+              ? `Propose ${typedGroup.label.toLowerCase()} from the saved RCC folder`
+              : "Propose charts, datasets, scripts and tools from this folder"
+            : typedGroup
+            ? "Save a file server folder first"
             : "Pick a file server folder first"
         }
       >
-        <Box component="span" sx={{ display: "inline-flex" }}>
-          <RegularStyledButton onClick={() => analyze()} disabled={!ready}>
-            Analyze RCC Folder
+        <Box
+          component="span"
+          sx={{ display: "inline-flex", width: typedGroup ? "100%" : "auto" }}
+        >
+          <RegularStyledButton
+            type="button"
+            fullWidth={Boolean(typedGroup)}
+            onClick={() => analyze()}
+            disabled={!ready}
+          >
+            {typedGroup ? IMPORT_LABELS[typedGroup.type] : "Analyze RCC Folder"}
           </RegularStyledButton>
         </Box>
       </Tooltip>
@@ -1240,7 +1292,11 @@ const FolderAnalysis = ({ path }) => {
           },
         }}
       >
-        <DialogTitle sx={{ flexShrink: 0 }}>Folder analysis</DialogTitle>
+        <DialogTitle sx={{ flexShrink: 0 }}>
+          {typedGroup
+            ? `Import ${typedGroup.label} from RCC`
+            : "Folder analysis"}
+        </DialogTitle>
         <DialogContent
           dividers
           sx={{ overflowY: "auto", overscrollBehavior: "contain" }}
@@ -1266,9 +1322,11 @@ const FolderAnalysis = ({ path }) => {
           {analysis && (
             <Fragment>
               <Typography variant="body2" gutterBottom>
-                These are proposals from the folder’s file names and manifests.
+                {typedGroup
+                  ? `These ${typedGroup.label.toLowerCase()} are proposals from the saved folder's file names and manifests. `
+                  : "These are proposals from the folder's file names and manifests. "}
                 Nothing is selected by default, and nothing is saved or
-                published — check what you want, edit it, then add it to the
+                published. Check what you want, edit it, then add it to the
                 form.
               </Typography>
               {analysis.truncated && (
@@ -1349,7 +1407,7 @@ const FolderAnalysis = ({ path }) => {
                     {folderBoundariesOffered && (
                     <Box sx={{ mb: 1.5 }} data-testid="folder-boundaries">
                     <Typography variant="subtitle2" sx={{ mt: 1 }}>
-                      Datasets and Scripts
+                      {typedGroup ? typedGroup.label : "Datasets and Scripts"}
                     </Typography>
                     <Typography
                       variant="caption"
@@ -1362,9 +1420,7 @@ const FolderAnalysis = ({ path }) => {
                       beneath it together, or select child folders to split
                       it. Nothing on the file server is changed.
                     </Typography>
-                    {Object.keys(analysis.boundary_trees || {})
-                      .sort()
-                      .map((root) => {
+                    {boundaryRoots.map((root) => {
                         const tree = analysis.boundary_trees[root];
                         const chosen = boundaries[root] || [];
                         return (
@@ -1456,7 +1512,8 @@ const FolderAnalysis = ({ path }) => {
                         onClick={() =>
                           analyze(
                             boundaries,
-                            buildChartPlan(chartGroups, chartRoles, appliedPlan)
+                            buildChartPlan(chartGroups, chartRoles, appliedPlan),
+                            { force: true }
                           )
                         }
                       >
@@ -1467,7 +1524,7 @@ const FolderAnalysis = ({ path }) => {
                         onClick={() => {
                           setBoundaries({});
                           setChartRoles({});
-                          analyze();
+                          analyze(undefined, undefined, { force: true });
                         }}
                       >
                         Use default boundaries
@@ -1476,23 +1533,29 @@ const FolderAnalysis = ({ path }) => {
                   </Collapse>
                 </Box>
               )}
-              <Tabs
-                value={tab}
-                onChange={(event, next) => setTab(next)}
-                variant="scrollable"
-              >
-                {GROUPS.map(({ key, label, secondary }) => (
-                  <Tab
-                    key={key}
-                    sx={secondary ? { color: "text.secondary" } : undefined}
-                    label={`${label} (${
-                      key === "unclassified"
-                        ? unclassifiedTotal
-                        : candidatesFor(key).length
-                    })`}
-                  />
-                ))}
-              </Tabs>
+              {typedGroup ? (
+                <Typography variant="subtitle2" sx={{ mt: 1.5, mb: 1 }}>
+                  {`${typedGroup.label} (${candidatesFor(typedGroup.key).length})`}
+                </Typography>
+              ) : (
+                <Tabs
+                  value={tab}
+                  onChange={(event, next) => setTab(next)}
+                  variant="scrollable"
+                >
+                  {GROUPS.map(({ key, label, secondary }) => (
+                    <Tab
+                      key={key}
+                      sx={secondary ? { color: "text.secondary" } : undefined}
+                      label={`${label} (${
+                        key === "unclassified"
+                          ? unclassifiedTotal
+                          : candidatesFor(key).length
+                      })`}
+                    />
+                  ))}
+                </Tabs>
+              )}
               <Divider sx={{ mb: 2 }} />
               {activeGroup.type ? (
                 <Fragment>
@@ -1659,7 +1722,9 @@ const FolderAnalysis = ({ path }) => {
             disabled={selectedCount === 0 || invalidStructure}
             onClick={apply}
           >
-            Add selected items to Curator
+            {typedGroup
+              ? `Add selected ${typedGroup.label} to Curator`
+              : "Add selected items to Curator"}
           </Button>
         </DialogActions>
       </Dialog>
@@ -1757,9 +1822,10 @@ const FolderAnalysis = ({ path }) => {
 };
 
 FolderAnalysis.propTypes = {
-  // Omit to analyze the saved fileServerPath; pass explicitly (even "") to
-  // analyze a selection that has not been committed yet.
+  // Omit to analyze the saved fileServerPath. An explicit path is retained
+  // for compatible embedders; production artifact actions omit it.
   path: PropTypes.string,
+  artifactType: PropTypes.oneOf(["chart", "dataset", "script", "tool"]),
 };
 
 export default FolderAnalysis;

@@ -6,6 +6,7 @@ import { EditAndRemove } from "../Form/Util";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
 import Drawer from "../drawer";
+import ArtifactActionBar from "./ArtifactActionBar";
 
 import { Typography } from "@mui/material";
 
@@ -14,7 +15,9 @@ const ToolsInfoElement = () => {
 
   return (
     <Drawer heading="Add Tools from your paper" defaultOpen={true}>
-      <ToolsInfoForm />
+      <ArtifactActionBar artifactType="tool">
+        <ToolsInfoForm />
+      </ArtifactActionBar>
       {tools.length > 0 ? (
         <ToolsInfo
           tools={tools}
