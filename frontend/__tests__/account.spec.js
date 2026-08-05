@@ -272,14 +272,7 @@ describe("Account page", () => {
         success: true,
       },
     });
-    // This one is genuinely slow, and it is the interaction that makes it so:
-    // the editor list is controlled by page-level state, so every character
-    // typed re-renders the whole account page. Measured here: ~0.2s to render,
-    // ~0.8s to open the dialog, ~4.0s to type 31 characters, ~0.3s to save.
-    // `delay: null` removes the inter-key wait (it is not what costs the time)
-    // and the budget below covers the rest, rather than trimming the address
-    // list this test exists to check.
-    const user = userEvent.setup({ delay: null });
+    const user = userEvent.setup();
     renderAccount(authedUser);
     await screen.findByText(/my paper/i);
     await user.click(screen.getByRole("button", { name: /editors/i }));
@@ -287,8 +280,13 @@ describe("Account page", () => {
     const dialog = screen.getByRole("dialog");
     const input = within(dialog).getByLabelText(/editor emails/i);
     expect(input).toHaveValue("old@example.com");
+    // Pasted, not typed key by key: the editor list is controlled by
+    // page-level state, so each character re-rendered the whole account page
+    // and 31 of them took ~4s of the 5s budget. What this test is about is
+    // the list that reaches the API, not the keystrokes -- and pasting a
+    // list of addresses is what a curator does with one anyway.
     await user.clear(input);
-    await user.type(input, "old@example.com, new@example.com");
+    await user.paste("old@example.com, new@example.com");
     await user.click(within(dialog).getByRole("button", { name: /save/i }));
 
     await waitFor(() =>
@@ -296,7 +294,7 @@ describe("Account page", () => {
         editor_emails: ["old@example.com", "new@example.com"],
       })
     );
-  }, 20000);
+  });
 
   it("shows the backend error inline when the editor update fails", async () => {
     mockAccountApi({
