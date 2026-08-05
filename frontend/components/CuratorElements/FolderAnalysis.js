@@ -539,10 +539,33 @@ const FolderAnalysis = ({ path, artifactType }) => {
     );
   };
 
-  const selectedCount = useMemo(
-    () => Object.values(selected).filter(Boolean).length,
-    [selected]
+  // THE set of candidates an Add would actually apply: still on the list —
+  // not removed, not unusable — AND ticked.
+  //
+  // Counting `selected` on its own was counting ghosts. Remove only set
+  // `removed`, so a card the curator had ticked and then removed still said
+  // "1 selected" and still lit the Add button, which then applied nothing and
+  // closed the dialog reporting "0 item(s) were added". The count, the
+  // button's disabled state and apply() all read this one helper now, so they
+  // cannot disagree about what is selected.
+  const selectedCandidatesFor = (key) =>
+    candidatesFor(key).filter((candidate) => selected[candidate.id]);
+
+  const selectedCandidates = useMemo(
+    () =>
+      (typedGroup ? [typedGroup] : GROUPS).reduce(
+        (found, { key, type }) =>
+          type ? found.concat(selectedCandidatesFor(key)) : found,
+        []
+      ),
+    // `candidatesFor` reads the analysis and `removed`; both belong here, and
+    // a dependency list of just `selected` is what let a removed candidate
+    // keep its place in the count.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [analysis, selected, removed, typedGroup]
   );
+
+  const selectedCount = selectedCandidates.length;
 
   // Everything the AI action may see, built here so the allowlist is visible:
   // the SELECTED candidate's id/kind, its display name, its RELATIVE paths,
@@ -627,16 +650,12 @@ const FolderAnalysis = ({ path, artifactType }) => {
     let total = 0;
     (typedGroup ? [typedGroup] : GROUPS).forEach(({ key, type }) => {
       if (!type) return;
-      const records = [];
-      candidatesFor(key)
-        .filter((candidate) => selected[candidate.id])
-        .forEach((candidate) => {
-          // One candidate, one record, for every kind. A Chart's image roles
-          // were decided in the boundary panel and are already reflected in
-          // the proposal the server built, so nothing is split or merged
-          // here.
-          records.push(toRecord(type, drafts[candidate.id]));
-        });
+      // One candidate, one record, for every kind. A Chart's image roles were
+      // decided in the boundary panel and are already reflected in the
+      // proposal the server built, so nothing is split or merged here.
+      const records = selectedCandidatesFor(key).map((candidate) =>
+        toRecord(type, drafts[candidate.id])
+      );
       if (records.length) {
         total += records.length;
         addMany(type, records);
@@ -1132,9 +1151,19 @@ const FolderAnalysis = ({ path, artifactType }) => {
             )}
             <Button
               size="small"
-              onClick={() =>
-                setRemoved((current) => ({ ...current, [candidate.id]: true }))
-              }
+              onClick={() => {
+                setRemoved((current) => ({ ...current, [candidate.id]: true }));
+                // A removed candidate is not a hidden selection. Its own tick
+                // goes with it; every other candidate's is left exactly as it
+                // was, and so are the drafts and any AI suggestion — Remove
+                // is not an undo of the curator's other work.
+                setSelected((current) => {
+                  if (!current[candidate.id]) return current;
+                  const next = { ...current };
+                  delete next[candidate.id];
+                  return next;
+                });
+              }}
             >
               Remove
             </Button>

@@ -234,6 +234,12 @@ const ToolsInfoForm = () => {
     setValue,
     reset,
   } = useForm({
+    // focusFirstInvalid below is the ONLY thing that moves focus on a
+    // failed Save. react-hook-form focuses its own first errored field
+    // AFTER the invalid handler runs, which landed on whichever element
+    // it holds a ref for and scrolled it into view its own way, undoing
+    // the block: "center" placement.
+    shouldFocusError: false,
     resolver: yupResolver(schema),
     defaultValues: toolFormDefaults(def),
   });

@@ -1,3 +1,6 @@
+import fs from "fs";
+import path from "path";
+
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -50,7 +53,7 @@ const renderForm = (kind, { def = null, records = [] } = {}) => {
   const add = jest.fn();
   const edit = jest.fn();
   const closeForm = jest.fn();
-  render(
+  const view = render(
     <CuratorContext.Provider
       value={{ [STATE_KEY[kind]]: records, add, edit }}
     >
@@ -74,7 +77,7 @@ const renderForm = (kind, { def = null, records = [] } = {}) => {
       </CuratorHelperContext.Provider>
     </CuratorContext.Provider>
   );
-  return { add, edit, closeForm };
+  return { add, edit, closeForm, unmount: view.unmount };
 };
 
 const save = async (user) =>
@@ -345,5 +348,148 @@ describe("choosing the control to focus", () => {
     expect(firstInvalidControl(form, { unknown: {} })).toBeNull();
     expect(firstInvalidControl(null, { known: {} })).toBeNull();
     expect(revealControl(null)).toBeNull();
+  });
+});
+
+// react-hook-form focuses the first errored field itself, AFTER the invalid
+// handler runs, unless it is told not to. Left on, it would land on whichever
+// element it holds a ref for — the hidden native input of a select, not the
+// trigger; the text field, not the picker button — and its plain .focus()
+// would scroll that element into view its own way, undoing the
+// block: "center" placement this feature exists to give. The custom handler
+// is the only thing that moves focus.
+
+// jsdom exposes HTMLElement.focus through an accessor, which jest.spyOn
+// cannot replace, so the counter is installed by hand.
+const watchFocus = () => {
+  const original = HTMLElement.prototype.focus;
+  const instances = [];
+  Object.defineProperty(HTMLElement.prototype, "focus", {
+    configurable: true,
+    writable: true,
+    value: function focus(...args) {
+      instances.push(this);
+      return original.apply(this, args);
+    },
+  });
+  return {
+    instances,
+    on: (element) => instances.filter((instance) => instance === element).length,
+    restore: () =>
+      Object.defineProperty(HTMLElement.prototype, "focus", {
+        configurable: true,
+        writable: true,
+        value: original,
+      }),
+  };
+};
+
+describe("only one thing moves the focus", () => {
+
+  it("focuses the target exactly once, and nothing focuses it later",
+     async () => {
+    const focusSpy = watchFocus();
+    const user = userEvent.setup({ delay: null });
+    renderForm("chart");
+
+    await save(user);
+    const caption = screen.getByPlaceholderText(/enter the figure caption/i);
+    await waitFor(() => expect(caption).toHaveFocus());
+
+    expect(focusSpy.on(caption)).toBe(1);
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+
+    // react-hook-form's own focus runs after the invalid callback, and MUI
+    // transitions settle on a timer; neither may add a second one.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(focusSpy.on(caption)).toBe(1);
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    expect(caption).toHaveFocus();
+
+    focusSpy.restore();
+  });
+
+  it("does not focus the field react-hook-form would have picked instead",
+     async () => {
+    const focusSpy = watchFocus();
+    const user = userEvent.setup({ delay: null });
+    renderForm("chart");
+
+    await save(user);
+    const caption = screen.getByPlaceholderText(/enter the figure caption/i);
+    await waitFor(() => expect(caption).toHaveFocus());
+
+    // Every other invalid field is left alone: one jump, one field.
+    ["enter chart image file name", "enter keywords"].forEach((placeholder) => {
+      const other = screen.getByPlaceholderText(new RegExp(placeholder, "i"));
+      expect(focusSpy.on(other)).toBe(0);
+      expect(other).not.toHaveFocus();
+    });
+
+    focusSpy.restore();
+  });
+
+  it("moves nothing at all when the form is valid", async () => {
+    const focusSpy = watchFocus();
+    const user = userEvent.setup({ delay: null });
+    const { add } = renderForm("chart");
+
+    const caption = screen.getByPlaceholderText(/enter the figure caption/i);
+    await user.type(caption, "Density of states");
+    await user.type(
+      screen.getByPlaceholderText(/enter chart image file name/i),
+      "figures/f1.png"
+    );
+    await user.type(screen.getByPlaceholderText(/enter keywords/i), "silicon");
+    const focusesBefore = focusSpy.instances.length;
+    await save(user);
+
+    await waitFor(() => expect(add).toHaveBeenCalled());
+    expect(scrollSpy).not.toHaveBeenCalled();
+    // The Save button takes focus from the click; nothing else moves.
+    expect(focusSpy.instances.length - focusesBefore).toBeLessThanOrEqual(1);
+
+    focusSpy.restore();
+  });
+
+  it("holds for every artifact form, not just charts", async () => {
+    const targets = {
+      dataset: /enter files for the dataset/i,
+      script: /enter files for the scripts/i,
+      tool: /enter name of the software package/i,
+    };
+    for (const [kind, placeholder] of Object.entries(targets)) {
+      const focusSpy = watchFocus();
+      const user = userEvent.setup({ delay: null });
+      const { unmount } = renderForm(kind);
+
+      // eslint-disable-next-line no-await-in-loop
+      await save(user);
+      const field = screen.getByPlaceholderText(placeholder);
+      // eslint-disable-next-line no-await-in-loop
+      await waitFor(() => expect(field).toHaveFocus());
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(focusSpy.on(field)).toBe(1);
+
+      focusSpy.restore();
+      unmount();
+      scrollSpy.mockClear();
+    }
+  });
+
+  it("states the contract in every form's useForm call", () => {
+    // A form that forgets this gets two focus owners again, and the symptom
+    // (a jump that lands somewhere else, or scrolls the field to the edge
+    // instead of the middle) is easy to mistake for a broken selector.
+    ["ChartsInfoForm", "DatasetsInfoForm", "ScriptsInfoForm", "ToolsInfoForm"]
+      .forEach((file) => {
+        const source = fs.readFileSync(
+          path.join(__dirname, "..", "components", "CuratorForms", `${file}.js`),
+          "utf8"
+        );
+        expect(source).toMatch(/shouldFocusError:\s*false/);
+        expect(source).toMatch(/handleSubmit\(onSubmit,\s*focusFirstInvalid\)/);
+      });
   });
 });

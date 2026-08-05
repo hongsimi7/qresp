@@ -3137,3 +3137,238 @@ describe("typed import dialog ??readable by default", () => {
     ]);
   });
 });
+
+// Remove takes a candidate off the list. It has to take the tick with it:
+// a card the curator can no longer see must not keep the count up, keep the
+// Add button alive, or make "Add selected" report items it never added.
+describe("removing a candidate clears its selection", () => {
+  const chart = (index, label) => ({
+    id: `chart-${index}`,
+    kind: "chart",
+    label,
+    file_count: 1,
+    confidence: "high",
+    evidence: [`figures/${label} is a .png image`],
+    needs_input: ["caption", "number", "properties"],
+    paths: [`figures/${label}`],
+    proposal: {
+      imageFile: `figures/${label}`,
+      files: [],
+      notebookFile: "",
+      number: "",
+      caption: "",
+      properties: [],
+      extraFields: [],
+    },
+  });
+
+  const threeCharts = {
+    ...analysis,
+    structure_mode: "standard",
+    candidates: {
+      ...analysis.candidates,
+      charts: [
+        chart(0, "figure1.png"),
+        chart(1, "figure2.png"),
+        chart(2, "figure3.png"),
+      ],
+    },
+  };
+
+  const TypedHarness = ({ addMany, setAlert }) => {
+    const [cache, setCache] = useState({ path: "", data: null });
+    return (
+      <AlertContext.Provider value={{ setAlert }}>
+        <CuratorContext.Provider
+          value={{
+            fileServerPath: FOLDER,
+            addMany,
+            rccAnalysisCache: cache,
+            cacheRccAnalysis: (path, data) => setCache({ path, data }),
+          }}
+        >
+          <FolderAnalysis artifactType="chart" />
+        </CuratorContext.Provider>
+      </AlertContext.Provider>
+    );
+  };
+
+  const renderTyped = () => {
+    const addMany = jest.fn();
+    const setAlert = jest.fn();
+    render(<TypedHarness addMany={addMany} setAlert={setAlert} />);
+    return { addMany, setAlert };
+  };
+
+  const openTyped = async (user) => {
+    await user.click(
+      screen.getByRole("button", { name: /import charts from rcc/i })
+    );
+    return screen.findByRole("dialog", { name: /import charts from rcc/i });
+  };
+
+  const pick = async (user, name) =>
+    user.click(screen.getByRole("checkbox", { name: `Select ${name}` }));
+
+  // Remove sits in the card's own action group, so it is addressed through
+  // the card rather than by index.
+  const removeCard = async (user, name) => {
+    const card = screen
+      .getByRole("checkbox", { name: `Select ${name}` })
+      .closest("[class*='MuiBox-root']").parentElement;
+    await user.click(within(card).getByRole("button", { name: /^remove$/i }));
+  };
+
+  const addButton = () =>
+    screen.getByRole("button", { name: /add selected charts to curator/i });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: threeCharts });
+  });
+
+  it("counts one selection, then none once it is removed", async () => {
+    const user = userEvent.setup();
+    renderTyped();
+    await openTyped(user);
+
+    expect(screen.getByTestId("candidate-count")).toHaveTextContent(
+      "3 proposals · 0 selected"
+    );
+
+    await pick(user, "figure1.png");
+    expect(screen.getByTestId("candidate-count")).toHaveTextContent(
+      "3 proposals · 1 selected"
+    );
+    expect(addButton()).toBeEnabled();
+
+    await removeCard(user, "figure1.png");
+
+    // The card is gone, and so is everything it was counted in.
+    expect(screen.queryByText("figure1.png")).toBeNull();
+    expect(screen.getByTestId("candidate-count")).toHaveTextContent(
+      "2 proposals · 0 selected"
+    );
+    expect(addButton()).toBeDisabled();
+  });
+
+  it("never reports adding something it did not add", async () => {
+    const user = userEvent.setup();
+    const { addMany, setAlert } = renderTyped();
+    await openTyped(user);
+
+    await pick(user, "figure1.png");
+    await removeCard(user, "figure1.png");
+
+    // The button is the guard: with nothing selectable left it cannot be
+    // pressed, so no "0 item(s) were added" alert and no silent close.
+    expect(addButton()).toBeDisabled();
+    expect(addMany).not.toHaveBeenCalled();
+    expect(setAlert).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("dialog", { name: /import charts from rcc/i })
+    ).toBeInTheDocument();
+  });
+
+  it("drops exactly the removed one from the count and the payload", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderTyped();
+    await openTyped(user);
+
+    await pick(user, "figure1.png");
+    await pick(user, "figure2.png");
+    await pick(user, "figure3.png");
+    expect(screen.getByTestId("candidate-count")).toHaveTextContent(
+      "3 proposals · 3 selected"
+    );
+
+    await removeCard(user, "figure2.png");
+    expect(screen.getByTestId("candidate-count")).toHaveTextContent(
+      "2 proposals · 2 selected"
+    );
+
+    await user.click(addButton());
+    const [kind, records] = addMany.mock.calls[0];
+    expect(kind).toBe("chart");
+    expect(records.map((record) => record.imageFile)).toEqual([
+      "figures/figure1.png",
+      "figures/figure3.png",
+    ]);
+  });
+
+  it("leaves the other candidates' selection alone", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderTyped();
+    await openTyped(user);
+
+    await pick(user, "figure1.png");
+    await pick(user, "figure3.png");
+    // figure2 was never ticked; removing it must not disturb the two that
+    // were.
+    await removeCard(user, "figure2.png");
+
+    expect(screen.getByTestId("candidate-count")).toHaveTextContent(
+      "2 proposals · 2 selected"
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "Select figure1.png" })
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "Select figure3.png" })
+    ).toBeChecked();
+
+    await user.click(addButton());
+    expect(addMany.mock.calls[0][1]).toHaveLength(2);
+  });
+
+  it("keeps the curator's edits on the candidates that stay", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderTyped();
+    await openTyped(user);
+
+    await pick(user, "figure1.png");
+    // Pasted rather than typed: every keystroke re-renders the open dialog,
+    // and what this test is about is the draft surviving a Remove.
+    await user.click(screen.getByLabelText(/^figure caption ?\*?$/i));
+    await user.paste("Density of states");
+    await removeCard(user, "figure3.png");
+
+    await user.click(addButton());
+    expect(addMany.mock.calls[0][1]).toEqual([
+      expect.objectContaining({
+        imageFile: "figures/figure1.png",
+        caption: "Density of states",
+      }),
+    ]);
+  });
+
+  it("applies the same rule in the whole-folder dialog", async () => {
+    const user = userEvent.setup();
+    const addMany = jest.fn();
+    const setAlert = jest.fn();
+    render(
+      <AlertContext.Provider value={{ setAlert }}>
+        <CuratorContext.Provider value={{ fileServerPath: FOLDER, addMany }}>
+          <FolderAnalysis />
+        </CuratorContext.Provider>
+      </AlertContext.Provider>
+    );
+    await user.click(screen.getByRole("button", { name: /analyze rcc folder/i }));
+    await screen.findByRole("tab", { name: /charts \(3\)/i });
+
+    const apply = screen.getByRole("button", {
+      name: /add selected items to curator/i,
+    });
+    await pick(user, "figure1.png");
+    expect(apply).toBeEnabled();
+
+    await removeCard(user, "figure1.png");
+    expect(
+      screen.getByRole("tab", { name: /charts \(2\)/i })
+    ).toBeInTheDocument();
+    // The count lives on the tab here, and the button must agree with it.
+    expect(apply).toBeDisabled();
+    expect(addMany).not.toHaveBeenCalled();
+    expect(setAlert).not.toHaveBeenCalled();
+  });
+});
