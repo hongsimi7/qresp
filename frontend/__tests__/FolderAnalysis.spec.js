@@ -754,10 +754,22 @@ describe("Analyze RCC Folder", () => {
     renderWith();
     await openAnalysis(user);
 
+    // The state is one short chip; the long explanation is one click away
+    // instead of hanging off it.
     const badge = screen.getByTestId("structure-mode");
     expect(badge).toHaveTextContent("Legacy-compatible");
-    expect(badge).toHaveTextContent(/figures_tables: Read as charts/);
-    expect(badge).toHaveTextContent(/Nothing on the file server is renamed/);
+    expect(badge).not.toHaveTextContent(/Read as charts/);
+    expect(screen.queryByTestId("folder-mapping")).toBeNull();
+
+    await user.click(
+      screen.getByRole("button", { name: /show folder mapping/i })
+    );
+    const mapping = await screen.findByTestId("folder-mapping");
+    // Every legacy name, and what it was read as.
+    expect(mapping).toHaveTextContent("data → datasets");
+    expect(mapping).toHaveTextContent("figures_tables → charts");
+    expect(mapping).toHaveTextContent(/figures_tables: Read as charts/);
+    expect(mapping).toHaveTextContent(/Nothing on the file server is renamed/);
   });
 
   it("flags a folder that needs reorganizing", async () => {
@@ -795,7 +807,8 @@ describe("Analyze RCC Folder", () => {
   });
 
   it("applies only the selected candidates, with the curator's edits", async () => {
-    const user = userEvent.setup();
+    // delay: null — see the note in the field-contract suite below.
+    const user = userEvent.setup({ delay: null });
     const { addMany } = renderWith();
     await openAnalysis(user);
 
@@ -951,7 +964,12 @@ describe("Analyze RCC Folder", () => {
         ...analysis,
         truncated: true,
         counts: { files: 1971, directories: 260 },
-        limits: { max_depth: 4, max_files: 2000 },
+        limits: {
+          max_depth: 4,
+          max_files: 2000,
+          max_directory_listings: 120,
+          max_evidence_files: 30,
+        },
         warnings: ["Only the first 4 folder levels were inspected."],
       },
     });
@@ -969,15 +987,26 @@ describe("Analyze RCC Folder", () => {
       .closest(".MuiAlert-root");
     expect(notice).toHaveTextContent("1971 file(s) across 260 folder(s)");
     expect(notice).toHaveTextContent(/built-in safety limits/i);
-    expect(notice).toHaveTextContent("at most 4 folder levels, 2000 files");
     expect(notice).toHaveTextContent(/do not represent everything/i);
     // Not styled as an error — it is an expected, safe outcome.
     expect(notice).toHaveClass("MuiAlert-colorInfo");
     expect(notice.className).not.toMatch(/colorError|colorWarning/);
-    // The specific reason is still listed.
-    expect(
-      screen.getByText(/only the first 4 folder levels were inspected/i)
-    ).toBeInTheDocument();
+    // ONE summary alert, not one per warning.
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+
+    // The numbers and the specific reason are in the scan details, closed
+    // until asked for.
+    expect(screen.queryByTestId("scan-details")).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: /show scan details/i })
+    );
+    const details = await screen.findByTestId("scan-details");
+    expect(details).toHaveTextContent("at most 4 folder levels, 2000 files");
+    expect(details).toHaveTextContent("120 directory listings");
+    expect(details).toHaveTextContent("30 manifest/script files");
+    expect(details).toHaveTextContent(
+      /only the first 4 folder levels were inspected/i
+    );
   });
 
   it("shows import hints as hints, not as tools", async () => {
@@ -1457,8 +1486,13 @@ describe("Analyze RCC Folder — needs reorganization", () => {
 
     const badge = screen.getByTestId("structure-mode");
     expect(badge).toHaveTextContent("Needs reorganization");
-    expect(badge).toHaveTextContent(/mystery_stuff:/);
-    expect(badge).toHaveTextContent(/not a layout Qresp recognizes/i);
+    // The reason is one click away rather than pasted onto the chip.
+    await user.click(
+      screen.getByRole("button", { name: /show folder mapping/i })
+    );
+    const mapping = await screen.findByTestId("folder-mapping");
+    expect(mapping).toHaveTextContent(/mystery_stuff:/);
+    expect(mapping).toHaveTextContent(/not a layout Qresp recognizes/i);
 
     // No candidate can be added while the layout cannot be read.
     expect(
@@ -2150,7 +2184,10 @@ describe("Folder Analysis field contract", () => {
 
   it("offers a dataset Files, Description and Keywords -- and no URLs",
      async () => {
-    const user = userEvent.setup();
+    // delay: null — every keystroke re-renders the whole dialog, so the
+    // default inter-key delay makes a 25-character phrase the slowest thing
+    // in this file. It changes nothing about what is asserted.
+    const user = userEvent.setup({ delay: null });
     renderWith();
     await openFields(user, /datasets \(1\)/i, /select short_traj/i,
                      "dataset-0");
@@ -2164,8 +2201,8 @@ describe("Folder Analysis field contract", () => {
     // but it is not an input on any current surface.
     expect(screen.queryByLabelText(/^urls/i)).toBeNull();
 
-    await user.type(keywords, "density functional theory");
-    expect(keywords).toHaveValue("density functional theory");
+    await user.type(keywords, "silicon");
+    expect(keywords).toHaveValue("silicon");
   });
 
   it("marks only required fields, and says what the marker means", async () => {
@@ -2792,5 +2829,302 @@ describe("Charts in the record boundary panel", () => {
     expect(screen.getByText("diagram.png")).toHaveStyle(
       "overflow-wrap: anywhere"
     );
+  });
+});
+
+// The typed import dialog is a review surface, not a dashboard. The title
+// already names the artifact, the state of the scan is one chip, and the
+// numbers behind it are one click away. These pin the layout contract so the
+// four dialogs cannot drift back into a wall of alerts.
+describe("typed import dialog ??readable by default", () => {
+  const TypedChart = () => {
+    const [cache, setCache] = useState({ path: "", data: null });
+    return (
+      <AlertContext.Provider value={{ setAlert: jest.fn() }}>
+        <CuratorContext.Provider
+          value={{
+            fileServerPath: FOLDER,
+            addMany: jest.fn(),
+            rccAnalysisCache: cache,
+            cacheRccAnalysis: (path, data) => setCache({ path, data }),
+          }}
+        >
+          <FolderAnalysis artifactType="chart" />
+        </CuratorContext.Provider>
+      </AlertContext.Provider>
+    );
+  };
+
+  const legacyAnalysis = {
+    ...analysis,
+    candidates: {
+      ...analysis.candidates,
+      charts: [
+        {
+          ...analysis.candidates.charts[0],
+          // Per-field standing, exactly as the backend sends it.
+          field_evidence: {
+            imageFile: "high",
+            files: "needs_input",
+            notebookFile: "needs_input",
+            number: "needs_input",
+            caption: "needs_input",
+            properties: "needs_input",
+          },
+        },
+      ],
+    },
+    structure_mode: "legacy",
+    truncated: true,
+    counts: { files: 1971, directories: 260 },
+    limits: {
+      max_depth: 4,
+      max_files: 2000,
+      max_directory_listings: 120,
+      max_evidence_files: 30,
+    },
+    warnings: ["Only the first 4 folder levels were inspected."],
+    normalized_roles: { data: "datasets", figures_tables: "charts" },
+    structure_issues: [
+      { path: "figures_tables", reason: "Read as charts (Qresp Folder Standard name: charts)." },
+    ],
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: legacyAnalysis });
+  });
+
+  const openChartImport = async (user) => {
+    render(<TypedChart />);
+    await user.click(
+      screen.getByRole("button", { name: /import charts from rcc/i })
+    );
+    return screen.findByRole("dialog", { name: /import charts from rcc/i });
+  };
+
+  it("names the type once ??no second Charts (N) heading inside", async () => {
+    const user = userEvent.setup();
+    const dialog = await openChartImport(user);
+
+    expect(
+      screen.getByRole("heading", { name: /import charts from rcc/i })
+    ).toBeInTheDocument();
+    // The old duplicate: a "Charts (1)" heading under a dialog already
+    // titled "Import Charts from RCC".
+    expect(
+      within(dialog).queryByText(/^charts \(\d+\)$/i)
+    ).toBeNull();
+    expect(within(dialog).queryByRole("tab")).toBeNull();
+    // The count itself is kept, as a count of what is on screen.
+    expect(screen.getByTestId("candidate-count")).toHaveTextContent(
+      "1 proposal · 0 selected"
+    );
+  });
+
+  it("opens with one line of guidance and one summary alert", async () => {
+    const user = userEvent.setup();
+    const dialog = await openChartImport(user);
+
+    expect(within(dialog).getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByTestId("partial-notice")).toHaveTextContent(
+      /partial view of the folder/i
+    );
+    // The long version is not in the way.
+    expect(screen.queryByTestId("scan-details")).toBeNull();
+    expect(screen.queryByTestId("folder-mapping")).toBeNull();
+    // ...and the state is a chip, not a paragraph glued to one.
+    const badge = screen.getByTestId("structure-mode");
+    expect(badge).toHaveTextContent("Legacy-compatible");
+    expect(badge).not.toHaveTextContent(/Read as charts/);
+  });
+
+  it("keeps every scan number and every warning behind Show scan details",
+     async () => {
+    const user = userEvent.setup();
+    await openChartImport(user);
+
+    await user.click(
+      screen.getByRole("button", { name: /show scan details/i })
+    );
+    const details = await screen.findByTestId("scan-details");
+    expect(details).toHaveTextContent("1971 file(s) across 260 folder(s)");
+    expect(details).toHaveTextContent("at most 4 folder levels");
+    expect(details).toHaveTextContent("2000 files");
+    expect(details).toHaveTextContent("120 directory listings");
+    expect(details).toHaveTextContent("30 manifest/script files");
+    expect(details).toHaveTextContent(
+      /only the first 4 folder levels were inspected/i
+    );
+
+    // It closes again, and it is not a scroll container of its own.
+    expect(getComputedStyle(details).overflowY).not.toMatch(/auto|scroll/);
+    await user.click(
+      screen.getByRole("button", { name: /hide scan details/i })
+    );
+    await waitForElementToBeRemoved(() => screen.queryByTestId("scan-details"));
+  });
+
+  it("keeps the whole legacy mapping behind Show folder mapping", async () => {
+    const user = userEvent.setup();
+    await openChartImport(user);
+
+    await user.click(
+      screen.getByRole("button", { name: /show folder mapping/i })
+    );
+    const mapping = await screen.findByTestId("folder-mapping");
+    expect(mapping).toHaveTextContent("data → datasets");
+    expect(mapping).toHaveTextContent("figures_tables → charts");
+    expect(mapping).toHaveTextContent(/Read as charts/);
+    expect(mapping).toHaveTextContent(/Nothing on the file server is renamed/i);
+    expect(getComputedStyle(mapping).overflowY).not.toMatch(/auto|scroll/);
+  });
+
+  it("groups a candidate's status and actions so they wrap together",
+     async () => {
+    const user = userEvent.setup();
+    await openChartImport(user);
+
+    const identity = screen.getByTestId("identity-chart-0");
+    const status = screen.getByTestId("status-chart-0");
+    const actions = screen.getByTestId("actions-chart-0");
+
+    // Three regions, and the two right-hand ones wrap as blocks rather than
+    // breaking their labels word by word.
+    expect(status).toHaveStyle("flex-wrap: wrap");
+    expect(status).toHaveStyle("flex-shrink: 0");
+    expect(actions).toHaveStyle("flex-wrap: wrap");
+    expect(actions).toHaveStyle("flex-shrink: 0");
+    expect(identity).toHaveStyle("min-width: 0");
+    // A long relative path breaks instead of pushing the buttons away.
+    expect(
+      within(identity).getByText("figures", { exact: false })
+    ).toHaveStyle("overflow-wrap: anywhere");
+    // The header row itself wraps, with real gaps between the groups.
+    const header = identity.parentElement;
+    expect(header).toHaveStyle("flex-wrap: wrap");
+    expect(header).toHaveStyle("column-gap: 12px");
+    expect(header).toHaveStyle("row-gap: 12px");
+  });
+
+  it("separates the proposal form from the header, and gives the first field room",
+     async () => {
+    const user = userEvent.setup();
+    await openChartImport(user);
+
+    await user.click(screen.getByRole("button", { name: /edit proposal/i }));
+    const fields = await screen.findByTestId("fields-chart-0");
+
+    // A rule, then real space before the first input.
+    const divider = screen.getByTestId("fields-divider-chart-0");
+    expect(divider).toHaveClass("MuiDivider-root");
+    expect(fields.previousElementSibling).toBe(divider);
+    expect(fields).toHaveStyle("padding-top: 20px");
+    // 20px between rows, 16px between the two columns. MUI's Grid carries
+    // its spacing as custom properties, so that is what is asserted.
+    const grid = getComputedStyle(fields);
+    expect(grid.getPropertyValue("--Grid-rowSpacing").trim()).toBe("20px");
+    expect(grid.getPropertyValue("--Grid-columnSpacing").trim()).toBe("16px");
+  });
+
+  it("keeps input, helper text and evidence chip in one field group",
+     async () => {
+    const user = userEvent.setup();
+    await openChartImport(user);
+
+    await user.click(screen.getByRole("button", { name: /edit proposal/i }));
+    await screen.findByTestId("fields-chart-0");
+
+    const group = screen.getByTestId("field-group-chart-0-imageFile");
+    // One column, one spacing rule: input -> helper text -> evidence chip.
+    expect(group).toHaveStyle("display: flex");
+    expect(group).toHaveStyle("flex-direction: column");
+    expect(group).toHaveStyle("gap: 8px");
+
+    const input = within(group).getByLabelText(/^figure image ?\*?$/i, {
+      selector: "input",
+    });
+    const chip = screen.getByTestId("field-evidence-chart-0-imageFile");
+    expect(group).toContainElement(input);
+    expect(group).toContainElement(chip);
+    // The chip is BELOW the helper text, not pulled up over the input.
+    const helper = group.querySelector(".MuiFormHelperText-root");
+    expect(helper).toBeInTheDocument();
+    expect(
+      helper.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(chip).not.toHaveStyle("margin-top: -12px");
+  });
+
+  it("shows no evidence or missing chip on an untouched optional field",
+     async () => {
+    const user = userEvent.setup();
+    await openChartImport(user);
+
+    await user.click(screen.getByRole("button", { name: /edit proposal/i }));
+    await screen.findByTestId("fields-chart-0");
+
+    // notebookFile is optional and empty here: no chip of any kind.
+    expect(
+      screen.queryByTestId("field-evidence-chart-0-notebookFile")
+    ).toBeNull();
+    // A missing REQUIRED field is said once in the header, and once in that
+    // field's own helper text ??never as a third chip.
+    expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
+      /required field/i
+    );
+    expect(screen.queryByTestId("field-evidence-chart-0-caption")).toBeNull();
+  });
+
+  it("adds exactly what it added before the layout changed", async () => {
+    const user = userEvent.setup();
+    const addMany = jest.fn();
+    const Harness = () => {
+      const [cache, setCache] = useState({ path: "", data: null });
+      return (
+        <AlertContext.Provider value={{ setAlert: jest.fn() }}>
+          <CuratorContext.Provider
+            value={{
+              fileServerPath: FOLDER,
+              addMany,
+              rccAnalysisCache: cache,
+              cacheRccAnalysis: (path, data) => setCache({ path, data }),
+            }}
+          >
+            <FolderAnalysis artifactType="chart" />
+          </CuratorContext.Provider>
+        </AlertContext.Provider>
+      );
+    };
+    render(<Harness />);
+    await user.click(
+      screen.getByRole("button", { name: /import charts from rcc/i })
+    );
+    await screen.findByRole("dialog", { name: /import charts from rcc/i });
+
+    // The request is untouched by the presentation work.
+    expect(axios.post).toHaveBeenCalledWith("/api/curation/analyze-folder", {
+      path: FOLDER,
+    });
+
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /add selected charts to curator/i })
+    );
+
+    expect(addMany).toHaveBeenCalledTimes(1);
+    expect(addMany).toHaveBeenCalledWith("chart", [
+      expect.objectContaining({
+        imageFile: "figures/figure1.png",
+        number: "",
+        caption: "",
+        properties: [],
+        files: [],
+        notebookFile: "",
+        extraFields: [],
+      }),
+    ]);
   });
 });

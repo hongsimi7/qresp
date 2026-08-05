@@ -158,6 +158,66 @@ const EVIDENCE_LABELS = {
   needs_input: "Needs input",
 };
 
+// Layout constants, hoisted so emotion serializes them once instead of on
+// every keystroke in an open proposal (six fields re-render per character).
+//
+// The spacing is the contract: 16px inside a card, 12px between cards, 12px
+// between the identity and the status/action groups, 8px between chips, 20px
+// between field rows, 16px between the two field columns, and 8px inside a
+// field group (input -> helper text -> evidence chip).
+const CARD_SX = {
+  border: 1,
+  borderColor: "divider",
+  borderRadius: 1,
+  px: 2,
+  py: 2,
+  mb: 1.5,
+};
+
+const CARD_HEADER_SX = {
+  display: "flex",
+  alignItems: "flex-start",
+  flexWrap: "wrap",
+  rowGap: 1.5,
+  columnGap: 1.5,
+};
+
+const CARD_IDENTITY_SX = {
+  flexGrow: 1,
+  flexBasis: 220,
+  minWidth: 0,
+  mr: 1.5,
+};
+
+const CARD_PATH_SX = { mt: 0.5, overflowWrap: "anywhere" };
+
+const CARD_STATUS_SX = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: 1,
+  flexShrink: 0,
+};
+
+const CARD_ACTIONS_SX = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: 1,
+  flexShrink: 0,
+  ml: "auto",
+  // Multi-word labels stay on one line at every width.
+  "& .MuiButton-root": { whiteSpace: "nowrap", minWidth: "auto" },
+};
+
+const FIELD_GROUP_SX = { display: "flex", flexDirection: "column", gap: 1 };
+
+const FIELD_INPUT_SX = { "& .MuiFormHelperText-root": { mt: 0.5, mx: 0 } };
+
+const FIELDS_GRID_SX = { pt: 2.5, pl: { xs: 0, sm: 5 } };
+
+const CHECKBOX_SX = { mt: -0.5, ml: -0.5, flexShrink: 0 };
+
 // ---- chart roles ------------------------------------------------------------
 //
 // A Chart stores exactly ONE image, so the unit of choice is the image file,
@@ -272,6 +332,10 @@ const FolderAnalysis = ({ path, artifactType }) => {
   // the curator rebuilds with a choice.
   const [boundaries, setBoundaries] = useState({});
   const [pickerOpen, setPickerOpen] = useState(false);
+  // How the folder was read: a chip by default, the long version on request.
+  // Both start closed, every time the dialog opens.
+  const [scanDetailsOpen, setScanDetailsOpen] = useState(false);
+  const [mappingOpen, setMappingOpen] = useState(false);
   const [tab, setTab] = useState(0);
   // Optional AI enrichment: a SEPARATE action over the candidates already
   // selected, behind its own always-unchecked consent box. Selecting
@@ -356,6 +420,8 @@ const FolderAnalysis = ({ path, artifactType }) => {
     setChartRoles({});
     setChartsOpen(true);
     setPickerOpen(false);
+    setScanDetailsOpen(false);
+    setMappingOpen(false);
     setTab(0);
     setAiConsent(false);
     setAiConsentOpen(null);
@@ -960,22 +1026,19 @@ const FolderAnalysis = ({ path, artifactType }) => {
     return (
       <Box
         key={candidate.id}
-        sx={{ border: 1, borderColor: "divider", borderRadius: 1, p: 1.5, mb: 1.5 }}
+        // 16px of breathing room inside the card, 12px between cards.
+        sx={CARD_SX}
       >
-        {/* One wrapping row: the label grows, the actions keep their natural
-            width and drop onto their own line when the row runs out of
-            space, instead of the labels breaking word by word. */}
+        {/* Three regions: the checkbox, the identity, and the status/actions
+            group. The identity grows; the status and the actions keep their
+            natural width and drop onto their own line TOGETHER when the row
+            runs out of space, instead of labels breaking word by word. */}
         <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            flexWrap: "wrap",
-            rowGap: 1,
-            columnGap: 1,
-          }}
+          sx={CARD_HEADER_SX}
         >
           <Checkbox
             size="small"
+            sx={CHECKBOX_SX}
             checked={isSelected}
             onChange={(event) =>
               setSelected((current) => ({
@@ -985,7 +1048,10 @@ const FolderAnalysis = ({ path, artifactType }) => {
             }
             slotProps={{ input: { "aria-label": `Select ${primary}` } }}
           />
-          <Box sx={{ flexGrow: 1, flexBasis: 200, minWidth: 0 }}>
+          <Box
+            data-testid={`identity-${candidate.id}`}
+            sx={CARD_IDENTITY_SX}
+          >
             <Typography variant="subtitle2" noWrap title={full || primary}>
               {primary}
             </Typography>
@@ -993,16 +1059,19 @@ const FolderAnalysis = ({ path, artifactType }) => {
               <Typography
                 variant="caption"
                 color="text.secondary"
-                noWrap
                 display="block"
                 title={secondary}
+                // 4px under the name, and a long relative path breaks rather
+                // than pushing the status and actions off the row.
+                sx={CARD_PATH_SX}
               >
                 {secondary}
               </Typography>
             ) : null}
           </Box>
           <Box
-            sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}
+            data-testid={`status-${candidate.id}`}
+            sx={CARD_STATUS_SX}
           >
             <Chip
               size="small"
@@ -1031,14 +1100,7 @@ const FolderAnalysis = ({ path, artifactType }) => {
           </Box>
           <Box
             data-testid={`actions-${candidate.id}`}
-            sx={{
-              display: "flex",
-              gap: 0.5,
-              flexShrink: 0,
-              ml: "auto",
-              // Multi-word labels stay on one line at every width.
-              "& .MuiButton-root": { whiteSpace: "nowrap", minWidth: "auto" },
-            }}
+            sx={CARD_ACTIONS_SX}
           >
             {/* Visually distinct from the Add checkbox on the left: the
                 checkbox chooses what goes to the Curator, this describes
@@ -1122,12 +1184,16 @@ const FolderAnalysis = ({ path, artifactType }) => {
         {renderAiProposal(candidate)}
 
         <Collapse in={fieldsVisible} unmountOnExit>
-          {/* Deliberate separation from the header/evidence above. */}
-          <Divider sx={{ mt: 2 }} />
+          {/* Deliberate separation from the header/evidence above: a rule,
+              then real space before the first input — the Figure Image used
+              to sit directly against it. */}
+          <Divider sx={{ mt: 2 }} data-testid={`fields-divider-${candidate.id}`} />
           <Grid
             container
-            spacing={2}
-            sx={{ mt: 0.5, pl: { xs: 0, sm: 5 } }}
+            // 20px between field rows, 16px between the two columns.
+            rowSpacing={2.5}
+            columnSpacing={2}
+            sx={FIELDS_GRID_SX}
             data-testid={`fields-${candidate.id}`}
           >
             {fieldsFor(candidate.kind).map(({ key: field, required }) => {
@@ -1147,7 +1213,16 @@ const FolderAnalysis = ({ path, artifactType }) => {
                 ? null
                 : (candidate.field_evidence || {})[field];
               return (
-                <Grid key={field} size={{ xs: 12, md: 6 }}>
+                // ONE field group per field: input, helper text, evidence
+                // chip, in that order and with the same spacing everywhere,
+                // so two fields on the same row line their chips up instead
+                // of each one hanging off its own input.
+                <Grid
+                  key={field}
+                  size={{ xs: 12, md: 6 }}
+                  sx={FIELD_GROUP_SX}
+                  data-testid={`field-group-${candidate.id}-${field}`}
+                >
                   <TextField
                     fullWidth
                     size="small"
@@ -1163,6 +1238,10 @@ const FolderAnalysis = ({ path, artifactType }) => {
                     // The contract's own explanation of the field, so
                     // Folder Analysis and the Add/Edit form cannot describe
                     // the same field two different ways.
+                    // The helper text belongs to the input, so it keeps the
+                    // TextField's own margin rather than floating between
+                    // the input and the chip.
+                    sx={FIELD_INPUT_SX}
                     helperText={
                       [
                         required && blank
@@ -1175,20 +1254,24 @@ const FolderAnalysis = ({ path, artifactType }) => {
                     }
                   />
                   {evidence ? (
-                    <Chip
-                      size="small"
-                      variant={evidence === HIGH_EVIDENCE ? "filled" : "outlined"}
-                      color={
-                        evidence === HIGH_EVIDENCE
-                          ? "success"
-                          : evidence === "medium"
-                          ? "info"
-                          : "default"
-                      }
-                      label={EVIDENCE_LABELS[evidence] || evidence}
-                      data-testid={`field-evidence-${candidate.id}-${field}`}
-                      sx={{ mt: -1.5 }}
-                    />
+                    // Below the helper text, never overlapping the input
+                    // border or the next field. The group's 8px gap does the
+                    // spacing, so nothing is pulled up into its neighbour.
+                    <Box>
+                      <Chip
+                        size="small"
+                        variant={evidence === HIGH_EVIDENCE ? "filled" : "outlined"}
+                        color={
+                          evidence === HIGH_EVIDENCE
+                            ? "success"
+                            : evidence === "medium"
+                            ? "info"
+                            : "default"
+                        }
+                        label={EVIDENCE_LABELS[evidence] || evidence}
+                        data-testid={`field-evidence-${candidate.id}-${field}`}
+                      />
+                    </Box>
                   ) : null}
                 </Grid>
               );
@@ -1208,6 +1291,11 @@ const FolderAnalysis = ({ path, artifactType }) => {
   const unclassifiedTotal = candidates.unclassified_total || 0;
   const structureMode = (analysis || {}).structure_mode || "";
   const invalidStructure = structureMode === "invalid";
+  // Only the roots whose name differs from the role they were read as: a
+  // folder already called `charts` maps to itself and says nothing.
+  const mappedRoles = Object.entries((analysis || {}).normalized_roles || {})
+    .filter(([folder, role]) => folder !== role)
+    .sort(([a], [b]) => a.localeCompare(b));
 
   // Two independent halves of the same panel. A legacy tree gets the
   // dataset/script folder picker; ANY tree with chart images gets the Charts
@@ -1321,16 +1409,19 @@ const FolderAnalysis = ({ path, artifactType }) => {
           {error && <Alert severity="error">{error}</Alert>}
           {analysis && (
             <Fragment>
-              <Typography variant="body2" gutterBottom>
+              {/* ONE line. Everything else about HOW the folder was read is
+                  a detail, and lives behind a toggle rather than stacking
+                  four alerts above the candidates. */}
+              <Typography variant="body2" sx={{ mb: 1.5 }}>
                 {typedGroup
-                  ? `These ${typedGroup.label.toLowerCase()} are proposals from the saved folder's file names and manifests. `
-                  : "These are proposals from the folder's file names and manifests. "}
-                Nothing is selected by default, and nothing is saved or
-                published. Check what you want, edit it, then add it to the
-                form.
+                  ? `Proposed ${typedGroup.label.toLowerCase()} from the saved RCC folder. `
+                  : "Proposals from this folder's file names and manifests. "}
+                Nothing is selected, saved or published until you say so.
               </Typography>
+              {/* One summary when the crawl stopped early. The numbers that
+                  explain WHY are in Show scan details. */}
               {analysis.truncated && (
-                <Alert severity="info" sx={{ mb: 1 }}>
+                <Alert severity="info" sx={{ mb: 1.5 }} data-testid="partial-notice">
                   <strong>This is a partial view of the folder.</strong> Qresp
                   scanned{" "}
                   {(analysis.counts || {}).files != null
@@ -1338,56 +1429,163 @@ const FolderAnalysis = ({ path, artifactType }) => {
                         (analysis.counts || {}).directories || 0
                       } folder(s)`
                     : "part of the folder"}{" "}
-                  and stopped at its built-in safety limits
-                  {(analysis.limits || {}).max_depth
-                    ? ` (at most ${analysis.limits.max_depth} folder levels, ${analysis.limits.max_files} files)`
-                    : ""}
-                  , so the candidates below do not represent everything that is
-                  there. Nothing was skipped silently — the reasons are listed
-                  below.
+                  and stopped at its built-in safety limits, so the candidates
+                  below do not represent everything that is there. Nothing was
+                  skipped silently — see <strong>Show scan details</strong>.
                 </Alert>
               )}
-              {(analysis.warnings || []).map((warning) => (
-                <Alert key={warning} severity="info" sx={{ mb: 1 }}>
-                  {warning}
-                </Alert>
-              ))}
-              {/* How the folder was read. Derived from its shape by the
-                  Folder Standard validator — session-only, and nothing on
-                  the file server is renamed. */}
-              {analysis.structure_mode && (
-                <Box sx={{ mb: 2 }} data-testid="structure-mode">
-                  <Chip
+              {/* How the folder was read: a short chip, and the two ways to
+                  see the long version. Derived from the folder's shape by the
+                  Folder Standard validator — session-only, and nothing on the
+                  file server is renamed. */}
+              <Box
+                sx={{
+                  mb: 2,
+                  display: "flex",
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                  gap: 1,
+                }}
+                data-testid="structure-mode"
+              >
+                  {analysis.structure_mode ? (
+                    <Chip
+                      size="small"
+                      color={
+                        analysis.structure_mode === "standard"
+                          ? "success"
+                          : analysis.structure_mode === "legacy"
+                          ? "info"
+                          : "warning"
+                      }
+                      label={
+                        analysis.structure_mode === "standard"
+                          ? "Qresp Standard"
+                          : analysis.structure_mode === "legacy"
+                          ? "Legacy-compatible"
+                          : "Needs reorganization"
+                      }
+                    />
+                  ) : null}
+                  <Button
                     size="small"
-                    color={
-                      analysis.structure_mode === "standard"
-                        ? "success"
-                        : analysis.structure_mode === "legacy"
-                        ? "info"
-                        : "warning"
-                    }
-                    label={
-                      analysis.structure_mode === "standard"
-                        ? "Qresp Standard"
-                        : analysis.structure_mode === "legacy"
-                        ? "Legacy-compatible"
-                        : "Needs reorganization"
-                    }
-                  />
+                    sx={{ textTransform: "none", whiteSpace: "nowrap" }}
+                    aria-expanded={scanDetailsOpen}
+                    onClick={() => setScanDetailsOpen((value) => !value)}
+                  >
+                    {scanDetailsOpen ? "Hide scan details" : "Show scan details"}
+                  </Button>
+                  {mappedRoles.length > 0 || (analysis.structure_issues || []).length > 0 ? (
+                    <Button
+                      size="small"
+                      sx={{ textTransform: "none", whiteSpace: "nowrap" }}
+                      aria-expanded={mappingOpen}
+                      onClick={() => setMappingOpen((value) => !value)}
+                    >
+                      {mappingOpen
+                        ? "Hide folder mapping"
+                        : "Show folder mapping"}
+                    </Button>
+                  ) : null}
+              </Box>
+              {/* The caps in force and every warning the crawl produced.
+                  Nothing is dropped — it is just not in the way. */}
+              <Collapse in={scanDetailsOpen} unmountOnExit>
+                <Box
+                  data-testid="scan-details"
+                  sx={{
+                    mb: 2,
+                    p: 1.5,
+                    border: 1,
+                    borderColor: "divider",
+                    borderRadius: 1,
+                  }}
+                >
+                  <Typography variant="subtitle2" gutterBottom>
+                    Scan details
+                  </Typography>
+                  {(analysis.counts || {}).files != null && (
+                    <Typography variant="caption" display="block">
+                      {`Scanned ${analysis.counts.files} file(s) across ${
+                        (analysis.counts || {}).directories || 0
+                      } folder(s).`}
+                    </Typography>
+                  )}
+                  {(analysis.limits || {}).max_depth ? (
+                    <Typography variant="caption" display="block">
+                      {`Limits in force: at most ${analysis.limits.max_depth} folder levels, ${analysis.limits.max_files} files, ${analysis.limits.max_directory_listings} directory listings, and ${analysis.limits.max_evidence_files} manifest/script files read for evidence.`}
+                    </Typography>
+                  ) : null}
+                  {(analysis.warnings || []).map((warning) => (
+                    <Typography
+                      key={warning}
+                      variant="caption"
+                      display="block"
+                      sx={{ mt: 0.5, overflowWrap: "anywhere" }}
+                    >
+                      {warning}
+                    </Typography>
+                  ))}
+                  {!(analysis.warnings || []).length && (
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      display="block"
+                      sx={{ mt: 0.5 }}
+                    >
+                      No folder was skipped.
+                    </Typography>
+                  )}
+                </Box>
+              </Collapse>
+              {/* The legacy names this folder actually uses, and what each one
+                  was read as. Never glued onto the status chip. */}
+              <Collapse in={mappingOpen} unmountOnExit>
+                <Box
+                  data-testid="folder-mapping"
+                  sx={{
+                    mb: 2,
+                    p: 1.5,
+                    border: 1,
+                    borderColor: "divider",
+                    borderRadius: 1,
+                  }}
+                >
+                  <Typography variant="subtitle2" gutterBottom>
+                    Folder mapping
+                  </Typography>
+                  {mappedRoles.map(([folder, role]) => (
+                    <Typography
+                      key={folder}
+                      variant="caption"
+                      display="block"
+                      sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
+                    >
+                      {`${folder} → ${role}`}
+                    </Typography>
+                  ))}
                   {(analysis.structure_issues || []).map((issue) => (
                     <Typography
                       key={`${issue.path}-${issue.reason}`}
                       variant="caption"
                       color="text.secondary"
                       display="block"
-                      sx={{ mt: 0.5 }}
+                      sx={{ mt: 0.5, overflowWrap: "anywhere" }}
                     >
                       {issue.path ? `${issue.path}: ` : ""}
                       {issue.reason}
                     </Typography>
                   ))}
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    display="block"
+                    sx={{ mt: 0.5 }}
+                  >
+                    Nothing on the file server is renamed.
+                  </Typography>
                 </Box>
-              )}
+              </Collapse>
               {/* Record boundaries. Dataset/Script boundaries are FOLDERS
                   and only a legacy tree needs to choose them; Chart roles are
                   IMAGES and every tree that has some needs to choose those,
@@ -1533,11 +1731,11 @@ const FolderAnalysis = ({ path, artifactType }) => {
                   </Collapse>
                 </Box>
               )}
-              {typedGroup ? (
-                <Typography variant="subtitle2" sx={{ mt: 1.5, mb: 1 }}>
-                  {`${typedGroup.label} (${candidatesFor(typedGroup.key).length})`}
-                </Typography>
-              ) : (
+              {/* No type heading here: the dialog title already says which
+                  artifact this is, and "Import Charts from RCC" followed by
+                  "Charts (12)" said it twice. The count lives with the
+                  candidates it describes. */}
+              {typedGroup ? null : (
                 <Tabs
                   value={tab}
                   onChange={(event, next) => setTab(next)}
@@ -1557,6 +1755,21 @@ const FolderAnalysis = ({ path, artifactType }) => {
                 </Tabs>
               )}
               <Divider sx={{ mb: 2 }} />
+              {/* The count stays — as a count of what is on screen, not as a
+                  second title. */}
+              {typedGroup && candidatesFor(typedGroup.key).length > 0 ? (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  display="block"
+                  sx={{ mb: 1.5 }}
+                  data-testid="candidate-count"
+                >
+                  {`${candidatesFor(typedGroup.key).length} proposal${
+                    candidatesFor(typedGroup.key).length === 1 ? "" : "s"
+                  } · ${selectedCount} selected`}
+                </Typography>
+              ) : null}
               {activeGroup.type ? (
                 <Fragment>
                   {candidatesFor(activeGroup.key).length === 0 && (

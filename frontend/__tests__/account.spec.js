@@ -272,7 +272,10 @@ describe("Account page", () => {
         success: true,
       },
     });
-    const user = userEvent.setup();
+    // delay: null — typing a 31-character list one key at a time re-renders
+    // the page per character and pushed this past the 5s timeout under load.
+    // It changes nothing about what is asserted.
+    const user = userEvent.setup({ delay: null });
     renderAccount(authedUser);
     await screen.findByText(/my paper/i);
     await user.click(screen.getByRole("button", { name: /editors/i }));
