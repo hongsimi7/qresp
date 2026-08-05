@@ -18,6 +18,7 @@ import { RegularStyledButton } from "../button";
 import StyledTooltip from "../tooltip";
 
 import { useForm } from "react-hook-form";
+import { useInvalidFieldFocus } from "../../Utils/invalidField";
 import { yupResolver } from "@hookform/resolvers/yup";
 import * as Yup from "yup";
 
@@ -218,6 +219,11 @@ const ToolsInfoForm = () => {
     extraFields: cleanExtraFields(tool && tool.extraFields),
   });
 
+  // Save with a required field empty sends the curator to the first one in
+  // FORM order, instead of silently refusing.
+  const { formRef, focusFirstInvalid } = useInvalidFieldFocus();
+
+
   const {
     register,
     unregister,
@@ -308,7 +314,10 @@ const ToolsInfoForm = () => {
           </Grid>
         </DialogTitle>
         <DialogContent dividers>
-          <form onSubmit={handleSubmit(onSubmit)}>
+          <form
+            ref={formRef}
+            onSubmit={handleSubmit(onSubmit, focusFirstInvalid)}
+          >
             <Grid container direction="column" spacing={1}>
               <Grid>
                 <RadioInputField

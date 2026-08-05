@@ -46,8 +46,13 @@ const TextInput = (props) => {
           : {})}
         fullWidth
         variant="outlined"
-        error={error && !focused}
-        helperText={error && !focused ? error.message : ""}
+        // The error stays while the field has focus. Save now sends the
+        // curator straight to the first invalid field, and a message that
+        // vanished on arrival — along with aria-invalid and the
+        // aria-describedby that names it — left them looking at a field with
+        // no reason on it. It clears the moment the value becomes valid.
+        error={Boolean(error)}
+        helperText={error ? error.message : ""}
         InputProps={{
           onFocus: () => setFocused(true),
           onBlur: (e) => {

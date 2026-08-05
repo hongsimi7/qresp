@@ -49,8 +49,10 @@ const SelectInput = (props) => {
                   onMouseLeave: () => setHovering(false),
                 }}
                 placeholder={placeholder}
-                error={error && !focused}
-                helperText={error && !focused ? error.message : ""}
+                // Kept while focused, like TextInput: the field a failed Save
+                // jumps to has to keep saying why.
+                error={Boolean(error)}
+                helperText={error ? error.message : ""}
                 fullWidth
               >
                 <MenuItem value="">Select a value ...</MenuItem>

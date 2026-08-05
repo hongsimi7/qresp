@@ -19,6 +19,7 @@ import ExtraFieldInput, {
 import { RegularStyledButton } from "../button";
 
 import { useForm } from "react-hook-form";
+import { useInvalidFieldFocus } from "../../Utils/invalidField";
 import { yupResolver } from "@hookform/resolvers/yup";
 import * as Yup from "yup";
 
@@ -73,6 +74,11 @@ const ScriptsInfoForm = () => {
       "",
     extraFields: cleanExtraFields(item && item.extraFields),
   });
+
+  // Save with a required field empty sends the curator to the first one in
+  // FORM order, instead of silently refusing.
+  const { formRef, focusFirstInvalid } = useInvalidFieldFocus();
+
 
   const { register, handleSubmit, formState: { errors }, control, setValue, reset } = useForm({
     resolver: yupResolver(schema),
@@ -152,7 +158,10 @@ const ScriptsInfoForm = () => {
           </Grid>
         </DialogTitle>
         <DialogContent dividers>
-          <form onSubmit={handleSubmit(onSubmit)}>
+          <form
+            ref={formRef}
+            onSubmit={handleSubmit(onSubmit, focusFirstInvalid)}
+          >
             <Grid container direction="column" spacing={1}>
               <Grid>
                 <TextInputField

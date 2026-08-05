@@ -272,9 +272,13 @@ describe("Account page", () => {
         success: true,
       },
     });
-    // delay: null — typing a 31-character list one key at a time re-renders
-    // the page per character and pushed this past the 5s timeout under load.
-    // It changes nothing about what is asserted.
+    // This one is genuinely slow, and it is the interaction that makes it so:
+    // the editor list is controlled by page-level state, so every character
+    // typed re-renders the whole account page. Measured here: ~0.2s to render,
+    // ~0.8s to open the dialog, ~4.0s to type 31 characters, ~0.3s to save.
+    // `delay: null` removes the inter-key wait (it is not what costs the time)
+    // and the budget below covers the rest, rather than trimming the address
+    // list this test exists to check.
     const user = userEvent.setup({ delay: null });
     renderAccount(authedUser);
     await screen.findByText(/my paper/i);
@@ -292,7 +296,7 @@ describe("Account page", () => {
         editor_emails: ["old@example.com", "new@example.com"],
       })
     );
-  });
+  }, 20000);
 
   it("shows the backend error inline when the editor update fails", async () => {
     mockAccountApi({
