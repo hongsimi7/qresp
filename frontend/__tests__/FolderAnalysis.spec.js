@@ -309,8 +309,10 @@ describe("Analyze RCC Folder", () => {
     expect(
       screen.getByRole("button", { name: "Edit Proposal" })
     ).toHaveStyle("white-space: nowrap");
-    // The action group does not shrink into the label.
-    expect(actions).toHaveStyle("flex-shrink: 0");
+    // The group wraps its buttons onto another line rather than keeping the
+    // full four-button width and pushing the card sideways.
+    expect(actions).toHaveStyle("flex-wrap: wrap");
+    expect(actions).toHaveStyle("min-width: 0");
   });
 
   it("separates the editable fields from the header with real spacing", async () => {
@@ -2989,13 +2991,20 @@ describe("typed import dialog ??readable by default", () => {
     const status = screen.getByTestId("status-chart-0");
     const actions = screen.getByTestId("actions-chart-0");
 
-    // Three regions, and the two right-hand ones wrap as blocks rather than
-    // breaking their labels word by word.
+    // Three regions. The two right-hand ones wrap INTERNALLY and may shrink:
+    // a group that refuses to shrink keeps the full width of four buttons in
+    // a row and pushes the card sideways at phone width. Measured in Chrome
+    // at 390px: with flex-shrink 0 the card was 414px wide inside a 294px
+    // column; allowing it to shrink removed the horizontal scroll entirely.
     expect(status).toHaveStyle("flex-wrap: wrap");
-    expect(status).toHaveStyle("flex-shrink: 0");
+    expect(status).toHaveStyle("min-width: 0");
     expect(actions).toHaveStyle("flex-wrap: wrap");
-    expect(actions).toHaveStyle("flex-shrink: 0");
+    expect(actions).toHaveStyle("min-width: 0");
     expect(identity).toHaveStyle("min-width: 0");
+    // ...while a button's own label never breaks word by word.
+    expect(
+      within(actions).getByRole("button", { name: /edit proposal/i })
+    ).toHaveStyle("white-space: nowrap");
     // A long relative path breaks instead of pushing the buttons away.
     expect(
       within(identity).getByText("figures", { exact: false })

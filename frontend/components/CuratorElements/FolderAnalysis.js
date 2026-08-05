@@ -191,12 +191,16 @@ const CARD_IDENTITY_SX = {
 
 const CARD_PATH_SX = { mt: 0.5, overflowWrap: "anywhere" };
 
+// Both groups WRAP internally and are allowed to shrink. A group that
+// refuses to shrink keeps its max-content width — the four action buttons in
+// a row — and pushes the card sideways at phone width instead of stacking.
+// The labels themselves still never break: that is the buttons' own rule.
 const CARD_STATUS_SX = {
   display: "flex",
   alignItems: "center",
   flexWrap: "wrap",
   gap: 1,
-  flexShrink: 0,
+  minWidth: 0,
 };
 
 const CARD_ACTIONS_SX = {
@@ -204,7 +208,7 @@ const CARD_ACTIONS_SX = {
   alignItems: "center",
   flexWrap: "wrap",
   gap: 1,
-  flexShrink: 0,
+  minWidth: 0,
   ml: "auto",
   // Multi-word labels stay on one line at every width.
   "& .MuiButton-root": { whiteSpace: "nowrap", minWidth: "auto" },
