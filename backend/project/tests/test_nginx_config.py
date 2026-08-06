@@ -81,6 +81,24 @@ class TestNginxRateLimiting(unittest.TestCase):
             self.assertIn("limit_req zone=%s" % zone, self.blocks[matcher],
                           matcher)
 
+    def test_related_research_reads_have_their_own_scoped_limit(self):
+        # GET /api/paper/{id}/related renders with the detail page, so the
+        # tight api_costly zone would throttle ordinary browsing; it can also
+        # reach an external provider on a cache miss, so it must not ride the
+        # general API allowance either. It gets a zone of its own, and a
+        # regex location so it wins over the /api prefix.
+        matcher = "~ ^/api/paper/[^/]+/related$"
+        self.assertIn(matcher, self.blocks)
+        self.assertIn("limit_req zone=api_related", self.blocks[matcher])
+        rate = int(re.search(r"zone=api_related:\d+m\s+rate=(\d+)r/m",
+                             self.text).group(1))
+        general = int(re.search(r"zone=api_general:\d+m\s+rate=(\d+)r/m",
+                                self.text).group(1))
+        costly = int(re.search(r"zone=api_costly:\d+m\s+rate=(\d+)r/m",
+                               self.text).group(1))
+        self.assertLess(rate, general)
+        self.assertGreater(rate, costly)
+
     def test_the_session_probe_is_not_throttled_as_a_sign_in_attempt(self):
         # /api/auth/me runs on every page mount; an exact-match location
         # keeps it off the tight sign-in zone.
