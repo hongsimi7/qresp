@@ -282,11 +282,12 @@ describe("FileTree picker", () => {
     // unit that ignores it.
     expect(getComputedStyle(paper).maxHeight).toMatch(/^calc\(100% - \d+px\)$/);
     expect(paper).toHaveStyle("overflow: hidden");
-    expect(paper).toHaveStyle("display: flex");
+    // Rows of a stated size, so nothing inside can resize the dialog.
+    expect(paper).toHaveStyle("display: grid");
     expect(paper).toHaveStyle("flex-direction: column");
-    expect(screen.getByTestId("filetree-content")).toHaveStyle(
-      "flex: 1 1 0"
-    );
+    // The tree row of the grid, free to shrink to whatever is left.
+    expect(paper).toHaveStyle("grid-template-rows: auto 4px minmax(0, 1fr) auto");
+    expect(screen.getByTestId("filetree-content")).toHaveStyle("min-height: 0");
     expect(screen.getByTestId("filetree-content")).toHaveStyle(
       "min-height: 0"
     );
@@ -328,5 +329,127 @@ describe("FileTree picker", () => {
 
     await user.click(folderCheckbox("figures_tables"));
     expect(screen.getByTestId("filetree-selection")).toHaveTextContent(FIGURES);
+  });
+});
+
+// What the picker stores when a row is ticked. jsdom has no layout, so these
+// pin the SELECTION contract only — the layout is held by the real-Chrome
+// probe in scripts/filetree-layout-probe.mjs, which measures the Paper, the
+// scroll position and the row under the pointer in an actual browser.
+describe("what a tick selects", () => {
+  // A parent whose children are already loaded: the tree the picker sees
+  // after a folder has been expanded once.
+  const selectionOf = () => screen.getByTestId("filetree-selection").textContent;
+
+  it("stores the ticked folder itself, and only that", async () => {
+    const user = userEvent.setup();
+    const { save } = renderTree();
+
+    await user.click(folderCheckbox("figures_tables"));
+
+    // The parent carries a loaded child; the child is not selected with it.
+    expect(selectionOf()).toContain(FIGURES);
+    expect(selectionOf()).not.toContain("figure_S1");
+    await user.click(confirmButton());
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(FIGURES);
+  });
+
+  it("keeps exactly one path when a parent with children is ticked", async () => {
+    const user = userEvent.setup();
+    const { save } = renderTree();
+
+    // Expand first, so the child rows are mounted and could be swept in.
+    await user.click(screen.getAllByRole("button", { name: /expand node/i })[0]);
+    expect(await screen.findByText("figure_S1")).toBeInTheDocument();
+
+    await user.click(folderCheckbox("figures_tables"));
+    await user.click(confirmButton());
+
+    // One folder means ONE path — never "parent, child".
+    expect(save).toHaveBeenCalledWith(FIGURES);
+    expect(save.mock.calls[0][0].split(",")).toHaveLength(1);
+  });
+
+  it("replaces the previous folder rather than adding to it", async () => {
+    const user = userEvent.setup();
+    const { save } = renderTree();
+
+    await user.click(folderCheckbox("figures_tables"));
+    await user.click(folderCheckbox("data_with_a_very_long_unbroken_name"));
+
+    expect(selectionOf()).toContain(DATA);
+    expect(selectionOf()).not.toContain(FIGURES);
+    await user.click(confirmButton());
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(DATA);
+  });
+
+  it("clears the selection when the same folder is ticked again", async () => {
+    const user = userEvent.setup();
+    renderTree();
+
+    await user.click(folderCheckbox("figures_tables"));
+    expect(confirmButton()).toBeEnabled();
+
+    await user.click(folderCheckbox("figures_tables"));
+    expect(selectionOf()).toMatch(/nothing currently selected/i);
+    expect(confirmButton()).toBeDisabled();
+  });
+
+  it("selects a child that arrived from a lazy expand", async () => {
+    const user = userEvent.setup();
+    const { save } = renderTree();
+
+    await user.click(screen.getAllByRole("button", { name: /expand node/i })[0]);
+    expect(await screen.findByText("figure_S1")).toBeInTheDocument();
+
+    await user.click(folderCheckbox("figure_S1"));
+    await user.click(confirmButton());
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(`${FIGURES}/figure_S1`);
+  });
+
+  it("cancel hands back nothing at all", async () => {
+    const user = userEvent.setup();
+    const { save, closeSelector } = renderTree();
+
+    await user.click(folderCheckbox("figures_tables"));
+    await user.click(cancelButton());
+
+    expect(save).toHaveBeenCalledTimes(0);
+    expect(closeSelector).toHaveBeenCalledTimes(1);
+  });
+
+  it("still accumulates for the multi-select pickers", async () => {
+    const user = userEvent.setup();
+    const { save } = renderTree({ multiple: true, confirmLabel: "Save" });
+
+    await user.click(folderCheckbox("figures_tables"));
+    await user.click(folderCheckbox("data_with_a_very_long_unbroken_name"));
+    await user.click(confirmButton(/^save$/i));
+
+    // Unchanged shape: the comma-joined list those forms have always stored.
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(`${FIGURES}, ${DATA}`);
+  });
+
+  it("lays the dialog out as fixed rows, so the tree cannot push the actions",
+     () => {
+    renderTree();
+    const paper = screen.getByRole("dialog");
+    // A grid of stated rows: header, progress slot, tree, actions. A flex
+    // column let the Paper keep a scroll position of its own, which is how
+    // the actions ended up thousands of pixels above the dialog.
+    expect(paper).toHaveStyle("display: grid");
+    expect(paper).toHaveStyle("grid-template-rows: auto 4px minmax(0, 1fr) auto");
+    expect(paper).toHaveStyle("grid-template-columns: minmax(0, 1fr)");
+    // The tree's scroller is the positioned ancestor, so the library's
+    // absolutely positioned hidden checkboxes belong to IT and not to the
+    // Paper. Focusing one can no longer scroll the dialog.
+    expect(screen.getByTestId("filetree-content")).toHaveStyle(
+      "position: relative"
+    );
   });
 });

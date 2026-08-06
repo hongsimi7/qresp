@@ -1,10 +1,4 @@
-import {
-  useContext,
-  useState,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-} from "react";
+import { useContext, useState, useEffect } from "react";
 
 import {
   Dialog,
@@ -62,25 +56,12 @@ const FileTree = () => {
 
   const [expanded, setExpanded] = useState([]);
   const [loading, setLoading] = useState(false);
-  const contentRef = useRef(null);
-  const pendingScrollTop = useRef(null);
 
   useEffect(() => {
     if (!selectorOpen) {
       setChecked([]);
-      pendingScrollTop.current = null;
     }
   }, [selectorOpen]);
-
-  // react-checkbox-tree re-renders its complete node list when `checked`
-  // changes. Large RCC trees can briefly recalculate their intrinsic height
-  // during that render, which used to move the row under the pointer. Keep
-  // the tree viewport anchored to the exact position the curator was using.
-  useLayoutEffect(() => {
-    if (pendingScrollTop.current == null || !contentRef.current) return;
-    contentRef.current.scrollTop = pendingScrollTop.current;
-    pendingScrollTop.current = null;
-  }, [checked]);
 
   const theme = useTheme();
 
@@ -104,6 +85,7 @@ const FileTree = () => {
       onClose={closeSelector}
       maxWidth="md"
       fullWidth
+      scroll="paper"
       aria-labelledby="file-tree-title"
       slotProps={{
         paper: {
@@ -113,8 +95,17 @@ const FileTree = () => {
             // second scrollbar beside the tree's own, and the page behind the
             // dialog does not move with the wheel.
             overflow: "hidden",
-            display: "flex",
-            flexDirection: "column",
+            // A grid, not a flex column: four rows of a stated size cannot
+            // collapse or leave a gap. `minmax(0, 1fr)` is what lets the tree
+            // row shrink to the space that is actually left, and the last row
+            // pins the actions to the bottom edge whatever the tree does.
+            display: "grid",
+            gridTemplateRows: "auto 4px minmax(0, 1fr) auto",
+            // A grid's implicit column is sized to its widest item, so one
+            // unbreakable folder name would widen every row past the dialog
+            // and change how the tree wraps. `minmax(0, 1fr)` lets the column
+            // shrink to the Paper instead.
+            gridTemplateColumns: "minmax(0, 1fr)",
             minHeight: 0,
             // The Paper carries a margin on every side, and the dialog's
             // container is exactly the viewport with NO overflow of its own.
@@ -189,14 +180,24 @@ const FileTree = () => {
         {loading && <LinearProgress color="primary" />}
       </Box>
       <DialogContent
-        ref={contentRef}
         dividers
         data-testid="filetree-content"
         sx={{
-          flex: "1 1 0",
           minHeight: 0,
           overflowY: "auto",
           overscrollBehavior: "contain",
+          // THE fix for the jump. react-checkbox-tree hides its native
+          // checkbox with `position: absolute; opacity: 0` and no offsets, so
+          // it resolves against the nearest POSITIONED ancestor. Without this
+          // that ancestor was MUI's Paper (`position: relative`), which put
+          // every hidden input of a 4000px tree into the Paper's own
+          // scrollable overflow. Clicking one focused it, and Chrome scrolled
+          // the Paper — `overflow: hidden` clips, it does not stop the user
+          // agent scrolling to a focused element — carrying the tree and the
+          // action row thousands of pixels above the dialog and leaving the
+          // white space underneath. Anchoring the inputs to the scroller they
+          // actually live in makes that scroll a no-op.
+          position: "relative",
           // The tree is the only thing that scrolls, and only vertically.
           // react-checkbox-tree lays a row out as a flex line whose children
           // never shrink, so one long folder name used to widen the row past
@@ -228,12 +229,16 @@ const FileTree = () => {
           nodes={tree}
           checked={checked}
           expanded={expanded}
-          onCheck={(newChecked) => {
-            pendingScrollTop.current = contentRef.current
-              ? contentRef.current.scrollTop
-              : 0;
+          // react-checkbox-tree hands us the whole checked list AND the node
+          // that was toggled, with `checked` already flipped. A picker that
+          // takes ONE folder reads the node: diffing the two arrays gave the
+          // same answer in the ordinary case, but silently produced two
+          // selections whenever the previous path had dropped out of the tree
+          // (a reload, or a parent whose children were fetched). One node in,
+          // one path out.
+          onCheck={(newChecked, targetNode) => {
             if (!multiple) {
-              setChecked(newChecked.filter((el) => !checked.includes(el)));
+              setChecked(targetNode.checked ? [targetNode.value] : []);
               return;
             }
             setChecked(newChecked);
