@@ -1,0 +1,393 @@
+"""Unit tests for the pure relatedness module.
+
+`project/relatedness.py` has no database, no network and no configuration, so
+everything below runs in memory and is deterministic.
+
+The vocabulary in these fixtures is synthetic on purpose. The module under
+test contains no DOI, no paper title and no material, method or facility
+name: rarity is measured against whatever corpus it is handed, which is why
+these tests can invent one and still exercise the real thresholds.
+"""
+import unittest
+
+from project import relatedness as R
+
+
+def record(key, title, abstract="", tags=(), collections=("shared-field",),
+           authors=(), tools=(), dataset_keywords=(), chart_properties=(),
+           doi=None, year=2020):
+    """A stored Qresp record, shaped like Paper.to_mongo().to_dict()."""
+    return {
+        "_id": key,
+        "reference": {
+            "title": title,
+            "publishedAbstract": abstract,
+            "DOI": doi if doi is not None else "10.1000/%s" % key,
+            "year": year,
+            "authors": [{"firstName": name.split()[0], "middleName": "",
+                         "lastName": name.split()[-1]} for name in authors],
+            "journal": {"fullName": "Journal of Placeholder Science"},
+        },
+        "tags": list(tags),
+        "collections": list(collections),
+        "charts": [{"caption": "", "properties": list(chart_properties)}],
+        "datasets": [{"readme": "", "keywords": list(dataset_keywords)}],
+        "scripts": [],
+        "tools": [{"packageName": name} for name in tools],
+    }
+
+
+def filler(count, start=0):
+    """Unrelated records, so the corpus is big enough for rarity to mean
+    something and so nothing below passes by having a two-record corpus."""
+    return [record("filler%d" % i,
+                   "Unrelated topic number %d in a different area" % i,
+                   "An unrelated abstract about topic%d and matter%d." % (i, i),
+                   tags=["topic%d" % i], collections=["other-field"],
+                   authors=["Person%d Surname%d" % (i, i)])
+            for i in range(start, start + count)]
+
+
+def stats_for(records):
+    return R.CorpusStats([R.build_internal_profile(r) for r in records])
+
+
+class TestNormalization(unittest.TestCase):
+    def test_tokenize_drops_stopwords_numbers_and_short_tokens(self):
+        tokens = R.tokenize("We report the 42 eV shift of a Widget in 2019")
+        self.assertNotIn("the", tokens)
+        self.assertNotIn("42", tokens)
+        self.assertNotIn("of", tokens)
+        self.assertIn("widget", tokens)
+
+    def test_plural_folding_is_conservative(self):
+        self.assertEqual(R.tokenize("nanowires"), R.tokenize("nanowire"))
+        # ...but does not merge words that merely end in s
+        self.assertEqual(["analysis"], R.tokenize("analysis"))
+
+    def test_normalize_doi_strips_prefixes_and_case(self):
+        for raw in ("https://doi.org/10.1000/ABC",
+                    "http://dx.doi.org/10.1000/abc",
+                    "doi: 10.1000/abc", "  10.1000/abc. "):
+            self.assertEqual("10.1000/abc", R.normalize_doi(raw))
+
+    def test_title_key_is_order_insensitive(self):
+        self.assertEqual(R.normalize_title_key("Alpha beta gamma"),
+                         R.normalize_title_key("Gamma, the beta and alpha"))
+
+    def test_author_key_survives_initials_and_middle_names(self):
+        self.assertEqual(R.author_key("Alexandra P. Widgetson"),
+                         R.author_key("A. Widgetson"))
+        self.assertNotEqual(R.author_key("Alexandra Widgetson"),
+                            R.author_key("Boris Widgetson"))
+
+
+class TestProfileScope(unittest.TestCase):
+    """What a Profile is allowed to see. A field that never enters a Profile
+    can never be scored, cached, or sent to a provider."""
+
+    def test_only_scientific_metadata_is_read(self):
+        stored = record("p", "Widget dynamics", "About widgets.",
+                        tags=["widget"], tools=["ToolPackage"])
+        stored["owner_email"] = "owner@example.com"
+        stored["editor_emails"] = ["editor@example.com"]
+        stored["edit_history"] = [{"email": "owner@example.com"}]
+        stored["info"] = {
+            "insertedBy": {"firstName": "Curator", "lastName": "Person",
+                           "emailId": "curator@example.com"},
+            "fileServerPath": "https://notebook.rcc.uchicago.edu/files/secret",
+            "folderAbsolutePath": "/project/secret/folder",
+            "downloadPath": "https://internal.example.org/download",
+            "notebookPath": "notebooks/private.ipynb",
+        }
+        stored["datasets"] = [{"readme": "Numbers.", "keywords": ["widget"],
+                               "files": ["datasets/private-file.dat"]}]
+        profile = R.build_internal_profile(stored)
+        haystack = " ".join(profile.all_terms) + " " + " ".join(profile.authors)
+        for leak in ("owner", "editor", "curator", "rcc", "uchicago",
+                     "notebook", "download", "folder", "secret", "ipynb",
+                     "example.com"):
+            self.assertNotIn(leak, haystack, leak)
+        # ...while the scientific metadata IS read
+        self.assertIn("widget", profile.all_terms)
+        self.assertIn("toolpackage", profile.method_terms)
+
+
+class TestSpecificity(unittest.TestCase):
+    def test_generic_words_are_never_specific(self):
+        stats = stats_for(filler(20))
+        for word in ("study", "data", "analysis", "simulation"):
+            self.assertFalse(stats.is_specific(word), word)
+
+    def test_a_term_carried_by_much_of_the_corpus_is_a_field_label(self):
+        common = [record("c%d" % i, "Fieldword paper %d" % i,
+                         "This is about fieldword and thing%d." % i)
+                  for i in range(20)]
+        stats = stats_for(common)
+        self.assertFalse(stats.is_specific("fieldword"))
+        self.assertTrue(stats.is_specific("thing1"))
+
+    def test_a_term_shared_by_only_the_compared_pair_is_specific(self):
+        corpus = filler(20) + [
+            record("a", "Rareword measurements"),
+            record("b", "More rareword measurements"),
+        ]
+        self.assertTrue(stats_for(corpus).is_specific("rareword"))
+
+
+class TestQualityGate(unittest.TestCase):
+    """One strong, or two INDEPENDENT mediums. Nothing else opens the gate."""
+
+    def assess(self, current, candidate, corpus, citations=frozenset()):
+        stats = stats_for(corpus)
+        return R.assess(R.build_internal_profile(current),
+                        R.build_internal_profile(candidate), stats, citations)
+
+    def test_same_journal_and_similar_year_alone_do_not_pass(self):
+        current = record("a", "Alpha widget resonance", "Alpha widgets.",
+                         year=2020)
+        candidate = record("b", "Beta gadget diffusion", "Beta gadgets.",
+                           year=2021)
+        # Same journal (the fixture gives both the same one) and adjacent
+        # years, and nothing else.
+        outcome = self.assess(current, candidate, filler(20) + [current,
+                                                                candidate])
+        self.assertFalse(outcome.passes)
+        self.assertEqual([], outcome.evidence)
+
+    def test_one_broad_shared_field_alone_does_not_pass(self):
+        current = record("a", "Alpha widget resonance", "Alpha widgets.",
+                         collections=["broad-field"])
+        candidate = record("b", "Beta gadget diffusion", "Beta gadgets.",
+                           collections=["broad-field"])
+        outcome = self.assess(current, candidate,
+                              filler(20) + [current, candidate])
+        self.assertFalse(outcome.passes)
+
+    def test_generic_shared_words_alone_do_not_pass(self):
+        current = record("a", "A study of data analysis",
+                         "This study presents a simulation and data analysis.")
+        candidate = record("b", "Another study of data analysis",
+                           "A study presenting data, analysis and simulation.")
+        outcome = self.assess(current, candidate,
+                              filler(20) + [current, candidate])
+        self.assertFalse(outcome.passes)
+
+    def test_shared_author_alone_does_not_pass(self):
+        current = record("a", "Alpha widget resonance", "Alpha widgets here.",
+                         authors=["Robin Sharedname"])
+        candidate = record("b", "Beta gadget diffusion", "Beta gadgets there.",
+                           authors=["Robin Sharedname"])
+        outcome = self.assess(current, candidate,
+                              filler(20) + [current, candidate])
+        self.assertFalse(outcome.passes)
+
+    def test_one_strong_signal_is_enough(self):
+        text = ("Rareterm alpha excitation of gadgetite lattices measured "
+                "with a spectrometer at cryogenic temperature.")
+        current = record("a", "Rareterm excitation of gadgetite", text)
+        candidate = record("b", "Rareterm excitation in gadgetite films", text)
+        outcome = self.assess(current, candidate,
+                              filler(20) + [current, candidate])
+        self.assertTrue(outcome.passes)
+        self.assertTrue(any(e.strength == R.STRONG for e in outcome.evidence))
+
+    def test_two_independent_mediums_pass(self):
+        # Medium 1: a shared explicit keyword. Medium 2: a shared author on a
+        # topic that overlaps. Two different families.
+        current = record("a", "Alpha rareword resonance",
+                         "Rareword resonance in alpha lattices.",
+                         tags=["rareword resonance"],
+                         authors=["Robin Sharedname"])
+        candidate = record("b", "Beta rareword transport",
+                           "Rareword transport in beta lattices.",
+                           tags=["rareword resonance"],
+                           authors=["Robin Sharedname"])
+        outcome = self.assess(current, candidate,
+                              filler(20) + [current, candidate])
+        self.assertTrue(outcome.passes)
+        families = {e.family for e in outcome.evidence if e.strength == R.MEDIUM}
+        self.assertIn(R.FAMILY_TERMS, families)
+        self.assertIn(R.FAMILY_AUTHORS, families)
+
+    def test_two_mediums_from_the_same_family_are_one_observation(self):
+        # A shared keyword AND the same keyword's words overlapping in text is
+        # one overlap, not two: only one `terms` evidence may ever be kept.
+        current = record("a", "Alpha rareword resonance",
+                         "Rareword resonance rareword resonance.",
+                         tags=["rareword resonance"],
+                         chart_properties=["rareword resonance"],
+                         dataset_keywords=["rareword resonance"])
+        candidate = record("b", "Beta rareword resonance study",
+                           "Rareword resonance rareword resonance.",
+                           tags=["rareword resonance"],
+                           chart_properties=["rareword resonance"],
+                           dataset_keywords=["rareword resonance"])
+        outcome = self.assess(current, candidate,
+                              filler(20) + [current, candidate])
+        terms_evidence = [e for e in outcome.evidence
+                          if e.family == R.FAMILY_TERMS]
+        self.assertEqual(1, len(terms_evidence))
+
+    def test_a_shared_tool_without_a_shared_topic_is_only_medium(self):
+        current = record("a", "Alpha widget resonance", "Alpha widgets here.",
+                         tools=["RarePackage"])
+        candidate = record("b", "Beta gadget diffusion", "Beta gadgets there.",
+                           tools=["RarePackage"])
+        outcome = self.assess(current, candidate,
+                              filler(20) + [current, candidate])
+        self.assertFalse(outcome.passes)
+        self.assertTrue(all(e.strength == R.MEDIUM for e in outcome.evidence))
+
+    def test_the_same_tool_on_the_same_topic_is_strong(self):
+        current = record("a", "Rareword resonance of gadgetite",
+                         "Rareword resonance measured in gadgetite lattices.",
+                         tags=["rareword resonance"], tools=["RarePackage"])
+        candidate = record("b", "Rareword resonance of gadgetite films",
+                           "Rareword resonance simulated in gadgetite films.",
+                           tags=["rareword resonance"], tools=["RarePackage"])
+        outcome = self.assess(current, candidate,
+                              filler(20) + [current, candidate])
+        methods = [e for e in outcome.evidence if e.family == R.FAMILY_METHODS]
+        self.assertEqual([R.STRONG], [e.strength for e in methods])
+
+    def test_a_direct_citation_is_strong_and_never_inferred(self):
+        current = record("a", "Alpha widget resonance", "Alpha widgets.")
+        candidate = record("b", "Beta gadget diffusion", "Beta gadgets.",
+                           doi="10.1000/cited")
+        corpus = filler(20) + [current, candidate]
+        # Without a citation source: nothing.
+        self.assertFalse(self.assess(current, candidate, corpus).passes)
+        # With one: strong, on its own.
+        cited = self.assess(current, candidate, corpus,
+                            frozenset({"10.1000/cited"}))
+        self.assertTrue(cited.passes)
+        self.assertEqual([R.STRONG],
+                         [e.strength for e in cited.evidence
+                          if e.family == R.FAMILY_CITATION])
+
+
+class TestReasons(unittest.TestCase):
+    def test_reasons_are_grounded_capped_and_strongest_first(self):
+        text = ("Rareword resonance of gadgetite lattices probed by a "
+                "spectrometer under cryogenic conditions.")
+        current = record("a", "Rareword resonance of gadgetite", text,
+                         tags=["rareword resonance"], tools=["RarePackage"],
+                         authors=["Robin Sharedname"])
+        candidate = record("b", "Rareword resonance of gadgetite films", text,
+                           tags=["rareword resonance"], tools=["RarePackage"],
+                           authors=["Robin Sharedname"])
+        stats = stats_for(filler(20) + [current, candidate])
+        outcome = R.assess(R.build_internal_profile(current),
+                           R.build_internal_profile(candidate), stats)
+        reasons = outcome.reasons(3)
+        self.assertLessEqual(len(reasons), 3)
+        self.assertTrue(reasons)
+        # Every reason names something that is actually in both records.
+        joined = " ".join(reasons).lower()
+        self.assertTrue(any(token in joined for token in
+                            ("rareword", "similarity", "rarepackage",
+                             "sharedname")))
+        # The strongest evidence leads.
+        strong_texts = [e.text for e in outcome.evidence
+                        if e.strength == R.STRONG]
+        self.assertIn(reasons[0], strong_texts)
+
+    def test_a_failing_candidate_produces_no_recommendation(self):
+        current = record("a", "Alpha widget resonance", "Alpha widgets.")
+        candidate = record("b", "Beta gadget diffusion", "Beta gadgets.")
+        stats = stats_for(filler(20) + [current, candidate])
+        ranked = R.rank(R.build_internal_profile(current),
+                        [R.build_internal_profile(candidate)], stats)
+        self.assertEqual([], ranked)
+
+
+class TestRanking(unittest.TestCase):
+    def build(self, current, candidates, corpus, limit=5):
+        stats = stats_for(corpus)
+        return R.rank(R.build_internal_profile(current),
+                      [R.build_internal_profile(c) for c in candidates],
+                      stats, frozenset(), limit)
+
+    def test_stronger_evidence_ranks_first(self):
+        current = record("a", "Rareword resonance of gadgetite",
+                         "Rareword resonance in gadgetite lattices measured "
+                         "with a cryogenic spectrometer.",
+                         tags=["rareword resonance"],
+                         authors=["Robin Sharedname"])
+        near = record("b", "Rareword resonance of gadgetite thin films",
+                      "Rareword resonance in gadgetite lattices measured "
+                      "with a cryogenic spectrometer.",
+                      tags=["rareword resonance"],
+                      authors=["Robin Sharedname"])
+        far = record("c", "Rareword resonance in an unrelated setting",
+                     "A different subject that mentions rareword resonance "
+                     "once.", tags=["rareword resonance"],
+                     authors=["Robin Sharedname"])
+        ranked = self.build(current, [far, near],
+                            filler(20) + [current, near, far])
+        self.assertEqual("b", ranked[0][0].key)
+        self.assertGreater(ranked[0][1].score, ranked[-1][1].score)
+
+    def test_the_list_is_capped_and_never_padded(self):
+        text = ("Rareword resonance of gadgetite lattices with a cryogenic "
+                "spectrometer and a tuned oscillator.")
+        current = record("a", "Rareword resonance of gadgetite", text)
+        clones = [record("clone%d" % i,
+                         "Rareword resonance of gadgetite variant %d" % i,
+                         text) for i in range(9)]
+        corpus = filler(20) + [current] + clones
+        self.assertEqual(5, len(self.build(current, clones, corpus)))
+        # ...and a short list stays short rather than being filled up.
+        weak = [record("weak%d" % i, "Totally different subject %d" % i,
+                       "Nothing in common at all here.") for i in range(9)]
+        self.assertEqual([], self.build(current, weak,
+                                        filler(20) + [current] + weak))
+
+    def test_untitled_candidates_are_dropped(self):
+        current = record("a", "Rareword resonance of gadgetite",
+                         "Rareword resonance of gadgetite lattices.")
+        untitled = record("b", "", "Rareword resonance of gadgetite lattices.")
+        self.assertEqual([], self.build(current, [untitled],
+                                        filler(20) + [current, untitled]))
+
+
+class TestExternalProfiles(unittest.TestCase):
+    def test_an_external_candidate_is_judged_by_the_same_gate(self):
+        current = record("a", "Rareword resonance of gadgetite",
+                         "Rareword resonance in gadgetite lattices probed "
+                         "with a cryogenic spectrometer.")
+        stats = stats_for(filler(20) + [current])
+        good = R.build_external_profile({
+            "key": "X1", "doi": "10.9999/x1",
+            "title": "Rareword resonance in gadgetite lattices",
+            "abstract": "Rareword resonance of gadgetite lattices probed by "
+                        "a cryogenic spectrometer.",
+            "year": 2022, "authors": ["Someone Else"], "fields": ["Physics"]})
+        bad = R.build_external_profile({
+            "key": "X2", "doi": "10.9999/x2",
+            "title": "A study of data analysis in another discipline",
+            "abstract": "This study presents a simulation and data analysis.",
+            "year": 2022, "authors": ["Nobody Here"], "fields": ["Economics"]})
+        ranked = R.rank(R.build_internal_profile(current), [bad, good], stats)
+        self.assertEqual(["X1"], [p.key for p, _ in ranked])
+
+    def test_provider_order_does_not_survive_the_gate(self):
+        """The provider's ranking is not evidence: a first-placed candidate
+        with nothing in common is dropped, a last-placed one with real
+        overlap is kept."""
+        current = record("a", "Rareword resonance of gadgetite",
+                         "Rareword resonance in gadgetite lattices.")
+        stats = stats_for(filler(20) + [current])
+        first = R.build_external_profile({
+            "key": "first", "title": "Unrelated subject entirely",
+            "abstract": "Nothing to do with the record at hand."})
+        last = R.build_external_profile({
+            "key": "last", "title": "Rareword resonance of gadgetite films",
+            "abstract": "Rareword resonance in gadgetite lattices."})
+        ranked = R.rank(R.build_internal_profile(current), [first, last], stats)
+        self.assertEqual(["last"], [p.key for p, _ in ranked])
+
+
+if __name__ == "__main__":
+    unittest.main()
