@@ -18,6 +18,7 @@ import FileServerInfo from "../../components/Paper/FileServer";
 import Workflow from "../../components/Paper/Workflow";
 import LicenseInfo from "../../components/Paper/License";
 import PermissionNotice from "../../components/Paper/PermissionNotice";
+import RelatedResearch from "../../components/Paper/RelatedResearch";
 
 import axios from "axios";
 
@@ -148,6 +149,11 @@ const PaperDetails = ({ paper, error, preview = false, query }) => {
           <CuratorInfo curator={curator} />
           <FileServerInfo fileserverpath={fileServerPath} />
           {license ? <LicenseInfo type={license} /> : null}
+          {/* Related Research is computed at view time from the published
+              record, so it has nothing to show for an unpublished preview. */}
+          {preview ? null : (
+            <RelatedResearch paperId={query.id} server={query.server} />
+          )}
         </Box>
       </Container>
     </Fragment>
