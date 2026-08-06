@@ -218,7 +218,22 @@ const FIELD_GROUP_SX = { display: "flex", flexDirection: "column", gap: 1 };
 
 const FIELD_INPUT_SX = { "& .MuiFormHelperText-root": { mt: 0.5, mx: 0 } };
 
-const FIELDS_GRID_SX = { pt: 2.5, pl: { xs: 0, sm: 5 } };
+// ONE alignment contract for everything a candidate card expands: Details,
+// the AI suggestion and the proposal form.
+//
+// They used to carry `pl: { xs: 0, sm: 5 }` — 40px of left padding and none
+// on the right, meant to line the fields up under the header's checkbox. It
+// did not centre them under it: the whole two-column form sat 40px right of
+// the card's own axis, so the right margin looked half the left one. Padding
+// is symmetric now, and the header keeps its own layout.
+const CARD_EXPANSION_SX = {
+  width: "100%",
+  boxSizing: "border-box",
+  px: { xs: 0, sm: 2 },
+  mx: "auto",
+};
+
+const FIELDS_GRID_SX = { pt: 2.5 };
 
 const CHECKBOX_SX = { mt: -0.5, ml: -0.5, flexShrink: 0 };
 
@@ -715,13 +730,11 @@ const FolderAnalysis = ({ path, artifactType }) => {
     const suggestion = aiSuggestions[candidate.id];
     if (notice && !suggestion) {
       return (
-        <Alert
-          severity="warning"
-          sx={{ mt: 1 }}
-          data-testid={`ai-notice-${candidate.id}`}
-        >
-          {notice}
-        </Alert>
+        <Box sx={{ ...CARD_EXPANSION_SX, mt: 1 }}>
+          <Alert severity="warning" data-testid={`ai-notice-${candidate.id}`}>
+            {notice}
+          </Alert>
+        </Box>
       );
     }
     if (!suggestion) return null;
@@ -734,8 +747,11 @@ const FolderAnalysis = ({ path, artifactType }) => {
 
     return (
       <Box
+        sx={{ ...CARD_EXPANSION_SX, mt: 1 }}
+        data-testid={`ai-panel-${candidate.id}`}
+      >
+      <Box
         sx={{
-          mt: 1,
           p: 1.5,
           borderRadius: 1,
           border: 1,
@@ -835,6 +851,7 @@ const FolderAnalysis = ({ path, artifactType }) => {
             ) : null}
           </Box>
         )}
+      </Box>
       </Box>
     );
   };
@@ -1171,7 +1188,10 @@ const FolderAnalysis = ({ path, artifactType }) => {
         </Box>
 
         <Collapse in={Boolean(detailsOpen[candidate.id])} unmountOnExit>
-          <Box sx={{ pl: { xs: 0, sm: 5 }, pt: 1 }}>
+          <Box
+            sx={{ ...CARD_EXPANSION_SX, pt: 1 }}
+            data-testid={`details-${candidate.id}`}
+          >
             {(candidate.evidence || []).map((line) => (
               <Typography
                 key={line}
@@ -1217,6 +1237,10 @@ const FolderAnalysis = ({ path, artifactType }) => {
         {renderAiProposal(candidate)}
 
         <Collapse in={fieldsVisible} unmountOnExit>
+          <Box
+            sx={CARD_EXPANSION_SX}
+            data-testid={`fields-wrapper-${candidate.id}`}
+          >
           {/* Deliberate separation from the header/evidence above: a rule,
               then real space before the first input — the Figure Image used
               to sit directly against it. */}
@@ -1310,6 +1334,7 @@ const FolderAnalysis = ({ path, artifactType }) => {
               );
             })}
           </Grid>
+          </Box>
         </Collapse>
       </Box>
     );

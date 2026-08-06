@@ -3372,3 +3372,162 @@ describe("removing a candidate clears its selection", () => {
     expect(setAlert).not.toHaveBeenCalled();
   });
 });
+
+// Everything a candidate card expands sits on ONE axis, centred in the card.
+//
+// The fields used to carry `pl: { xs: 0, sm: 5 }` — 40px of padding on the
+// left and none on the right — so the two-column form sat 40px right of the
+// card's own centre and the right margin looked half the left one. jsdom has
+// no layout, so these pin the CONTRACT; the actual insets are measured in
+// Chrome (see the report accompanying this change: 57/17 before, 33/33 after
+// at 1440x900 and 900x800).
+describe("a card's expanded areas share one centred axis", () => {
+  const openTyped = async (user) => {
+    await user.click(
+      screen.getByRole("button", { name: /import charts from rcc/i })
+    );
+    return screen.findByRole("dialog", { name: /import charts from rcc/i });
+  };
+
+  const renderTyped = () => {
+    const addMany = jest.fn();
+    const setAlert = jest.fn();
+    render(
+      <AlertContext.Provider value={{ setAlert }}>
+        <CuratorContext.Provider
+          value={{ fileServerPath: FOLDER, addMany, charts: [] }}
+        >
+          <FolderAnalysis artifactType="chart" />
+        </CuratorContext.Provider>
+      </AlertContext.Provider>
+    );
+    return { addMany, setAlert };
+  };
+
+  const horizontalPadding = (element) => {
+    const style = getComputedStyle(element);
+    return { left: style.paddingLeft, right: style.paddingRight };
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: analysis });
+  });
+
+  it("pads the proposal form symmetrically, never on one side", async () => {
+    const user = userEvent.setup();
+    renderTyped();
+    await openTyped(user);
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+
+    const wrapper = await screen.findByTestId("fields-wrapper-chart-0");
+    const padding = horizontalPadding(wrapper);
+    expect(padding.left).toBe(padding.right);
+    // A left-only inset is exactly what pushed the form off centre.
+    expect(padding.left).not.toBe("40px");
+    expect(wrapper).toHaveStyle("width: 100%");
+    expect(wrapper).toHaveStyle("box-sizing: border-box");
+    expect(wrapper).toHaveStyle("margin-left: auto");
+    expect(wrapper).toHaveStyle("margin-right: auto");
+  });
+
+  it("gives Details the same axis as the proposal form", async () => {
+    const user = userEvent.setup();
+    renderTyped();
+    await openTyped(user);
+    await user.click(screen.getByRole("button", { name: /^details$/i }));
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+
+    const details = await screen.findByTestId("details-chart-0");
+    const fields = await screen.findByTestId("fields-wrapper-chart-0");
+    // Same wrapper contract on both, so opening one does not shift the other.
+    expect(horizontalPadding(details)).toEqual(horizontalPadding(fields));
+    expect(details).toHaveStyle("width: 100%");
+    expect(details).toHaveStyle("box-sizing: border-box");
+  });
+
+  it("keeps the AI suggestion on that axis too", async () => {
+    const user = userEvent.setup();
+    renderTyped();
+    await openTyped(user);
+
+    axios.post.mockResolvedValueOnce({
+      data: { suggestions: { "chart-0": { description: "A figure",
+                                          keywords: [], confidence: "low" } } },
+    });
+    await user.click(screen.getByTestId("enhance-chart-0"));
+    await user.click(
+      screen.getByLabelText(/i agree to send this evidence to gemini/i)
+    );
+    await user.click(
+      screen.getByRole("button", { name: /send and get suggestions/i })
+    );
+    const panel = await screen.findByTestId("ai-panel-chart-0");
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+
+    expect(horizontalPadding(panel)).toEqual(
+      horizontalPadding(screen.getByTestId("fields-wrapper-chart-0"))
+    );
+  });
+
+  it("no expanded area carries a one-sided inset any more", async () => {
+    const user = userEvent.setup();
+    renderTyped();
+    await openTyped(user);
+    await user.click(screen.getByRole("button", { name: /^details$/i }));
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+
+    ["details-chart-0", "fields-wrapper-chart-0"].forEach((id) => {
+      const padding = horizontalPadding(screen.getByTestId(id));
+      expect(padding.left).toBe(padding.right);
+    });
+    // The grid itself only spaces its rows and columns; the inset is the
+    // wrapper's job, in one place.
+    const grid = screen.getByTestId("fields-chart-0");
+    expect(getComputedStyle(grid).paddingLeft).toBe(
+      getComputedStyle(grid).paddingRight
+    );
+  });
+
+  it("still stacks the fields into one column on a phone", async () => {
+    const user = userEvent.setup();
+    renderTyped();
+    await openTyped(user);
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+
+    // Mobile-first, straight from MUI's own classes: all 12 columns until
+    // the md breakpoint puts two fields on a row.
+    const items = Array.from(
+      screen.getByTestId("fields-chart-0").children
+    );
+    expect(items.length).toBeGreaterThan(1);
+    items.forEach((item) => {
+      expect(item).toHaveClass("MuiGrid-grid-xs-12");
+      expect(item).toHaveClass("MuiGrid-grid-md-6");
+      // ...and it can shrink, so a long path wraps instead of widening the
+      // row and pushing the form sideways again.
+      expect(getComputedStyle(item).minWidth).toBe("0");
+    });
+  });
+
+  it("changes nothing about selecting, removing or adding", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderTyped();
+    await openTyped(user);
+
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    );
+    expect(screen.getByTestId("candidate-count")).toHaveTextContent(
+      "1 proposal · 1 selected"
+    );
+    await user.click(
+      screen.getByRole("button", { name: /add selected charts to curator/i })
+    );
+
+    expect(addMany).toHaveBeenCalledTimes(1);
+    expect(addMany.mock.calls[0][1]).toEqual([
+      expect.objectContaining({ imageFile: "figures/figure1.png" }),
+    ]);
+  });
+});
