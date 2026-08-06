@@ -92,8 +92,30 @@ auto-saved or auto-published.
   and quota. Docs: `RCC_FOLDER_ANALYSIS.md`. Out of scope: Zenodo folders,
   file sizes/mtimes, notebook content parsing.
 
-### 5. Agentic literature explorer — ⛔ out of scope (paused)
-- Paused with the curation-assistant/AI direction (see header, 2026-07-03). No `/related` endpoint, no external scholarly API, no LLM calls in this MVP. Kept here only to record the deferral; do not implement without an explicit new decision.
+### 5. Agentic literature explorer — 🧪 Related Literature Explorer prototype implemented; domain relevance QA pending
+- `GET /api/paper/{id}/related` (public, read-only) plus a **Related Research**
+  section at the bottom of Paper Details, split into **Related Qresp Records**
+  and **Related External Papers**, five each, never padded, every result
+  carrying up to three grounded "Why related" reasons.
+- **No LLM.** Not agentic in the AI sense: candidates come from the free
+  Semantic Scholar Recommendations API, and every threshold, ordering and
+  reason sentence is computed deterministically by Qresp from the two records'
+  own published scientific metadata (`project/relatedness.py`, pure and
+  unit-tested). Specificity is measured against this server's own corpus, so
+  no vocabulary, material or method is hardcoded.
+- Quality gate: one STRONG, or two MEDIUM from independent families. Same
+  journal, adjacent years, one broad field, generic words, and the provider's
+  own ranking are never evidence.
+- Off by default (`QRESP_RELATED_RESEARCH_ENABLED`); external results cached
+  outside the Paper document (`RelatedResearchCache`, 7-day TTL, stale
+  fallback); internal results recomputed per request so publish/deactivate are
+  instant. A provider timeout/404/429/malformed answer degrades the external
+  section only. Own nginx rate-limit zone (`api_related`).
+- Docs: `RELATED_RESEARCH.md`, including the 10–20 record
+  관련 있음 / 부분 관련 / 관련 없음 QA table.
+- **Pending:** domain-expert relevance QA on real records; thresholds are
+  reasoned starting values, not yet validated by a physicist. Out of scope:
+  citations *to* this paper, cross-server federation, memoized corpus stats.
 
 ## Implementation order
 1. **UI regression repair** (goal 2) — everything else demos on top of this.

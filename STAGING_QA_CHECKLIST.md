@@ -612,7 +612,112 @@ insertion; production sends the verification email over SMTP, staging can
 set QRESP_PUBLISH_SKIP_EMAIL=1 to show the link instead. No Google
 Drive/Gmail scopes anywhere.
 
+## Related Research (Related Literature Explorer prototype)
+
+Full design, thresholds and rationale: `RELATED_RESEARCH.md`.
+**Off by default.** Everything below assumes you turned it on deliberately.
+
+### Environment (staging backend only)
+
+```sh
+QRESP_RELATED_RESEARCH_ENABLED=1
+# OPTIONAL — Semantic Scholar serves this API without a key at a lower rate
+# limit. Leave it unset for the first pass; that path must work too.
+QRESP_SEMANTIC_SCHOLAR_API_KEY=...
+# Optional, bounded server-side (timeout ≤ 30s, cache ≤ 90 days):
+QRESP_SEMANTIC_SCHOLAR_TIMEOUT_SECONDS=8
+QRESP_RELATED_RESEARCH_CACHE_DAYS=7
+```
+
+No `config.ini` key exists for any of these, by design.
+
+### Switch and degradation
+
+- [ ] **Unset** `QRESP_RELATED_RESEARCH_ENABLED` → detail pages render exactly
+      as before, **no** "Related Research" section anywhere; `curl -k
+      https://localhost:8443/api/paper/<id>/related` → 200 with
+      `"enabled": false` and both lists empty; **no** outbound request in the
+      backend log
+- [ ] Set it → the section appears at the BOTTOM of Paper Details, below
+      License, split into **Related Qresp Records** and **Related External
+      Papers**
+- [ ] **No API key set** → the internal list still works and external results
+      still load (or degrade cleanly); nothing in the logs mentions a key
+- [ ] Block outbound network (or set the timeout to 1s against a slow link) →
+      the page still renders, internal results intact, external section reads
+      "External recommendations are unavailable right now"; **no 500**
+- [ ] A record whose DOI is not in the provider's index → external section
+      reads "could not be matched in the external index"; internal unaffected
+
+### Content quality
+
+- [ ] Each list shows **at most 5** and is **not padded** — a record with one
+      good neighbour shows one, not five
+- [ ] A record with nothing related shows exactly
+      `No sufficiently related papers were found.`
+- [ ] Every result shows title, authors, year, DOI/link and **Why related**
+      with at most 3 reasons
+- [ ] Reasons name something you can verify in both records (a shared keyword,
+      a shared author, a shared tool, a similarity number) — never "recommended
+      by Semantic Scholar" as a reason
+- [ ] External results carry the **Recommended by Semantic Scholar** chip;
+      internal results do NOT
+- [ ] The current paper never appears in its own lists, and no title or DOI
+      appears twice
+- [ ] A **deactivated** record never appears in anyone's Related Qresp Records
+      (deactivate one that was showing, reload → it is gone immediately)
+- [ ] A **newly published** record appears in a related record's list on the
+      next page load, with no cache clearing
+- [ ] Internal result links open the Qresp detail page (with `?server=`);
+      external result links open `https://doi.org/…` in a new tab
+
+**Reference sample:** a record with DOI `10.1021/acs.nanolett.7b00283`
+exercises the DOI-first resolution and returns a non-trivial external set.
+
+### Cache
+
+- [ ] Load a detail page twice; the second load makes **no** provider request
+      (backend log quiet)
+- [ ] `db.related_research_cache.find()` on staging Mongo: entries exist,
+      keyed by paper id, and contain **no** API key, header, provider error
+      body, email, RCC path or file content
+- [ ] `db.papers.findOne({_id: …})` for the same record: **unchanged** — no
+      recommendations, no `related*` field, no new timestamp
+- [ ] Force expiry (`db.related_research_cache.updateOne({paper_id: "<id>"},
+      {$set: {expires_at: new Date("2000-01-01")}})`) with the provider
+      reachable → refreshed, `stale: false`
+- [ ] Force expiry with outbound network blocked → the last successful results
+      still show, with the dated "Showing the last successful external
+      results…" warning (`stale: true`)
+
+### Read-only and access
+
+- [ ] `GET /api/paper/<deactivated id>/related` signed out → 404
+      `{"error": "This record is not available."}`; as its owner/admin → 200
+- [ ] `GET /api/paper/000000000000000000000000/related` → 404, same body
+- [ ] Hitting the endpoint repeatedly changes nothing: record, drafts,
+      ownership, editors, publish state and curation state all unchanged
+- [ ] `nginx -t` passes and `GET /api/paper/<id>/related` is limited by the
+      `api_related` zone (see `nginx/ratelimit-check.sh`); ordinary browsing
+      of 10 detail pages in a minute is NOT throttled
+
+### Layout
+
+- [ ] 1440×900, 900×800 and 390×844: no horizontal page scroll; long titles,
+      long author lists, DOIs and the provenance chip wrap instead of
+      overflowing; nothing overlaps
+- [ ] Loading state ("Looking for related research…") is visible on a slow
+      connection and is replaced, not stacked
+
+### Domain relevance (the actual gate on enabling this anywhere public)
+
+- [ ] Fill in the 10–20 record 관련 있음 / 부분 관련 / 관련 없음 table in
+      `RELATED_RESEARCH.md` § "Domain QA", including false negatives and
+      uninformative reasons, and record which thresholds (if any) need moving
+
 ## After QA
 
 - [ ] Note any UI deltas vs production in FULL_STACK_MODERNIZATION_REPORT.md §8
 - [ ] Do NOT leave `QRESP_ENABLE_DEV_LOGIN` set on anything production-facing
+- [ ] Do NOT leave `QRESP_RELATED_RESEARCH_ENABLED` set on anything
+      production-facing until the domain relevance table above is filled in
