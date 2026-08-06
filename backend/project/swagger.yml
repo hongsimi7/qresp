@@ -577,6 +577,39 @@ paths:
           description: Paper with this id does not exist
         409:
           description: Record already has a different owner (use force)
+  /paper/{id}/related:
+    get:
+      operationId: "project.related.related_research"
+      tags:
+        - "Paper details"
+      summary: "Related Qresp records and related external papers for a
+        record (read-only; public active records only)"
+      description: "Computes Related Qresp Records from the published
+        scientific metadata of active records, and judges Semantic Scholar
+        recommendations with the same Qresp quality gate. Off unless
+        QRESP_RELATED_RESEARCH_ENABLED is set, in which case both lists come
+        back empty with status `disabled`. External results are cached
+        separately from the Paper document and never written into it; a
+        provider timeout, 404, 429 or malformed answer degrades the external
+        section only. Nothing here modifies a record."
+      parameters:
+        - in: path
+          name: id
+          type: string
+          required: true
+          description: Paper Id
+      responses:
+        200:
+          description: >-
+            Two independent lists, each capped at five and never padded.
+            `internal[].id` links to the Qresp detail page;
+            `external[].url` prefers an HTTPS DOI link. Every result carries
+            grounded `reasons` (at most three). The external section reports
+            `status` (`ok`, `disabled`, `unresolved`, `unavailable`) and
+            `stale`, which is true when a refresh failed and the last
+            successful results are being served.
+        404:
+          description: No such record, or the record is not publicly available
   /paper/{id}/permissions:
     get:
       operationId: "project.api.paper_permissions"

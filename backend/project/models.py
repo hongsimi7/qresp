@@ -272,6 +272,39 @@ def active_papers():
     return Paper.objects(is_active__ne=False)
 
 
+class RelatedResearchCache(Document):
+    """External Related Research results for one record, kept OUT of the
+    canonical Paper document.
+
+    Recommendations are a derived, perishable view: pinning them into Paper
+    would freeze them at curation time and make a read look like an edit.
+    They live here instead, keyed by paper id, with an explicit expiry so a
+    later follow-up study can appear on its own.
+
+    Stored: only the provider's public bibliographic metadata for the
+    candidates that already passed Qresp's quality gate, plus the reasons
+    Qresp computed. Never stored: the API key, any header, any provider error
+    body, any session/user/owner data, any RCC URL or file path, any file
+    content. `results` is empty for a `status` other than 'ok'.
+
+    `last_success_at` outlives a failed refresh on purpose: it is what lets a
+    stale-but-real answer be served when the provider is unreachable.
+    """
+    paper_id = StringField(required=True, unique=True, max_length=64)
+    provider = StringField(max_length=64)
+    # 'ok' (provider answered), 'unresolved' (this paper could not be
+    # identified confidently enough to ask), 'unavailable' (provider failed).
+    status = StringField(max_length=32)
+    results = ListField(DictField())
+    fetched_at = DateTimeField()
+    last_success_at = DateTimeField()
+    expires_at = DateTimeField()
+    meta = {
+        'collection': 'related_research_cache',
+        'indexes': ['paper_id', 'expires_at'],
+    }
+
+
 class CuratorDraft(Document):
     """Account-owned curator draft saved explicitly from /curator.
 
