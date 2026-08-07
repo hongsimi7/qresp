@@ -185,7 +185,26 @@ fields are not loaded into the `Profile` object at all, which is enforced by
    authors for the shared-author signal, year for display/ordering,
    `externalIds` for the DOI link and de-duplication, `fieldsOfStudy` for the
    "same research area" check). No venue, no citation counts, no embeddings.
-   No `from` parameter: see the live findings below.
+   No `from` parameter, so the provider's default pool is used.
+
+> ### Correction — the provider DOES cover Qresp's domains
+>
+> An earlier note here claimed the Recommendations API returns nothing usable
+> for Qresp records, based on two hand-picked DOIs. **That generalization was
+> wrong**, and a proper sample overturned it. Over 18 real records from a
+> public Qresp instance:
+>
+> | Pool | Records with candidates | Candidates | Gate pass rate |
+> | --- | --- | --- | --- |
+> | `recommendations_default` (what production uses) | 15 / 18 (83 %) | 300 | 74 % |
+> | `recommendations_all_cs` | 18 / 18 (100 %) | 347 | 58 % |
+> | `title_resolution` | 13 / 18 (72 %) | 260 | 75 % |
+>
+> The candidates are on-topic, not Computer Science strays — the `all-cs`
+> pool returned, for example, quantum-embedding papers against a
+> quantum-embedding record. The lesson is about method, not the provider: two
+> DOIs are an anecdote, and the reason the evaluation CLI below exists is so
+> claims like this are made from a sample instead.
 
 > **Two things the live API taught us that no stub could.**
 >
@@ -406,13 +425,145 @@ should be settable (or accidentally committable) there.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `QRESP_RELATED_RESEARCH_ENABLED` | *(off)* | `1`/`true`/`yes`/`on` enables the whole feature. Off ⇒ `enabled: false`, no section, no provider call. |
+| `QRESP_RELATED_RESEARCH_ENABLED` | *(off)* | **Master switch** for the whole section. Off ⇒ `enabled: false`, nothing rendered, no provider call. |
+| `QRESP_RELATED_EXTERNAL_ENABLED` | *(off)* | Enables the **outbound** Semantic Scholar call. Subordinate: worthless unless the master switch is also on. |
 | `QRESP_SEMANTIC_SCHOLAR_API_KEY` | *(none)* | **Optional.** Semantic Scholar serves this API without a key at a lower rate limit. Without one, no credential header is sent and everything still works; with one it is sent as `x-api-key` only. |
 | `QRESP_SEMANTIC_SCHOLAR_TIMEOUT_SECONDS` | `8` | Capped at 30. |
 | `QRESP_RELATED_RESEARCH_CACHE_DAYS` | `7` | Capped at 90. |
 
 The internal list never depends on any of the last three: a missing key or a
 dead provider leaves Related Qresp Records fully working.
+
+### The two switches
+
+Related Qresp Records is local computation over records this server already
+holds. Related External Papers is a request to a third party. Those are
+different decisions, so they are different variables — an operator may
+reasonably want the first and no outbound traffic at all.
+
+| `..._RESEARCH_ENABLED` | `..._EXTERNAL_ENABLED` | Internal list | Provider call | External cache | `external.status` | Frontend |
+| --- | --- | --- | --- | --- | --- | --- |
+| off | off | not computed | never | untouched | `disabled` | whole section hidden |
+| off | **on** | not computed | **never** | untouched | `disabled` | whole section hidden |
+| on | off | **computed and shown** | **never** | **neither read nor written** | `disabled` | internal section only; the external heading is not rendered at all |
+| on | on | computed and shown | on cache miss | read and written | `ok` / `unresolved` / `unavailable` | both sections |
+
+The second row is the one worth stating explicitly: setting only the external
+variable must not make a server whose operator never enabled the feature start
+calling out. `config()["EXTERNAL_ENABLED"]` is the master AND the external
+flag, never the external flag alone.
+
+Internal-only, for staging:
+
+```sh
+QRESP_RELATED_RESEARCH_ENABLED=1
+QRESP_RELATED_EXTERNAL_ENABLED=      # unset or empty: no outbound traffic
+```
+
+In that mode the external cache collection is not touched at all — not even
+read — so an entry left over from a period when external was on is ignored
+rather than replayed.
+
+---
+
+## Domain-quality evaluation CLI
+
+`backend/project/tools/related_eval.py` — a **read-only, development/QA
+command line**. It is not an endpoint, not in `swagger.yml`, and not reachable
+over HTTP.
+
+It exists because the gate's own accept/reject decision cannot be the answer
+key for judging the gate. The CLI lays the verdicts out beside the candidates
+that were thrown away, so a person can rate them.
+
+**It will not:** write to any Paper, Draft, cache or MongoDB; call
+`/api/paper/{id}/related` (so the production cache and the quota behind it are
+untouched); make any external request without `--live`; fill in a rating;
+or emit curator identity, owner/editor fields, RCC URLs, file-server paths,
+file names, the API key or any header.
+
+### Collect
+
+```sh
+cd backend
+python -m project.tools.related_eval collect \
+  --api-base https://<a-qresp-instance> \
+  --sample-size 18 \
+  --output-dir ../related-eval-out \
+  --live --rate-limit 0.7 --max-retries 2
+```
+
+No instance URL is hardcoded anywhere in the tool; `--api-base` is required.
+`--ids-file FILE` (one record id per line) replaces `--sample-size`. Drop
+`--live` to evaluate the internal list only, with zero external requests.
+`--review-rejected N` (default 5) sets how many near-misses per source go into
+the review file — those are what expose false negatives. `--include-flagged`
+samples records the triage set aside. `--insecure` skips TLS verification for
+a self-signed staging tunnel.
+
+The API key is read **only** from `QRESP_SEMANTIC_SCHOLAR_API_KEY` and is
+reported only as `api_key_present: true|false`.
+
+Requests are sequential and paced (default 1/s); HTTP 429 is retried a bounded
+number of times, honouring `Retry-After` up to 60 s.
+
+### Inputs
+
+`GET /api/search` for the record pool and `GET /api/paper/{id}` for artifact
+metadata. Both the legacy name-mangled keys (`_Search__id`, `_Search__title`,
+`_Search__abstract`, `_Search__doi`, `_Search__tags`, `_Search__collections`,
+`_Search__publication`, `_Search__year`) and plain `id`/`title`/`abstract`/
+`doi` are understood, in one place: `eval_core.normalize_search_record`.
+
+**Sampling is deterministic** — no RNG, so a re-run is comparable to the run
+before it. Metadata-rich records (DOI + abstract + tags) are preferred, and
+selection round-robins across collections/publications so one collection
+cannot crowd out the rest.
+
+**Triage never deletes anything.** Records whose titles read as scaffolding
+(`STAGING TEST`, `QA`, `placeholder`, `asdf`, …), whose tags are keyboard
+mash, or whose title and abstract share no content words at all are reported
+with a reason and held out of the default sample; `--include-flagged` puts
+them back. Merely thin records (short abstract, no DOI) are still evaluated,
+carrying their flags into the output.
+
+### Candidate pools
+
+| Pool | What it is |
+| --- | --- |
+| `internal` | Related Qresp Records, via the production ranking |
+| `recommendations_default` | Recommendations with no `from` — exactly what production asks for |
+| `recommendations_all_cs` | Recommendations with `from=all-cs` |
+| `title_resolution` | The paper resolved by title instead of DOI, then recommendations |
+
+Every candidate is kept, accepted or not, with its `rank`, `gate_score`, score
+components, decision, `rejection_code`, prose `rejection_reason`, and whether
+production would have shown it (`in_top5`).
+
+### Outputs
+
+| File | Contents |
+| --- | --- |
+| `raw-results.jsonl` | one line per record: the record, every candidate from every pool with scores and verdicts, and the provider outcome per pool |
+| `human-review.tsv` | `record_id, record_title, source, candidate_title, reasons, gate_score, gate_decision, human_rating, human_note` — the shown candidates plus the best near-misses, with **`human_rating` blank** |
+| `summary.json` | sample size, flagged vs not-sampled records, per-pool coverage and gate pass rate, zero-candidate ratio, rejection-code frequency, provider request counts |
+| `metrics.json` | written by `summarize` |
+
+`human_rating` accepts only `related`, `partial` or `unrelated` (blank means
+unrated). Anything else stops the scoring with the offending line numbers.
+
+### Summarize
+
+```sh
+python -m project.tools.related_eval summarize --output-dir ../related-eval-out
+```
+
+Reports precision@5 (strict, `related` only) and lenient (`related` +
+`partial`) over the candidates production would actually show, false positives
+(accepted but rated unrelated), false negatives (rejected but rated related or
+partial), record coverage, and a per-pool breakdown. **Unrated rows are
+excluded from every metric and counted separately**, so a half-finished review
+cannot masquerade as a verdict.
 
 ---
 
@@ -576,30 +727,25 @@ docker compose up -d --force-recreate --no-deps backend
 
 ## Known limitations
 
-- **The external provider does not currently serve Qresp's domains.** This is
-  the headline finding of the live verification and the reason the external
-  half of the feature is not yet useful:
-
-  | Candidate pool | Result against real Qresp-shaped papers |
-  | --- | --- |
-  | provider default (`recent`) | HTTP 200 with an **empty** list; two real DOIs from two fields both returned zero candidates |
-  | `from=all-cs` | 18–20 candidates, but **Computer Science** whatever the source field. Best cosine 0.022 and 0.025 against a 0.16 MODERATE bar; no candidate shared even three specific terms; **all 38 correctly rejected** by the quality gate |
-
-  So today the external list is empty for the records Qresp holds. The quality
-  gate is vindicated by this — it refused 38 of 38 irrelevant papers — but a
-  different source is needed before the external half earns its place.
-  Candidates for that decision (none implemented): Semantic Scholar's
-  `/paper/{id}/citations` and `/references` (real citation graph, in-domain by
-  construction), OpenAlex `related_works`, or Crossref relation metadata.
-  **Recommendation: leave `QRESP_RELATED_RESEARCH_ENABLED` off, or accept that
-  only Related Qresp Records will show anything.**
-- **Citation evidence has no source and never fires.** The pure module
-  implements and tests it, but `related.py` supplies nothing: asking the
-  provider for `references.externalIds` made it discard the whole field list
-  (see above). Wiring it needs one extra
+- **Gate permissiveness is the open question, not provider coverage.**
+  Measured over 18 real records from a public Qresp instance (see the
+  evaluation CLI below), the gate **accepts 71 % of all candidate pairs** —
+  74 % internally, 58–75 % across the external pools. Only the top five are
+  ever shown, so the user-visible damage is bounded, but "accepted" currently
+  means very little. Whether that is correct is exactly what the human
+  labelling pass has to decide; **no threshold has been changed on the
+  strength of unlabelled data.**
+- **Citation evidence is INACTIVE: it has no input source and can never
+  fire.** The pure module implements and unit-tests the signal, and `assess()`
+  still accepts a `citation_dois` argument, but **nothing ever passes a
+  non-empty one** — `related.py` calls it with an empty set, always. The
+  reason is the field-selector defect above: asking the provider for
+  `references.externalIds` makes it discard the whole field list, so no
+  reference DOIs come back. Reactivating it needs one extra
   `GET /graph/v1/paper/<id>/references?fields=externalIds` per cache miss,
-  which has not been added. Papers that cite *this* one are not detected
-  either way.
+  which has deliberately not been added. Papers that cite *this* one are not
+  detected either way. **Treat "Directly cited by this paper" as dead code
+  paths, not as a signal in service.**
 - **Small corpora.** With fewer than ~14 active records, IDF is coarse and the
   specificity floor of 2 does most of the work. The internal list will be short
   — correctly so.

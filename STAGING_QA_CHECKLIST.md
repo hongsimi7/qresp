@@ -619,8 +619,23 @@ Full design, thresholds and rationale: `RELATED_RESEARCH.md`.
 
 ### Environment (staging backend only)
 
+**Recommended first pass — internal only, zero outbound traffic:**
+
+```sh
+QRESP_RELATED_RESEARCH_ENABLED=1     # master switch
+QRESP_RELATED_EXTERNAL_ENABLED=      # unset/empty: no provider call at all
+```
+
+In this mode Related Qresp Records is computed and shown, the external
+provider is never contacted, the external cache is neither read nor written,
+the API answers `external.status: "disabled"`, and the frontend renders the
+internal section alone with no external heading.
+
+**Second pass — add the external half:**
+
 ```sh
 QRESP_RELATED_RESEARCH_ENABLED=1
+QRESP_RELATED_EXTERNAL_ENABLED=1
 # OPTIONAL — Semantic Scholar serves this API without a key at a lower rate
 # limit. Leave it unset for the first pass; that path must work too.
 QRESP_SEMANTIC_SCHOLAR_API_KEY=...
@@ -628,6 +643,9 @@ QRESP_SEMANTIC_SCHOLAR_API_KEY=...
 QRESP_SEMANTIC_SCHOLAR_TIMEOUT_SECONDS=8
 QRESP_RELATED_RESEARCH_CACHE_DAYS=7
 ```
+
+Setting `QRESP_RELATED_EXTERNAL_ENABLED` **without** the master switch does
+nothing at all — verify that too.
 
 No `config.ini` key exists for any of these, by design.
 
@@ -657,9 +675,16 @@ docker compose exec backend python -c "import os; print('enabled:', \
       https://localhost:8443/api/paper/<id>/related` → 200 with
       `"enabled": false` and both lists empty; **no** outbound request in the
       backend log
-- [ ] Set it → the section appears at the BOTTOM of Paper Details, below
-      License, split into **Related Qresp Records** and **Related External
-      Papers**
+- [ ] Master **off** but `QRESP_RELATED_EXTERNAL_ENABLED=1` → identical to the
+      line above. Nothing is rendered and nothing is fetched: the external
+      switch alone must never activate anything
+- [ ] Master **on**, external **off** → the section appears with **only**
+      Related Qresp Records; there is NO "Related External Papers" heading at
+      all; `external.status` is `disabled`; the backend log shows no outbound
+      request; `db.related_research_cache.count()` does not change (not even a
+      read)
+- [ ] Master **on**, external **on** → the section appears with BOTH
+      Related Qresp Records and Related External Papers
 - [ ] **No API key set** → the internal list still works and external results
       still load (or degrade cleanly); nothing in the logs mentions a key
 - [ ] Block outbound network (`docker compose exec backend sh -c "echo
@@ -760,9 +785,31 @@ exercises the DOI-first resolution and returns a non-trivial external set.
 
 ### Domain relevance (the actual gate on enabling this anywhere public)
 
-- [ ] Fill in the 10–20 record 관련 있음 / 부분 관련 / 관련 없음 table in
-      `RELATED_RESEARCH.md` § "Domain QA", including false negatives and
-      uninformative reasons, and record which thresholds (if any) need moving
+Staging holds too few usable records to judge relevance (2 active, one with a
+title/DOI/abstract mismatch and one tagged `asdf`). Use the evaluation CLI
+against a Qresp instance with a real corpus instead — it is read-only and
+never touches the related endpoint, its cache or its quota.
+
+```sh
+cd backend
+python -m project.tools.related_eval collect \
+  --api-base https://<a-qresp-instance-with-real-records> \
+  --sample-size 18 --output-dir ../related-eval-out --live
+# ...rate human_rating in ../related-eval-out/human-review.tsv, then:
+python -m project.tools.related_eval summarize --output-dir ../related-eval-out
+```
+
+- [ ] `collect` run; `summary.json` reviewed for per-pool coverage and the
+      gate pass rate
+- [ ] A domain expert has filled in `human_rating`
+      (`related` / `partial` / `unrelated`) for 15–20 records' worth of rows,
+      **including the rejected near-misses** — those are the only way false
+      negatives surface
+- [ ] `summarize` run; precision@5, false positives and false negatives
+      recorded
+- [ ] Only THEN decide whether any gate threshold moves. A pass rate of ~71 %
+      on unlabelled data is a question, not a verdict — see
+      `RELATED_RESEARCH.md` § Known limitations
 
 ## After QA
 

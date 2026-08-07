@@ -92,7 +92,7 @@ auto-saved or auto-published.
   and quota. Docs: `RCC_FOLDER_ANALYSIS.md`. Out of scope: Zenodo folders,
   file sizes/mtimes, notebook content parsing.
 
-### 5. Agentic literature explorer — 🧪 Related Literature Explorer prototype implemented; domain relevance QA pending
+### 5. Agentic literature explorer — [~] Related Literature Explorer prototype implemented; 실제 도메인 평가 및 사람 라벨링 대기
 - `GET /api/paper/{id}/related` (public, read-only) plus a **Related Research**
   section at the bottom of Paper Details, split into **Related Qresp Records**
   and **Related External Papers**, five each, never padded, every result
@@ -127,9 +127,27 @@ auto-saved or auto-published.
   internal half is unaffected.
 - Docs: `RELATED_RESEARCH.md`, including the 10–20 record
   관련 있음 / 부분 관련 / 관련 없음 QA table.
-- **Pending:** domain-expert relevance QA on real records; thresholds are
-  reasoned starting values, not yet validated by a physicist. Out of scope:
-  citations *to* this paper, cross-server federation, memoized corpus stats.
+- **Two switches:** `QRESP_RELATED_RESEARCH_ENABLED` (master, default off) and
+  `QRESP_RELATED_EXTERNAL_ENABLED` (outbound call, default off, subordinate —
+  worthless without the master). master=on/external=off computes and shows
+  Related Qresp Records with **zero** provider calls and **zero** external
+  cache reads or writes; the frontend hides the external heading entirely.
+- **Read-only evaluation CLI** (`project/tools/related_eval.py`, dev/QA only,
+  not an endpoint): deterministic sampling from a public Qresp instance,
+  legacy `_Search__*` key normalization, all four candidate pools collected
+  pre-gate, and a `human-review.tsv` a domain expert fills in
+  (`related`/`partial`/`unrelated`) before `summarize` computes precision@5,
+  false positives and false negatives. Never writes to Qresp, never calls the
+  related endpoint, no external request without `--live`, and never fills in
+  a rating.
+- **Citation evidence is INACTIVE** — implemented and unit-tested in the pure
+  module, but nothing ever supplies a non-empty `citation_dois`, because the
+  provider discards the field list when nested selectors are requested.
+- **Pending:** the human labelling pass. An 18-record live run shows the gate
+  accepting ~71 % of candidate pairs (74 % internal); whether that is too
+  permissive is exactly what the ratings must decide. **No threshold has been
+  moved on unlabelled data.** Out of scope: citations *to* this paper,
+  cross-server federation, memoized corpus stats.
 
 ## Implementation order
 1. **UI regression repair** (goal 2) — everything else demos on top of this.
