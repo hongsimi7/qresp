@@ -133,13 +133,45 @@ UNRELATED_EXTERNAL = recommendation(
     "material.", doi="10.2000/external-b", fields=("Economics",))
 
 
+class ProviderTimeout(IOError):
+    """What `requests` raises when the provider never answers."""
+
+
+# Every way one provider call can go wrong, named. `not_found` is the only
+# one that is an ANSWER; the rest are non-answers and must never be recorded
+# as a fact about the record.
+FAILURE_MODES = ("timeout", "connection", "rate_limited", "server_error",
+                 "malformed", "unexpected_shape")
+
+
+def _failure_response(mode):
+    if mode == "timeout":
+        raise ProviderTimeout("timed out")
+    if mode == "connection":
+        raise OSError("connection reset")
+    if mode == "rate_limited":
+        return FakeResponse({"error": "too many requests",
+                             "message": "quota exceeded"}, 429)
+    if mode == "server_error":
+        return FakeResponse({"error": "upstream exploded"}, 500)
+    if mode == "malformed":
+        return FakeResponse(None)                    # body is not JSON
+    if mode == "unexpected_shape":
+        return FakeResponse(["not", "an", "object"])  # 200, wrong type
+    raise AssertionError("unknown failure mode %r" % mode)
+
+
 class ProviderStub:
     """Stands in for `requests`, dispatching on the URL the code chose.
-    Records every call so the tests can assert on the endpoint, the params
-    and the headers actually used."""
+
+    Each of the two call sites -- paper resolution and recommendations -- has
+    its own `mode`: `ok`, `not_found`, or any of FAILURE_MODES. Every call is
+    recorded so the tests can assert on the endpoint, the params and the
+    headers actually used.
+    """
 
     def __init__(self, resolution=None, recommendations=None,
-                 recommendation_status=200, resolution_status=200):
+                 resolution_mode="ok", recommendation_mode="ok"):
         self.calls = []
         self.resolution = (resolution if resolution is not None
                            else {"paperId": "S2-SUBJECT",
@@ -149,19 +181,22 @@ class ProviderStub:
                                  "references": []})
         self.recommendations = (recommendations if recommendations is not None
                                 else [RELATED_EXTERNAL, UNRELATED_EXTERNAL])
-        self.recommendation_status = recommendation_status
-        self.resolution_status = resolution_status
+        self.resolution_mode = resolution_mode
+        self.recommendation_mode = recommendation_mode
 
     def get(self, url, params=None, headers=None, timeout=None):
         self.calls.append({"url": url, "params": params or {},
                            "headers": headers or {}, "timeout": timeout})
-        if url.startswith(related.SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL):
-            if self.recommendation_status != 200:
-                return FakeResponse({"error": "rate limited"},
-                                    self.recommendation_status)
+        recommending = url.startswith(
+            related.SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL)
+        mode = (self.recommendation_mode if recommending
+                else self.resolution_mode)
+        if mode == "not_found":
+            return FakeResponse({"error": "Paper not found"}, 404)
+        if mode != "ok":
+            return _failure_response(mode)
+        if recommending:
             return FakeResponse({"recommendedPapers": self.recommendations})
-        if self.resolution_status != 200:
-            return FakeResponse({"error": "nope"}, self.resolution_status)
         if url.startswith(related.SEMANTIC_SCHOLAR_TITLE_MATCH_URL):
             return FakeResponse({"data": [self.resolution]})
         return FakeResponse(self.resolution)
@@ -324,6 +359,37 @@ class TestExternalProvider(RelatedTestCase):
         self.assertEqual(related.EXTERNAL_CANDIDATE_LIMIT,
                          call["params"]["limit"])
 
+    def test_the_candidate_pool_is_the_providers_default_and_not_settable(self):
+        # Measured live: the alternative pool ("all-cs") answers with Computer
+        # Science papers whatever the source paper's field -- 38 candidates
+        # across two domains, best cosine 0.025 against a 0.16 bar, all
+        # correctly rejected. Asking for it would buy nothing but traffic.
+        _, stub = self.fetch()
+        self.assertNotIn("from", stub.recommendation_call["params"])
+        # ...and no environment variable can introduce one. (The first call
+        # filled the cache, so it has to be cleared or nothing is fetched.)
+        RelatedResearchCache.drop_collection()
+        with mock.patch.dict('os.environ', dict(
+                ENABLED, QRESP_SEMANTIC_SCHOLAR_RECOMMENDATION_POOL="all-cs",
+                QRESP_RELATED_RESEARCH_POOL="all-cs")):
+            other = ProviderStub()
+            with mock.patch.object(related, 'requests', other):
+                self.client.get('/api/paper/%s/related' % self.subject_id)
+        self.assertNotIn("from", other.recommendation_call["params"])
+
+    def test_an_empty_recommendation_list_is_an_answer_not_a_failure(self):
+        # What the live provider actually returns today for Qresp-age
+        # records: 200 with an empty list. That is `ok` with no results, and
+        # it is cached for the full TTL -- not treated as an outage.
+        response, _ = self.fetch(provider=ProviderStub(recommendations=[]))
+        external = response.json()["external"]
+        self.assertEqual("ok", external["status"])
+        self.assertEqual([], external["results"])
+        self.assertFalse(external["stale"])
+        entry = RelatedResearchCache.objects(paper_id=self.subject_id).first()
+        self.assertGreater(entry.expires_at,
+                           datetime.utcnow() + timedelta(days=6))
+
     def test_the_provider_host_is_a_fixed_https_constant(self):
         for url in (related.SEMANTIC_SCHOLAR_PAPER_URL,
                     related.SEMANTIC_SCHOLAR_TITLE_MATCH_URL,
@@ -349,6 +415,45 @@ class TestExternalProvider(RelatedTestCase):
         self.assertEqual(
             sorted(["title", "abstract", "year", "authors.name",
                     "externalIds", "fieldsOfStudy"]), sorted(fields))
+
+    def test_resolution_asks_only_for_flat_identity_fields(self):
+        # A nested selector (`references.externalIds`) makes the live provider
+        # DISCARD the whole field list and answer with its defaults -- more
+        # data than was asked for, and still no reference DOIs. Verified
+        # against the real API; pinned here so it cannot come back.
+        _, stub = self.fetch()
+        lookups = [c for c in stub.calls
+                   if not c["url"].startswith(
+                       related.SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL)]
+        self.assertTrue(lookups)
+        for call in lookups:
+            fields = call["params"]["fields"].split(",")
+            self.assertEqual(["paperId", "title", "externalIds"], fields)
+            self.assertNotIn("references", call["params"]["fields"])
+
+    def test_provider_volunteered_extras_never_reach_a_result_or_the_cache(self):
+        # The provider returns `openAccessPdf` (and a full author object)
+        # alongside `abstract` whatever is requested. Nothing outside the
+        # allowlist may survive normalization.
+        noisy = recommendation(
+            "Rareword resonance in gadgetite single crystals",
+            "Rareword resonance of gadgetite lattices measured with a "
+            "cryogenic spectrometer and a tunable oscillator.",
+            doi="10.2000/noisy")
+        noisy["openAccessPdf"] = {"url": "https://example.org/secret.pdf"}
+        noisy["embedding"] = [0.1, 0.2]
+        noisy["citationCount"] = 42
+        noisy["authors"] = [{"authorId": "A1", "name": "Someone Else",
+                             "homepage": "https://example.org/person"}]
+        response, _ = self.fetch(provider=ProviderStub(recommendations=[noisy]))
+        text = response.text
+        for leak in ("openAccessPdf", "secret.pdf", "embedding",
+                     "citationCount", "homepage", "authorId"):
+            self.assertNotIn(leak, text, leak)
+        entry = RelatedResearchCache.objects(paper_id=self.subject_id).first()
+        stored = json.dumps(entry.to_mongo().to_dict(), default=str)
+        for leak in ("openAccessPdf", "secret.pdf", "embedding", "homepage"):
+            self.assertNotIn(leak, stored, leak)
 
     def test_the_api_key_travels_only_in_the_x_api_key_header(self):
         _, stub = self.fetch(env=ENABLED_WITH_KEY)
@@ -521,7 +626,7 @@ class TestCache(RelatedTestCase):
         RelatedResearchCache.objects(paper_id=self.subject_id).update_one(
             set__expires_at=datetime.utcnow() - timedelta(days=1))
         response, _ = self.fetch(
-            provider=ProviderStub(recommendation_status=429))
+            provider=ProviderStub(recommendation_mode="rate_limited"))
         external = response.json()["external"]
         self.assertTrue(external["stale"])
         self.assertEqual("unavailable", external["status"])
@@ -531,14 +636,14 @@ class TestCache(RelatedTestCase):
 
     def test_a_first_ever_failure_is_an_empty_external_section_not_a_stale_one(self):
         response, _ = self.fetch(
-            provider=ProviderStub(recommendation_status=500))
+            provider=ProviderStub(recommendation_mode="server_error"))
         external = response.json()["external"]
         self.assertEqual("unavailable", external["status"])
         self.assertEqual([], external["results"])
         self.assertFalse(external["stale"])
 
     def test_a_failure_is_remembered_only_briefly(self):
-        self.fetch(provider=ProviderStub(recommendation_status=429))
+        self.fetch(provider=ProviderStub(recommendation_mode="rate_limited"))
         entry = RelatedResearchCache.objects(paper_id=self.subject_id).first()
         self.assertLess(entry.expires_at,
                         datetime.utcnow() + timedelta(days=1))
@@ -550,6 +655,100 @@ class TestCache(RelatedTestCase):
         self.assertTrue(stub.calls)
         self.assertEqual(
             2, RelatedResearchCache.objects.count())
+
+
+class TestEditedMetadataInvalidatesTheCache(RelatedTestCase):
+    """A cached external answer describes the record AS IT WAS. When the
+    record's public scientific metadata changes, the answer is recomputed at
+    once -- not seven days later."""
+
+    def entry(self):
+        return RelatedResearchCache.objects(paper_id=self.subject_id).first()
+
+    def test_editing_the_title_refetches_inside_the_ttl(self):
+        # REPRODUCTION of the bug this fixes: with the cache keyed on the
+        # paper id and an expiry alone, a record edited a minute after
+        # publication kept serving recommendations computed from the OLD text
+        # for a week. The cache entry below is deliberately still fresh.
+        self.fetch()
+        before = self.entry()
+        self.assertGreater(before.expires_at, datetime.utcnow())
+
+        Paper.objects(id=self.subject_id).update(
+            set__reference__title="Cryogenic oscillator survey of widgetite")
+        response, stub = self.fetch()
+
+        self.assertTrue(stub.calls, "an edited record must be looked up again")
+        self.assertEqual("ok", response.json()["external"]["status"])
+        self.assertNotEqual(before.fingerprint, self.entry().fingerprint)
+
+    def test_every_scoring_field_forces_a_refetch(self):
+        edits = {
+            "abstract": {"set__reference__publishedAbstract": "New abstract."},
+            "doi": {"set__reference__DOI": "10.1000/changed"},
+            "tags": {"set__tags": ["rareword resonance", "added-tag"]},
+            "collections": {"set__collections": ["MICCOM", "another"]},
+        }
+        for label, update in edits.items():
+            with self.subTest(field=label):
+                RelatedResearchCache.drop_collection()
+                self.fetch()
+                Paper.objects(id=self.subject_id).update(**update)
+                _, stub = self.fetch()
+                self.assertTrue(stub.calls, label)
+
+    def test_editing_artifacts_and_tools_forces_a_refetch(self):
+        for label, update in (
+                ("tool", {"set__tools": [{"id": "t0", "kind": "software",
+                                          "packageName": "OtherPackage"}]}),
+                ("dataset", {"set__datasets": [{"id": "d0", "readme": "Data.",
+                                               "keywords": ["diffraction"]}]}),
+                ("chart", {"set__charts": [{"id": "c0",
+                                            "imageFile": "charts/a.png",
+                                            "caption": "A chart",
+                                            "properties": ["pressure"]}]}),
+                ("script", {"set__scripts": [{"id": "s0", "readme": "Fit.",
+                                              "keywords": ["fitting"]}]})):
+            with self.subTest(field=label):
+                RelatedResearchCache.drop_collection()
+                self.fetch()
+                Paper.objects(id=self.subject_id).update(**update)
+                _, stub = self.fetch()
+                self.assertTrue(stub.calls, label)
+
+    def test_ownership_and_file_server_edits_do_NOT_refetch(self):
+        # These change nothing a recommendation depends on. Refetching for
+        # them would also mean private fields were part of the cache key.
+        self.fetch()
+        Paper.objects(id=self.subject_id).update(
+            set__owner_email="someone@example.com",
+            set__editor_emails=["editor@example.com"],
+            set__info__fileServerPath="https://elsewhere.example.org/x",
+            set__info__insertedBy={"firstName": "Other", "lastName": "Person",
+                                   "emailId": "other@example.com"},
+            set__updated_by_email="someone@example.com")
+        _, stub = self.fetch()
+        self.assertEqual([], stub.calls)
+
+    def test_a_legacy_entry_without_a_fingerprint_is_a_miss_not_a_migration(self):
+        self.fetch()
+        # Exactly what a document written by the previous version looks like.
+        RelatedResearchCache.objects(paper_id=self.subject_id).update_one(
+            unset__fingerprint=1)
+        self.assertIsNone(self.entry().fingerprint)
+        response, stub = self.fetch()
+        self.assertTrue(stub.calls, "a fingerprintless entry must not be used")
+        self.assertEqual("ok", response.json()["external"]["status"])
+        self.assertTrue(self.entry().fingerprint)
+
+    def test_the_stored_fingerprint_is_a_digest_and_leaks_nothing(self):
+        self.fetch(env=ENABLED_WITH_KEY)
+        fingerprint = self.entry().fingerprint
+        self.assertRegex(fingerprint, r"^[0-9a-f]{64}$")
+        for leak in ("rareword", "gadgetite", "Sharedname", "10.1000/subject",
+                     "curator@example.com", "files.example.org",
+                     "test-s2-super-secret"):
+            self.assertNotIn(leak.lower(), fingerprint)
 
 
 # ------------------------------------------------------- provider failures
@@ -564,40 +763,91 @@ class TestProviderFailuresDegradeGracefully(RelatedTestCase):
         self.assertEqual([], body["external"]["results"])
         return body
 
-    def test_a_timeout_does_not_become_a_500(self):
-        class Timeout(ProviderStub):
-            def get(self, url, params=None, headers=None, timeout=None):
-                raise IOError("timed out")
-        body = self.assert_internal_survives(Timeout())
+    def test_a_404_is_the_provider_ANSWERING_not_in_the_index(self):
+        # The one failure that is a fact about the record.
+        body = self.assert_internal_survives(
+            ProviderStub(resolution_mode="not_found"))
         self.assertEqual("unresolved", body["external"]["status"])
 
-    def test_a_404_from_the_provider_is_not_an_error_page(self):
+    def test_a_404_from_the_recommendations_call_is_also_an_answer(self):
         body = self.assert_internal_survives(
-            ProviderStub(resolution_status=404))
+            ProviderStub(recommendation_mode="not_found"))
         self.assertEqual("unresolved", body["external"]["status"])
 
-    def test_a_429_leaves_the_page_intact(self):
-        body = self.assert_internal_survives(
-            ProviderStub(recommendation_status=429))
-        self.assertEqual("unavailable", body["external"]["status"])
+    def test_every_non_answer_during_DOI_resolution_is_unavailable(self):
+        # Previously ALL of these were recorded as "not in the index" and kept
+        # for seven days: a timing-out or rate-limited provider silently
+        # became a durable claim about the record.
+        for mode in FAILURE_MODES:
+            with self.subTest(mode=mode):
+                RelatedResearchCache.drop_collection()
+                body = self.assert_internal_survives(
+                    ProviderStub(resolution_mode=mode))
+                self.assertEqual("unavailable", body["external"]["status"],
+                                 mode)
 
-    def test_a_malformed_response_is_treated_as_a_failure(self):
-        class Malformed(ProviderStub):
-            def get(self, url, params=None, headers=None, timeout=None):
-                self.calls.append({"url": url, "params": params or {},
-                                   "headers": headers or {},
-                                   "timeout": timeout})
-                return FakeResponse(None)
-        self.assert_internal_survives(Malformed())
+    def test_every_non_answer_during_title_lookup_is_unavailable(self):
+        no_doi = Paper(**paper_doc(
+            "nodoi-fail", "Rareword resonance of gadgetite whiskers",
+            "Rareword resonance in gadgetite lattices with a cryogenic "
+            "spectrometer.", tags=["rareword resonance"], doi="")).save()
+        for mode in FAILURE_MODES:
+            with self.subTest(mode=mode):
+                RelatedResearchCache.drop_collection()
+                response, stub = self.fetch(
+                    paper_id=str(no_doi.id),
+                    provider=ProviderStub(resolution_mode=mode))
+                self.assertEqual(200, response.status_code)
+                self.assertEqual("unavailable",
+                                 response.json()["external"]["status"], mode)
+                # It failed at the lookup, so it never asked for
+                # recommendations for a paper it had not identified.
+                self.assertIsNone(stub.recommendation_call, mode)
 
-    def test_an_unexpected_payload_shape_is_treated_as_a_failure(self):
-        class Weird(ProviderStub):
-            def get(self, url, params=None, headers=None, timeout=None):
-                self.calls.append({"url": url, "params": params or {},
-                                   "headers": headers or {},
-                                   "timeout": timeout})
-                return FakeResponse(["not", "an", "object"])
-        self.assert_internal_survives(Weird())
+    def test_every_non_answer_during_recommendations_is_unavailable(self):
+        for mode in FAILURE_MODES:
+            with self.subTest(mode=mode):
+                RelatedResearchCache.drop_collection()
+                body = self.assert_internal_survives(
+                    ProviderStub(recommendation_mode=mode))
+                self.assertEqual("unavailable", body["external"]["status"],
+                                 mode)
+
+    def test_a_non_answer_is_never_cached_as_a_week_long_fact(self):
+        for mode in FAILURE_MODES:
+            with self.subTest(mode=mode):
+                RelatedResearchCache.drop_collection()
+                self.fetch(provider=ProviderStub(resolution_mode=mode))
+                entry = RelatedResearchCache.objects(
+                    paper_id=self.subject_id).first()
+                self.assertEqual("unavailable", entry.status, mode)
+                self.assertLessEqual(
+                    entry.expires_at,
+                    datetime.utcnow() + timedelta(
+                        seconds=related.FAILURE_RETRY_SECONDS + 5), mode)
+
+    def test_not_found_IS_cached_for_the_full_ttl(self):
+        self.fetch(provider=ProviderStub(resolution_mode="not_found"))
+        entry = RelatedResearchCache.objects(paper_id=self.subject_id).first()
+        self.assertEqual("unresolved", entry.status)
+        self.assertGreater(entry.expires_at,
+                           datetime.utcnow() + timedelta(days=6))
+
+    def test_a_non_answer_within_the_retry_window_still_reads_as_stale(self):
+        # A failure is remembered for an hour. Anything served from that entry
+        # came from an EARLIER success, so it must still be flagged stale --
+        # the same promise the refresh path makes.
+        self.fetch()
+        RelatedResearchCache.objects(paper_id=self.subject_id).update_one(
+            set__expires_at=datetime.utcnow() - timedelta(days=1))
+        self.fetch(provider=ProviderStub(recommendation_mode="timeout"))
+        response, stub = self.fetch(
+            provider=ProviderStub(recommendation_mode="timeout"))
+        external = response.json()["external"]
+        self.assertEqual([], stub.calls, "the retry window must be honoured")
+        self.assertEqual("unavailable", external["status"])
+        self.assertTrue(external["stale"])
+        self.assertTrue(external["results"])
 
     def test_no_provider_error_body_or_header_reaches_the_response(self):
         class Leaky(ProviderStub):

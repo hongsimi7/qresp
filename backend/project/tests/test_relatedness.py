@@ -113,6 +113,90 @@ class TestProfileScope(unittest.TestCase):
         self.assertIn("toolpackage", profile.method_terms)
 
 
+class TestMetadataFingerprint(unittest.TestCase):
+    """The digest that decides whether a cached external answer still
+    describes the record it was computed for."""
+
+    def base(self):
+        return record("p", "Widget dynamics", "About widgets.",
+                      tags=["widget"], authors=["Robin Sharedname"],
+                      tools=["ToolPackage"], dataset_keywords=["numbers"],
+                      chart_properties=["energy"])
+
+    def test_it_is_stable_and_opaque(self):
+        first = R.metadata_fingerprint(self.base())
+        self.assertEqual(first, R.metadata_fingerprint(self.base()))
+        # A digest, not the metadata itself.
+        self.assertRegex(first, r"^[0-9a-f]{64}$")
+        self.assertNotIn("widget", first)
+
+    def assert_changes(self, mutate, label):
+        before = R.metadata_fingerprint(self.base())
+        changed = self.base()
+        mutate(changed)
+        self.assertNotEqual(before, R.metadata_fingerprint(changed), label)
+
+    def test_every_field_a_recommendation_depends_on_changes_it(self):
+        cases = {
+            "doi": lambda r: r["reference"].__setitem__("DOI", "10.1/other"),
+            "title": lambda r: r["reference"].__setitem__("title", "Other"),
+            "abstract": lambda r: r["reference"].__setitem__(
+                "publishedAbstract", "Something else entirely."),
+            "authors": lambda r: r["reference"]["authors"].append(
+                {"firstName": "New", "middleName": "", "lastName": "Person"}),
+            "author spelling": lambda r: r["reference"]["authors"][0].__setitem__(
+                "lastName", "Renamed"),
+            "tags": lambda r: r["tags"].append("added"),
+            "collections": lambda r: r["collections"].append("another-field"),
+            "chart properties": lambda r: r["charts"][0]["properties"].append(
+                "pressure"),
+            "chart caption": lambda r: r["charts"][0].__setitem__(
+                "caption", "A new caption"),
+            "dataset keywords": lambda r: r["datasets"][0]["keywords"].append(
+                "extra"),
+            "dataset description": lambda r: r["datasets"][0].__setitem__(
+                "readme", "Now described."),
+            "script added": lambda r: r["scripts"].append(
+                {"readme": "A script", "keywords": ["fitting"]}),
+            "tool package": lambda r: r["tools"][0].__setitem__(
+                "packageName", "OtherPackage"),
+            "tool facility": lambda r: r["tools"][0].__setitem__(
+                "facilityname", "Some Beamline"),
+            "tool measurement": lambda r: r["tools"][0].__setitem__(
+                "measurement", "spectroscopy"),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(field=label):
+                self.assert_changes(mutate, label)
+
+    def test_private_and_operational_fields_can_never_invalidate_a_cache(self):
+        """If one of these changed the fingerprint it would also be a signal
+        that private data reached the cache key. Neither may happen."""
+        before = R.metadata_fingerprint(self.base())
+        private = self.base()
+        private["owner_email"] = "owner@example.com"
+        private["editor_emails"] = ["editor@example.com"]
+        private["edit_history"] = [{"email": "owner@example.com",
+                                    "action": "edit"}]
+        private["updated_by_email"] = "owner@example.com"
+        private["is_active"] = False
+        private["info"] = {
+            "insertedBy": {"firstName": "Curator", "lastName": "Person",
+                           "emailId": "curator@example.com"},
+            "fileServerPath": "https://notebook.rcc.uchicago.edu/files/secret",
+            "folderAbsolutePath": "/project/secret",
+            "downloadPath": "https://internal.example.org/download",
+            "notebookPath": "notebooks/private.ipynb",
+        }
+        private["datasets"][0]["files"] = ["datasets/private-file.dat"]
+        private["charts"][0]["imageFile"] = "charts/secret.png"
+        self.assertEqual(before, R.metadata_fingerprint(private))
+
+    def test_a_missing_or_empty_record_does_not_explode(self):
+        for value in (None, {}, {"reference": None}):
+            self.assertRegex(R.metadata_fingerprint(value), r"^[0-9a-f]{64}$")
+
+
 class TestSpecificity(unittest.TestCase):
     def test_generic_words_are_never_specific(self):
         stats = stats_for(filler(20))
