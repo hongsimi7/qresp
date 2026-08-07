@@ -15,6 +15,7 @@ names/emails, owner and editor fields, RCC URLs, file-server paths, file
 names and image files are not copied through it, so they cannot reach a
 profile, a JSONL line, a TSV cell or a summary.
 """
+import hashlib
 import json
 import re
 
@@ -408,9 +409,10 @@ def rejection_reason(assessment):
 # that is not in this list -- openAccessPdf, embeddings, citation counts,
 # author ids, homepages -- never reaches a file.
 CANDIDATE_KEYS = (
-    "source", "rank", "title", "abstract", "year", "doi", "provider_paper_id",
-    "gate_score", "gate_components", "gate_decision", "rejection_code",
-    "rejection_reason", "reasons", "in_top5",
+    "pair_id", "stable_key", "source", "rank", "title", "abstract", "year",
+    "doi", "provider_paper_id", "gate_score", "gate_components",
+    "gate_decision", "rejection_code", "rejection_reason", "reasons",
+    "in_top5",
 )
 
 RECORD_KEYS = (
@@ -425,9 +427,16 @@ RECORD_KEYS = (
 # one pathological record cannot bloat the artifacts.
 MAX_ABSTRACT_CHARS = 4000
 
-TSV_COLUMNS = ("record_id", "record_title", "source", "candidate_title",
-               "reasons", "gate_score", "gate_decision", "human_rating",
-               "human_note")
+TSV_COLUMNS = ("pair_id", "record_id", "record_title", "source",
+               "candidate_title", "reasons", "gate_score", "gate_decision",
+               "human_rating", "human_note")
+
+# The column set before `pair_id` existed. Files already handed to reviewers
+# use it, and they must keep working: a format change must never invalidate
+# work somebody has already done.
+LEGACY_TSV_COLUMNS = ("record_id", "record_title", "source",
+                      "candidate_title", "reasons", "gate_score",
+                      "gate_decision", "human_rating", "human_note")
 
 VALID_RATINGS = ("related", "partial", "unrelated")
 
@@ -437,10 +446,42 @@ def clip_abstract(value):
     return text[:MAX_ABSTRACT_CHARS]
 
 
+def stable_candidate_key(source, profile_key, provider_paper_id, doi, title):
+    """The most durable identifier this candidate has.
+
+    Preference order: the Qresp record id or provider paper id (opaque and
+    permanent), then the DOI, and only then the normalized title. A title is
+    the weakest of the three -- two records can share one -- which is exactly
+    why matching on it has to be able to report AMBIGUOUS rather than guess.
+    """
+    for value in (profile_key, provider_paper_id, doi):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return normalize_title_key(title)
+
+
+def pair_identifier(record_id, source, stable_key):
+    """Stable id for one (record, candidate) pair.
+
+    Hashed so it is short, TSV-safe and free of the delimiter problems that
+    raw titles bring, while still being a pure function of the three things
+    that identify the pair -- the same inputs always give the same id, across
+    runs and across machines.
+    """
+    raw = "%s\x1f%s\x1f%s" % (record_id or "", source or "", stable_key or "")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def candidate_row(source, rank, profile, assessment, in_top5,
-                  provider_paper_id=None, abstract=""):
+                  provider_paper_id=None, abstract="", record_id=""):
     """One evaluated candidate, allowlisted."""
+    stable_key = stable_candidate_key(
+        source, profile.key if source == "internal" else None,
+        provider_paper_id, profile.doi, profile.title)
     return {
+        "pair_id": pair_identifier(record_id, source, stable_key),
+        "stable_key": stable_key,
         "source": source,
         "rank": rank,
         "title": profile.title,
@@ -496,6 +537,7 @@ def tsv_rows(record_rows, rejected_per_source=5):
                 key=lambda c: (-c["gate_score"], c["title"]))
             for candidate in shown + near_misses[:rejected_per_source]:
                 rows.append((
+                    _tsv_cell(candidate.get("pair_id")),
                     _tsv_cell(record["record_id"]),
                     _tsv_cell(record["record_title"]),
                     _tsv_cell(candidate["source"]),
@@ -514,22 +556,34 @@ def render_tsv(rows):
 
 
 def parse_tsv(text):
-    """Read a reviewed TSV back. Returns (rows, errors)."""
+    """Read a reviewed TSV back. Returns (rows, errors).
+
+    Both column sets are accepted. A file written before `pair_id` existed is
+    read with an empty `pair_id`, so a reviewer who has already started
+    filling one in does not lose that work to a format change.
+    """
     lines = [line for line in (text or "").split("\n") if line.strip()]
     if not lines:
         return [], ["the review file is empty"]
     header = tuple(lines[0].split("\t"))
-    if header != TSV_COLUMNS:
-        return [], ["unexpected header: expected %s, found %s"
-                    % (list(TSV_COLUMNS), list(header))]
+    if header == TSV_COLUMNS:
+        columns, legacy = TSV_COLUMNS, False
+    elif header == LEGACY_TSV_COLUMNS:
+        columns, legacy = LEGACY_TSV_COLUMNS, True
+    else:
+        return [], ["unexpected header: expected %s (or the legacy %s), "
+                    "found %s" % (list(TSV_COLUMNS),
+                                  list(LEGACY_TSV_COLUMNS), list(header))]
     rows, errors = [], []
     for number, line in enumerate(lines[1:], start=2):
         parts = line.split("\t")
-        if len(parts) != len(TSV_COLUMNS):
+        if len(parts) != len(columns):
             errors.append("line %d: expected %d columns, found %d"
-                          % (number, len(TSV_COLUMNS), len(parts)))
+                          % (number, len(columns), len(parts)))
             continue
-        row = dict(zip(TSV_COLUMNS, parts))
+        row = dict(zip(columns, parts))
+        if legacy:
+            row["pair_id"] = ""
         rating = (row["human_rating"] or "").strip().lower()
         if rating and rating not in VALID_RATINGS:
             errors.append("line %d: human_rating %r is not one of %s"
@@ -588,11 +642,37 @@ def collection_summary(record_rows, skipped, sample_size, live,
     # a record HELD BACK because it looks broken is a finding about the
     # corpus, while a record simply not drawn into the sample is not.
     flagged = [e for e in skipped if e.get("flags")]
+    # Abstract coverage decides whether a later judgement is reading the
+    # papers or guessing from their titles, so it is reported up front rather
+    # than discovered when the labelling produces nothing but low confidence.
+    records_with_abstract = sum(
+        1 for record in record_rows
+        if (record.get("record_abstract") or "").strip())
+    candidates_with_abstract = 0
+    for record in record_rows:
+        candidates = list(record.get("internal") or [])
+        for pool in (record.get("external") or {}).values():
+            candidates.extend(pool)
+        candidates_with_abstract += sum(
+            1 for c in candidates if (c.get("abstract") or "").strip())
+
     return {
         "sample_size": len(record_rows),
         "requested_sample_size": sample_size,
         "live": bool(live),
         "api_key_present": bool(api_key_present),
+        "abstract_coverage": {
+            "records_with_abstract": records_with_abstract,
+            "records_total": len(record_rows),
+            "records_ratio": _ratio(records_with_abstract, len(record_rows)),
+            "candidates_with_abstract": candidates_with_abstract,
+            "candidates_total": candidates_total,
+            "candidates_ratio": _ratio(candidates_with_abstract,
+                                       candidates_total),
+            "note": "Pairs where NEITHER side has an abstract are not sent "
+                    "to a language model by default; see `ai-label "
+                    "--allow-title-only`.",
+        },
         "records_not_sampled": len(skipped) - len(flagged),
         "records_flagged": len(flagged),
         "flag_reasons": _flag_counts(flagged),

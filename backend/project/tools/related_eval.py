@@ -181,7 +181,8 @@ def _provider_paper_id(candidate):
     return candidate.get("key") or None
 
 
-def _evaluate_candidates(current_record, candidates, stats, source):
+def _evaluate_candidates(current_record, candidates, stats, source,
+                         record_id=""):
     """Score every candidate and mark which ones production would show.
 
     Every candidate is kept, accepted or not: the rejected ones are the
@@ -201,11 +202,13 @@ def _evaluate_candidates(current_record, candidates, stats, source):
             source, rank_index, profile, assessment,
             in_top5=profile.key in shown,
             provider_paper_id=_provider_paper_id(candidate),
-            abstract=candidate.get("abstract")))
+            abstract=candidate.get("abstract"),
+            record_id=record_id))
     return rows
 
 
-def _external_pools(current_record, normalized, stats, cfg, live):
+def _external_pools(current_record, normalized, stats, cfg, live,
+                    record_id=""):
     """Collect each pool separately, preserving the raw (pre-gate) candidates.
 
     Returns (pools, outcomes).
@@ -251,7 +254,7 @@ def _external_pools(current_record, normalized, stats, cfg, live):
             continue
         candidates = related.dedupe_candidates(candidates, doi, title)
         pools[pool] = _evaluate_candidates(current_record, candidates, stats,
-                                           pool)
+                                           pool, record_id=record_id)
     return pools, outcomes
 
 
@@ -277,7 +280,8 @@ def _internal_rows(entry, corpus_entries, stats):
             SOURCE_INTERNAL, rank_index, profile, assessment,
             in_top5=profile.key in shown,
             abstract=(other["record"].get("reference")
-                      or {}).get("publishedAbstract"))
+                      or {}).get("publishedAbstract"),
+            record_id=entry["normalized"]["id"])
         row["provider_paper_id"] = None
         rows.append(row)
     rows.sort(key=lambda r: (-r["gate_score"], r["title"]))
@@ -363,8 +367,9 @@ def collect(args):
             normalized = entry["normalized"]
             print("  [%d/%d] %s" % (index, len(chosen), normalized["id"]))
             internal = _internal_rows(entry, corpus_entries, stats)
-            pools, outcomes = _external_pools(entry["record"], normalized,
-                                              stats, cfg, args.live)
+            pools, outcomes = _external_pools(
+                entry["record"], normalized, stats, cfg, args.live,
+                record_id=normalized["id"])
             record_rows.append({
                 "record_id": normalized["id"],
                 "record_title": normalized["title"],
@@ -453,8 +458,11 @@ def _protected_guard(output_dir):
 def _load_pairs(output_dir, sources=None):
     """Every (record, candidate) pair present in raw-results.jsonl.
 
-    Reads the raw file rather than the review TSV so the abstracts are
-    available; the TSV never carried them.
+    This is the METADATA STORE, not the work list. raw-results holds every
+    candidate the gate ever scored -- on the current artifacts, 2,041 of them
+    -- and judging all of those was never the intent. What gets judged is
+    decided by the review file; this only supplies the abstracts and the
+    bibliography for the pairs that file names.
     """
     path = os.path.join(output_dir, "raw-results.jsonl")
     pairs = []
@@ -471,6 +479,114 @@ def _load_pairs(output_dir, sources=None):
                     continue
                 pairs.append((record, candidate))
     return pairs
+
+
+def _match_review_rows(review_rows, raw_pairs):
+    """Resolve each review row to exactly ONE raw pair.
+
+    `pair_id` is used when both sides carry it. Older review files have none,
+    so those fall back to (record_id, source, candidate_title).
+
+    A row that matches nothing is `unmatched`; a row that matches more than
+    one raw candidate is `ambiguous`. Neither is silently resolved by taking
+    the first hit -- judging the wrong candidate and filing the answer under
+    the right one's name would corrupt the review with no visible symptom.
+
+    Returns (matched, unmatched, ambiguous).
+    """
+    by_pair_id, by_triple = {}, {}
+    for record, candidate in raw_pairs:
+        pair_id = (candidate.get("pair_id") or "").strip()
+        if pair_id:
+            by_pair_id.setdefault(pair_id, []).append((record, candidate))
+        triple = (record.get("record_id"), candidate.get("source"),
+                  core._tsv_cell(candidate.get("title")).lower())
+        by_triple.setdefault(triple, []).append((record, candidate))
+
+    matched, unmatched, ambiguous = [], [], []
+    for row in review_rows:
+        pair_id = (row.get("pair_id") or "").strip()
+        hits = by_pair_id.get(pair_id) if pair_id else None
+        how = "pair_id"
+        if not hits:
+            how = "record_id+source+candidate_title"
+            hits = by_triple.get(
+                (row.get("record_id"), row.get("source"),
+                 core._tsv_cell(row.get("candidate_title")).lower())) or []
+        if not hits:
+            unmatched.append(row)
+        elif len(hits) > 1:
+            ambiguous.append((row, len(hits)))
+        else:
+            record, candidate = hits[0]
+            matched.append((record, candidate, how))
+    return matched, unmatched, ambiguous
+
+
+def _abstract_split(matched):
+    """How many judgeable pairs actually have something to read."""
+    both = one = none = 0
+    for record, candidate, _ in matched:
+        left = bool((record.get("record_abstract") or "").strip())
+        right = bool((candidate.get("abstract") or "").strip())
+        if left and right:
+            both += 1
+        elif left or right:
+            one += 1
+        else:
+            none += 1
+    return both, one, none
+
+
+def _preflight(raw_pairs, review_rows, matched, unmatched, ambiguous, cache,
+               allow_title_only, retry_errors):
+    """Everything a person needs to decide whether to let this run.
+
+    Printed identically for a real run and a --dry-run, because the number
+    that matters -- how many provider calls this will make -- must be
+    knowable BEFORE any of them happen.
+    """
+    both, one, none = _abstract_split(matched)
+    cached = planned = 0
+    for record, candidate, _ in matched:
+        key = ai_review.pair_key(record["record_id"], candidate["source"],
+                                 candidate["title"])
+        hit = cache.get(key)
+        if hit and (hit.get("ai_status") == ai_review.STATUS_COMPLETED
+                    or not retry_errors):
+            cached += 1
+            continue
+        if not ai_review.has_enough_metadata(record, candidate):
+            continue
+        if not _has_any_abstract(record, candidate) and not allow_title_only:
+            continue
+        planned += 1
+
+    report = {
+        "raw_pairs": len(raw_pairs),
+        "review_rows": len(review_rows),
+        "matched_pairs": len(matched),
+        "unmatched_pairs": len(unmatched),
+        "ambiguous_pairs": len(ambiguous),
+        "pairs_with_both_abstracts": both,
+        "pairs_with_one_abstract": one,
+        "pairs_with_no_abstract": none,
+        "cached_pairs": cached,
+        "planned_provider_calls": planned,
+    }
+    print("\nPREFLIGHT")
+    for key in ("raw_pairs", "review_rows", "matched_pairs",
+                "unmatched_pairs", "ambiguous_pairs",
+                "pairs_with_both_abstracts", "pairs_with_one_abstract",
+                "pairs_with_no_abstract", "cached_pairs",
+                "planned_provider_calls"):
+        print("  %-28s %d" % (key, report[key]))
+    return report
+
+
+def _has_any_abstract(record, candidate):
+    return bool((record.get("record_abstract") or "").strip()
+                or (candidate.get("abstract") or "").strip())
 
 
 def _load_cache(path):
@@ -509,12 +625,34 @@ def ai_label(args):
 
     sources = ([s.strip() for s in args.sources.split(",") if s.strip()]
                if args.sources else None)
-    pairs = _load_pairs(output_dir, sources)
-    if args.limit:
-        pairs = pairs[:args.limit]
-    if not pairs:
-        print("No candidate pairs to judge.")
-        return 1
+    raw_pairs = _load_pairs(output_dir, sources)
+
+    # The REVIEW FILE is the work list. raw-results is only where the
+    # abstracts and bibliography are looked up.
+    review_path = args.review_file or os.path.join(output_dir,
+                                                   "human-review.tsv")
+    if not os.path.isfile(review_path):
+        print("No review file at %s." % review_path)
+        print("ai-label judges the pairs a review file names, not every "
+              "candidate in raw-results.jsonl. Pass --review-file.")
+        return 2
+    with io.open(review_path, encoding="utf-8") as handle:
+        review_rows, review_errors = core.parse_tsv(handle.read())
+    if review_errors:
+        print("The review file could not be read:")
+        for error in review_errors:
+            print("  - %s" % error)
+        return 2
+
+    # `--sources` narrows BOTH sides or neither. Filtering only the raw store
+    # would turn every out-of-scope review row into a phantom "unmatched" and
+    # abort a perfectly legitimate run.
+    review_rows_total = len(review_rows)
+    if sources:
+        review_rows = [row for row in review_rows
+                       if row.get("source") in sources]
+
+    matched, unmatched, ambiguous = _match_review_rows(review_rows, raw_pairs)
 
     jsonl_path = os.path.join(output_dir, "ai-review.jsonl")
     cache = _load_cache(jsonl_path)
@@ -522,12 +660,45 @@ def ai_label(args):
     cfg = assist._gemini_config()
     ready = bool(cfg["ENABLED"] and cfg["API_KEY"])
     print("AI-BASED PROVISIONAL EVALUATION - not expert ground truth.")
-    print("  pairs to consider: %d" % len(pairs))
-    print("  already judged (cache): %d" % len(cache))
+    print("  review file:  %s (%d rows, %d in scope for sources %s)"
+          % (review_path, review_rows_total, len(review_rows),
+             ",".join(sources) if sources else "all"))
+    print("  metadata from: %s" % raw_path)
     print("  provider configured: %s" % ready)
+    print("  title-only pairs allowed: %s" % bool(args.allow_title_only))
+    _preflight(raw_pairs, review_rows, matched, unmatched, ambiguous, cache,
+               args.allow_title_only, args.retry_errors)
+
+    # Refuse BEFORE spending anything. An unresolved row means the review file
+    # and the raw results disagree about what exists, and judging under that
+    # disagreement files answers against the wrong candidates.
+    if unmatched or ambiguous:
+        print("\nSTOPPING: the review file does not line up with "
+              "raw-results.jsonl.")
+        for row in unmatched[:10]:
+            print("  unmatched: %s | %s | %s"
+                  % (row.get("record_id"), row.get("source"),
+                     (row.get("candidate_title") or "")[:60]))
+        for row, count in ambiguous[:10]:
+            print("  ambiguous (%d candidates): %s | %s | %s"
+                  % (count, row.get("record_id"), row.get("source"),
+                     (row.get("candidate_title") or "")[:60]))
+        print("  Re-run `collect` into a fresh directory so the review file "
+              "and the raw results come from the same run.")
+        return 4
+
+    if not matched:
+        print("No candidate pairs to judge.")
+        return 1
+
+    # --limit applies to the WHITELIST, never to the raw candidate list.
+    pairs = [(record, candidate) for record, candidate, _ in matched]
+    if args.limit:
+        pairs = pairs[:args.limit]
+
     if not ready and not args.dry_run:
-        print("  QRESP_GEMINI_ENABLED / QRESP_GEMINI_API_KEY are not set, so "
-              "no judgement can be made.")
+        print("\n  QRESP_GEMINI_ENABLED / QRESP_GEMINI_API_KEY are not set, "
+              "so no judgement can be made.")
         print("  Re-run with --dry-run to see what WOULD be sent, without "
               "contacting any provider.")
         return 3
@@ -551,11 +722,22 @@ def ai_label(args):
                 continue
 
             has_abstracts = ai_review.abstracts_present(record, candidate)
+            skip_reason = None
             if not ai_review.has_enough_metadata(record, candidate):
+                skip_reason = "no title on one or both papers"
+            elif (not _has_any_abstract(record, candidate)
+                  and not args.allow_title_only):
+                # NEITHER side has an abstract. Two titles are not enough to
+                # judge relatedness on, and an answer produced from them would
+                # still arrive looking like every other answer in the file.
+                # Opt in with --allow-title-only if that is genuinely wanted.
+                skip_reason = ("neither paper has an abstract; title-only "
+                               "judgement is off by default "
+                               "(--allow-title-only)")
+            if skip_reason:
                 row = ai_review.build_jsonl_row(
                     record, candidate, None, ai_review.STATUS_INSUFFICIENT,
-                    error="no title on one or both papers",
-                    abstracts_available=has_abstracts)
+                    error=skip_reason, abstracts_available=has_abstracts)
                 rows.append(row)
                 handle.write(json.dumps(row, ensure_ascii=False,
                                         sort_keys=True) + "\n")
@@ -807,6 +989,15 @@ def build_parser():
         help="AI-BASED PROVISIONAL labels to triage what an expert should "
              "read. Not ground truth; never changes production scoring.")
     ai_parser.add_argument("--output-dir", required=True)
+    ai_parser.add_argument(
+        "--review-file",
+        help="TSV naming the pairs to judge (default: "
+             "<output-dir>/human-review.tsv). This is the work list; "
+             "raw-results.jsonl is only the metadata store.")
+    ai_parser.add_argument(
+        "--allow-title-only", action="store_true",
+        help="also judge pairs where NEITHER paper has an abstract. Off by "
+             "default; when on, confidence is forced to low.")
     ai_parser.add_argument(
         "--sources", default="internal,recommendations_default",
         help="comma-separated candidate sources to judge (default: the two "

@@ -337,34 +337,76 @@ CONFIGURED = {"QRESP_GEMINI_ENABLED": "1",
               "QRESP_GEMINI_API_KEY": "gemini-super-secret"}
 
 
+def pair_id_for(record_id, source, stable_key):
+    return core.pair_identifier(record_id, source, stable_key)
+
+
 class TestAiLabelCommand(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="ai-label-")
         self.write_raw()
-        # A human file that must survive everything below untouched.
-        self.human = os.path.join(self.dir, "human-review.tsv")
-        with io.open(self.human, "w", encoding="utf-8", newline="\n") as f:
-            f.write(core.render_tsv([core.TSV_COLUMNS]))
-        self.human_bytes = io.open(self.human, encoding="utf-8").read()
 
     def tearDown(self):
         shutil.rmtree(self.dir, ignore_errors=True)
 
-    def write_raw(self, records=None):
-        records = records or [{
-            **record(i),
-            "status": "ok", "flags": [], "provider_outcomes": {},
-            "internal": [candidate(title="Internal candidate %d" % i)],
-            "external": {"recommendations_default": [
-                candidate(title="External candidate %d" % i,
-                          source="recommendations_default",
-                          gate_decision="rejected", in_top5=False,
-                          score=1.0)]},
-        } for i in range(3)]
+    def default_records(self):
+        records = []
+        for i in range(3):
+            internal = candidate(title="Internal candidate %d" % i)
+            internal["stable_key"] = "int%d" % i
+            internal["pair_id"] = pair_id_for("rec%02d" % i, "internal",
+                                              "int%d" % i)
+            external = candidate(title="External candidate %d" % i,
+                                 source="recommendations_default",
+                                 gate_decision="rejected", in_top5=False,
+                                 score=1.0)
+            external["stable_key"] = "ext%d" % i
+            external["pair_id"] = pair_id_for(
+                "rec%02d" % i, "recommendations_default", "ext%d" % i)
+            records.append({
+                **record(i),
+                "status": "ok", "flags": [], "provider_outcomes": {},
+                "internal": [internal],
+                "external": {"recommendations_default": [external]},
+            })
+        return records
+
+    def write_raw(self, records=None, review=True):
+        records = records if records is not None else self.default_records()
         path = os.path.join(self.dir, "raw-results.jsonl")
         with io.open(path, "w", encoding="utf-8", newline="\n") as handle:
             for row in records:
                 handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        if review:
+            self.write_review(records)
+
+    def write_review(self, records, name="human-review.tsv", legacy=False,
+                     mutate=None):
+        """The whitelist: every pair in `records`, in the review TSV shape."""
+        columns = core.LEGACY_TSV_COLUMNS if legacy else core.TSV_COLUMNS
+        rows = [columns]
+        for entry in records:
+            candidates = list(entry.get("internal") or [])
+            for pool in (entry.get("external") or {}).values():
+                candidates.extend(pool)
+            for item in candidates:
+                cells = [entry["record_id"], entry["record_title"],
+                         item["source"], item["title"],
+                         " | ".join(item.get("reasons") or []),
+                         str(item["gate_score"]), item["gate_decision"],
+                         "", ""]
+                if not legacy:
+                    cells = [item.get("pair_id") or ""] + cells
+                if mutate:
+                    cells = mutate(cells)
+                rows.append(tuple(cells))
+        path = os.path.join(self.dir, name)
+        with io.open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(core.render_tsv(rows))
+        if name == "human-review.tsv":
+            self.human = path
+            self.human_bytes = io.open(path, encoding="utf-8").read()
+        return path
 
     def run_ai(self, gemini=None, argv_extra=(), env=None):
         gemini = gemini or FakeGemini()
@@ -479,24 +521,33 @@ class TestAiLabelCommand(unittest.TestCase):
     # -- metadata handling ------------------------------------------------
 
     def test_a_pair_without_titles_is_never_sent(self):
+        item = candidate()
+        item["stable_key"] = "int0"
+        item["pair_id"] = pair_id_for("rec00", "internal", "int0")
         self.write_raw([{
             **record(0, title=""),
             "status": "ok", "flags": [], "provider_outcomes": {},
-            "internal": [candidate()], "external": {},
+            "internal": [item], "external": {},
         }])
         _, gemini = self.run_ai()
         self.assertEqual([], gemini.payloads)
         rows = [json.loads(l) for l in self.lines("ai-review.jsonl")]
         self.assertEqual(ai_review.STATUS_INSUFFICIENT, rows[0]["ai_status"])
 
-    def test_a_missing_abstract_forces_low_confidence(self):
+    def test_one_missing_abstract_forces_low_confidence(self):
+        # The record has an abstract, the candidate does not: still judgeable,
+        # but not confidently.
+        item = candidate(abstract="")
+        item["stable_key"] = "int0"
+        item["pair_id"] = pair_id_for("rec00", "internal", "int0")
         self.write_raw([{
-            **record(0, abstract=""),
+            **record(0),
             "status": "ok", "flags": [], "provider_outcomes": {},
-            "internal": [candidate(abstract="")], "external": {},
+            "internal": [item], "external": {},
         }])
         self.run_ai(gemini=FakeGemini(answers=[answer(confidence="high")]))
         rows = [json.loads(l) for l in self.lines("ai-review.jsonl")]
+        self.assertEqual(ai_review.STATUS_COMPLETED, rows[0]["ai_status"])
         self.assertEqual("low", rows[0]["ai_confidence"])
         self.assertFalse(rows[0]["abstracts_available"])
 
@@ -579,6 +630,376 @@ class TestAiLabelCommand(unittest.TestCase):
     def test_the_pair_limit_is_honoured(self):
         _, gemini = self.run_ai(argv_extra=["--limit", "2"])
         self.assertEqual(2, len(gemini.payloads))
+
+
+class TestReviewFileIsTheWorkList(unittest.TestCase):
+    """The bug this class exists for: `ai-label` used to judge every candidate
+    in raw-results.jsonl. On the real artifacts that is 1,434 pairs, not the
+    135 a reviewer was ever asked about -- a 10x overspend, silently, on a
+    file nobody would read."""
+
+    RECORDS = 18
+    INTERNAL_PER_RECORD = 63          # 1,134 across 18 records
+    DEFAULT_PER_RECORD = 17           # 306; trimmed to 300 below
+    REVIEW_PER_RECORD = 7             # 126, topped up to 135 below
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="ai-worklist-")
+        self.records = self.build_records()
+        self.write_raw()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def build_records(self):
+        records = []
+        for r in range(self.RECORDS):
+            internal, external = [], []
+            for i in range(self.INTERNAL_PER_RECORD):
+                item = candidate(title="R%02d internal %03d" % (r, i))
+                item["stable_key"] = "r%02d-int-%03d" % (r, i)
+                item["pair_id"] = pair_id_for("rec%02d" % r, "internal",
+                                              item["stable_key"])
+                internal.append(item)
+            for i in range(self.DEFAULT_PER_RECORD):
+                item = candidate(title="R%02d external %03d" % (r, i),
+                                 source="recommendations_default")
+                item["stable_key"] = "r%02d-ext-%03d" % (r, i)
+                item["pair_id"] = pair_id_for(
+                    "rec%02d" % r, "recommendations_default",
+                    item["stable_key"])
+                external.append(item)
+            records.append({
+                **record(r),
+                "status": "ok", "flags": [], "provider_outcomes": {},
+                "internal": internal,
+                "external": {"recommendations_default": external},
+            })
+        # Trim to exactly the shape the real artifacts have.
+        total_ext = sum(len(x["external"]["recommendations_default"])
+                        for x in records)
+        excess = total_ext - 300
+        for entry in records:
+            while excess > 0 and entry["external"]["recommendations_default"]:
+                entry["external"]["recommendations_default"].pop()
+                excess -= 1
+                break
+        return records
+
+    def raw_pair_count(self):
+        total = 0
+        for entry in self.records:
+            total += len(entry["internal"])
+            for pool in entry["external"].values():
+                total += len(pool)
+        return total
+
+    def write_raw(self):
+        path = os.path.join(self.dir, "raw-results.jsonl")
+        with io.open(path, "w", encoding="utf-8", newline="\n") as handle:
+            for entry in self.records:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def write_review(self, per_record=None, legacy=False, mutate=None,
+                     name="human-review.tsv"):
+        per_record = per_record or self.REVIEW_PER_RECORD
+        columns = core.LEGACY_TSV_COLUMNS if legacy else core.TSV_COLUMNS
+        rows, written = [columns], 0
+        for entry in self.records:
+            chosen = entry["internal"][:per_record - 2]
+            chosen += entry["external"]["recommendations_default"][:2]
+            for item in chosen:
+                if written >= 135:
+                    break
+                cells = [entry["record_id"], entry["record_title"],
+                         item["source"], item["title"], "", "9.0",
+                         item["gate_decision"], "", ""]
+                if not legacy:
+                    cells = [item.get("pair_id") or ""] + cells
+                if mutate:
+                    cells = mutate(cells)
+                rows.append(tuple(cells))
+                written += 1
+        # Top up to exactly 135 from whatever is left.
+        for entry in self.records:
+            for item in entry["internal"][per_record:]:
+                if written >= 135:
+                    break
+                cells = [entry["record_id"], entry["record_title"],
+                         item["source"], item["title"], "", "9.0",
+                         item["gate_decision"], "", ""]
+                if not legacy:
+                    cells = [item.get("pair_id") or ""] + cells
+                if mutate:
+                    cells = mutate(cells)
+                rows.append(tuple(cells))
+                written += 1
+        path = os.path.join(self.dir, name)
+        with io.open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(core.render_tsv(rows))
+        return path, written
+
+    def run_ai(self, argv_extra=(), gemini=None, env=None):
+        gemini = gemini or FakeGemini()
+        argv = ["ai-label", "--output-dir", self.dir, "--rate-limit", "0"]
+        argv.extend(argv_extra)
+        with mock.patch.dict("os.environ", env or CONFIGURED):
+            with mock.patch("project.assist.call_gemini", gemini):
+                code = related_eval.main(argv)
+        return code, gemini
+
+    # -- the headline numbers ---------------------------------------------
+
+    def test_the_fixture_matches_the_real_artifacts(self):
+        self.assertEqual(18, len(self.records))
+        internal = sum(len(e["internal"]) for e in self.records)
+        external = sum(len(e["external"]["recommendations_default"])
+                       for e in self.records)
+        self.assertEqual(1134, internal)
+        self.assertEqual(300, external)
+        self.assertEqual(1434, self.raw_pair_count())
+
+    def test_raw_1434_and_review_135_gives_exactly_135_calls(self):
+        _, written = self.write_review()
+        self.assertEqual(135, written)
+        code, gemini = self.run_ai()
+        self.assertEqual(0, code)
+        self.assertEqual(135, len(gemini.payloads),
+                         "only the review file's pairs may be judged")
+
+    def test_the_limit_applies_after_the_whitelist_not_before(self):
+        self.write_review()
+        _, gemini = self.run_ai(argv_extra=["--limit", "5"])
+        self.assertEqual(5, len(gemini.payloads))
+
+    def test_a_shorter_review_file_means_fewer_calls(self):
+        path, written = self.write_review(name="first-pass.tsv")
+        # Re-use only the first 20 rows.
+        lines = [l for l in io.open(path, encoding="utf-8").read().split("\n")
+                 if l]
+        short = os.path.join(self.dir, "short.tsv")
+        with io.open(short, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("\n".join(lines[:21]) + "\n")
+        _, gemini = self.run_ai(argv_extra=["--review-file", short])
+        self.assertEqual(20, len(gemini.payloads))
+
+    # -- matching ---------------------------------------------------------
+
+    def test_a_legacy_review_file_without_pair_id_still_matches(self):
+        self.write_review(legacy=True)
+        code, gemini = self.run_ai()
+        self.assertEqual(0, code)
+        self.assertEqual(135, len(gemini.payloads))
+
+    def test_an_unmatched_row_stops_the_run_before_any_call(self):
+        def rename(cells):
+            if cells[4].endswith("internal 000"):
+                cells[4] = "A candidate that is not in raw-results"
+                cells[0] = ""      # no pair_id either, so no fallback match
+            return cells
+        self.write_review(mutate=rename)
+        code, gemini = self.run_ai()
+        self.assertEqual(4, code)
+        self.assertEqual([], gemini.payloads,
+                         "nothing may be spent while the files disagree")
+
+    def test_an_ambiguous_row_stops_the_run_before_any_call(self):
+        # Two raw candidates share a title, and the review row carries no
+        # pair_id to tell them apart.
+        duplicate = candidate(title="R00 internal 000")
+        duplicate["stable_key"] = "r00-int-duplicate"
+        duplicate["pair_id"] = pair_id_for("rec00", "internal",
+                                           "r00-int-duplicate")
+        self.records[0]["internal"].append(duplicate)
+        self.write_raw()
+        self.write_review(legacy=True)
+        code, gemini = self.run_ai()
+        self.assertEqual(4, code)
+        self.assertEqual([], gemini.payloads)
+
+    def test_pair_id_disambiguates_what_a_title_cannot(self):
+        duplicate = candidate(title="R00 internal 000")
+        duplicate["stable_key"] = "r00-int-duplicate"
+        duplicate["pair_id"] = pair_id_for("rec00", "internal",
+                                           "r00-int-duplicate")
+        self.records[0]["internal"].append(duplicate)
+        self.write_raw()
+        self.write_review()          # new format, pair_id present
+        code, gemini = self.run_ai()
+        self.assertEqual(0, code)
+        self.assertEqual(135, len(gemini.payloads))
+
+    # -- preflight --------------------------------------------------------
+
+    def preflight_of(self, output):
+        report = {}
+        for line in output.split("\n"):
+            parts = line.strip().split()
+            if len(parts) == 2 and parts[1].isdigit():
+                report[parts[0]] = int(parts[1])
+        return report
+
+    def test_preflight_reports_every_required_number(self):
+        self.write_review()
+        import contextlib
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            self.run_ai(argv_extra=["--dry-run"])
+        report = self.preflight_of(buffer.getvalue())
+        for key in ("raw_pairs", "review_rows", "matched_pairs",
+                    "unmatched_pairs", "ambiguous_pairs",
+                    "pairs_with_both_abstracts", "pairs_with_one_abstract",
+                    "pairs_with_no_abstract", "cached_pairs",
+                    "planned_provider_calls"):
+            self.assertIn(key, report, key)
+        self.assertEqual(1434, report["raw_pairs"])
+        self.assertEqual(135, report["review_rows"])
+        self.assertEqual(135, report["matched_pairs"])
+        self.assertEqual(0, report["unmatched_pairs"])
+        self.assertEqual(0, report["ambiguous_pairs"])
+        self.assertEqual(135, report["planned_provider_calls"])
+
+    def test_dry_run_reports_the_same_plan_and_calls_nobody(self):
+        self.write_review()
+        code, gemini = self.run_ai(argv_extra=["--dry-run"])
+        self.assertEqual(0, code)
+        self.assertEqual([], gemini.payloads)
+
+    # -- title-only guard -------------------------------------------------
+
+    def strip_all_abstracts(self):
+        for entry in self.records:
+            entry["record_abstract"] = ""
+            for item in entry["internal"]:
+                item["abstract"] = ""
+            for item in entry["external"]["recommendations_default"]:
+                item["abstract"] = ""
+        self.write_raw()
+
+    def test_pairs_with_no_abstract_are_not_sent_by_default(self):
+        self.strip_all_abstracts()
+        self.write_review()
+        code, gemini = self.run_ai()
+        self.assertEqual(0, code)
+        self.assertEqual([], gemini.payloads,
+                         "title-only judgement is off by default")
+        rows = [json.loads(l) for l in
+                io.open(os.path.join(self.dir, "ai-review.jsonl"),
+                        encoding="utf-8").read().split("\n") if l]
+        self.assertEqual(135, len(rows))
+        self.assertTrue(all(r["ai_status"] == ai_review.STATUS_INSUFFICIENT
+                            for r in rows))
+        self.assertTrue(all("abstract" in r["ai_error"] for r in rows))
+
+    def test_preflight_plans_zero_calls_when_nothing_has_an_abstract(self):
+        self.strip_all_abstracts()
+        self.write_review()
+        import contextlib
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            self.run_ai(argv_extra=["--dry-run"])
+        report = self.preflight_of(buffer.getvalue())
+        self.assertEqual(135, report["pairs_with_no_abstract"])
+        self.assertEqual(0, report["pairs_with_both_abstracts"])
+        self.assertEqual(0, report["planned_provider_calls"])
+
+    def test_allow_title_only_opts_in_and_forces_low_confidence(self):
+        self.strip_all_abstracts()
+        self.write_review()
+        code, gemini = self.run_ai(
+            argv_extra=["--allow-title-only", "--limit", "3"])
+        self.assertEqual(0, code)
+        self.assertEqual(3, len(gemini.payloads))
+        rows = [json.loads(l) for l in
+                io.open(os.path.join(self.dir, "ai-review.jsonl"),
+                        encoding="utf-8").read().split("\n") if l]
+        judged = [r for r in rows
+                  if r["ai_status"] == ai_review.STATUS_COMPLETED]
+        self.assertEqual(3, len(judged))
+        self.assertTrue(all(r["ai_confidence"] == "low" for r in judged))
+
+    # -- cache ------------------------------------------------------------
+
+    def test_the_cache_is_counted_and_not_re_asked(self):
+        self.write_review()
+        self.run_ai(argv_extra=["--limit", "10"])
+        import contextlib
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            _, gemini = self.run_ai()
+        report = self.preflight_of(buffer.getvalue())
+        self.assertEqual(10, report["cached_pairs"])
+        self.assertEqual(125, report["planned_provider_calls"])
+        self.assertEqual(125, len(gemini.payloads))
+
+    def test_the_human_review_file_is_never_written(self):
+        path, _ = self.write_review()
+        before = io.open(path, encoding="utf-8").read()
+        self.run_ai()
+        self.assertEqual(before, io.open(path, encoding="utf-8").read())
+
+
+class TestCollectStoresAbstracts(unittest.TestCase):
+    """The abstracts have to actually be in raw-results.jsonl, or every
+    judgement silently degrades to titles. Verified through the real collect
+    route, not by trusting the schema."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="collect-abstracts-")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_collect_writes_record_and_candidate_abstracts(self):
+        from project.tests import test_related_eval as fixtures
+
+        provider = fixtures.FakeProvider()
+        session = fixtures.FakeQrespSession(fixtures.rich_corpus(6),
+                                            provider=provider)
+        with mock.patch("requests.Session", return_value=session):
+            code = related_eval.main([
+                "collect", "--api-base", "https://qresp.example.org",
+                "--output-dir", self.dir, "--sample-size", "3", "--live"])
+        self.assertEqual(0, code)
+
+        records = [json.loads(l) for l in
+                   io.open(os.path.join(self.dir, "raw-results.jsonl"),
+                           encoding="utf-8").read().split("\n") if l]
+        self.assertTrue(records)
+        for entry in records:
+            self.assertTrue(entry["record_abstract"].strip(),
+                            "record_abstract must be stored")
+            candidates = list(entry["internal"])
+            for pool in entry["external"].values():
+                candidates.extend(pool)
+            self.assertTrue(candidates)
+            with_abstract = [c for c in candidates
+                             if (c.get("abstract") or "").strip()]
+            self.assertTrue(with_abstract,
+                            "candidate abstracts must be stored")
+            for item in candidates:
+                self.assertIn("pair_id", item)
+                self.assertTrue(item["pair_id"])
+
+    def test_collect_reports_abstract_coverage(self):
+        from project.tests import test_related_eval as fixtures
+
+        provider = fixtures.FakeProvider()
+        session = fixtures.FakeQrespSession(fixtures.rich_corpus(6),
+                                            provider=provider)
+        with mock.patch("requests.Session", return_value=session):
+            related_eval.main([
+                "collect", "--api-base", "https://qresp.example.org",
+                "--output-dir", self.dir, "--sample-size", "3", "--live"])
+        with io.open(os.path.join(self.dir, "summary.json"),
+                     encoding="utf-8") as handle:
+            summary = json.load(handle)
+        coverage = summary["abstract_coverage"]
+        self.assertEqual(3, coverage["records_total"])
+        self.assertEqual(3, coverage["records_with_abstract"])
+        self.assertEqual(1.0, coverage["records_ratio"])
+        self.assertGreater(coverage["candidates_with_abstract"], 0)
+        self.assertGreater(coverage["candidates_ratio"], 0.0)
 
 
 if __name__ == "__main__":

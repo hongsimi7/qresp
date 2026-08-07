@@ -410,7 +410,8 @@ class TestReviewFile(unittest.TestCase):
             self.assertEqual("", row[core.TSV_COLUMNS.index("human_note")])
 
     def test_rejected_candidates_are_included_so_false_negatives_are_findable(self):
-        titles = [row[3] for row in core.tsv_rows(self.rows())[1:]]
+        title_at = core.TSV_COLUMNS.index("candidate_title")
+        titles = [row[title_at] for row in core.tsv_rows(self.rows())[1:]]
         self.assertIn("Accepted one", titles)
         self.assertIn("Rejected one", titles)
 
@@ -433,7 +434,8 @@ class TestReviewFile(unittest.TestCase):
                 for i in range(40)
             ],
         }
-        titles = [row[3] for row in
+        title_at = core.TSV_COLUMNS.index("candidate_title")
+        titles = [row[title_at] for row in
                   core.tsv_rows([record], rejected_per_source=5)[1:]]
         self.assertEqual(10, len(titles))
         for i in range(5):
@@ -452,8 +454,8 @@ class TestReviewFile(unittest.TestCase):
 
     def test_only_the_three_ratings_are_accepted(self):
         header = "\t".join(core.TSV_COLUMNS)
-        base = ["id00", "A record", "internal", "A candidate", "why", "9.0",
-                "accepted"]
+        base = ["pair0001", "id00", "A record", "internal", "A candidate",
+                "why", "9.0", "accepted"]
         for rating in ("related", "partial", "unrelated", "RELATED", " partial ",
                        ""):
             text = header + "\n" + "\t".join(base + [rating, ""])
@@ -776,13 +778,13 @@ class TestSummarizeCommand(unittest.TestCase):
     def test_it_scores_a_reviewed_file(self):
         header = "\t".join(core.TSV_COLUMNS)
         rows = [
-            ["id00", "A record", "internal", "Good one", "why", "9.0",
+            ["p1", "id00", "A record", "internal", "Good one", "why", "9.0",
              "accepted", "related", ""],
-            ["id00", "A record", "internal", "Bad one", "why", "8.0",
+            ["p2", "id00", "A record", "internal", "Bad one", "why", "8.0",
              "accepted", "unrelated", ""],
-            ["id00", "A record", "internal", "Missed one", "", "1.0",
+            ["p3", "id00", "A record", "internal", "Missed one", "", "1.0",
              "rejected", "related", "the gate should have kept this"],
-            ["id00", "A record", "internal", "Not yet rated", "", "1.0",
+            ["p4", "id00", "A record", "internal", "Not yet rated", "", "1.0",
              "rejected", "", ""],
         ]
         self.write("human-review.tsv",
