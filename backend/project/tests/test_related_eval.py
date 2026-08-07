@@ -825,6 +825,129 @@ class TestSummarizeCommand(unittest.TestCase):
             2, related_eval.main(["summarize", "--output-dir", self.output]))
 
 
+class TestIdsFile(unittest.TestCase):
+    """Reading the --ids-file.
+
+    The bug this guards: `Set-Content -Encoding utf8` on Windows PowerShell
+    5.1 writes a BOM. Read as plain UTF-8 the BOM arrives glued to the first
+    id, which then matches no record -- so the first paper vanishes from the
+    sample and nothing anywhere says so.
+
+    Fixtures write real bytes. Putting a literal "\\ufeff" in a Python string
+    would test the escape, not the file.
+    """
+
+    UTF8_BOM = b"\xef\xbb\xbf"
+    FIRST = "60316fb93f58fc9075286688"
+    SECOND = "6927175d9bd76c2c6bf77364"
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="ids-file-")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def write_bytes(self, payload, name="ids.txt"):
+        path = os.path.join(self.dir, name)
+        with open(path, "wb") as handle:
+            handle.write(payload)
+        return path
+
+    def test_a_bom_and_crlf_file_reads_exactly_like_a_plain_one(self):
+        # Byte-for-byte what PowerShell 5.1 produces: BOM, then CRLF lines.
+        path = self.write_bytes(
+            self.UTF8_BOM
+            + ("%s\r\n%s\r\n" % (self.FIRST, self.SECOND)).encode("utf-8"))
+        ids = related_eval._read_ids(path)
+        self.assertEqual({self.FIRST, self.SECOND}, ids)
+        for value in ids:
+            self.assertFalse(value.startswith("﻿"), repr(value))
+            self.assertNotIn("﻿", value, repr(value))
+            self.assertNotIn("\r", value, repr(value))
+        # The first id specifically -- that is the one a BOM corrupts.
+        self.assertIn(self.FIRST, ids)
+
+    def test_a_plain_utf8_file_without_a_bom_is_unchanged(self):
+        path = self.write_bytes(
+            ("%s\n%s\n" % (self.FIRST, self.SECOND)).encode("utf-8"))
+        self.assertEqual({self.FIRST, self.SECOND},
+                         related_eval._read_ids(path))
+
+    def test_the_two_encodings_give_identical_results(self):
+        body = "%s\n%s\n" % (self.FIRST, self.SECOND)
+        with_bom = self.write_bytes(self.UTF8_BOM + body.encode("utf-8"),
+                                    "with-bom.txt")
+        without = self.write_bytes(body.encode("utf-8"), "without-bom.txt")
+        self.assertEqual(related_eval._read_ids(without),
+                         related_eval._read_ids(with_bom))
+
+    def test_blank_lines_comments_whitespace_and_duplicates(self):
+        path = self.write_bytes(self.UTF8_BOM + (
+            "# a leading comment\r\n"
+            "\r\n"
+            "   %s   \r\n"
+            "\t\r\n"
+            "   # an indented comment\r\n"
+            "%s\r\n"
+            "%s\r\n"          # duplicate of the line above
+            "\r\n"
+         % (self.FIRST, self.SECOND, self.SECOND)).encode("utf-8"))
+        self.assertEqual({self.FIRST, self.SECOND},
+                         related_eval._read_ids(path))
+
+    def test_a_comment_on_the_very_first_line_is_still_a_comment(self):
+        # With a BOM, a first-line comment used to read as "﻿# ...",
+        # which is not a comment and became an id.
+        path = self.write_bytes(self.UTF8_BOM
+                                + ("# only a comment\n%s\n" % self.FIRST)
+                                .encode("utf-8"))
+        self.assertEqual({self.FIRST}, related_eval._read_ids(path))
+
+
+class TestIdsFileDrivesCollect(unittest.TestCase):
+    """The integration the bug actually broke: a BOM'd ids file must select
+    the first record, not silently drop it."""
+
+    UTF8_BOM = b"\xef\xbb\xbf"
+
+    def setUp(self):
+        self.output = tempfile.mkdtemp(prefix="ids-collect-")
+
+    def tearDown(self):
+        shutil.rmtree(self.output, ignore_errors=True)
+
+    def collect_with_ids(self, payload):
+        ids_path = os.path.join(self.output, "ids.txt")
+        with open(ids_path, "wb") as handle:
+            handle.write(payload)
+        session = FakeQrespSession(rich_corpus(6), provider=FakeProvider())
+        argv = ["collect", "--api-base", "https://qresp.example.org",
+                "--output-dir", self.output, "--ids-file", ids_path]
+        with mock.patch("requests.Session", return_value=session):
+            code = related_eval.main(argv)
+        records = []
+        path = os.path.join(self.output, "raw-results.jsonl")
+        if os.path.isfile(path):
+            with io.open(path, encoding="utf-8") as handle:
+                records = [json.loads(l) for l in handle if l.strip()]
+        return code, records
+
+    def test_a_bom_prefixed_ids_file_still_selects_the_first_record(self):
+        code, records = self.collect_with_ids(
+            self.UTF8_BOM + b"id00\r\nid02\r\n")
+        self.assertEqual(0, code)
+        self.assertEqual(["id00", "id02"],
+                         sorted(r["record_id"] for r in records))
+
+    def test_the_result_matches_a_bomless_file(self):
+        _, with_bom = self.collect_with_ids(self.UTF8_BOM + b"id00\r\nid02\r\n")
+        shutil.rmtree(self.output, ignore_errors=True)
+        self.output = tempfile.mkdtemp(prefix="ids-collect-")
+        _, without = self.collect_with_ids(b"id00\nid02\n")
+        self.assertEqual(sorted(r["record_id"] for r in without),
+                         sorted(r["record_id"] for r in with_bom))
+
+
 class TestCliSurface(unittest.TestCase):
     def test_no_production_url_is_hardcoded(self):
         source = io.open(related_eval.__file__, encoding="utf-8").read()

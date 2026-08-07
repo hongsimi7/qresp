@@ -501,7 +501,9 @@ python -m project.tools.related_eval collect \
 ```
 
 No instance URL is hardcoded anywhere in the tool; `--api-base` is required.
-`--ids-file FILE` (one record id per line) replaces `--sample-size`. Drop
+`--ids-file FILE` (one record id per line; blank lines and `#` comments
+ignored, read as `utf-8-sig` so a Windows BOM is harmless) replaces
+`--sample-size`. Drop
 `--live` to evaluate the internal list only, with zero external requests.
 `--review-rejected N` (default 5) sets how many near-misses per source go into
 the review file — those are what expose false negatives. `--include-flagged`
@@ -790,7 +792,7 @@ cd C:\Users\hongs\Desktop\qresp_from_server\backend
 691bb29dc58f7d350e2fb830
 69178ee9c58f7d350e2fb82d
 606bb69d057dbbfb35b05d4e
-'@ | Set-Content -Encoding utf8 ..\related-eval-v2-ids.txt
+'@ | Set-Content -Encoding ascii ..\related-eval-v2-ids.txt
 
 python -m project.tools.related_eval collect `
   --api-base https://paperstack.uchicago.edu `
@@ -798,6 +800,14 @@ python -m project.tools.related_eval collect `
   --output-dir ..\related-eval-v2 `
   --live --rate-limit 0.7 --max-retries 2
 ```
+
+> **Why `-Encoding ascii` and not `utf8`.** On Windows PowerShell 5.1
+> `-Encoding utf8` writes a **BOM**. Record ids are hex, so ASCII is exact and
+> sidesteps the difference between PowerShell 5.1 and 7 entirely. `--ids-file`
+> is read as `utf-8-sig`, so a BOM'd file is handled correctly too — but a
+> BOM used to be glued to the first id, which matched nothing and silently
+> dropped the first paper from the sample. ASCII in the example, tolerance in
+> the parser.
 
 **Report these two numbers before going further** — they decide whether the
 judgement is worth making at all:

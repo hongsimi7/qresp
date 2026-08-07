@@ -390,9 +390,27 @@ def collect(args):
 
 
 def _read_ids(path):
-    with io.open(path, encoding="utf-8") as handle:
-        return {line.strip() for line in handle
-                if line.strip() and not line.startswith("#")}
+    """Record ids, one per line. Blank lines and `#` comments are ignored,
+    surrounding whitespace is trimmed, and duplicates collapse.
+
+    Read as `utf-8-sig`, not `utf-8`: Windows PowerShell 5.1 writes a BOM for
+    `Set-Content -Encoding utf8`, and read as plain UTF-8 that BOM survives as
+    a leading \\ufeff on the FIRST id. The failure is silent -- the id simply
+    matches no record, so the first paper drops out of the sample and
+    everything else looks fine. `utf-8-sig` consumes a BOM when one is there
+    and behaves exactly like `utf-8` when it is not.
+
+    The comment test is applied to the STRIPPED line, so an indented comment
+    is a comment rather than an id called "# ...".
+    """
+    ids = set()
+    with io.open(path, encoding="utf-8-sig") as handle:
+        for line in handle:
+            value = line.strip()
+            if not value or value.startswith("#"):
+                continue
+            ids.add(value)
+    return ids
 
 
 def _write_outputs(args, record_rows, skipped, api_key_present, client):
