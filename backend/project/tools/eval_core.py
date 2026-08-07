@@ -408,15 +408,22 @@ def rejection_reason(assessment):
 # that is not in this list -- openAccessPdf, embeddings, citation counts,
 # author ids, homepages -- never reaches a file.
 CANDIDATE_KEYS = (
-    "source", "rank", "title", "year", "doi", "provider_paper_id",
+    "source", "rank", "title", "abstract", "year", "doi", "provider_paper_id",
     "gate_score", "gate_components", "gate_decision", "rejection_code",
     "rejection_reason", "reasons", "in_top5",
 )
 
 RECORD_KEYS = (
-    "record_id", "record_title", "record_year", "record_doi", "status",
-    "flags", "internal", "external", "provider_outcomes",
+    "record_id", "record_title", "record_abstract", "record_year",
+    "record_doi", "status", "flags", "internal", "external",
+    "provider_outcomes",
 )
+
+# Abstracts are carried so a later judgement -- human or machine -- can read
+# what the paper actually says instead of guessing from a title. They are
+# public bibliographic text, already used for scoring, and are bounded here so
+# one pathological record cannot bloat the artifacts.
+MAX_ABSTRACT_CHARS = 4000
 
 TSV_COLUMNS = ("record_id", "record_title", "source", "candidate_title",
                "reasons", "gate_score", "gate_decision", "human_rating",
@@ -425,13 +432,19 @@ TSV_COLUMNS = ("record_id", "record_title", "source", "candidate_title",
 VALID_RATINGS = ("related", "partial", "unrelated")
 
 
+def clip_abstract(value):
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text[:MAX_ABSTRACT_CHARS]
+
+
 def candidate_row(source, rank, profile, assessment, in_top5,
-                  provider_paper_id=None):
+                  provider_paper_id=None, abstract=""):
     """One evaluated candidate, allowlisted."""
     return {
         "source": source,
         "rank": rank,
         "title": profile.title,
+        "abstract": clip_abstract(abstract),
         "year": profile.year,
         "doi": profile.doi or None,
         "provider_paper_id": provider_paper_id or None,

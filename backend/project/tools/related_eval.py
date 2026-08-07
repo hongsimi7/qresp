@@ -39,6 +39,7 @@ import time
 
 from project import related
 from project import relatedness as R
+from project.tools import ai_review
 from project.tools import eval_core as core
 
 # Candidate pools compared side by side. `default` is what production asks
@@ -199,7 +200,8 @@ def _evaluate_candidates(current_record, candidates, stats, source):
         rows.append(core.candidate_row(
             source, rank_index, profile, assessment,
             in_top5=profile.key in shown,
-            provider_paper_id=_provider_paper_id(candidate)))
+            provider_paper_id=_provider_paper_id(candidate),
+            abstract=candidate.get("abstract")))
     return rows
 
 
@@ -271,8 +273,11 @@ def _internal_rows(entry, corpus_entries, stats):
     rows = []
     for rank_index, (other, profile) in enumerate(others):
         assessment = R.assess(current, profile, stats)
-        row = core.candidate_row(SOURCE_INTERNAL, rank_index, profile,
-                                 assessment, in_top5=profile.key in shown)
+        row = core.candidate_row(
+            SOURCE_INTERNAL, rank_index, profile, assessment,
+            in_top5=profile.key in shown,
+            abstract=(other["record"].get("reference")
+                      or {}).get("publishedAbstract"))
         row["provider_paper_id"] = None
         rows.append(row)
     rows.sort(key=lambda r: (-r["gate_score"], r["title"]))
@@ -363,6 +368,7 @@ def collect(args):
             record_rows.append({
                 "record_id": normalized["id"],
                 "record_title": normalized["title"],
+                "record_abstract": core.clip_abstract(normalized["abstract"]),
                 "record_year": normalized["year"],
                 "record_doi": normalized["doi"] or None,
                 "status": entry["status"],
@@ -421,6 +427,266 @@ def _write_outputs(args, record_rows, skipped, api_key_present, client):
     print("%s, then run:" % tsv_path)
     print("  python -m project.tools.related_eval summarize --output-dir %s"
           % output_dir)
+
+
+# ------------------------------------------------------- AI provisional labels
+
+# Files this command may write. `human-review.tsv` and
+# `first-pass-human-review.tsv` are deliberately absent: a person's ratings
+# live there, and an automated pass must never be able to touch them.
+AI_OUTPUT_FILES = ("ai-review.tsv", "ai-review.jsonl", "ai-summary.json",
+                   "expert-review.tsv")
+PROTECTED_FILES = ("human-review.tsv", "first-pass-human-review.tsv")
+DEFAULT_AI_RATE_LIMIT = 0.5     # provider requests per second
+
+
+def _protected_guard(output_dir):
+    """Refuse to run if an output name would collide with a human file.
+    Cheap, and it makes 'never overwrite the ratings' a property of the code
+    rather than of the author's care."""
+    for name in AI_OUTPUT_FILES:
+        if name in PROTECTED_FILES:
+            raise RuntimeError("output %r collides with a human file" % name)
+    return [os.path.join(output_dir, name) for name in PROTECTED_FILES]
+
+
+def _load_pairs(output_dir, sources=None):
+    """Every (record, candidate) pair present in raw-results.jsonl.
+
+    Reads the raw file rather than the review TSV so the abstracts are
+    available; the TSV never carried them.
+    """
+    path = os.path.join(output_dir, "raw-results.jsonl")
+    pairs = []
+    with io.open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            candidates = list(record.get("internal") or [])
+            for pool in (record.get("external") or {}).values():
+                candidates.extend(pool)
+            for candidate in candidates:
+                if sources and candidate.get("source") not in sources:
+                    continue
+                pairs.append((record, candidate))
+    return pairs
+
+
+def _load_cache(path):
+    """Completed judgements from an earlier run, keyed by pair."""
+    cache = {}
+    if not os.path.isfile(path):
+        return cache
+    with io.open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if row.get("pair_key"):
+                cache[row["pair_key"]] = row
+    return cache
+
+
+def ai_label(args):
+    from datetime import datetime
+
+    from project import assist
+
+    output_dir = args.output_dir
+    protected = _protected_guard(output_dir)
+    before = {path: os.path.getmtime(path) for path in protected
+              if os.path.isfile(path)}
+
+    raw_path = os.path.join(output_dir, "raw-results.jsonl")
+    if not os.path.isfile(raw_path):
+        print("No raw-results.jsonl in %s - run `collect` first."
+              % output_dir)
+        return 2
+
+    sources = ([s.strip() for s in args.sources.split(",") if s.strip()]
+               if args.sources else None)
+    pairs = _load_pairs(output_dir, sources)
+    if args.limit:
+        pairs = pairs[:args.limit]
+    if not pairs:
+        print("No candidate pairs to judge.")
+        return 1
+
+    jsonl_path = os.path.join(output_dir, "ai-review.jsonl")
+    cache = _load_cache(jsonl_path)
+
+    cfg = assist._gemini_config()
+    ready = bool(cfg["ENABLED"] and cfg["API_KEY"])
+    print("AI-BASED PROVISIONAL EVALUATION - not expert ground truth.")
+    print("  pairs to consider: %d" % len(pairs))
+    print("  already judged (cache): %d" % len(cache))
+    print("  provider configured: %s" % ready)
+    if not ready and not args.dry_run:
+        print("  QRESP_GEMINI_ENABLED / QRESP_GEMINI_API_KEY are not set, so "
+              "no judgement can be made.")
+        print("  Re-run with --dry-run to see what WOULD be sent, without "
+              "contacting any provider.")
+        return 3
+
+    interval = 1.0 / args.rate_limit if args.rate_limit > 0 else 0.0
+    rows, calls, cached_used = [], 0, 0
+    last_call = None
+
+    # Append as we go and flush every line: an interrupted run keeps every
+    # judgement it already paid for.
+    handle = io.open(jsonl_path, "a", encoding="utf-8", newline="\n")
+    try:
+        for index, (record, candidate) in enumerate(pairs, start=1):
+            key = ai_review.pair_key(record["record_id"], candidate["source"],
+                                     candidate["title"])
+            hit = cache.get(key)
+            if hit and (hit.get("ai_status") == ai_review.STATUS_COMPLETED
+                        or not args.retry_errors):
+                rows.append(hit)
+                cached_used += 1
+                continue
+
+            has_abstracts = ai_review.abstracts_present(record, candidate)
+            if not ai_review.has_enough_metadata(record, candidate):
+                row = ai_review.build_jsonl_row(
+                    record, candidate, None, ai_review.STATUS_INSUFFICIENT,
+                    error="no title on one or both papers",
+                    abstracts_available=has_abstracts)
+                rows.append(row)
+                handle.write(json.dumps(row, ensure_ascii=False,
+                                        sort_keys=True) + "\n")
+                handle.flush()
+                continue
+
+            payload = ai_review.blind_pair_payload(record, candidate)
+            # Belt and braces: the payload builder is an allowlist, and this
+            # asserts the result before anything leaves the process.
+            if not ai_review.payload_is_blind(payload):
+                raise RuntimeError("payload leaked a gate decision")
+
+            if args.dry_run:
+                row = ai_review.build_jsonl_row(
+                    record, candidate, None, ai_review.STATUS_PROVIDER_ERROR,
+                    error="dry run: no provider call made",
+                    abstracts_available=has_abstracts)
+                rows.append(row)
+                continue
+
+            if interval and last_call is not None:
+                elapsed = time.monotonic() - last_call
+                if elapsed < interval:
+                    time.sleep(interval - elapsed)
+            last_call = time.monotonic()
+
+            calls += 1
+            result = error = None
+            try:
+                answer, provider_error = assist.call_gemini(
+                    cfg, payload, ai_review.SYSTEM_PROMPT,
+                    ai_review.RESPONSE_SCHEMA,
+                    max_output_tokens=args.max_output_tokens)
+                if provider_error:
+                    error = provider_error
+                else:
+                    result, error = ai_review.parse_ai_answer(
+                        answer, abstracts_available=has_abstracts)
+            except Exception as e:
+                # One bad pair must not end a sweep that has already paid for
+                # everything before it.
+                error = "provider call raised %s" % type(e).__name__
+
+            status = (ai_review.STATUS_COMPLETED if result
+                      else ai_review.STATUS_PROVIDER_ERROR)
+            row = ai_review.build_jsonl_row(
+                record, candidate, result, status, error=error or "",
+                model=cfg["MODEL"],
+                evaluated_at=datetime.utcnow().isoformat() + "Z",
+                abstracts_available=has_abstracts)
+            rows.append(row)
+            handle.write(json.dumps(row, ensure_ascii=False,
+                                    sort_keys=True) + "\n")
+            handle.flush()
+            if index % 20 == 0:
+                print("  judged %d/%d (%d provider calls)"
+                      % (index, len(pairs), calls))
+    finally:
+        handle.close()
+
+    _write_ai_outputs(output_dir, rows, cfg["MODEL"], len(pairs), cached_used,
+                      calls, args.expert_limit)
+
+    for path in protected:
+        if path in before and os.path.getmtime(path) != before[path]:
+            raise RuntimeError("a human review file was modified: %s" % path)
+    return 0
+
+
+def _write_ai_outputs(output_dir, rows, model, requested, cached, calls,
+                      expert_limit):
+    tsv_rows = [ai_review.AI_REVIEW_COLUMNS]
+    for row in rows:
+        tsv_rows.append((
+            core._tsv_cell(row["record_id"]),
+            core._tsv_cell(row["record_title"]),
+            core._tsv_cell(row["source"]),
+            core._tsv_cell(row["candidate_title"]),
+            core._tsv_cell(row["ai_rating"]),
+            core._tsv_cell(row["ai_confidence"]),
+            core._tsv_cell(row["ai_reason"]),
+            core._tsv_cell(row["ai_status"]),
+            core._tsv_cell(row["gate_decision"]),
+            core._tsv_cell("yes" if row["in_top5"] else "no"),
+        ))
+    with io.open(os.path.join(output_dir, "ai-review.tsv"), "w",
+                 encoding="utf-8", newline="\n") as handle:
+        handle.write(core.render_tsv(tsv_rows))
+
+    shortlist, counts = ai_review.select_for_expert(rows, expert_limit)
+    expert_rows = [ai_review.EXPERT_REVIEW_COLUMNS]
+    for category, row in shortlist:
+        expert_rows.append((
+            core._tsv_cell(category),
+            core._tsv_cell(row["record_id"]),
+            core._tsv_cell(row["record_title"]),
+            core._tsv_cell(row["source"]),
+            core._tsv_cell(row["candidate_title"]),
+            core._tsv_cell(row["ai_rating"]),
+            core._tsv_cell(row["ai_confidence"]),
+            core._tsv_cell(row["ai_reason"]),
+            core._tsv_cell(row["gate_decision"]),
+            "",   # human_rating -- the expert's column, always blank here
+            "",   # human_note
+        ))
+    with io.open(os.path.join(output_dir, "expert-review.tsv"), "w",
+                 encoding="utf-8", newline="\n") as handle:
+        handle.write(core.render_tsv(expert_rows))
+
+    summary = ai_review.ai_summary(rows, model, counts, requested, cached,
+                                   calls)
+    with io.open(os.path.join(output_dir, "ai-summary.json"), "w",
+                 encoding="utf-8", newline="\n") as handle:
+        handle.write(ai_review.dumps(summary) + "\n")
+
+    print("\nAI-BASED PROVISIONAL EVALUATION - not expert ground truth.")
+    print("  completed %d, insufficient metadata %d, provider errors %d"
+          % (summary["status_counts"][ai_review.STATUS_COMPLETED],
+             summary["status_counts"][ai_review.STATUS_INSUFFICIENT],
+             summary["status_counts"][ai_review.STATUS_PROVIDER_ERROR]))
+    print("  ratings: %s" % summary["rating_counts"])
+    print("  gate agreement: %s of %s"
+          % (summary["gate_agreement"]["agree"],
+             summary["gate_agreement"]["agree"]
+             + summary["gate_agreement"]["disagree"]))
+    print("  expert shortlist: %d rows" % (len(expert_rows) - 1))
+    for name in ai_review.REVIEW_CATEGORIES:
+        print("    %-34s available %d" % (name, counts.get(name, 0)))
+    print("\nWrote ai-review.tsv, ai-review.jsonl, ai-summary.json, "
+          "expert-review.tsv in %s" % output_dir)
+    print("Human review files were not touched.")
 
 
 # ---------------------------------------------------------------- summarizing
@@ -535,6 +801,31 @@ def build_parser():
                                 help="skip TLS verification (local tunnels "
                                      "with self-signed certificates only)")
     collect_parser.set_defaults(func=collect)
+
+    ai_parser = sub.add_parser(
+        "ai-label",
+        help="AI-BASED PROVISIONAL labels to triage what an expert should "
+             "read. Not ground truth; never changes production scoring.")
+    ai_parser.add_argument("--output-dir", required=True)
+    ai_parser.add_argument(
+        "--sources", default="internal,recommendations_default",
+        help="comma-separated candidate sources to judge (default: the two "
+             "a decision rests on)")
+    ai_parser.add_argument("--limit", type=int, default=0,
+                           help="judge at most N pairs (0 = all)")
+    ai_parser.add_argument("--rate-limit", type=float,
+                           default=DEFAULT_AI_RATE_LIMIT,
+                           help="provider requests per second (default 0.5)")
+    ai_parser.add_argument("--max-output-tokens", type=int, default=512)
+    ai_parser.add_argument("--expert-limit", type=int,
+                           default=ai_review.EXPERT_REVIEW_LIMIT,
+                           help="rows in expert-review.tsv (default 30)")
+    ai_parser.add_argument("--retry-errors", action="store_true",
+                           help="re-ask for pairs that previously failed")
+    ai_parser.add_argument("--dry-run", action="store_true",
+                           help="build and blind-check every payload but "
+                                "contact no provider")
+    ai_parser.set_defaults(func=ai_label)
 
     summarize_parser = sub.add_parser(
         "summarize", help="score a review file a human has filled in")
