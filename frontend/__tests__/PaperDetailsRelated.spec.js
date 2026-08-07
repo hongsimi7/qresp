@@ -1,5 +1,5 @@
 /**
- * The Paper Details page must carry the Related Research section at its
+ * The Paper Details page must carry the Suggested Related Papers section
  * bottom, and must keep rendering exactly as before when the feature is off
  * or the request fails.
  *
@@ -94,10 +94,10 @@ const renderPage = (props = {}) =>
     </AlertContext.Provider>
   );
 
-describe("Paper Details / Related Research", () => {
+describe("Paper Details / Suggested Related Papers", () => {
   afterEach(() => jest.resetAllMocks());
 
-  it("shows Related Research below the record's own sections", async () => {
+  it("shows Suggested Related Papers below the record's own sections", async () => {
     axios.get.mockResolvedValue({ data: related });
     renderPage();
     expect(
@@ -122,7 +122,9 @@ describe("Paper Details / Related Research", () => {
     });
     renderPage();
     await waitFor(() =>
-      expect(screen.queryByText(/related research/i)).not.toBeInTheDocument()
+      expect(
+        screen.queryByText(/suggested related papers/i)
+      ).not.toBeInTheDocument()
     );
     expect(screen.getByText("charts-stub")).toBeInTheDocument();
   });
@@ -131,7 +133,9 @@ describe("Paper Details / Related Research", () => {
     axios.get.mockRejectedValue(new Error("boom"));
     renderPage();
     await waitFor(() =>
-      expect(screen.queryByText(/related research/i)).not.toBeInTheDocument()
+      expect(
+        screen.queryByText(/suggested related papers/i)
+      ).not.toBeInTheDocument()
     );
     expect(screen.getByText("charts-stub")).toBeInTheDocument();
     expect(
@@ -139,13 +143,15 @@ describe("Paper Details / Related Research", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("does not offer Related Research for an unpublished preview", async () => {
+  it("does not offer Suggested Related Papers for an unpublished preview", async () => {
     axios.get.mockResolvedValue({ data: related });
     renderPage({ preview: true });
     await waitFor(() =>
       expect(screen.getByText(/this is unpublished content/i)).toBeInTheDocument()
     );
-    expect(screen.queryByText(/related research/i)).not.toBeInTheDocument();
+    expect(
+        screen.queryByText(/suggested related papers/i)
+      ).not.toBeInTheDocument();
     expect(axios.get).not.toHaveBeenCalled();
   });
 });

@@ -64,8 +64,75 @@ const sectionFor = async (name) => {
   return heading.closest("div");
 };
 
+// The exact wording a reader must always see. Pinned verbatim: it is the
+// only thing telling them these connections were not checked by a person.
+const DISCLAIMER =
+  "These suggestions are generated automatically from publication metadata " +
+  "and research-similarity signals. They may be incomplete or inaccurate. " +
+  "Review each paper before relying on the suggested connection.";
+
 describe("RelatedResearch", () => {
   afterEach(() => jest.resetAllMocks());
+
+  it("is headed Suggested Related Papers", async () => {
+    renderSection(payload());
+    // Wait for the settled state before asserting: the heading also renders
+    // while loading, so finishing early would both prove less and leave a
+    // pending fetch running into the next test.
+    await screen.findByRole("heading", { name: /related qresp records/i });
+    expect(screen.getByText(/suggested related papers/i)).toBeInTheDocument();
+  });
+
+  it("always shows the automatic-generation disclaimer", async () => {
+    renderSection(payload());
+    expect(await screen.findByText(DISCLAIMER)).toBeInTheDocument();
+  });
+
+  it("shows the disclaimer while still loading, not only afterwards", async () => {
+    let resolve;
+    axios.get.mockReturnValue(
+      new Promise((r) => {
+        resolve = r;
+      })
+    );
+    render(<RelatedResearch paperId="abc123" server="s" />);
+    expect(screen.getByText(DISCLAIMER)).toBeInTheDocument();
+    resolve({ data: payload() });
+    await screen.findByRole("heading", { name: /related qresp records/i });
+    expect(screen.getByText(DISCLAIMER)).toBeInTheDocument();
+  });
+
+  it("keeps the disclaimer when there is nothing to show", async () => {
+    renderSection(
+      payload({
+        internal: { status: "ok", results: [], count: 0 },
+        external: {
+          status: "ok",
+          provider: "Semantic Scholar",
+          results: [],
+          count: 0,
+          stale: false,
+          updated_at: null,
+        },
+      })
+    );
+    expect(await screen.findByText(DISCLAIMER)).toBeInTheDocument();
+  });
+
+  it("never claims the suggestions are AI-generated", async () => {
+    // No language model runs in the serving path: candidates come from the
+    // Qresp corpus and Semantic Scholar, and the ranking is arithmetic.
+    // Saying "AI" here would misdescribe how the answer was produced.
+    const { container } = renderSection(payload());
+    await screen.findByText(DISCLAIMER);
+    const text = container.textContent;
+    expect(text).not.toMatch(/\bAI\b/);
+    expect(text).not.toMatch(/AI-assisted/i);
+    expect(text).not.toMatch(/AI recommendations/i);
+    expect(text).not.toMatch(/generative/i);
+    expect(text).not.toMatch(/language model/i);
+    expect(text).not.toMatch(/\bGemini\b/i);
+  });
 
   it("asks the backend for the record's related research", async () => {
     renderSection(payload());

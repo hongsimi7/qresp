@@ -22,6 +22,22 @@ import Drawer from "../drawer";
 
 const EMPTY_MESSAGE = "No sufficiently related papers were found.";
 const MAX_REASONS = 3;
+const HEADING = "Suggested Related Papers";
+
+// Shown on every render, in every state. These suggestions come from
+// deterministic metadata similarity, not from a person having checked them,
+// and a reader deciding whether to trust a connection needs to know that
+// before they act on it.
+//
+// It deliberately does NOT say "AI" or "AI-assisted". No language model is
+// involved in serving this section: candidates come from the Qresp corpus and
+// from Semantic Scholar, and the ranking is computed arithmetic. Calling it AI
+// would be a false claim about how the answer was produced. If a model ever
+// reranks at serve time, that is when the wording changes.
+const DISCLAIMER =
+  "These suggestions are generated automatically from publication metadata " +
+  "and research-similarity signals. They may be incomplete or inaccurate. " +
+  "Review each paper before relying on the suggested connection.";
 
 const formatDate = (value) => {
   if (!value) return null;
@@ -233,8 +249,15 @@ const RelatedResearch = ({ paperId, server }) => {
 
   if (loading) {
     return (
-      <Drawer heading="Related Research" defaultOpen>
+      <Drawer heading={HEADING} defaultOpen>
         <Box sx={{ py: 1 }}>
+          <Typography
+            variant="body2"
+            color="secondary"
+            sx={{ mb: 2, wordBreak: "break-word" }}
+          >
+            {DISCLAIMER}
+          </Typography>
           <Typography variant="body2" color="secondary" gutterBottom>
             Looking for related research…
           </Typography>
@@ -257,7 +280,14 @@ const RelatedResearch = ({ paperId, server }) => {
   const showExternal = external.status !== "disabled";
 
   return (
-    <Drawer heading="Related Research" defaultOpen>
+    <Drawer heading={HEADING} defaultOpen>
+      <Typography
+        variant="body2"
+        color="secondary"
+        sx={{ mb: 2, wordBreak: "break-word" }}
+      >
+        {DISCLAIMER}
+      </Typography>
       <Section title="Related Qresp Records">
         {internalResults.length ? (
           <ResultList results={internalResults} server={server} />
