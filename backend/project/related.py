@@ -20,7 +20,10 @@ which is pure and unit-tested.
 Nothing here writes to a Paper. Recommendations are a derived view, so they
 are never pinned into the canonical record: they are recomputed (internal) or
 cached separately with an expiry (external, `RelatedResearchCache`), which is
-what lets a new follow-up study show up on a record published years ago.
+what lets a new follow-up study show up on a record published years ago. The
+external cache is additionally keyed by a fingerprint of the record's public
+scientific metadata, so an edit to the title or the abstract refreshes the
+answer at once instead of waiting out the TTL.
 
 Configuration is ENVIRONMENT ONLY (QRESP_RELATED_RESEARCH_*,
 QRESP_SEMANTIC_SCHOLAR_*), deliberately not `Config.get_setting`: that helper
@@ -48,8 +51,9 @@ import requests
 from project.auth import can_edit_paper, get_current_user
 from project.models import Paper, RelatedResearchCache, active_papers
 from project.relatedness import (CorpusStats, build_external_profile,
-                                 build_internal_profile, normalize_doi,
-                                 normalize_title_key, rank, tokenize)
+                                 build_internal_profile, metadata_fingerprint,
+                                 normalize_doi, normalize_title_key, rank,
+                                 tokenize)
 
 # ---------------------------------------------------------------- provider
 #
@@ -72,16 +76,46 @@ PROVIDER_HEADERS = {"User-Agent": "Qresp/2.0 (research data curation)"}
 # title/abstract for text similarity and shared terms, authors for the shared
 # author signal, year for display and ordering, externalIds for the DOI link
 # and for de-duplication, fieldsOfStudy for the "same research area" check.
-# Nothing else is requested -- no venue, no citation counts, no embeddings,
-# no open-access PDFs.
+# Nothing else is asked for -- no venue, no citation counts, no embeddings, no
+# open-access PDFs. (The provider volunteers `openAccessPdf` alongside
+# `abstract` whatever is requested; `_normalize_candidate` allowlists what is
+# copied out, so it never reaches a profile, the cache, or the response.)
 RECOMMENDATION_FIELDS = "title,abstract,year,authors.name,externalIds,fieldsOfStudy"
-# Resolution asks for the paper's identity only, plus the DOIs of what it
-# cites, which is the one strong-evidence signal Qresp cannot compute itself.
-RESOLUTION_FIELDS_WITH_REFERENCES = "paperId,title,externalIds,references.externalIds"
+# Resolution asks for the paper's identity and nothing else.
+#
+# It deliberately does NOT ask for `references.externalIds`. A live check
+# against the provider showed that adding a nested `references` selector makes
+# it DISCARD the whole field list and answer with its default set -- so the
+# request came back with more data than was asked for (authors, openAccessPdf)
+# and still no reference DOIs. Citation evidence therefore has no source here;
+# see RELATED_RESEARCH.md for the one extra call that would provide it.
 RESOLUTION_FIELDS = "paperId,title,externalIds"
 
 # Candidates asked of the provider, before Qresp's gate removes most of them.
 EXTERNAL_CANDIDATE_LIMIT = 20
+
+# The candidate pool is deliberately NOT overridden: the request carries no
+# `from` parameter, so the provider uses its default.
+#
+# This was measured against the live API, and the measurement is the reason
+# the external half of this feature is not yet useful for Qresp:
+#
+#   from=recent (the default)  ->  200 with an EMPTY list. Two real DOIs from
+#                                  two fields both returned zero candidates.
+#   from=all-cs                ->  18-20 candidates, but from Computer
+#                                  Science whatever the source paper's field.
+#                                  Against a condensed-matter and a materials
+#                                  -chemistry paper the best candidate scored
+#                                  cosine 0.022 / 0.025 (the MODERATE bar is
+#                                  0.16) and no candidate shared even three
+#                                  specific terms. All 38 were correctly
+#                                  rejected by the quality gate.
+#
+# So `all-cs` would buy nothing but 20 irrelevant papers fetched per record,
+# forever. Until a provider that covers Qresp's domains is chosen (see
+# RELATED_RESEARCH.md), the honest behaviour is to ask the default way and
+# report an empty external list.
+RECOMMENDATION_POOL = None
 # Shown to the user, per list. The lists are never padded to reach it.
 MAX_RESULTS = 5
 
@@ -104,6 +138,24 @@ STATUS_OK = "ok"
 STATUS_DISABLED = "disabled"
 STATUS_UNRESOLVED = "unresolved"
 STATUS_UNAVAILABLE = "unavailable"
+
+# Outcome of one provider call. The distinction that matters is between an
+# ANSWER and a NON-ANSWER:
+#
+#   FOUND        the provider answered and the answer is usable
+#   NOT_FOUND    the provider answered, and the answer is "no such paper" --
+#                a real 404, or a well-formed response with no match. A stable
+#                fact about this record, so it is cached for the full TTL.
+#   UNAVAILABLE  the provider did not answer: timeout, connection error, 429,
+#                5xx, unreadable body, or a 200 whose shape is not what this
+#                endpoint documents. Says nothing about the record, so it is
+#                remembered for an hour and never overwrites a good answer.
+#
+# Collapsing these two was the bug: a rate-limited or timing-out provider was
+# recorded as "this paper is not in the index" and kept for seven days.
+FOUND = "found"
+NOT_FOUND = "not_found"
+UNAVAILABLE = "unavailable"
 
 
 # ------------------------------------------------------------ configuration
@@ -156,30 +208,41 @@ def _provider_headers(cfg):
 # ------------------------------------------------------------- provider I/O
 
 def _get(url, cfg, params=None):
-    """One bounded GET. Returns the decoded body, or None for any failure --
-    timeout, connection error, 404, 429, 5xx, or an unreadable body. Provider
-    error bodies and headers are never returned or logged; only the failure
-    kind and status code are, so a key can never reach a log line."""
+    """One bounded GET. Returns (payload, outcome).
+
+    A 404 is the provider ANSWERING "no such paper" and comes back as
+    NOT_FOUND. Everything else that goes wrong -- timeout, connection error,
+    429, 5xx, an unreadable body, a body of the wrong type -- is UNAVAILABLE:
+    the provider did not answer, so nothing may be concluded about the record.
+
+    Provider error bodies and headers are never returned or logged; only the
+    failure kind and the status code are, so a key can never reach a log line.
+    """
     try:
         response = requests.get(url, params=params or {},
                                 headers=_provider_headers(cfg),
                                 timeout=cfg["TIMEOUT"])
     except Exception as e:
         print("Related research provider unreachable: %s" % type(e).__name__)
-        return None
+        return None, UNAVAILABLE
+    if response.status_code == 404:
+        return None, NOT_FOUND
     if response.status_code != 200:
         print("Related research provider error: HTTP %s"
               % response.status_code)
-        return None
+        return None, UNAVAILABLE
     try:
         payload = response.json()
     except Exception:
         print("Related research provider returned an unreadable response")
-        return None
-    if not isinstance(payload, (dict, list)):
+        return None, UNAVAILABLE
+    # All three provider endpoints document a JSON OBJECT. Anything else is a
+    # shape this code cannot read, and reading it as "no match" would cache a
+    # non-answer as a fact.
+    if not isinstance(payload, dict):
         print("Related research provider returned an unexpected shape")
-        return None
-    return payload
+        return None, UNAVAILABLE
+    return payload, FOUND
 
 
 def _title_overlap(left, right):
@@ -202,46 +265,48 @@ def resolve_provider_paper(title, doi, cfg):
     treated as "not found", because recommendations for the wrong paper are
     worse than none.
 
-    Returns (paper_id, cited_dois) or (None, frozenset()).
+    Returns (paper_id, outcome), where outcome is FOUND, NOT_FOUND (the
+    provider answered and this paper is not in its index, or the match was not
+    close enough to trust) or UNAVAILABLE (the provider did not answer). Both
+    lookup paths report all three.
     """
     if doi:
         # The slash stays literal: a DOI is written `DOI:10.1000/xyz` in the
         # path, and percent-encoding it (`%2F`) is not what the provider --
         # or an intermediate proxy -- routes on.
-        payload = _get(SEMANTIC_SCHOLAR_PAPER_URL + "DOI:" + quote(doi, safe="/"),
-                       cfg, {"fields": RESOLUTION_FIELDS_WITH_REFERENCES})
-        if not isinstance(payload, dict) or not payload.get("paperId"):
-            return None, frozenset()
-        return str(payload["paperId"]), _cited_dois(payload)
+        payload, outcome = _get(
+            SEMANTIC_SCHOLAR_PAPER_URL + "DOI:" + quote(doi, safe="/"),
+            cfg, {"fields": RESOLUTION_FIELDS})
+        if outcome == UNAVAILABLE:
+            return None, UNAVAILABLE
+        if outcome == NOT_FOUND or not isinstance(payload, dict):
+            return None, NOT_FOUND
+        if not payload.get("paperId"):
+            # A well-formed answer that names no paper is an answer.
+            return None, NOT_FOUND
+        return str(payload["paperId"]), FOUND
 
     if not title:
-        return None, frozenset()
+        # Nothing to identify this record with. Not a provider problem.
+        return None, NOT_FOUND
 
-    payload = _get(SEMANTIC_SCHOLAR_TITLE_MATCH_URL, cfg,
-                   {"query": title, "fields": RESOLUTION_FIELDS})
-    matches = (payload or {}).get("data") if isinstance(payload, dict) else None
-    if not matches:
-        return None, frozenset()
+    payload, outcome = _get(SEMANTIC_SCHOLAR_TITLE_MATCH_URL, cfg,
+                            {"query": title, "fields": RESOLUTION_FIELDS})
+    if outcome == UNAVAILABLE:
+        return None, UNAVAILABLE
+    if outcome == NOT_FOUND or not isinstance(payload, dict):
+        # The title-match endpoint answers 404 when nothing matches.
+        return None, NOT_FOUND
+    matches = payload.get("data")
+    if not matches or not isinstance(matches, list):
+        return None, NOT_FOUND
     match = matches[0] or {}
-    if not match.get("paperId"):
-        return None, frozenset()
+    if not isinstance(match, dict) or not match.get("paperId"):
+        return None, NOT_FOUND
     if _title_overlap(title, match.get("title")) < TITLE_MATCH_MIN_OVERLAP:
         # Confidently wrong is worse than silent: skip the external list.
-        return None, frozenset()
-    return str(match["paperId"]), frozenset()
-
-
-def _cited_dois(payload):
-    """DOIs of the works this paper cites, as far as the provider reports
-    them. Used only for the 'directly cited' strong evidence; never inferred
-    when absent."""
-    dois = set()
-    for reference in payload.get("references") or []:
-        doi = normalize_doi(((reference or {}).get("externalIds")
-                             or {}).get("DOI"))
-        if doi:
-            dois.add(doi)
-    return frozenset(dois)
+        return None, NOT_FOUND
+    return str(match["paperId"]), FOUND
 
 
 def _normalize_candidate(raw):
@@ -285,22 +350,33 @@ def _normalize_candidate(raw):
 
 def fetch_external_candidates(paper_id, cfg):
     """At most EXTERNAL_CANDIDATE_LIMIT recommendations for `paper_id`.
-    Returns None when the provider could not be used at all (so the caller can
-    tell "provider failed" from "provider had nothing")."""
-    payload = _get(SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL + quote(paper_id, safe=""),
-                   cfg, {"fields": RECOMMENDATION_FIELDS,
-                         "limit": EXTERNAL_CANDIDATE_LIMIT})
-    if payload is None:
-        return None
+
+    Returns (candidates, outcome) with the same three-way split as the lookup:
+    a 404 here means the provider has nothing to recommend for this paper
+    (NOT_FOUND, a stable fact), while a timeout, 429, 5xx or a 200 that does
+    not carry `recommendedPapers` means it did not answer (UNAVAILABLE).
+    """
+    params = {"fields": RECOMMENDATION_FIELDS,
+              "limit": EXTERNAL_CANDIDATE_LIMIT}
+    if RECOMMENDATION_POOL:
+        params["from"] = RECOMMENDATION_POOL
+    payload, outcome = _get(
+        SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL + quote(paper_id, safe=""),
+        cfg, params)
+    if outcome != FOUND:
+        return None, outcome
     raw = payload.get("recommendedPapers") if isinstance(payload, dict) else None
-    if raw is None:
-        return None
+    if not isinstance(raw, list):
+        # A 200 without the documented key is not an answer this endpoint can
+        # read; treating it as "no recommendations" would cache a lie.
+        print("Related research provider returned an unexpected shape")
+        return None, UNAVAILABLE
     candidates = []
     for item in raw[:EXTERNAL_CANDIDATE_LIMIT]:
         candidate = _normalize_candidate(item)
         if candidate:
             candidates.append(candidate)
-    return candidates
+    return candidates, FOUND
 
 
 def dedupe_candidates(candidates, current_doi, current_title):
@@ -351,10 +427,19 @@ def _load_cache(paper_id):
         return None
 
 
-def _store_cache(paper_id, status, results, cfg, previous=None):
+def _store_cache(paper_id, status, results, cfg, fingerprint, previous=None):
     """Persist the external outcome. Only gate-passing public bibliographic
-    metadata and the reasons Qresp computed are written -- never the API key,
-    a request header, a provider error body, or anything about the user."""
+    metadata, the reasons Qresp computed, and the metadata fingerprint are
+    written -- never the API key, a request header, a provider error body, or
+    anything about the user.
+
+    How long it is kept is decided HERE, by what the provider actually said:
+
+    * `ok` / `unresolved` are answers, and keep the full TTL.
+    * `unavailable` is a non-answer. It keeps the last successful results (so
+      they can still be served, marked stale) but expires within the hour, so
+      a passing outage costs an hour of freshness, not a week.
+    """
     now = _utcnow()
     if status == STATUS_OK:
         expires_at = now + timedelta(days=cfg["CACHE_DAYS"])
@@ -374,6 +459,7 @@ def _store_cache(paper_id, status, results, cfg, previous=None):
             set__provider=PROVIDER_KEY,
             set__status=status,
             set__results=stored,
+            set__fingerprint=fingerprint,
             set__fetched_at=now,
             set__last_success_at=last_success_at,
             set__expires_at=expires_at,
@@ -381,6 +467,30 @@ def _store_cache(paper_id, status, results, cfg, previous=None):
     except Exception as e:
         print("Related research cache write failed: %s" % type(e).__name__)
     return stored
+
+
+def _cache_is_usable(entry, fingerprint, now):
+    """A cache entry may be served only when it is BOTH unexpired AND about
+    the record as it stands now.
+
+    An entry written before the fingerprint field existed has none, so it can
+    never match: legacy documents degrade to a miss and are rewritten on the
+    next request. That is the whole migration.
+    """
+    if entry is None or not entry.expires_at or entry.expires_at <= now:
+        return False
+    return bool(entry.fingerprint) and entry.fingerprint == fingerprint
+
+
+def _section_from_entry(entry):
+    """Serve a cache entry. Results carried over from an earlier success under
+    a non-`ok` status ARE stale, and must say so -- this is the same promise
+    the refresh path makes, kept for the hour a failure is remembered."""
+    results = list(entry.results or [])
+    status = entry.status or STATUS_OK
+    return _external_section(status, results,
+                             stale=(status != STATUS_OK and bool(results)),
+                             updated_at=entry.last_success_at)
 
 
 # ------------------------------------------------------- recommendation core
@@ -460,43 +570,51 @@ def _external_section(status, results, stale=False, updated_at=None):
 def _external_for(paper_id, current_record, stats, cfg):
     """The external list, honouring the cache.
 
-    A cache entry that has not expired is returned as-is and the provider is
-    NOT called. An expired entry is refreshed; if the refresh fails, the last
-    successful results are returned marked `stale` so the section degrades
-    instead of emptying.
+    A cache entry is served -- without calling the provider -- only when it
+    has not expired AND its fingerprint still matches the record's public
+    scientific metadata. Otherwise the provider is asked again, and the
+    provider's own answer decides what is recorded:
+
+        NOT_FOUND    -> `unresolved`, kept for the full TTL
+        UNAVAILABLE  -> `unavailable`, kept for an hour, previous results
+                        served marked `stale`
+        FOUND        -> `ok`, fresh results, full TTL
     """
     entry = _load_cache(paper_id)
     now = _utcnow()
-    if entry and entry.expires_at and entry.expires_at > now:
-        return _external_section(entry.status or STATUS_OK,
-                                 list(entry.results or []),
-                                 stale=False,
-                                 updated_at=entry.last_success_at)
+    fingerprint = metadata_fingerprint(current_record)
+    if _cache_is_usable(entry, fingerprint, now):
+        return _section_from_entry(entry)
+
+    def failed(status):
+        stored = _store_cache(paper_id, status, [], cfg, fingerprint, entry)
+        return _external_section(
+            status, list(stored),
+            # Results only ever survive here from an EARLIER success.
+            stale=bool(stored),
+            updated_at=entry.last_success_at if entry else None)
 
     reference = current_record.get("reference") or {}
     doi = normalize_doi(reference.get("DOI"))
     title = str(reference.get("title") or "").strip()
 
-    provider_paper_id, citation_dois = resolve_provider_paper(title, doi, cfg)
-    if not provider_paper_id:
-        stored = _store_cache(paper_id, STATUS_UNRESOLVED, [], cfg, entry)
-        return _external_section(
-            STATUS_UNRESOLVED, list(stored),
-            stale=bool(stored),
-            updated_at=entry.last_success_at if entry else None)
+    provider_paper_id, outcome = resolve_provider_paper(title, doi, cfg)
+    if outcome == UNAVAILABLE:
+        return failed(STATUS_UNAVAILABLE)
+    if outcome != FOUND or not provider_paper_id:
+        return failed(STATUS_UNRESOLVED)
 
-    candidates = fetch_external_candidates(provider_paper_id, cfg)
-    if candidates is None:
-        stored = _store_cache(paper_id, STATUS_UNAVAILABLE, [], cfg, entry)
-        return _external_section(
-            STATUS_UNAVAILABLE, list(stored),
-            stale=bool(stored),
-            updated_at=entry.last_success_at if entry else None)
+    candidates, outcome = fetch_external_candidates(provider_paper_id, cfg)
+    if outcome == UNAVAILABLE:
+        return failed(STATUS_UNAVAILABLE)
+    if outcome != FOUND or candidates is None:
+        return failed(STATUS_UNRESOLVED)
 
     candidates = dedupe_candidates(candidates, doi, title)
-    results = external_recommendations(current_record, candidates, stats,
-                                       citation_dois)
-    _store_cache(paper_id, STATUS_OK, results, cfg, entry)
+    # No citation source is wired (see RESOLUTION_FIELDS): the citation family
+    # simply never fires, rather than being inferred from something weaker.
+    results = external_recommendations(current_record, candidates, stats)
+    _store_cache(paper_id, STATUS_OK, results, cfg, fingerprint, entry)
     return _external_section(STATUS_OK, results, stale=False, updated_at=now)
 
 
