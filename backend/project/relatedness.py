@@ -553,14 +553,20 @@ class Assessment(object):
     """Verdict for one candidate."""
 
     __slots__ = ("passes", "score", "evidence", "similarity",
-                 "shared_terms")
+                 "shared_terms", "shared_weight")
 
-    def __init__(self, passes, score, evidence, similarity, shared_terms):
+    def __init__(self, passes, score, evidence, similarity, shared_terms,
+                 shared_weight=0.0):
         self.passes = passes
         self.score = score
         self.evidence = evidence
         self.similarity = similarity
         self.shared_terms = shared_terms
+        # Combined IDF of the shared specific terms. Carried so a verdict can
+        # be EXPLAINED (how far short of the strong bar was it?) without
+        # anything having to recompute -- and therefore risk disagreeing with
+        # -- the gate.
+        self.shared_weight = shared_weight
 
     def reasons(self, limit=3):
         """The (at most) `limit` strongest reasons, strongest family first."""
@@ -710,7 +716,7 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
     score += min(shared_weight, 10.0) / 10.0
 
     return Assessment(passes, round(score, 6), evidence, similarity,
-                      sorted(shared_specific))
+                      sorted(shared_specific), shared_weight)
 
 
 def rank(current, candidates, stats, citation_dois=frozenset(), limit=5):
