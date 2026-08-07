@@ -108,9 +108,23 @@ auto-saved or auto-published.
   own ranking are never evidence.
 - Off by default (`QRESP_RELATED_RESEARCH_ENABLED`); external results cached
   outside the Paper document (`RelatedResearchCache`, 7-day TTL, stale
-  fallback); internal results recomputed per request so publish/deactivate are
-  instant. A provider timeout/404/429/malformed answer degrades the external
-  section only. Own nginx rate-limit zone (`api_related`).
+  fallback), keyed additionally by a SHA-256 fingerprint of the record's
+  public scientific metadata so an edit refreshes the answer at once, with no
+  migration (a fingerprintless legacy entry is simply a miss); internal
+  results recomputed per request so publish/deactivate are instant. Own nginx
+  rate-limit zone (`api_related`).
+- Provider outcomes are kept distinct: a **404 / no match** is an answer
+  (`unresolved`, cached 7 days), while a **timeout / 429 / 5xx / malformed**
+  is a non-answer (`unavailable`, cached 1 hour, previous results served
+  `stale`). Collapsing them turned one blip into a week-long wrong claim.
+- **Live-verified against the real Semantic Scholar API** (no key, no DOI
+  hardcoded). Findings: nested field selectors make the provider discard the
+  whole field list (so citation evidence has no source and never fires); and
+  **the Recommendations API does not cover Qresp's domains** — its default
+  pool returns nothing for Qresp-age records and its wider pool returns
+  Computer Science papers whatever the field, all 38 of which the quality gate
+  correctly rejected. The external half therefore shows nothing today; the
+  internal half is unaffected.
 - Docs: `RELATED_RESEARCH.md`, including the 10–20 record
   관련 있음 / 부분 관련 / 관련 없음 QA table.
 - **Pending:** domain-expert relevance QA on real records; thresholds are

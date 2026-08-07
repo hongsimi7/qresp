@@ -631,6 +631,25 @@ QRESP_RELATED_RESEARCH_CACHE_DAYS=7
 
 No `config.ini` key exists for any of these, by design.
 
+Compose bind-mounts `./backend`, so a `build` does **not** pick these up —
+recreate the container and confirm with booleans (never echo the key):
+
+```sh
+cd ~/qresp_staging && git pull
+docker compose up -d --force-recreate --no-deps backend
+docker compose exec backend python -c "import os; print('enabled:', \
+  bool(os.environ.get('QRESP_RELATED_RESEARCH_ENABLED')), 'key set:', \
+  bool(os.environ.get('QRESP_SEMANTIC_SCHOLAR_API_KEY')))"
+```
+
+> ⚠️ **Expect the external list to be empty.** Verified against the live API:
+> the provider's default candidate pool returns nothing for Qresp-age records,
+> and its wider pool returns Computer Science papers whatever the field (best
+> cosine 0.025 against a 0.16 bar — all correctly rejected by the quality
+> gate). `external.status: "ok"` with `count: 0` is the **expected healthy
+> result** today. See `RELATED_RESEARCH.md` § Known limitations. The internal
+> list is the part worth QA-ing.
+
 ### Switch and degradation
 
 - [ ] **Unset** `QRESP_RELATED_RESEARCH_ENABLED` → detail pages render exactly
@@ -643,11 +662,41 @@ No `config.ini` key exists for any of these, by design.
       Papers**
 - [ ] **No API key set** → the internal list still works and external results
       still load (or degrade cleanly); nothing in the logs mentions a key
-- [ ] Block outbound network (or set the timeout to 1s against a slow link) →
-      the page still renders, internal results intact, external section reads
-      "External recommendations are unavailable right now"; **no 500**
+- [ ] Block outbound network (`docker compose exec backend sh -c "echo
+      '127.0.0.1 api.semanticscholar.org' >> /etc/hosts"`) → the page still
+      renders, internal results intact, external section reads "External
+      recommendations are unavailable right now"; **no 500**. Undo with
+      `docker compose up -d --force-recreate --no-deps backend`
 - [ ] A record whose DOI is not in the provider's index → external section
       reads "could not be matched in the external index"; internal unaffected
+
+### Provider status must not be collapsed
+
+The distinction below is the point of the hardening pass: a **non-answer**
+must never be recorded as a fact about the record.
+
+- [ ] Outbound blocked → `external.status == "unavailable"`, and the cache
+      entry's `expires_at` is **within the hour**, not seven days:
+      `db.related_research_cache.find({}, {status:1, expires_at:1})`
+- [ ] A genuine 404 (a record whose DOI the provider does not know) →
+      `external.status == "unresolved"` and `expires_at` **is** ~7 days out
+- [ ] After an outage, restore the network → the next load refetches
+      (the hour-long entry expires) rather than staying blank for a week
+- [ ] Without an API key, expect occasional `unavailable` from 429 on the
+      shared pool; it must clear by itself within the hour
+
+### Edited metadata must invalidate the external cache
+
+- [ ] Load a record (cache filled), then edit its **title** in the curator and
+      reload the detail page → the provider is queried again immediately and
+      `related_research_cache.fingerprint` changes, **without** waiting out the
+      TTL and **without** any migration step
+- [ ] Same for abstract, tags, collections, authors, and any chart/dataset/
+      script/tool description or keyword
+- [ ] Changing **owner, editors or the file-server path** does NOT trigger a
+      refetch (those are not part of the fingerprint, and must not be)
+- [ ] `db.related_research_cache.findOne()` → `fingerprint` is a 64-character
+      hex digest, and contains no title, DOI, email, path or key
 
 ### Content quality
 
