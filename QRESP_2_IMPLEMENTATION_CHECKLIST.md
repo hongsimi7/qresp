@@ -159,7 +159,15 @@ auto-saved or auto-published.
   `related_eval ai-label`, dev/QA only): a language model gives each candidate
   pair a blind opinion — it never sees the gate's score, verdict, reasons,
   rank or source — and the pairs where that opinion disagrees with the gate
-  become a ≤30-row `expert-review.tsv`. One pair per request, structured
+  become a ≤30-row `expert-review.tsv`. **The work list is `--review-file`
+  (default `human-review.tsv`), never the whole of raw-results.jsonl** — the
+  raw file holds 2,041 candidates against a 135-row review file, and judging
+  the former was a 10× overspend. Each review row must resolve to exactly one
+  raw candidate (`pair_id`, falling back to record+source+title); unmatched or
+  ambiguous aborts before any call. A preflight prints raw/review/matched/
+  unmatched/ambiguous/abstract-coverage/cached/planned counts, in `--dry-run`
+  too. Pairs where neither paper has an abstract are **not** sent
+  (`--allow-title-only` opts in, forcing low confidence). One pair per request, structured
   output re-validated locally, confidence forced to `low` when an abstract is
   missing, resumable cache, human files never written. **Not ground truth,
   not validated, not verified; it may not move any threshold.** No model runs

@@ -580,7 +580,7 @@ cannot masquerade as a verdict.
 backend/project/tests/test_relatedness.py        30 tests — the pure gate + fingerprint
 backend/project/tests/test_related_research.py   63 tests — endpoint/provider/cache/switches
 backend/project/tests/test_related_eval.py       49 tests — the evaluation CLI
-backend/project/tests/test_ai_review.py          45 tests — AI provisional labelling
+backend/project/tests/test_ai_review.py          62 tests — AI provisional labelling
 frontend/__tests__/RelatedResearch.spec.js       20 tests — the section
 frontend/__tests__/PaperDetailsRelated.spec.js    4 tests — page composition
 backend/project/tests/test_nginx_config.py       +1 test — the rate-limit zone
@@ -634,6 +634,7 @@ export QRESP_GEMINI_ENABLED=1
 export QRESP_GEMINI_API_KEY='...'        # never committed, never logged
 python -m project.tools.related_eval ai-label \
   --output-dir ../related-eval-out \
+  --review-file ../related-eval-out/first-pass-human-review.tsv \
   --sources internal,recommendations_default \
   --rate-limit 0.5
 ```
@@ -642,6 +643,64 @@ python -m project.tools.related_eval ai-label \
 provider. `--limit N` bounds a trial run. `--retry-errors` re-asks only the
 pairs that previously failed. Without a key the command refuses (exit 3)
 rather than pretending.
+
+### The review file is the work list
+
+**`--review-file` (default `<output-dir>/human-review.tsv`) decides what gets
+judged. `raw-results.jsonl` is only where the abstracts and bibliography are
+looked up.**
+
+This distinction is the whole cost model, and getting it wrong is expensive:
+raw-results holds every candidate the gate ever scored — 2,041 on the current
+artifacts, 1,434 of them in the two first-pass sources — while the review file
+names 135. An earlier version judged the raw list, which was a 10× overspend
+on pairs nobody would ever read.
+
+`--limit` applies **after** the whitelist, never to the raw list.
+
+Each review row must resolve to **exactly one** raw candidate. Matching uses
+`pair_id` when both sides carry it (`collect` now writes one, derived from
+record id + source + the candidate's most durable key), and falls back to
+`record_id + source + candidate_title` for review files written before that
+column existed. A row matching nothing is *unmatched*; a row matching several
+is *ambiguous*; **either one aborts the run before a single provider call**.
+Picking the first hit would file an answer about one paper under another
+paper's name, and nothing downstream would ever show it.
+
+### Preflight
+
+Every run — including `--dry-run` — prints this before spending anything:
+
+```text
+PREFLIGHT
+  raw_pairs                    1434
+  review_rows                  135
+  matched_pairs                135
+  unmatched_pairs              0
+  ambiguous_pairs              0
+  pairs_with_both_abstracts    0
+  pairs_with_one_abstract      0
+  pairs_with_no_abstract       135
+  cached_pairs                 0
+  planned_provider_calls       0
+```
+
+`planned_provider_calls` is the number to budget against. It is the matched
+pairs minus what the cache already holds, minus anything that cannot be
+judged.
+
+### No abstracts, no judgement
+
+**A pair where NEITHER paper has an abstract is not sent.** It is recorded as
+`insufficient_metadata` and costs nothing. Two titles are not enough to judge
+relatedness on, and an answer produced from them would arrive in the file
+looking exactly like every other answer.
+
+`--allow-title-only` opts in, and forces confidence to `low`.
+
+The transcript above is the real state of the delivered artifacts: they were
+collected before abstracts were stored, so **every one of the 135 pairs is
+title-only and a run today would make zero calls**. Re-collect first.
 
 ### Two properties that make the opinion worth having
 
@@ -680,6 +739,7 @@ be indistinguishable from a real one in the review file.
 | File | Contents |
 | --- | --- |
 | `ai-review.jsonl` | one line per judged pair; also the resume cache |
+| — | *(judged pairs are those the review file named, never the whole raw list)* |
 | `ai-review.tsv` | the same, readable |
 | `ai-summary.json` | rating/confidence/status counts, per-source breakdown, gate-agreement rate |
 | `expert-review.tsv` | **the shortlist — at most 30 rows**, `human_rating` blank |
@@ -708,6 +768,80 @@ enumerating the commonest one:
 
 Each pair lands in exactly one category, so one disagreement is not counted
 five times.
+
+### Re-collecting the same 10 records (PowerShell)
+
+The delivered artifacts have no abstracts, so the first-pass set has to be
+gathered again before any judgement is worth making. Use a **new output
+directory** — the existing evaluation files are not overwritten.
+
+```powershell
+cd C:\Users\hongs\Desktop\qresp_from_server\backend
+
+# The 10 records first-pass-selection.json chose, re-used verbatim.
+@'
+60316fb93f58fc9075286688
+6927175d9bd76c2c6bf77364
+650f2db8dcf4aad701f0d18b
+6574fd0f1a8a9f515d86142e
+68fa608127247d6aff390adf
+62302ab3057dbbfb35b05d52
+617c303032f83df21c34e5e6
+691bb29dc58f7d350e2fb830
+69178ee9c58f7d350e2fb82d
+606bb69d057dbbfb35b05d4e
+'@ | Set-Content -Encoding utf8 ..\related-eval-v2-ids.txt
+
+python -m project.tools.related_eval collect `
+  --api-base https://paperstack.uchicago.edu `
+  --ids-file ..\related-eval-v2-ids.txt `
+  --output-dir ..\related-eval-v2 `
+  --live --rate-limit 0.7 --max-retries 2
+```
+
+**Report these two numbers before going further** — they decide whether the
+judgement is worth making at all:
+
+```powershell
+# 1. How many review rows the new run produced
+$tsv = Get-Content ..\related-eval-v2\human-review.tsv
+"review rows: $($tsv.Count - 1)"
+
+# 2. Abstract coverage
+python -c "import json,io; s=json.load(io.open(r'..\related-eval-v2\summary.json',encoding='utf-8')); print(json.dumps(s['abstract_coverage'], indent=2))"
+```
+
+The new `human-review.tsv` becomes the AI whitelist:
+
+```powershell
+python -m project.tools.related_eval ai-label `
+  --output-dir ..\related-eval-v2 `
+  --dry-run
+```
+
+> **The row count will not be exactly 135 again.** Semantic Scholar's
+> recommendations change over time, so the candidate set — and therefore the
+> review file — will differ. That is expected; report the new count rather
+> than trying to force the old one.
+
+### Smoke test order, once a key exists
+
+```powershell
+$env:QRESP_GEMINI_ENABLED = "1"
+$env:QRESP_GEMINI_API_KEY = "..."        # this session only; never committed
+
+# 1. Plan only. No provider contact. Read PREFLIGHT.
+python -m project.tools.related_eval ai-label --output-dir ..\related-eval-v2 --dry-run
+
+# 2. Five real calls, then look at what came back.
+python -m project.tools.related_eval ai-label --output-dir ..\related-eval-v2 --limit 5
+Get-Content ..\related-eval-v2\ai-review.tsv -TotalCount 6
+
+# 3. The rest. The five above are cached and are not re-asked.
+python -m project.tools.related_eval ai-label --output-dir ..\related-eval-v2
+
+# 4. Interrupt with Ctrl+C at any point and re-run: it resumes.
+```
 
 ### What the expert does with it
 
