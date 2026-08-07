@@ -291,6 +291,13 @@ class RelatedResearchCache(Document):
     stale-but-real answer be served when the provider is unreachable.
     """
     paper_id = StringField(required=True, unique=True, max_length=64)
+    # SHA-256 of the record's public scientific metadata at the moment these
+    # results were computed (project.relatedness.metadata_fingerprint). An
+    # entry whose fingerprint no longer matches the record is a MISS whatever
+    # its expiry says, so editing a title or an abstract refreshes the answer
+    # instead of waiting out the TTL. Absent on entries written before this
+    # field existed => also a miss, which is why no migration is needed.
+    fingerprint = StringField(max_length=64)
     provider = StringField(max_length=64)
     # 'ok' (provider answered), 'unresolved' (this paper could not be
     # identified confidently enough to ask), 'unavailable' (provider failed).

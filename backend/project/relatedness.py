@@ -36,6 +36,8 @@ Specificity comes from the Qresp corpus itself: a term that appears in a large
 share of the corpus is a field label, not a fingerprint, and is weighted (and
 gated) accordingly.
 """
+import hashlib
+import json
 import math
 import re
 from collections import Counter
@@ -369,6 +371,71 @@ def build_internal_profile(record):
         profile.add_text(tool.get("readme"))
 
     return profile
+
+
+# Bumped only when the ALLOWLIST below changes, so a deployment that starts
+# reading a new field invalidates every cached answer that was computed
+# without it.
+FINGERPRINT_VERSION = "1"
+
+
+def _artifact_fingerprint(artifacts, keys):
+    return [[_text(artifact, key) for key in keys]
+            for artifact in (artifacts or []) if isinstance(artifact, dict)]
+
+
+def _text(source, key):
+    value = (source or {}).get(key)
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    return "" if value is None else str(value)
+
+
+def metadata_fingerprint(record):
+    """A stable digest of exactly the public scientific metadata that decides
+    a recommendation.
+
+    This is what lets a cached external answer be thrown away the moment the
+    record it describes is edited, without waiting out the TTL and without a
+    migration: an entry whose fingerprint does not match (or which predates
+    the field entirely) is simply a miss.
+
+    The allowlist is the same set `build_internal_profile` reads, so the two
+    cannot drift apart silently. RAW values are hashed, not normalized ones:
+    the question is "did the curator change this record", not "did the change
+    survive tokenization".
+
+    Deliberately NOT included -- and therefore unable to invalidate a cache
+    entry or to appear in one: owner_email, editor_emails, edit_history,
+    info.insertedBy (curator name/email/affiliation), any RCC URL or file
+    path (serverPath, fileServerPath, folderAbsolutePath, downloadPath,
+    notebookPath), any `files` list or file content, drafts, sessions, CSRF
+    tokens, and activation/audit bookkeeping.
+    """
+    record = record or {}
+    reference = record.get("reference") or {}
+    payload = [
+        FINGERPRINT_VERSION,
+        _text(reference, "DOI"),
+        _text(reference, "title"),
+        _text(reference, "publishedAbstract"),
+        [[_text(person, "firstName"), _text(person, "middleName"),
+          _text(person, "lastName")]
+         for person in (reference.get("authors") or [])
+         if isinstance(person, dict)],
+        [str(tag) for tag in (record.get("tags") or [])],
+        [str(item) for item in (record.get("collections") or [])],
+        _artifact_fingerprint(record.get("charts"),
+                              ("caption", "properties")),
+        _artifact_fingerprint(record.get("datasets"), ("readme", "keywords")),
+        _artifact_fingerprint(record.get("scripts"), ("readme", "keywords")),
+        _artifact_fingerprint(record.get("tools"),
+                              ("packageName", "programName", "facilityname",
+                               "facilityName", "measurement", "readme")),
+    ]
+    encoded = json.dumps(payload, ensure_ascii=False,
+                         separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def build_external_profile(paper):
