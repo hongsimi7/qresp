@@ -26,10 +26,11 @@ scientific metadata, so an edit to the title or the abstract refreshes the
 answer at once instead of waiting out the TTL.
 
 Configuration is ENVIRONMENT ONLY (QRESP_RELATED_RESEARCH_*,
-QRESP_SEMANTIC_SCHOLAR_*), deliberately not `Config.get_setting`: that helper
-falls back to config.ini, and neither the credential nor the switch for an
-external call should be configurable (or accidentally committed) there. The
-feature is OFF by default.
+QRESP_RELATED_EXTERNAL_ENABLED, QRESP_SEMANTIC_SCHOLAR_*), deliberately not
+`Config.get_setting`: that helper falls back to config.ini, and neither the
+credential nor the switch for an external call should be configurable (or
+accidentally committed) there. Both switches are OFF by default, and the
+external one is subordinate to the master one -- see `config()`.
 
 What leaves this server
 -----------------------
@@ -181,9 +182,22 @@ def _int_env(key, default, ceiling):
 
 def config():
     """Effective configuration. Read per request so a deployment can flip the
-    feature without a restart, and so tests can patch the environment."""
+    feature without a restart, and so tests can patch the environment.
+
+    Two switches, not one. The internal list is local computation over records
+    this server already holds; the external list is an outbound call to a
+    third party. Those are different decisions -- an operator may well want
+    Related Qresp Records on and no outbound traffic at all -- so they are
+    separate variables. EXTERNAL is subordinate: the master switch off means
+    the section does not exist, and nothing under it can turn itself on.
+    """
+    enabled = _truthy(_env("RELATED_RESEARCH_ENABLED"))
     return {
-        "ENABLED": _truthy(_env("RELATED_RESEARCH_ENABLED")),
+        "ENABLED": enabled,
+        # Never true on its own: setting only the external variable must not
+        # produce outbound requests from a server whose operator never
+        # enabled the feature.
+        "EXTERNAL_ENABLED": enabled and _truthy(_env("RELATED_EXTERNAL_ENABLED")),
         # Optional. Semantic Scholar serves this API without a key at a lower
         # rate limit; a key raises it. Its absence must never break the page,
         # and never disables the internal list.
@@ -348,18 +362,25 @@ def _normalize_candidate(raw):
     }
 
 
-def fetch_external_candidates(paper_id, cfg):
+def fetch_external_candidates(paper_id, cfg, pool=None):
     """At most EXTERNAL_CANDIDATE_LIMIT recommendations for `paper_id`.
 
     Returns (candidates, outcome) with the same three-way split as the lookup:
     a 404 here means the provider has nothing to recommend for this paper
     (NOT_FOUND, a stable fact), while a timeout, 429, 5xx or a 200 that does
     not carry `recommendedPapers` means it did not answer (UNAVAILABLE).
+
+    `pool` overrides the candidate pool for ONE call. Serving traffic never
+    passes it -- the module constant governs there. It exists so the offline
+    evaluation CLI can compare pools through this exact function instead of
+    reimplementing the request, which would let the thing being measured
+    drift away from the thing being served.
     """
     params = {"fields": RECOMMENDATION_FIELDS,
               "limit": EXTERNAL_CANDIDATE_LIMIT}
-    if RECOMMENDATION_POOL:
-        params["from"] = RECOMMENDATION_POOL
+    pool = pool or RECOMMENDATION_POOL
+    if pool:
+        params["from"] = pool
     payload, outcome = _get(
         SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL + quote(paper_id, safe=""),
         cfg, params)
@@ -659,13 +680,21 @@ def related_research(id):
 
     internal_results, stats = internal_recommendations(current_record, corpus)
 
-    try:
-        external = _external_for(str(paper.id), current_record, stats, cfg)
-    except Exception as e:
-        # A provider or cache problem degrades this one section; it never
-        # becomes a 500 for a page that has perfectly good internal results.
-        print("Related research external section failed: %s" % type(e).__name__)
-        external = _external_section(STATUS_UNAVAILABLE, [])
+    if not cfg["EXTERNAL_ENABLED"]:
+        # Internal-only. No provider request, and the external cache is
+        # neither read nor written -- an operator who turned the outbound call
+        # off gets exactly no outbound behaviour, not a cached echo of it.
+        external = _external_section(STATUS_DISABLED, [])
+    else:
+        try:
+            external = _external_for(str(paper.id), current_record, stats, cfg)
+        except Exception as e:
+            # A provider or cache problem degrades this one section; it never
+            # becomes a 500 for a page that has perfectly good internal
+            # results.
+            print("Related research external section failed: %s"
+                  % type(e).__name__)
+            external = _external_section(STATUS_UNAVAILABLE, [])
 
     return {
         "paper_id": str(paper.id),

@@ -185,10 +185,11 @@ const ResultList = ({ results, server }) => (
 // The external provider is the one part of this that can be missing, off, or
 // broken; each case reads differently so a reader can tell "nothing matched"
 // from "we could not ask".
+//
+// `disabled` is NOT one of those cases: a server running internal-only has no
+// external half at all, so the heading is dropped rather than explained. A
+// reader should not be told about a feature this deployment does not have.
 const externalNotice = (external) => {
-  if (external.status === "disabled") {
-    return "External recommendations are turned off on this server.";
-  }
   if (external.status === "unresolved") {
     return (
       "This record could not be matched in the external index, so no " +
@@ -251,6 +252,9 @@ const RelatedResearch = ({ paperId, server }) => {
   const externalResults = external.results || [];
   const notice = externalNotice(external);
   const staleDate = external.stale ? formatDate(external.updated_at) : null;
+  // Internal-only deployment: the external half is not merely empty, it is
+  // not part of this server. Render the internal list alone.
+  const showExternal = external.status !== "disabled";
 
   return (
     <Drawer heading="Related Research" defaultOpen>
@@ -261,29 +265,35 @@ const RelatedResearch = ({ paperId, server }) => {
           <Note>{EMPTY_MESSAGE}</Note>
         )}
       </Section>
-      <Divider />
-      <Section title="Related External Papers">
-        {external.stale ? (
-          <Note color="error">
-            {staleDate
-              ? `Showing the last successful external results (${staleDate}); refreshing them just failed.`
-              : "Showing the last successful external results; refreshing them just failed."}
-          </Note>
-        ) : null}
-        {externalResults.length ? (
-          <Fragment>
-            <ResultList results={externalResults} server={server} />
-            <Typography variant="caption" color="secondary" component="div">
-              Candidates proposed by Semantic Scholar; shown only when Qresp
-              found evidence they are related.
-            </Typography>
-          </Fragment>
-        ) : (
-          <Note color={external.status === "unavailable" ? "error" : "secondary"}>
-            {notice || EMPTY_MESSAGE}
-          </Note>
-        )}
-      </Section>
+      {showExternal ? (
+        <Fragment>
+          <Divider />
+          <Section title="Related External Papers">
+            {external.stale ? (
+              <Note color="error">
+                {staleDate
+                  ? `Showing the last successful external results (${staleDate}); refreshing them just failed.`
+                  : "Showing the last successful external results; refreshing them just failed."}
+              </Note>
+            ) : null}
+            {externalResults.length ? (
+              <Fragment>
+                <ResultList results={externalResults} server={server} />
+                <Typography variant="caption" color="secondary" component="div">
+                  Candidates proposed by Semantic Scholar; shown only when
+                  Qresp found evidence they are related.
+                </Typography>
+              </Fragment>
+            ) : (
+              <Note
+                color={external.status === "unavailable" ? "error" : "secondary"}
+              >
+                {notice || EMPTY_MESSAGE}
+              </Note>
+            )}
+          </Section>
+        </Fragment>
+      ) : null}
     </Drawer>
   );
 };

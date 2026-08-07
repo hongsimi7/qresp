@@ -19,11 +19,23 @@ from project import connexionapp, related
 from project.models import Paper, RelatedResearchCache
 
 ENABLED = {"QRESP_RELATED_RESEARCH_ENABLED": "1",
+           "QRESP_RELATED_EXTERNAL_ENABLED": "1",
            "QRESP_SEMANTIC_SCHOLAR_API_KEY": ""}
 ENABLED_WITH_KEY = {"QRESP_RELATED_RESEARCH_ENABLED": "1",
+                    "QRESP_RELATED_EXTERNAL_ENABLED": "1",
                     "QRESP_SEMANTIC_SCHOLAR_API_KEY": "test-s2-super-secret"}
 DISABLED = {"QRESP_RELATED_RESEARCH_ENABLED": "",
+            "QRESP_RELATED_EXTERNAL_ENABLED": "",
             "QRESP_SEMANTIC_SCHOLAR_API_KEY": ""}
+# The deployment this split exists for: Related Qresp Records on, no outbound
+# traffic of any kind.
+INTERNAL_ONLY = {"QRESP_RELATED_RESEARCH_ENABLED": "1",
+                 "QRESP_RELATED_EXTERNAL_ENABLED": "",
+                 "QRESP_SEMANTIC_SCHOLAR_API_KEY": ""}
+# Only the subordinate switch set: must behave exactly like fully off.
+EXTERNAL_WITHOUT_MASTER = {"QRESP_RELATED_RESEARCH_ENABLED": "",
+                           "QRESP_RELATED_EXTERNAL_ENABLED": "1",
+                           "QRESP_SEMANTIC_SCHOLAR_API_KEY": "unused"}
 
 
 class FakeResponse:
@@ -273,6 +285,76 @@ class TestFeatureSwitch(RelatedTestCase):
     def test_the_external_default_cache_ttl_is_seven_days(self):
         with mock.patch.dict('os.environ', ENABLED):
             self.assertEqual(7, related.config()["CACHE_DAYS"])
+
+
+class TestInternalAndExternalSwitches(RelatedTestCase):
+    """Two switches. The internal list is local computation; the external one
+    is an outbound call to a third party. An operator must be able to have the
+    first without the second."""
+
+    def test_the_master_switch_off_means_no_section_at_all(self):
+        response, stub = self.fetch(env=DISABLED)
+        body = response.json()
+        self.assertFalse(body["enabled"])
+        self.assertEqual("disabled", body["internal"]["status"])
+        self.assertEqual("disabled", body["external"]["status"])
+        self.assertEqual([], stub.calls)
+
+    def test_the_external_switch_alone_cannot_turn_anything_on(self):
+        # A server whose operator never enabled the feature must not start
+        # making outbound requests because a second variable was set.
+        response, stub = self.fetch(env=EXTERNAL_WITHOUT_MASTER)
+        body = response.json()
+        self.assertFalse(body["enabled"])
+        self.assertEqual([], body["internal"]["results"])
+        self.assertEqual("disabled", body["external"]["status"])
+        self.assertEqual([], stub.calls)
+        with mock.patch.dict('os.environ', EXTERNAL_WITHOUT_MASTER):
+            self.assertFalse(related.config()["EXTERNAL_ENABLED"])
+
+    def test_internal_only_computes_records_and_touches_no_provider(self):
+        response, stub = self.fetch(env=INTERNAL_ONLY)
+        body = response.json()
+        self.assertTrue(body["enabled"])
+        self.assertEqual("ok", body["internal"]["status"])
+        self.assertTrue(body["internal"]["results"])
+        self.assertEqual("disabled", body["external"]["status"])
+        self.assertEqual([], body["external"]["results"])
+        self.assertFalse(body["external"]["stale"])
+        self.assertEqual([], stub.calls, "no provider request may be made")
+
+    def test_internal_only_neither_reads_nor_writes_the_external_cache(self):
+        # Not even a cached echo of a feature the operator turned off.
+        self.fetch(env=INTERNAL_ONLY)
+        self.assertEqual(0, RelatedResearchCache.objects.count())
+
+        # ...and an entry left over from when external WAS on is ignored.
+        self.fetch(env=ENABLED)
+        self.assertEqual(1, RelatedResearchCache.objects.count())
+        before = RelatedResearchCache.objects.first().to_mongo().to_dict()
+        response, stub = self.fetch(env=INTERNAL_ONLY)
+        self.assertEqual("disabled", response.json()["external"]["status"])
+        self.assertEqual([], response.json()["external"]["results"])
+        self.assertEqual([], stub.calls)
+        after = RelatedResearchCache.objects.first().to_mongo().to_dict()
+        self.assertEqual(before, after, "the cache must not be rewritten")
+
+    def test_internal_and_external_together_behave_as_before(self):
+        response, stub = self.fetch(env=ENABLED)
+        body = response.json()
+        self.assertTrue(body["enabled"])
+        self.assertTrue(body["internal"]["results"])
+        self.assertEqual("ok", body["external"]["status"])
+        self.assertTrue(body["external"]["results"])
+        self.assertTrue(stub.calls)
+
+    def test_both_switches_are_environment_only_and_default_off(self):
+        with mock.patch.dict('os.environ',
+                             {"QRESP_RELATED_RESEARCH_ENABLED": "",
+                              "QRESP_RELATED_EXTERNAL_ENABLED": ""}):
+            cfg = related.config()
+        self.assertFalse(cfg["ENABLED"])
+        self.assertFalse(cfg["EXTERNAL_ENABLED"])
 
 
 # ------------------------------------------------------- internal list

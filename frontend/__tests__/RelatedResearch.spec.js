@@ -266,7 +266,10 @@ describe("RelatedResearch", () => {
     ).toBeInTheDocument();
   });
 
-  it("says external recommendations are off rather than pretending nothing matched", async () => {
+  it("hides the external half entirely on an internal-only server", async () => {
+    // The server is running with the external switch off. That is not "we
+    // looked and found nothing" — the external half does not exist here, so
+    // the reader is not told about a feature this deployment lacks.
     renderSection(
       payload({
         external: {
@@ -279,11 +282,40 @@ describe("RelatedResearch", () => {
         },
       })
     );
+    // The internal list is still shown in full.
     expect(
-      await screen.findByText(/external recommendations are turned off/i)
+      await screen.findByRole("heading", { name: /related qresp records/i })
     ).toBeInTheDocument();
-    // ...and the internal list is still shown in full.
     expect(screen.getByText(/gadgetite thin films/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /related external papers/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/recommended by semantic scholar/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/external recommendations are turned off/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it("still shows the empty message for the internal list when external is off", async () => {
+    renderSection(
+      payload({
+        internal: { status: "ok", results: [], count: 0 },
+        external: {
+          status: "disabled",
+          provider: "Semantic Scholar",
+          results: [],
+          count: 0,
+          stale: false,
+          updated_at: null,
+        },
+      })
+    );
+    const messages = await screen.findAllByText(
+      "No sufficiently related papers were found."
+    );
+    expect(messages).toHaveLength(1);
   });
 
   it("renders nothing at all when the feature is disabled server-side", async () => {
