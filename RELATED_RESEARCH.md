@@ -1,10 +1,16 @@
 # Related Literature Explorer — Related Research on Paper Details
 
-> **No language model is involved anywhere in this feature.** No Gemini,
-> OpenAI, Kimi or Qwen call is made, and none is added. Candidates come from
-> the free Semantic Scholar Recommendations API; every ordering, every
-> threshold and every "Why related" sentence is computed deterministically by
-> Qresp from the two records' own published scientific metadata.
+> **No language model runs in the serving path.** Nothing a visitor sees is
+> produced by a model: candidates come from the Qresp corpus and the free
+> Semantic Scholar Recommendations API, and every ordering, threshold and
+> "Why related" sentence is computed deterministically by Qresp from the two
+> records' own published scientific metadata. That is why the UI says
+> "generated automatically", not "AI" — see "Product wording" below.
+>
+> One model IS used, entirely offline and never on a request path: the
+> dev/QA triage tool that gives each candidate pair a **provisional** opinion
+> so a domain expert knows which 30 pairs to read first. It changes nothing
+> about what is served. See "AI-based provisional evaluation".
 
 A visitor reading a record's detail page gets, at the bottom of the page, two
 independent lists:
@@ -32,6 +38,7 @@ page is byte-for-byte what it was before.
 | API contract | `backend/project/swagger.yml` |
 | Rate limit | `nginx/default.conf` (`api_related` zone) |
 | UI section | `frontend/components/Paper/RelatedResearch.js` |
+| AI provisional labelling (dev/QA) | `backend/project/tools/ai_review.py` |
 | Page wiring | `frontend/pages/paperdetails/[id].js` |
 
 `relatedness.py` is **pure**: no database, no network, no clock, no
@@ -573,7 +580,8 @@ cannot masquerade as a verdict.
 backend/project/tests/test_relatedness.py        30 tests — the pure gate + fingerprint
 backend/project/tests/test_related_research.py   63 tests — endpoint/provider/cache/switches
 backend/project/tests/test_related_eval.py       49 tests — the evaluation CLI
-frontend/__tests__/RelatedResearch.spec.js       15 tests — the section
+backend/project/tests/test_ai_review.py          45 tests — AI provisional labelling
+frontend/__tests__/RelatedResearch.spec.js       20 tests — the section
 frontend/__tests__/PaperDetailsRelated.spec.js    4 tests — page composition
 backend/project/tests/test_nginx_config.py       +1 test — the rate-limit zone
 ```
@@ -582,6 +590,131 @@ No DOI, paper title, material, method or facility name is hardcoded in
 `relatedness.py`, `related.py`, or in any test's *algorithm*. Test fixtures use
 invented vocabulary precisely so the thresholds, not a lookup table, are what
 is under test.
+
+---
+
+## Product wording
+
+The section is headed **Suggested Related Papers** and always carries, in
+every state including loading and empty:
+
+> These suggestions are generated automatically from publication metadata and
+> research-similarity signals. They may be incomplete or inaccurate. Review
+> each paper before relying on the suggested connection.
+
+**The UI must not say "AI", "AI-assisted" or "AI recommendations."** No model
+runs when the section is served, so the claim would be false — and a user who
+believes a model vetted these connections would trust them more than the
+arithmetic warrants. If a model ever reranks at serve time, that is the moment
+the wording changes, and not before. A frontend test asserts the section
+contains no such claim.
+
+The existing policies are unchanged by any of this: at most five per list,
+candidates below the quality gate stay hidden, an empty list is an acceptable
+answer, and every candidate comes from a real Qresp record or a real provider
+result. Nothing generates a title, a DOI or a paper.
+
+---
+
+## AI-based provisional evaluation (triage only)
+
+> **This is NOT expert ground truth.** It is not validated and not verified.
+> Its only job is to decide which 15–30 pairs a domain expert should read
+> first. **No threshold and no production scoring may be changed on the
+> strength of these labels.**
+
+135 rows is a lot to read cold, and the person who has to read them is not a
+specialist in these fields. So a language model gives every pair a provisional
+opinion, and the pairs where that opinion *disagrees* with the gate become the
+expert's shortlist.
+
+```sh
+cd backend
+export QRESP_GEMINI_ENABLED=1
+export QRESP_GEMINI_API_KEY='...'        # never committed, never logged
+python -m project.tools.related_eval ai-label \
+  --output-dir ../related-eval-out \
+  --sources internal,recommendations_default \
+  --rate-limit 0.5
+```
+
+`--dry-run` builds and blind-checks every payload while contacting no
+provider. `--limit N` bounds a trial run. `--retry-errors` re-asks only the
+pairs that previously failed. Without a key the command refuses (exit 3)
+rather than pretending.
+
+### Two properties that make the opinion worth having
+
+**It is blind.** `ai_review.blind_pair_payload` is the only place a payload is
+built, and it carries just the two papers' own bibliography — title, abstract,
+and optionally year, DOI and venue. The gate's score, its accept/reject
+verdict, its reasons, the candidate's rank, whether production would show it,
+and even which pool it came from are all absent. A model told "the existing
+system rejected this" would mostly agree with the existing system, and the
+point is an independent second opinion. The payload is asserted blind again,
+on its serialized form, immediately before it leaves the process.
+
+**Confidence is bounded locally.** When either abstract is missing the
+confidence is forced to `low` *after* the model answers. The model is not
+asked to police itself, because a judgement made from a title alone is not a
+confident one whatever it claims.
+
+One pair per request, deliberately: batching would let the model rank
+candidates against one another and drift into reproducing an ordering, when
+what is wanted is a single independent judgement.
+
+### Output contract
+
+| Field | Values |
+| --- | --- |
+| `ai_rating` | `related` / `partial` / `unrelated` |
+| `ai_confidence` | `high` / `medium` / `low` |
+| `ai_reason` | one or two sentences naming the specific overlap or mismatch |
+| `ai_status` | `completed` / `insufficient_metadata` / `provider_error` |
+
+The provider is asked for structured JSON against a narrow schema, and the
+answer is **re-validated locally anyway**: a value outside an enum is refused
+outright, never coerced to the nearest one — a silently corrected label would
+be indistinguishable from a real one in the review file.
+
+| File | Contents |
+| --- | --- |
+| `ai-review.jsonl` | one line per judged pair; also the resume cache |
+| `ai-review.tsv` | the same, readable |
+| `ai-summary.json` | rating/confidence/status counts, per-source breakdown, gate-agreement rate |
+| `expert-review.tsv` | **the shortlist — at most 30 rows**, `human_rating` blank |
+
+Judgements are appended and flushed one at a time, so an interrupted run keeps
+everything it already paid for and a re-run asks only about what is left. A
+provider failure is recorded against that pair and the sweep continues.
+
+`human-review.tsv` and `first-pass-human-review.tsv` are never written; the
+command refuses to start if an output name would collide with one, and
+verifies their timestamps afterwards.
+
+### How the shortlist is chosen
+
+Five risk categories, each given an equal share of the 30 slots, with unused
+slots redistributed — so the list samples each KIND of disagreement instead of
+enumerating the commonest one:
+
+| Category | Why it is worth an expert's time |
+| --- | --- |
+| `gate_accepted_ai_unrelated` | possible false positive — shown to users but maybe irrelevant |
+| `gate_rejected_ai_related` | possible false negative — the failure the gate cannot see in itself |
+| `ai_low_confidence` | the machine could not tell; a person must |
+| `internal_vs_external_disagreement` | the two sources disagree sharply for one record |
+| `random_sample` | an unbiased control against the four targeted buckets |
+
+Each pair lands in exactly one category, so one disagreement is not counted
+five times.
+
+### What the expert does with it
+
+Fill `human_rating` in `expert-review.tsv` (`related` / `partial` /
+`unrelated`). Those human values — never the AI's — are what any later
+threshold decision rests on. The AI column sits alongside as context, and the
+gate's own decision is shown too so the expert can see what is being disputed.
 
 ---
 

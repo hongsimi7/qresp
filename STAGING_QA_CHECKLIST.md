@@ -679,7 +679,7 @@ docker compose exec backend python -c "import os; print('enabled:', \
 ### Switch and degradation
 
 - [ ] **Unset** `QRESP_RELATED_RESEARCH_ENABLED` → detail pages render exactly
-      as before, **no** "Related Research" section anywhere; `curl -k
+      as before, **no** "Suggested Related Papers" section anywhere; `curl -k
       https://localhost:8443/api/paper/<id>/related` → 200 with
       `"enabled": false` and both lists empty; **no** outbound request in the
       backend log
@@ -733,6 +733,13 @@ must never be recorded as a fact about the record.
 
 ### Content quality
 
+- [ ] The section is headed **Suggested Related Papers** and always carries
+      the notice "These suggestions are generated automatically from
+      publication metadata and research-similarity signals…", in every state
+      (loading, results, empty)
+- [ ] The UI **never** says "AI", "AI-assisted" or "AI recommendations": no
+      language model runs in the serving path, and claiming one would
+      misdescribe how the answer was produced
 - [ ] Each list shows **at most 5** and is **not padded** — a record with one
       good neighbour shows one, not five
 - [ ] A record with nothing related shows exactly

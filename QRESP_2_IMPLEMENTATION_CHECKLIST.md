@@ -155,6 +155,16 @@ auto-saved or auto-published.
 - **Citation evidence is INACTIVE** — implemented and unit-tested in the pure
   module, but nothing ever supplies a non-empty `citation_dois`, because the
   provider discards the field list when nested selectors are requested.
+- **AI-based PROVISIONAL triage** (`project/tools/ai_review.py`,
+  `related_eval ai-label`, dev/QA only): a language model gives each candidate
+  pair a blind opinion — it never sees the gate's score, verdict, reasons,
+  rank or source — and the pairs where that opinion disagrees with the gate
+  become a ≤30-row `expert-review.tsv`. One pair per request, structured
+  output re-validated locally, confidence forced to `low` when an abstract is
+  missing, resumable cache, human files never written. **Not ground truth,
+  not validated, not verified; it may not move any threshold.** No model runs
+  in the serving path, and the UI accordingly says "generated automatically",
+  never "AI".
 - **Pending:** the human labelling pass. An 18-record live run shows the gate
   accepting ~71 % of candidate pairs (74 % internal); whether that is too
   permissive is exactly what the ratings must decide. **No threshold has been
