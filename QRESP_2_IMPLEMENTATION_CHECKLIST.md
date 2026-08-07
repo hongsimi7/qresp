@@ -118,13 +118,25 @@ auto-saved or auto-published.
   is a non-answer (`unavailable`, cached 1 hour, previous results served
   `stale`). Collapsing them turned one blip into a week-long wrong claim.
 - **Live-verified against the real Semantic Scholar API** (no key, no DOI
-  hardcoded). Findings: nested field selectors make the provider discard the
-  whole field list (so citation evidence has no source and never fires); and
-  **the Recommendations API does not cover Qresp's domains** — its default
-  pool returns nothing for Qresp-age records and its wider pool returns
-  Computer Science papers whatever the field, all 38 of which the quality gate
-  correctly rejected. The external half therefore shows nothing today; the
-  internal half is unaffected.
+  hardcoded). Finding: nested field selectors make the provider discard the
+  whole field list, so citation evidence has no input source and never fires.
+- **Provider coverage, measured over 18 real Qresp records** (supersedes an
+  earlier claim, drawn from only two hand-picked DOIs, that the
+  Recommendations API does not serve Qresp's domains — that claim is
+  **retracted**):
+  - `recommendations_default` (the pool production uses): **15/18 records,
+    300 candidates, 74 % gate pass**
+  - `recommendations_all_cs`: **18/18 records, 347 candidates, 58 % gate
+    pass**
+  - `title_resolution`: **13/18 records, 260 candidates, 75 % gate pass**
+  - Candidates are plausibly on-topic for Qresp's subject matter (e.g.
+    quantum-embedding papers returned against a quantum-embedding record).
+  - **Recommendation precision is still undetermined: there are no human
+    labels yet.** Plausibility is not precision.
+- **Open question, not a conclusion:** the overall gate pass rate is ~71 %,
+  which may be too permissive. Only the top five are ever shown, so the
+  visible effect is bounded. **No threshold is changed before the human QA
+  pass** — that decision belongs to whoever fills in the ratings.
 - Docs: `RELATED_RESEARCH.md`, including the 10–20 record
   관련 있음 / 부분 관련 / 관련 없음 QA table.
 - **Two switches:** `QRESP_RELATED_RESEARCH_ENABLED` (master, default off) and

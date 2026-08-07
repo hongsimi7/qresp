@@ -660,13 +660,21 @@ docker compose exec backend python -c "import os; print('enabled:', \
   bool(os.environ.get('QRESP_SEMANTIC_SCHOLAR_API_KEY')))"
 ```
 
-> ⚠️ **Expect the external list to be empty.** Verified against the live API:
-> the provider's default candidate pool returns nothing for Qresp-age records,
-> and its wider pool returns Computer Science papers whatever the field (best
-> cosine 0.025 against a 0.16 bar — all correctly rejected by the quality
-> gate). `external.status: "ok"` with `count: 0` is the **expected healthy
-> result** today. See `RELATED_RESEARCH.md` § Known limitations. The internal
-> list is the part worth QA-ing.
+> ℹ️ **What to expect from the external list.** Measured over 18 real Qresp
+> records, the pool production uses returns candidates for **15 of 18**
+> (300 candidates, 74 % of them clearing the gate), and they look on-topic.
+> An `external.status: "ok"` with `count: 0` on a given record is still a
+> perfectly normal answer — some records simply have no match — so it is not
+> by itself a fault.
+>
+> An earlier version of this note said the external list would always be
+> empty. That was drawn from two hand-picked DOIs and is **retracted**; see
+> `RELATED_RESEARCH.md` § "Correction".
+>
+> **Precision is still unknown** — there are no human labels yet, and
+> plausible-looking is not the same as relevant. The open question is the
+> opposite one: the gate accepts ~71 % of candidate pairs, which may be too
+> permissive. Resolve that with the labelling pass below, not by eye.
 
 ### Switch and degradation
 

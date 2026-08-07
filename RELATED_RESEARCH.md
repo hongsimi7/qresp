@@ -570,9 +570,10 @@ cannot masquerade as a verdict.
 ## Tests
 
 ```text
-backend/project/tests/test_relatedness.py        31 tests — the pure gate + fingerprint
-backend/project/tests/test_related_research.py   56 tests — endpoint/provider/cache
-frontend/__tests__/RelatedResearch.spec.js       14 tests — the section
+backend/project/tests/test_relatedness.py        30 tests — the pure gate + fingerprint
+backend/project/tests/test_related_research.py   63 tests — endpoint/provider/cache/switches
+backend/project/tests/test_related_eval.py       49 tests — the evaluation CLI
+frontend/__tests__/RelatedResearch.spec.js       15 tests — the section
 frontend/__tests__/PaperDetailsRelated.spec.js    4 tests — page composition
 backend/project/tests/test_nginx_config.py       +1 test — the rate-limit zone
 ```
@@ -586,38 +587,22 @@ is under test.
 
 ## Domain QA — rate the recommendations
 
-The gate above is calibrated by reasoning, not yet by a physicist. This table
-is what turns it into evidence. Pick 10–20 records that already exist on the
-instance (a mix: same group, same method, same field, unrelated), open each
-detail page, and rate what appears.
+The gate above is calibrated by reasoning, not yet by a physicist. **The
+review TSV the evaluation CLI writes is what turns it into evidence** — see
+"Domain-quality evaluation CLI" above. Rate rows there rather than
+transcribing detail pages by hand: the CLI samples deterministically, records
+the gate's own score and rejection reason beside each candidate, and includes
+the near-misses the gate threw away, which is the only way a false negative
+can be seen at all.
+
+A first pass of ~135 rows over 10 topically distinct records
+(`first-pass-human-review.tsv`) is the intended starting point; the full
+511-row file remains available for a wider pass afterwards.
 
 **Reference sample for the external path:** DOI `10.1021/acs.nanolett.7b00283`
 — a record carrying this DOI exercises the DOI-first resolution and returns a
 non-trivial recommendation set. *(This DOI appears in documentation only; it is
 not referenced by any code or test.)*
-
-| # | Qresp record (title / id) | List | Recommended title | Reasons shown | 관련 있음 / 부분 관련 / 관련 없음 | Note |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | | internal | | | | |
-| 2 | | internal | | | | |
-| 3 | | internal | | | | |
-| 4 | | internal | | | | |
-| 5 | | internal | | | | |
-| 6 | | internal | | | | |
-| 7 | | internal | | | | |
-| 8 | | internal | | | | |
-| 9 | | internal | | | | |
-| 10 | | internal | | | | |
-| 11 | | external | | | | |
-| 12 | | external | | | | |
-| 13 | | external | | | | |
-| 14 | | external | | | | |
-| 15 | | external | | | | |
-| 16 | | external | | | | |
-| 17 | | external | | | | |
-| 18 | | external | | | | |
-| 19 | | external | | | | |
-| 20 | | external | | | | |
 
 Also record, per rated record:
 
@@ -628,7 +613,8 @@ Also record, per rated record:
 | Reasons naming a term that is really a **field label** on this corpus | |
 | Records where the list was **empty** and that was correct | |
 
-**How to act on the result**
+**How to act on the result** — only after the ratings exist. No threshold is
+moved on unlabelled data.
 
 | Symptom | Knob (`backend/project/relatedness.py`) |
 | --- | --- |
@@ -692,8 +678,9 @@ docker compose logs --tail=50 backend | grep -i "related research" || echo "no p
 ```
 
 Expected on a healthy run: `enabled: true`, a non-zero `internal` count on a
-record that has neighbours, and an `external` status of `ok` (see the
-limitation below about the count being 0).
+record that has neighbours, and an `external` status of `ok`. An external
+`count` of 0 on a particular record is a normal answer, not a fault — some
+records genuinely have no match.
 
 ### 4. Confirm the cache without reading secrets out of it
 
