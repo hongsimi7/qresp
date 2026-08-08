@@ -45,6 +45,22 @@ MAX_REASON_CHARS = 400
 MAX_ABSTRACT_CHARS = 4000
 MAX_TITLE_CHARS = 400
 
+# Marks a reason that was cut short. Leading space so a cut at a sentence end
+# reads as "…spectrometer. ..." rather than "…spectrometer....".
+REASON_TRUNCATION_SUFFIX = " ..."
+# A sentence boundary is preferred, but not at any price: one early full stop
+# ("We agree.") would throw most of the explanation away. Below this fraction
+# of the budget, cut at a word boundary instead and keep the text.
+MIN_SENTENCE_KEEP_RATIO = 0.6
+_SENTENCE_ENDS = (".", "?", "!")
+
+# Appended verbatim when the confidence is clamped. Kept as a constant so the
+# reason can be shortened to leave room for it -- the note must survive.
+CONFIDENCE_CLAMP_NOTE = ("[confidence capped to low: at least one abstract "
+                         "was unavailable, so this rests on titles alone]")
+MAX_REASON_WITH_NOTE_CHARS = (MAX_REASON_CHARS + 1
+                              + len(CONFIDENCE_CLAMP_NOTE))
+
 # Everything the gate decided. None of it may reach the provider, and a test
 # asserts the serialized payload contains no key from this list.
 FORBIDDEN_PAYLOAD_KEYS = (
@@ -98,6 +114,45 @@ RESPONSE_SCHEMA = {
 def _clip(value, limit):
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return text[:limit]
+
+
+def shorten_reason(value, limit=MAX_REASON_CHARS):
+    """Cut an explanation to `limit` characters WITHOUT cutting a word in half.
+
+    A raw slice produced things like "thermoelectr" and "donor-acceptor pa" --
+    fragments that read as if the model had said something it had not, and
+    that a reviewer cannot check. So the cut lands on a boundary:
+
+    1. the last completed sentence inside the budget, when that keeps most of
+       it (see MIN_SENTENCE_KEEP_RATIO), otherwise
+    2. the last word boundary, and only if there is neither
+    3. a hard cut -- which can only happen for one enormous unbroken token.
+
+    The result is always <= `limit`, and always ends with `...` when anything
+    was dropped, so a shortened reason is never mistaken for a whole one.
+    """
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text or len(text) <= limit:
+        return text
+
+    budget = limit - len(REASON_TRUNCATION_SUFFIX)
+    if budget <= 0:
+        # Pathologically small limit: no room to mark the cut.
+        return text[:limit]
+
+    window = text[:budget]
+    sentence_end = max(window.rfind(end) for end in _SENTENCE_ENDS)
+    if (sentence_end >= 0
+            and sentence_end + 1 >= budget * MIN_SENTENCE_KEEP_RATIO):
+        head = window[:sentence_end + 1]
+    else:
+        space = window.rfind(" ")
+        head = window[:space] if space > 0 else window
+
+    head = head.rstrip()
+    if not head:
+        head = window.rstrip() or window
+    return head + REASON_TRUNCATION_SUFFIX
 
 
 def _paper_payload(title, abstract, year, doi, venue):
@@ -195,17 +250,18 @@ def parse_ai_answer(answer_text, abstracts_available=True):
     if confidence not in AI_CONFIDENCE:
         return None, ("confidence %r is not one of %s"
                       % (data.get("confidence"), ", ".join(AI_CONFIDENCE)))
-    reason = _clip(data.get("reason"), MAX_REASON_CHARS)
+    reason = shorten_reason(data.get("reason"))
     if not reason:
         return None, "the answer carries no reason"
 
     if not abstracts_available and confidence != CONFIDENCE_LOW:
         # Enforced here, not requested of the model: a judgement made from
         # titles alone is not a confident one, whatever the model claims.
+        # The reason is already within MAX_REASON_CHARS, so appending the note
+        # cannot push it past MAX_REASON_WITH_NOTE_CHARS -- and the note is
+        # never the part that gets cut off.
         confidence = CONFIDENCE_LOW
-        reason = _clip("%s [confidence capped to low: at least one abstract "
-                       "was unavailable, so this rests on titles alone]"
-                       % reason, MAX_REASON_CHARS + 120)
+        reason = "%s %s" % (reason, CONFIDENCE_CLAMP_NOTE)
 
     return {"ai_rating": rating, "ai_confidence": confidence,
             "ai_reason": reason}, None
@@ -272,17 +328,67 @@ def build_jsonl_row(record, candidate, result, status, error="",
 # ------------------------------------------------- expert-review shortlisting
 
 CATEGORY_FALSE_POSITIVE = "gate_accepted_ai_unrelated"
-CATEGORY_FALSE_NEGATIVE = "gate_rejected_ai_related"
+# Named for what it actually holds. `partial` is a disagreement with a gate
+# that rejected the pair just as much as `related` is, and the previous name
+# ("..._ai_related") said otherwise -- so those rows fell through to the
+# random bucket and stopped being flagged as disagreements at all.
+CATEGORY_FALSE_NEGATIVE = "gate_rejected_ai_related_or_partial"
 CATEGORY_LOW_CONFIDENCE = "ai_low_confidence"
 CATEGORY_SOURCE_CONFLICT = "internal_vs_external_disagreement"
 CATEGORY_RANDOM = "random_sample"
 
-REVIEW_CATEGORIES = (CATEGORY_FALSE_POSITIVE, CATEGORY_FALSE_NEGATIVE,
-                     CATEGORY_LOW_CONFIDENCE, CATEGORY_SOURCE_CONFLICT,
-                     CATEGORY_RANDOM)
+# Where the gate and the AI actually contradict each other. These are the
+# rows an expert exists to adjudicate, so they are filled before anything
+# else -- at any shortlist size.
+DISAGREEMENT_CATEGORIES = (CATEGORY_FALSE_POSITIVE, CATEGORY_FALSE_NEGATIVE)
+CONTEXT_CATEGORIES = (CATEGORY_LOW_CONFIDENCE, CATEGORY_SOURCE_CONFLICT,
+                      CATEGORY_RANDOM)
+REVIEW_CATEGORIES = DISAGREEMENT_CATEGORIES + CONTEXT_CATEGORIES
 
 EXPERT_REVIEW_LIMIT = 30
 SOURCE_CONFLICT_MARGIN = 0.5
+
+
+# ------------------------------------------------- the gate/AI contract
+#
+# ONE definition, used by both the summary and the shortlist. They used to
+# carry separate hardcoded conditions and had drifted apart: the summary
+# counted `partial` as agreement with an ACCEPT and as disagreement with a
+# REJECT, while the shortlist only recognised `related` as a false negative.
+# The visible symptom was a summary reporting four disagreements and a
+# shortlist naming three.
+
+VERDICT_AGREEMENT = "agreement"
+VERDICT_FALSE_POSITIVE = "false_positive"
+VERDICT_FALSE_NEGATIVE = "false_negative"
+
+# Ratings that mean "there is a relationship here", of whatever strength.
+POSITIVE_RATINGS = (RATING_RELATED, RATING_PARTIAL)
+
+
+def gate_ai_verdict(gate_decision, ai_rating):
+    """How one pair's gate decision and AI rating relate.
+
+        gate accepted + related/partial -> agreement
+        gate accepted + unrelated       -> false positive  (shown, maybe junk)
+        gate rejected + unrelated       -> agreement
+        gate rejected + related/partial -> false negative  (dropped, maybe good)
+
+    `partial` counts as a relationship on BOTH sides of the gate. Treating it
+    as agreement under an accept but as nothing under a reject is the
+    inconsistency this function exists to remove.
+    """
+    accepted = gate_decision == "accepted"
+    positive = ai_rating in POSITIVE_RATINGS
+    if accepted and not positive:
+        return VERDICT_FALSE_POSITIVE
+    if not accepted and positive:
+        return VERDICT_FALSE_NEGATIVE
+    return VERDICT_AGREEMENT
+
+
+def is_disagreement(gate_decision, ai_rating):
+    return gate_ai_verdict(gate_decision, ai_rating) != VERDICT_AGREEMENT
 
 
 def _is_external(source):
@@ -327,10 +433,10 @@ def categorize(rows):
             # Not a disagreement -- an absence of a judgement. Worth a look
             # only through the low-confidence door if it has a rating at all.
             continue
-        gate_accepted = row.get("gate_decision") == "accepted"
-        if gate_accepted and row["ai_rating"] == RATING_UNRELATED:
+        verdict = gate_ai_verdict(row.get("gate_decision"), row["ai_rating"])
+        if verdict == VERDICT_FALSE_POSITIVE:
             buckets[CATEGORY_FALSE_POSITIVE].append(row)
-        elif not gate_accepted and row["ai_rating"] == RATING_RELATED:
+        elif verdict == VERDICT_FALSE_NEGATIVE:
             buckets[CATEGORY_FALSE_NEGATIVE].append(row)
         elif row["ai_confidence"] == CONFIDENCE_LOW:
             buckets[CATEGORY_LOW_CONFIDENCE].append(row)
@@ -360,29 +466,13 @@ def _spread(rows):
     return spread
 
 
-def select_for_expert(rows, limit=EXPERT_REVIEW_LIMIT):
-    """At most `limit` pairs, balanced across the risk categories.
-
-    Every category gets an equal share first; whatever a thin category cannot
-    use is redistributed to the others in a fixed order. No category is
-    allowed to swamp the list, because the point is to sample each KIND of
-    disagreement, not to enumerate the commonest one.
-    """
-    buckets = categorize(rows)
-    available = {name: _spread(buckets[name]) for name in REVIEW_CATEGORIES}
-    quota = max(1, limit // len(REVIEW_CATEGORIES))
-    chosen, taken = [], {name: 0 for name in REVIEW_CATEGORIES}
-
-    for name in REVIEW_CATEGORIES:
-        share = available[name][:quota]
-        taken[name] = len(share)
-        chosen.extend((name, row) for row in share)
-
-    # Redistribute what the thin categories left behind.
-    index = 0
+def _round_robin(names, available, taken, chosen, limit):
+    """Take one row at a time across `names` until they run dry or the list is
+    full. Alternating rather than draining one category keeps a large bucket
+    from crowding out a small one."""
     while len(chosen) < limit:
         progressed = False
-        for name in REVIEW_CATEGORIES:
+        for name in names:
             if len(chosen) >= limit:
                 break
             pool = available[name]
@@ -391,8 +481,27 @@ def select_for_expert(rows, limit=EXPERT_REVIEW_LIMIT):
                 taken[name] += 1
                 progressed = True
         if not progressed:
-            break
-        index += 1
+            return
+
+
+def select_for_expert(rows, limit=EXPERT_REVIEW_LIMIT):
+    """At most `limit` pairs, disagreements first.
+
+    Two tiers, and the order between them is the point. Every row where the
+    gate and the AI actually contradict each other goes in BEFORE any context
+    row, at any shortlist size -- a reviewer given ten slots should spend all
+    ten on contested pairs, not four of them on a random sample of pairs
+    everybody already agrees about.
+
+    Within a tier the categories alternate, so a bucket of two hundred false
+    positives cannot bury the four false negatives beside it.
+    """
+    buckets = categorize(rows)
+    available = {name: _spread(buckets[name]) for name in REVIEW_CATEGORIES}
+    chosen, taken = [], {name: 0 for name in REVIEW_CATEGORIES}
+
+    _round_robin(DISAGREEMENT_CATEGORIES, available, taken, chosen, limit)
+    _round_robin(CONTEXT_CATEGORIES, available, taken, chosen, limit)
 
     return chosen[:limit], {name: len(available[name])
                             for name in REVIEW_CATEGORIES}
@@ -412,14 +521,16 @@ def ai_summary(rows, model, shortlist_counts, requested, cached, calls):
             row["source"], {name: 0 for name in AI_RATINGS})
         bucket[row["ai_rating"]] += 1
 
-    agree = disagree = 0
+    # Same helper the shortlist uses, so the two can never disagree about
+    # what a disagreement is.
+    verdicts = {VERDICT_AGREEMENT: 0, VERDICT_FALSE_POSITIVE: 0,
+                VERDICT_FALSE_NEGATIVE: 0}
     for row in completed:
-        gate_accepted = row.get("gate_decision") == "accepted"
-        ai_positive = row["ai_rating"] in (RATING_RELATED, RATING_PARTIAL)
-        if gate_accepted == ai_positive:
-            agree += 1
-        else:
-            disagree += 1
+        verdicts[gate_ai_verdict(row.get("gate_decision"),
+                                 row["ai_rating"])] += 1
+    agree = verdicts[VERDICT_AGREEMENT]
+    disagree = (verdicts[VERDICT_FALSE_POSITIVE]
+                + verdicts[VERDICT_FALSE_NEGATIVE])
 
     total = len(completed)
     return {
@@ -451,9 +562,14 @@ def ai_summary(rows, model, shortlist_counts, requested, cached, calls):
         "gate_agreement": {
             "note": "Agreement between the gate's accept/reject and the AI's "
                     "related-or-partial. A disagreement is a QUESTION for the "
-                    "expert, not evidence that either side is wrong.",
+                    "expert, not evidence that either side is wrong. Every "
+                    "disagreement counted here is also in the expert "
+                    "shortlist's %s or %s category."
+                    % (CATEGORY_FALSE_POSITIVE, CATEGORY_FALSE_NEGATIVE),
             "agree": agree,
             "disagree": disagree,
+            "false_positives": verdicts[VERDICT_FALSE_POSITIVE],
+            "false_negatives": verdicts[VERDICT_FALSE_NEGATIVE],
             "agreement_rate": round(agree / float(total), 4) if total else 0.0,
         },
         "expert_shortlist_candidates_by_category": shortlist_counts,

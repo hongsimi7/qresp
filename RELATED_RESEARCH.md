@@ -582,7 +582,7 @@ cannot masquerade as a verdict.
 backend/project/tests/test_relatedness.py        30 tests — the pure gate + fingerprint
 backend/project/tests/test_related_research.py   63 tests — endpoint/provider/cache/switches
 backend/project/tests/test_related_eval.py       56 tests — the evaluation CLI
-backend/project/tests/test_ai_review.py          77 tests — AI provisional labelling + smoke sample
+backend/project/tests/test_ai_review.py          99 tests — AI provisional labelling + smoke sample
 frontend/__tests__/RelatedResearch.spec.js       20 tests — the section
 frontend/__tests__/PaperDetailsRelated.spec.js    4 tests — page composition
 backend/project/tests/test_nginx_config.py       +1 test — the rate-limit zone
@@ -756,20 +756,44 @@ verifies their timestamps afterwards.
 
 ### How the shortlist is chosen
 
-Five risk categories, each given an equal share of the 30 slots, with unused
-slots redistributed — so the list samples each KIND of disagreement instead of
-enumerating the commonest one:
+Two tiers. **Every pair where the gate and the AI actually contradict each
+other goes in first, at any shortlist size** — a reviewer with ten slots
+should spend all ten on contested pairs, not four of them on a random sample
+of pairs everybody already agrees about. Within a tier the categories
+alternate, so a bucket of two hundred false positives cannot bury the four
+false negatives beside it.
 
-| Category | Why it is worth an expert's time |
-| --- | --- |
-| `gate_accepted_ai_unrelated` | possible false positive — shown to users but maybe irrelevant |
-| `gate_rejected_ai_related` | possible false negative — the failure the gate cannot see in itself |
-| `ai_low_confidence` | the machine could not tell; a person must |
-| `internal_vs_external_disagreement` | the two sources disagree sharply for one record |
-| `random_sample` | an unbiased control against the four targeted buckets |
+| Tier | Category | Why it is worth an expert's time |
+| --- | --- | --- |
+| 1 | `gate_accepted_ai_unrelated` | possible false positive — shown to users but maybe irrelevant |
+| 1 | `gate_rejected_ai_related_or_partial` | possible false negative — the failure the gate cannot see in itself |
+| 2 | `ai_low_confidence` | the machine could not tell; a person must |
+| 2 | `internal_vs_external_disagreement` | the two sources disagree sharply for one record |
+| 2 | `random_sample` | an unbiased control against the targeted buckets |
 
 Each pair lands in exactly one category, so one disagreement is not counted
 five times.
+
+### What counts as a disagreement
+
+One helper, `ai_review.gate_ai_verdict`, and both the summary and the
+shortlist use it. They used to carry separate hardcoded conditions and had
+drifted apart: the summary treated `partial` as a relationship on both sides
+of the gate, while the shortlist recognised only `related` as a false
+negative. A real 10-pair run therefore reported **four** disagreements and
+shortlisted **three**, with the fourth quietly filed under `random_sample`.
+
+| Gate | AI rating | Verdict |
+| --- | --- | --- |
+| accepted | `related` / `partial` | agreement |
+| accepted | `unrelated` | **false positive** |
+| rejected | `unrelated` | agreement |
+| rejected | `related` / `partial` | **false negative** |
+
+`partial` means "there is a relationship here, weakly" — which contradicts a
+reject exactly as `related` does. `ai-summary.json` now also reports
+`false_positives` and `false_negatives`, and their sum is by construction the
+size of the two tier-1 categories.
 
 ### Re-collecting the same 10 records (PowerShell)
 

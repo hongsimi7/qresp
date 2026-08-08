@@ -226,6 +226,253 @@ def judged(index, source="internal", gate="accepted", rating="related",
     }
 
 
+class TestGateAiContract(unittest.TestCase):
+    """One definition of agreement, used by the summary AND the shortlist.
+
+    They used to hold separate hardcoded conditions and had drifted: the
+    summary counted `partial` against a REJECT as a disagreement, while the
+    shortlist recognised only `related` as a false negative. A real 10-pair
+    run reported four disagreements and shortlisted three.
+    """
+
+    def test_the_full_contract(self):
+        cases = {
+            ("accepted", "related"): ai_review.VERDICT_AGREEMENT,
+            ("accepted", "partial"): ai_review.VERDICT_AGREEMENT,
+            ("accepted", "unrelated"): ai_review.VERDICT_FALSE_POSITIVE,
+            ("rejected", "unrelated"): ai_review.VERDICT_AGREEMENT,
+            ("rejected", "related"): ai_review.VERDICT_FALSE_NEGATIVE,
+            ("rejected", "partial"): ai_review.VERDICT_FALSE_NEGATIVE,
+        }
+        for (decision, rating), expected in cases.items():
+            self.assertEqual(expected,
+                             ai_review.gate_ai_verdict(decision, rating),
+                             "%s + %s" % (decision, rating))
+
+    def test_partial_is_a_relationship_on_both_sides_of_the_gate(self):
+        # The exact asymmetry that caused the bug.
+        self.assertEqual(ai_review.VERDICT_AGREEMENT,
+                         ai_review.gate_ai_verdict("accepted", "partial"))
+        self.assertEqual(ai_review.VERDICT_FALSE_NEGATIVE,
+                         ai_review.gate_ai_verdict("rejected", "partial"))
+
+    def test_is_disagreement_agrees_with_the_verdict(self):
+        for decision in ("accepted", "rejected"):
+            for rating in ai_review.AI_RATINGS:
+                expected = (ai_review.gate_ai_verdict(decision, rating)
+                            != ai_review.VERDICT_AGREEMENT)
+                self.assertEqual(expected,
+                                 ai_review.is_disagreement(decision, rating))
+
+    def test_the_false_negative_category_is_named_for_what_it_holds(self):
+        self.assertEqual("gate_rejected_ai_related_or_partial",
+                         ai_review.CATEGORY_FALSE_NEGATIVE)
+
+
+class TestSmokeRunShape(unittest.TestCase):
+    """The real 10-pair smoke result, pinned:
+    related 1 / partial 5 / unrelated 4, agreement 6, disagreement 4,
+    3 false positives and 1 false negative (a gate-rejected `partial`)."""
+
+    def rows(self):
+        spec = [
+            # (gate_decision, ai_rating)  -- 10 pairs
+            ("accepted", "related"),      # agreement
+            ("accepted", "partial"),      # agreement
+            ("accepted", "partial"),      # agreement
+            ("accepted", "partial"),      # agreement
+            ("accepted", "partial"),      # agreement
+            ("accepted", "unrelated"),    # FALSE POSITIVE
+            ("accepted", "unrelated"),    # FALSE POSITIVE
+            ("accepted", "unrelated"),    # FALSE POSITIVE
+            ("rejected", "unrelated"),    # agreement
+            ("rejected", "partial"),      # FALSE NEGATIVE
+        ]
+        return [judged(index, gate=decision, rating=rating,
+                       record_id="rec%02d" % index)
+                for index, (decision, rating) in enumerate(spec)]
+
+    def test_the_counts_match_the_real_run(self):
+        rows = self.rows()
+        summary = ai_review.ai_summary(rows, "m", {}, 10, 0, 10)
+        self.assertEqual(1, summary["rating_counts"]["related"])
+        self.assertEqual(5, summary["rating_counts"]["partial"])
+        self.assertEqual(4, summary["rating_counts"]["unrelated"])
+        self.assertEqual(6, summary["gate_agreement"]["agree"])
+        self.assertEqual(4, summary["gate_agreement"]["disagree"])
+        self.assertEqual(3, summary["gate_agreement"]["false_positives"])
+        self.assertEqual(1, summary["gate_agreement"]["false_negatives"])
+
+    def test_the_shortlist_categorises_every_disagreement(self):
+        rows = self.rows()
+        buckets = ai_review.categorize(rows)
+        self.assertEqual(3, len(buckets[ai_review.CATEGORY_FALSE_POSITIVE]))
+        self.assertEqual(1, len(buckets[ai_review.CATEGORY_FALSE_NEGATIVE]))
+
+    def test_the_gate_rejected_partial_is_not_filed_as_random(self):
+        # This is the row that used to disappear into the random sample.
+        rows = self.rows()
+        buckets = ai_review.categorize(rows)
+        random_pairs = {r["pair_key"]
+                        for r in buckets[ai_review.CATEGORY_RANDOM]}
+        false_negatives = buckets[ai_review.CATEGORY_FALSE_NEGATIVE]
+        self.assertEqual(1, len(false_negatives))
+        self.assertEqual("rejected", false_negatives[0]["gate_decision"])
+        self.assertEqual("partial", false_negatives[0]["ai_rating"])
+        self.assertNotIn(false_negatives[0]["pair_key"], random_pairs)
+
+    def test_summary_and_shortlist_can_never_report_different_totals(self):
+        for rows in (self.rows(), self.mixed_rows()):
+            summary = ai_review.ai_summary(rows, "m", {}, len(rows), 0, 0)
+            buckets = ai_review.categorize(rows)
+            categorised = (len(buckets[ai_review.CATEGORY_FALSE_POSITIVE])
+                           + len(buckets[ai_review.CATEGORY_FALSE_NEGATIVE]))
+            self.assertEqual(summary["gate_agreement"]["disagree"],
+                             categorised)
+
+    def mixed_rows(self):
+        rows, n = [], 0
+        for decision in ("accepted", "rejected"):
+            for rating in ai_review.AI_RATINGS:
+                for confidence in ("high", "low"):
+                    rows.append(judged(n, gate=decision, rating=rating,
+                                       confidence=confidence,
+                                       record_id="rec%02d" % (n % 5)))
+                    n += 1
+        return rows
+
+    def test_every_disagreement_reaches_the_shortlist_at_a_small_limit(self):
+        rows = self.rows()
+        shortlist, _ = ai_review.select_for_expert(rows, limit=4)
+        categories = [category for category, _ in shortlist]
+        self.assertEqual(4, len(shortlist))
+        self.assertNotIn(ai_review.CATEGORY_RANDOM, categories,
+                         "contested pairs come before a random sample")
+        self.assertEqual(
+            3, categories.count(ai_review.CATEGORY_FALSE_POSITIVE))
+        self.assertEqual(
+            1, categories.count(ai_review.CATEGORY_FALSE_NEGATIVE))
+
+    def test_a_row_is_counted_in_exactly_one_category(self):
+        rows = self.mixed_rows()
+        buckets = ai_review.categorize(rows)
+        seen = []
+        for bucket in buckets.values():
+            seen.extend(r["pair_key"] for r in bucket)
+        self.assertEqual(len(seen), len(set(seen)))
+        completed = [r for r in rows
+                     if r["ai_status"] == ai_review.STATUS_COMPLETED]
+        self.assertEqual(len(completed), len(seen))
+
+
+class TestReasonShortening(unittest.TestCase):
+    """Raw slicing produced "thermoelectr" and "donor-acceptor pa" --
+    fragments a reviewer cannot check and that read as words the model never
+    wrote."""
+
+    # Deliberately longer than MAX_REASON_CHARS, with several sentence
+    # boundaries so there is a real choice of cut point.
+    SENTENCES = (
+        "Both papers study spin defects in silicon carbide using density "
+        "functional theory. The candidate additionally measures coherence "
+        "times at cryogenic temperatures, which the reference only predicts. "
+        "The overlap is therefore in the material and the method rather than "
+        "in the specific measurement reported. A reviewer would likely call "
+        "this closely related work worth reading alongside the reference, "
+        "though the experimental section addresses a different question "
+        "about thermoelectric transport in the same host material.")
+
+    def test_short_reasons_are_untouched(self):
+        for text in ("Both study thermoelectric transport.",
+                     "a" * ai_review.MAX_REASON_CHARS):
+            self.assertEqual(text, ai_review.shorten_reason(text))
+
+    def test_a_long_reason_ends_at_a_sentence_boundary(self):
+        result = ai_review.shorten_reason(self.SENTENCES)
+        self.assertTrue(result.endswith(ai_review.REASON_TRUNCATION_SUFFIX))
+        body = result[:-len(ai_review.REASON_TRUNCATION_SUFFIX)]
+        self.assertTrue(body.endswith("."), repr(body[-40:]))
+        self.assertIn("density functional theory.", body)
+
+    def test_it_never_ends_mid_word(self):
+        # The reported symptoms, reproduced: each of these words sat exactly
+        # across the old 400-character slice point.
+        for filler in range(380, 405):
+            text = ("x" * filler) + " thermoelectric transport measurements"
+            result = ai_review.shorten_reason(text)
+            body = result.replace(ai_review.REASON_TRUNCATION_SUFFIX, "")
+            self.assertNotIn("thermoelectr ", body + " ")
+            for fragment in ("thermoelectr", "thermoelectri",
+                             "thermoelectric transpor"):
+                self.assertFalse(body.endswith(fragment), (filler, body[-30:]))
+
+    def test_a_word_boundary_is_used_when_there_is_no_sentence_end(self):
+        text = " ".join(["donor-acceptor pairs in wide bandgap semiconductors"]
+                        * 20)
+        result = ai_review.shorten_reason(text)
+        body = result[:-len(ai_review.REASON_TRUNCATION_SUFFIX)]
+        self.assertFalse(body.endswith("pa"), repr(body[-20:]))
+        # Every word in the body is a whole word from the source.
+        source_words = set(text.split())
+        for word in body.split():
+            self.assertIn(word, source_words, word)
+
+    def test_an_early_full_stop_does_not_gut_the_explanation(self):
+        # One short sentence, then a long one: cutting at the early boundary
+        # would throw away almost everything, so a word boundary wins.
+        text = "They agree. " + ("useful detail " * 60)
+        result = ai_review.shorten_reason(text)
+        self.assertGreater(
+            len(result),
+            ai_review.MAX_REASON_CHARS * ai_review.MIN_SENTENCE_KEEP_RATIO)
+
+    def test_truncation_is_always_marked(self):
+        result = ai_review.shorten_reason(self.SENTENCES)
+        self.assertIn("...", result)
+        short = ai_review.shorten_reason("Both study widgets.")
+        self.assertNotIn("...", short)
+
+    def test_the_limit_is_never_exceeded(self):
+        for text in (self.SENTENCES, "a" * 5000, "word " * 500,
+                     "no-spaces-at-all" * 100):
+            self.assertLessEqual(len(ai_review.shorten_reason(text)),
+                                 ai_review.MAX_REASON_CHARS, text[:20])
+
+    def test_whitespace_only_and_empty_input(self):
+        for text in ("", "   ", "\t\n  ", None):
+            self.assertEqual("", ai_review.shorten_reason(text))
+
+    def test_a_single_enormous_token_is_handled_safely(self):
+        result = ai_review.shorten_reason("z" * 2000)
+        self.assertLessEqual(len(result), ai_review.MAX_REASON_CHARS)
+        self.assertTrue(result.endswith(ai_review.REASON_TRUNCATION_SUFFIX))
+
+    def test_internal_whitespace_is_normalized(self):
+        self.assertEqual("Both study widgets.",
+                         ai_review.shorten_reason("  Both   study\n\twidgets. "))
+
+    def test_the_confidence_clamp_note_survives_a_long_reason(self):
+        answer_text = json.dumps({"rating": "partial", "confidence": "high",
+                                  "reason": self.SENTENCES * 3})
+        result, error = ai_review.parse_ai_answer(answer_text,
+                                                  abstracts_available=False)
+        self.assertIsNone(error)
+        self.assertEqual("low", result["ai_confidence"])
+        # The note is appended whole, never itself cut off.
+        self.assertTrue(result["ai_reason"].endswith(
+            ai_review.CONFIDENCE_CLAMP_NOTE))
+        self.assertLessEqual(len(result["ai_reason"]),
+                             ai_review.MAX_REASON_WITH_NOTE_CHARS)
+        self.assertIn("...", result["ai_reason"])
+
+    def test_a_clamped_short_reason_keeps_its_whole_text(self):
+        result, _ = ai_review.parse_ai_answer(
+            answer(reason="Both study widgets."), abstracts_available=False)
+        self.assertTrue(result["ai_reason"].startswith("Both study widgets."))
+        self.assertIn("capped to low", result["ai_reason"])
+        self.assertNotIn("...", result["ai_reason"])
+
+
 class TestExpertShortlist(unittest.TestCase):
     def mixed(self):
         rows = []
