@@ -1,0 +1,863 @@
+"""Benchmarks for the keyword AI and the RCC description AI.
+
+Nothing here reaches a network: the Qresp reader is stubbed and
+`assist.call_gemini` is either replaced by a fake or by the refusing
+stand-in the CLI installs itself.
+
+The properties that make these benchmarks worth anything at all:
+
+* the record being scored cannot see its own answer -- not through the
+  vocabulary and not through the payload; and
+* an RCC candidate is compared with a human artifact only when the two are
+  the same file, established by exact path.
+"""
+import io
+import json
+import os
+import shutil
+import tempfile
+import unittest
+from unittest import mock
+
+from project import assist
+from project import curation
+from project.tools import assist_core as core
+from project.tools import assist_eval
+
+
+# ---------------------------------------------------------------- fixtures
+
+def search_row(index, title, abstract, tags, collections=("MICCOM",)):
+    """The LEGACY /api/search shape, name-mangled keys and all."""
+    return {
+        "_Search__id": "rec%02d" % index,
+        "_Search__title": title,
+        "_Search__abstract": abstract,
+        "_Search__doi": "10.1000/rec%02d" % index,
+        "_Search__tags": list(tags),
+        "_Search__collections": list(collections),
+        "_Search__publication": "Journal of Placeholder Science 1, 1-2",
+        "_Search__year": 2021,
+        "_Search__fileServerPath": "https://notebook.rcc.uchicago.edu/x%02d"
+                                   % index,
+        # Present in the real payload; must never reach a payload or a file.
+        "_Search__downloadPath": "https://internal.example.org/download",
+        "_Search__notebookPath": "notebooks/private.ipynb",
+    }
+
+
+DETAILS = {
+    "charts": [{"id": "c0", "caption": "Absorption spectrum of the film",
+                "properties": ["absorption", "thin film"],
+                "imageFile": "charts/figure1/figure1.png",
+                "files": ["charts/figure1/figure1.csv"]}],
+    "datasets": [{"id": "d0", "readme": "Raw diffraction patterns",
+                  "keywords": ["diffraction"],
+                  "files": ["datasets/xrd/patterns.dat"]}],
+    "scripts": [{"id": "s0", "readme": "Fits the diffraction peaks",
+                 "keywords": ["peak fitting"],
+                 "files": ["scripts/fit/fit_peaks.py"]}],
+    "tools": [{"id": "t0", "packageName": "RarePackage",
+               "readme": "Simulates the lattice",
+               "facilityname": "Beamline 12", "measurement": "diffraction",
+               "files": ["tools/rarepackage/manifest.txt"]}],
+    # Curator identity, present in the real details payload.
+    "firstName": "Curator", "lastName": "Person",
+    "emailId": "curator@example.com",
+    "fileServerPath": "https://notebook.rcc.uchicago.edu/secret",
+}
+
+
+def benchmark_record(index=0, tags=("perovskite", "thin film"),
+                     with_artifacts=True, with_rcc=True):
+    row = search_row(index, "Absorption in perovskite thin films",
+                     "We measure optical absorption in perovskite thin "
+                     "films grown by spin coating and relate it to the "
+                     "diffraction patterns of the same samples.", tags)
+    record = core.to_benchmark_record(row, DETAILS if with_artifacts else {})
+    record["rcc_candidates"] = [
+        {"id": "cand-chart", "kind": "chart", "name": "figure1",
+         "paths": ["charts/figure1/figure1.png"], "context": ""},
+        {"id": "cand-dataset", "kind": "dataset", "name": "xrd",
+         "paths": ["datasets/xrd/patterns.dat"],
+         "context": "README: raw powder diffraction patterns collected at "
+                    "room temperature."},
+        {"id": "cand-script", "kind": "script", "name": "fit",
+         "paths": ["scripts/fit/fit_peaks.py"],
+         "context": "docstring: fits Gaussian peaks to a diffractogram."},
+        {"id": "cand-tool", "kind": "tool", "name": "rarepackage",
+         "paths": ["tools/rarepackage/manifest.txt"],
+         "context": "manifest: rarepackage lattice simulation library."},
+    ] if with_rcc else []
+    return record
+
+
+def corpus(count=6):
+    records = []
+    topics = [("perovskite", "thin film"), ("graphene", "transport"),
+              ("spin defect", "silicon carbide"), ("water", "interface"),
+              ("perovskite", "photovoltaics"), ("catalysis", "surface")]
+    for i in range(count):
+        records.append(benchmark_record(i, tags=topics[i % len(topics)]))
+    return records
+
+
+class FakeResponse:
+    def __init__(self, payload, status_code=200):
+        self._payload = payload
+        self.status_code = status_code
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("not json")
+        return self._payload
+
+
+class FakeQrespSession:
+    def __init__(self, rows, details=None):
+        self.rows = rows
+        self.details = details if details is not None else DETAILS
+        self.calls = []
+
+    def get(self, url, timeout=None, verify=True):
+        self.calls.append(url)
+        if url.endswith("/api/search"):
+            return FakeResponse(self.rows)
+        if "/api/paper/" in url:
+            return FakeResponse(dict(self.details))
+        return FakeResponse({}, 404)
+
+
+class FakeGemini:
+    """Stands in for assist.call_gemini. Records every payload it is given."""
+
+    def __init__(self, answers=None, error=None):
+        self.payloads = []
+        self.prompts = []
+        self.answers = list(answers or [])
+        self.error = error
+
+    def __call__(self, cfg, payload, system_prompt, schema,
+                 max_output_tokens=None):
+        self.payloads.append(payload)
+        self.prompts.append(system_prompt)
+        if self.error:
+            return None, self.error
+        if self.answers:
+            return self.answers.pop(0), None
+        return json.dumps({"keywords": [{"keyword": "perovskite",
+                                         "reason": "the abstract says so"}]}), None
+
+
+CONFIGURED = {"QRESP_GEMINI_ENABLED": "1",
+              "QRESP_GEMINI_API_KEY": "test-gemini-secret"}
+
+
+# ------------------------------------------------------------ normalization
+
+class TestNormalization(unittest.TestCase):
+    def test_legacy_search_keys_are_understood(self):
+        record = core.normalize_search_record(
+            search_row(1, "A title", "An abstract", ["alpha", "beta"]))
+        self.assertEqual("rec01", record["id"])
+        self.assertEqual("A title", record["title"])
+        self.assertEqual(["alpha", "beta"], record["tags"])
+        self.assertEqual(2021, record["year"])
+
+    def test_plain_keys_are_understood_too(self):
+        record = core.normalize_search_record({
+            "id": "abc", "title": "T", "abstract": "A", "doi": "10.1/x",
+            "tags": ["alpha"], "year": "2019"})
+        self.assertEqual("abc", record["id"])
+        self.assertEqual(2019, record["year"])
+
+    def test_curator_identity_and_paths_never_enter_a_record(self):
+        record = benchmark_record()
+        blob = json.dumps(record).lower()
+        for leak in ("curator@example.com", "downloadpath", "firstname",
+                     "lastname", "emailid"):
+            self.assertNotIn(leak, blob, leak)
+
+    def test_the_model_field_names_are_read_not_the_ai_ones(self):
+        # Dataset/script descriptions are stored as `readme`.
+        record = benchmark_record()
+        dataset = record["artifacts"]["datasets"][0]
+        self.assertEqual("readme", dataset["human_description_field"])
+        self.assertEqual("Raw diffraction patterns",
+                         dataset["human_description"])
+        chart = record["artifacts"]["charts"][0]
+        self.assertEqual("caption", chart["human_description_field"])
+
+
+# ----------------------------------------------------------- leakage guards
+
+class TestKeywordLeakage(unittest.TestCase):
+    def test_the_target_records_tags_are_held_out_of_the_vocabulary(self):
+        records = corpus(6)
+        target = records[0]                      # perovskite, thin film
+        display, known = core.build_vocabulary(
+            records, exclude_record_id=target["record_id"])
+        # "thin film" belongs to this record alone -> gone.
+        self.assertNotIn("thin film", known)
+        self.assertNotIn("thin film", [d.lower() for d in display])
+
+    def test_a_tag_another_record_also_uses_stays_in_the_vocabulary(self):
+        records = corpus(6)
+        target = records[0]                      # perovskite, thin film
+        # rec04 also carries "perovskite".
+        _, known = core.build_vocabulary(
+            records, exclude_record_id=target["record_id"])
+        self.assertIn("perovskite", known)
+
+    def test_without_the_holdout_the_answer_would_be_in_the_vocabulary(self):
+        records = corpus(6)
+        _, known = core.build_vocabulary(records)
+        self.assertIn("thin film", known)        # the leak this prevents
+
+    def test_no_held_out_tag_appears_in_any_payload(self):
+        records = corpus(6)
+        target = records[0]
+        vocabulary, _ = core.build_vocabulary(
+            records, exclude_record_id=target["record_id"])
+        for mode in core.KEYWORD_MODES:
+            payload = core.build_keyword_payload(target, mode, vocabulary)
+            self.assertTrue(
+                core.payload_hides_reference_tags(
+                    payload, ["thin film"]), mode)
+
+    def test_the_leak_check_catches_a_tag_in_the_vocabulary(self):
+        payload = {"publication": {"title": "T"},
+                   "qresp_vocabulary": ["graphene", "thin film"]}
+        self.assertFalse(
+            core.payload_hides_reference_tags(payload, ["thin film"]))
+        self.assertTrue(
+            core.payload_hides_reference_tags(payload, ["perovskite"]))
+
+    def test_a_tag_another_record_shares_may_stay_in_the_vocabulary(self):
+        # rec00 and rec04 both carry "perovskite": it is genuinely part of
+        # the site vocabulary and removing it would model a Qresp that does
+        # not exist. Only a term this record ALONE owns is a leak.
+        records = corpus(6)
+        target = records[0]
+        exclusive = core.exclusive_tags(target, records)
+        self.assertIn("thin film", exclusive)
+        self.assertNotIn("perovskite", exclusive)
+        payload = {"publication": {"title": "T"},
+                   "qresp_vocabulary": ["perovskite"]}
+        self.assertEqual([], core.payload_leaks(
+            payload, target["reference_tags"], exclusive))
+
+    def test_the_leak_check_catches_a_tag_in_an_artifact_keyword_list(self):
+        payload = {"publication": {"title": "T"},
+                   "reviewed_artifacts": {
+                       "charts": [{"properties": "absorption, thin film"}]}}
+        self.assertFalse(
+            core.payload_hides_reference_tags(payload, ["thin film"]))
+
+    def test_the_papers_own_title_and_abstract_are_not_leakage(self):
+        # A tag readable from the abstract is what the feature is FOR.
+        # Treating it as leakage would leave only papers nobody could tag.
+        payload = {"publication": {
+            "title": "Absorption in perovskite thin films",
+            "abstract": "We measure thin film absorption."}}
+        self.assertTrue(
+            core.payload_hides_reference_tags(payload, ["thin film"]))
+
+    def test_a_stray_tags_field_is_caught(self):
+        payload = {"publication": {"title": "T"}, "tags": ["thin film"]}
+        self.assertFalse(
+            core.payload_hides_reference_tags(payload, ["thin film"]))
+
+    def test_an_artifact_keyword_repeating_a_held_out_tag_is_withheld(self):
+        # The chart carries "thin film" in `properties`, and so does the
+        # paper's hidden tags. It must not travel.
+        record = benchmark_record(tags=["perovskite", "thin film"])
+        payload = core.build_keyword_payload(
+            record, core.MODE_WITH_ARTIFACTS, [])
+        properties = payload["reviewed_artifacts"]["charts"][0].get(
+            "properties", "")
+        self.assertIn("absorption", properties)
+        self.assertNotIn("thin film", properties)
+        self.assertEqual(1, core.count_hidden_artifact_keywords(record))
+
+
+class TestKeywordModes(unittest.TestCase):
+    def test_publication_only_carries_no_artifacts(self):
+        record = benchmark_record()
+        payload = core.build_keyword_payload(
+            record, core.MODE_PUBLICATION_ONLY, ["perovskite"])
+        self.assertIn("publication", payload)
+        self.assertNotIn("reviewed_artifacts", payload)
+
+    def test_the_artifacts_mode_adds_the_products_allowlisted_context(self):
+        record = benchmark_record()
+        payload = core.build_keyword_payload(
+            record, core.MODE_WITH_ARTIFACTS, ["perovskite"])
+        self.assertIn("reviewed_artifacts", payload)
+        self.assertIn("charts", payload["reviewed_artifacts"])
+        # Only the product's CONTEXT_FIELDS keys survive.
+        for kind, entries in payload["reviewed_artifacts"].items():
+            allowed = set(assist.CONTEXT_FIELDS[kind])
+            for entry in entries:
+                self.assertTrue(set(entry) <= allowed, (kind, set(entry)))
+
+    def test_no_path_or_file_name_reaches_the_keyword_payload(self):
+        record = benchmark_record()
+        payload = core.build_keyword_payload(
+            record, core.MODE_WITH_ARTIFACTS, ["perovskite"])
+        blob = json.dumps(payload).lower()
+        for leak in ("figure1.png", "patterns.dat", "fit_peaks.py",
+                     "rcc.uchicago", "://", "manifest.txt"):
+            self.assertNotIn(leak, blob, leak)
+
+    def test_the_context_gap_between_stored_and_sent_fields_is_reported(self):
+        # The product reads `description`/`facility`; datasets and scripts
+        # store `readme` and tools store `facilityName`. The values are
+        # therefore never sent, and the benchmark says so instead of
+        # silently scoring a product that does not exist.
+        gaps = core.keyword_context_gaps([benchmark_record()])
+        self.assertEqual(1, gaps["datasets.description"]["stored"])
+        self.assertEqual(0, gaps["datasets.description"]["reaches_ai"])
+        self.assertEqual(1, gaps["datasets.description"]["lost"])
+        self.assertEqual(1, gaps["scripts.description"]["lost"])
+        self.assertEqual(1, gaps["tools.facility"]["lost"])
+        # Charts are unaffected: caption and properties do reach it.
+        self.assertEqual(0, gaps["charts.description"]["lost"])
+        self.assertEqual(0, gaps["charts.keywords"]["lost"])
+
+
+# ------------------------------------------------------------ path matching
+
+class TestCandidateMatching(unittest.TestCase):
+    def test_an_exact_relative_path_matches(self):
+        record = benchmark_record()
+        candidate = record["rcc_candidates"][1]           # dataset
+        artifact, reason = core.match_candidate(candidate, record)
+        self.assertEqual(core.MATCH_EXACT_PATH, reason)
+        self.assertEqual("Raw diffraction patterns",
+                         artifact["human_description"])
+
+    def test_case_and_separator_differences_still_match(self):
+        record = benchmark_record()
+        candidate = dict(record["rcc_candidates"][1],
+                         paths=["./Datasets\\XRD\\Patterns.dat"])
+        artifact, reason = core.match_candidate(candidate, record)
+        self.assertEqual(core.MATCH_EXACT_PATH, reason)
+        self.assertIsNotNone(artifact)
+
+    def test_a_similar_basename_is_refused_not_guessed(self):
+        record = benchmark_record()
+        candidate = dict(record["rcc_candidates"][1],
+                         paths=["other/place/patterns.dat"])
+        artifact, reason = core.match_candidate(candidate, record)
+        self.assertIsNone(artifact)
+        self.assertEqual(core.UNMATCHED_NOT_FOUND, reason)
+
+    def test_a_similar_title_is_not_a_match(self):
+        record = benchmark_record()
+        candidate = {"id": "x", "kind": "dataset",
+                     "name": "Raw diffraction patterns", "paths": [],
+                     "context": ""}
+        artifact, reason = core.match_candidate(candidate, record)
+        self.assertIsNone(artifact)
+        self.assertEqual(core.UNMATCHED_NO_PATH, reason)
+
+    def test_a_path_matching_two_artifacts_is_ambiguous_not_arbitrary(self):
+        record = benchmark_record()
+        record["artifacts"]["datasets"].append({
+            "kind": "datasets", "id": "d1",
+            "human_description": "A different dataset",
+            "human_description_field": "readme", "human_keywords": [],
+            "human_keyword_field": "keywords",
+            "files": ["datasets/xrd/patterns.dat"], "image_file": "",
+            "notebook_file": "", "package_name": "", "facility_name": "",
+            "measurement": ""})
+        artifact, reason = core.match_candidate(
+            record["rcc_candidates"][1], record)
+        self.assertIsNone(artifact)
+        self.assertEqual(core.UNMATCHED_AMBIGUOUS, reason)
+
+    def test_a_candidate_of_another_kind_never_matches(self):
+        record = benchmark_record()
+        candidate = dict(record["rcc_candidates"][1], kind="chart")
+        artifact, reason = core.match_candidate(candidate, record)
+        self.assertIsNone(artifact)
+        self.assertEqual(core.UNMATCHED_NOT_FOUND, reason)
+
+    def test_chart_images_and_notebooks_are_match_keys_too(self):
+        record = benchmark_record()
+        artifact, reason = core.match_candidate(
+            record["rcc_candidates"][0], record)
+        self.assertEqual(core.MATCH_EXACT_PATH, reason)
+        self.assertEqual("Absorption spectrum of the film",
+                         artifact["human_description"])
+
+
+# --------------------------------------------------------- artifact payload
+
+class TestArtifactPayload(unittest.TestCase):
+    def payload_for(self, index):
+        record = benchmark_record()
+        candidate = record["rcc_candidates"][index]
+        artifact, _ = core.match_candidate(candidate, record)
+        return core.build_artifact_payload(candidate, artifact), artifact
+
+    def test_the_human_answer_is_stripped_from_the_evidence(self):
+        record = benchmark_record()
+        candidate = dict(record["rcc_candidates"][1],
+                         context="README: Raw diffraction patterns and more.")
+        artifact, _ = core.match_candidate(candidate, record)
+        payload = core.build_artifact_payload(candidate, artifact)
+        self.assertNotIn("raw diffraction patterns",
+                         payload["context"].lower())
+
+    def test_the_payload_uses_the_products_own_sanitizer(self):
+        payload, _ = self.payload_for(1)
+        self.assertEqual(sorted(curation.AI_ALLOWED_KEYS), sorted(payload))
+
+    def test_wants_keywords_follows_the_record_type(self):
+        for index, kind, expected in ((0, "chart", True), (1, "dataset", True),
+                                      (2, "script", True), (3, "tool", False)):
+            payload, _ = self.payload_for(index)
+            self.assertEqual(kind, payload["kind"])
+            self.assertEqual(expected, payload["wants_keywords"], kind)
+
+    def test_no_url_absolute_path_image_or_account_data_is_sent(self):
+        for index in range(4):
+            payload, _ = self.payload_for(index)
+            self.assertEqual([], core.payload_is_safe(payload))
+
+    def test_the_safety_check_catches_a_url_or_an_absolute_path(self):
+        self.assertIn("payload contains a URL",
+                      core.payload_is_safe({"context": "see https://x.org"}))
+        self.assertIn("payload contains an email address",
+                      core.payload_is_safe({"context": "a@b.org"}))
+
+
+# ------------------------------------------------------------------ metrics
+
+class TestKeywordMetrics(unittest.TestCase):
+    def test_exact_match_scoring(self):
+        metrics = core.keyword_metrics(
+            ["Perovskite", "thin films", "graphene"],
+            ["perovskite", "solar cell"], {"perovskite", "graphene"})
+        self.assertEqual(1, metrics["exact_hits"])
+        self.assertAlmostEqual(1 / 3.0, metrics["exact_precision"], places=3)
+        self.assertAlmostEqual(0.5, metrics["exact_recall"], places=3)
+        self.assertEqual(2, metrics["vocabulary_reuse"])
+
+    def test_the_lower_bound_is_stated_in_the_output(self):
+        metrics = core.keyword_metrics(["DFT"], ["density functional theory"],
+                                       set())
+        self.assertEqual(0, metrics["exact_hits"])
+        self.assertIn("LOWER BOUND", metrics["metric_note"])
+
+    def test_plural_and_case_fold_into_one_concept(self):
+        metrics = core.keyword_metrics(["Thin Films"], ["thin film"], set())
+        self.assertEqual(0, metrics["exact_hits"])
+        self.assertEqual(1, metrics["normalized_concept_hits"])
+
+    def test_generic_keywords_are_listed_for_review(self):
+        metrics = core.keyword_metrics(["simulation", "perovskite"],
+                                       ["perovskite"], set())
+        self.assertIn("simulation", metrics["generic_suggestions"])
+
+    def test_duplicate_concepts_are_flagged_not_merged(self):
+        pairs = core.suspected_duplicate_concepts(
+            ["thin film", "thin films", "DFT", "density functional theory"])
+        whys = " ".join(p["why"] for p in pairs)
+        self.assertIn("plural", whys)
+        self.assertIn("acronym", whys)
+
+    def test_no_synonym_dictionary_is_hardcoded(self):
+        source = io.open(core.__file__, encoding="utf-8").read()
+        for pair in ("photovoltaic", "solar cell", "density functional"):
+            self.assertNotIn('"%s"' % pair, source, pair)
+
+
+class TestArtifactMetrics(unittest.TestCase):
+    def test_a_tool_returning_keywords_is_a_contract_violation(self):
+        problems = core.type_contract_violations(
+            "tool", {"description": "A lattice simulator", "keywords": ["x"]})
+        self.assertTrue(any("Tool" in p for p in problems))
+
+    def test_a_chart_may_hold_keywords(self):
+        self.assertEqual([], core.type_contract_violations(
+            "chart", {"description": "An absorption spectrum",
+                      "keywords": ["absorption"]}))
+
+    def test_forbidden_fields_are_detected(self):
+        self.assertIn("path_or_filename",
+                      core.forbidden_field_hits("Made from figure1.png"))
+        self.assertIn("url", core.forbidden_field_hits("see https://x.org"))
+        self.assertIn("version_number",
+                      core.forbidden_field_hits("Uses version 2.11"))
+        self.assertIn("figure_number",
+                      core.forbidden_field_hits("Shown in Figure 3"))
+        self.assertEqual([], core.forbidden_field_hits(
+            "Raw powder diffraction patterns at room temperature"))
+
+    def test_similarity_is_resemblance_not_correctness(self):
+        self.assertGreater(core.text_similarity(
+            "raw diffraction patterns", "diffraction patterns raw"), 0.9)
+        self.assertEqual(0.0, core.text_similarity("", "anything"))
+
+
+# -------------------------------------------------------------- CLI: safety
+
+class CliTestCase(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="assist-eval-")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def write_records(self, records=None):
+        records = records if records is not None else corpus(6)
+        path = os.path.join(self.dir, "raw-records.jsonl")
+        with io.open(path, "w", encoding="utf-8", newline="\n") as handle:
+            for record in records:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return records
+
+    def read(self, name):
+        with io.open(os.path.join(self.dir, name), encoding="utf-8") as f:
+            return f.read()
+
+    def run_cli(self, argv, gemini=None, env=None):
+        gemini = gemini or FakeGemini()
+        with mock.patch.dict("os.environ", env or CONFIGURED):
+            with mock.patch.object(assist, "call_gemini", gemini):
+                code = assist_eval.main(argv)
+        return code, gemini
+
+
+class TestCollect(CliTestCase):
+    def test_it_reads_qresp_and_calls_no_provider(self):
+        session = FakeQrespSession([search_row(0, "T", "A", ["alpha"])])
+        gemini = FakeGemini()
+        with mock.patch("requests.Session", return_value=session):
+            with mock.patch.object(assist, "call_gemini", gemini):
+                code = assist_eval.main([
+                    "collect", "--api-base", "https://qresp.example.org",
+                    "--output-dir", self.dir])
+        self.assertEqual(0, code)
+        self.assertEqual([], gemini.payloads)
+        records = [json.loads(l) for l in self.read("raw-records.jsonl")
+                   .split("\n") if l.strip()]
+        self.assertEqual(1, len(records))
+        self.assertEqual(["alpha"], records[0]["reference_tags"])
+
+    def test_a_bom_and_crlf_ids_file_is_read_safely(self):
+        ids = os.path.join(self.dir, "ids.txt")
+        with open(ids, "wb") as handle:
+            handle.write(b"\xef\xbb\xbf" + b"# a comment\r\nrec00\r\nrec02\r\n")
+        self.assertEqual(["rec00", "rec02"], assist_eval._read_lines(ids))
+
+    def test_only_requested_ids_are_collected(self):
+        ids = os.path.join(self.dir, "ids.txt")
+        with open(ids, "wb") as handle:
+            handle.write(b"\xef\xbb\xbfrec01\r\n")
+        session = FakeQrespSession([search_row(i, "T%d" % i, "A", ["a%d" % i])
+                                    for i in range(3)])
+        with mock.patch("requests.Session", return_value=session):
+            with mock.patch.object(assist, "call_gemini", FakeGemini()):
+                assist_eval.main([
+                    "collect", "--api-base", "https://x", "--output-dir",
+                    self.dir, "--ids-file", ids])
+        records = [json.loads(l) for l in self.read("raw-records.jsonl")
+                   .split("\n") if l.strip()]
+        self.assertEqual(["rec01"], [r["record_id"] for r in records])
+
+
+class TestAuditAndSample(CliTestCase):
+    def test_audit_reports_coverage_without_calling_a_provider(self):
+        self.write_records()
+        code, gemini = self.run_cli(["audit", "--output-dir", self.dir])
+        self.assertEqual(0, code)
+        self.assertEqual([], gemini.payloads)
+        report = json.loads(self.read("audit.json"))
+        self.assertEqual(6, report["records"])
+        self.assertEqual(12, report["keyword_units"])      # 6 records x 2
+        self.assertEqual(24, report["artifact_units"])     # 6 x 4 candidates
+        self.assertIn("keyword_context_gaps", report)
+
+    def test_the_sample_is_deterministic_for_a_seed(self):
+        self.write_records()
+        self.run_cli(["smoke-sample", "--output-dir", self.dir, "--seed", "7"])
+        first = json.loads(self.read("smoke-sample.json"))
+        self.run_cli(["smoke-sample", "--output-dir", self.dir, "--seed", "7"])
+        second = json.loads(self.read("smoke-sample.json"))
+        self.assertEqual(first, second)
+
+    def test_a_different_seed_gives_a_different_but_valid_sample(self):
+        self.write_records()
+        self.run_cli(["smoke-sample", "--output-dir", self.dir, "--seed", "0"])
+        first = json.loads(self.read("smoke-sample.json"))
+        self.run_cli(["smoke-sample", "--output-dir", self.dir, "--seed", "3"])
+        second = json.loads(self.read("smoke-sample.json"))
+        self.assertEqual(first["planned_provider_calls"],
+                         second["planned_provider_calls"])
+
+    def test_the_default_sample_stays_within_the_smoke_budget(self):
+        self.write_records()
+        self.run_cli(["smoke-sample", "--output-dir", self.dir])
+        sample = json.loads(self.read("smoke-sample.json"))
+        self.assertEqual(10, len(sample["keyword_units"]))   # 5 records x 2
+        self.assertEqual(10, len(sample["artifact_units"]))
+        self.assertEqual(20, sample["planned_provider_calls"])
+
+    def test_artifact_strata_spread_across_kinds(self):
+        self.write_records()
+        self.run_cli(["smoke-sample", "--output-dir", self.dir])
+        sample = json.loads(self.read("smoke-sample.json"))
+        kinds = {u["kind"] for u in sample["artifact_units"]}
+        self.assertGreaterEqual(len(kinds), 3)
+
+    def test_both_keyword_modes_are_present_for_each_sampled_record(self):
+        self.write_records()
+        self.run_cli(["smoke-sample", "--output-dir", self.dir])
+        sample = json.loads(self.read("smoke-sample.json"))
+        by_record = {}
+        for unit in sample["keyword_units"]:
+            by_record.setdefault(unit["record_id"], set()).add(unit["mode"])
+        for modes in by_record.values():
+            self.assertEqual(set(core.KEYWORD_MODES), modes)
+
+
+class TestRun(CliTestCase):
+    def prepare(self):
+        self.write_records()
+        self.run_cli(["smoke-sample", "--output-dir", self.dir])
+
+    def test_a_dry_run_contacts_nobody(self):
+        self.prepare()
+        code, gemini = self.run_cli(["run", "--output-dir", self.dir])
+        self.assertEqual(0, code)
+        self.assertEqual([], gemini.payloads)
+        self.assertFalse(os.path.isfile(
+            os.path.join(self.dir, "provider-cache.jsonl")))
+
+    def test_without_execute_the_provider_is_structurally_unreachable(self):
+        # main() installs a refusing stand-in, so even a bug cannot call out.
+        self.prepare()
+        with mock.patch.dict("os.environ", CONFIGURED):
+            assist_eval.main(["run", "--output-dir", self.dir])
+        self.assertNotIsInstance(assist.call_gemini,
+                                 assist_eval.RefusingProvider)
+        self.assertTrue(callable(assist.call_gemini))
+
+    def test_execute_makes_exactly_one_call_per_unit(self):
+        self.prepare()
+        code, gemini = self.run_cli(
+            ["run", "--output-dir", self.dir, "--execute", "--rate-limit", "0"])
+        self.assertEqual(0, code)
+        sample = json.loads(self.read("smoke-sample.json"))
+        self.assertEqual(sample["planned_provider_calls"],
+                         len(gemini.payloads))
+
+    def test_one_artifact_payload_carries_exactly_one_item(self):
+        self.prepare()
+        _, gemini = self.run_cli(
+            ["run", "--output-dir", self.dir, "--execute", "--rate-limit", "0"])
+        for payload in gemini.payloads:
+            if "item" in payload:
+                self.assertIsInstance(payload["item"], dict)
+                self.assertNotIn("items", payload)
+
+    def test_the_products_own_prompts_are_used(self):
+        self.prepare()
+        _, gemini = self.run_cli(
+            ["run", "--output-dir", self.dir, "--execute", "--rate-limit", "0"])
+        self.assertIn(assist.KEYWORD_SYSTEM_PROMPT, gemini.prompts)
+        self.assertIn(curation.AI_SYSTEM_PROMPT, gemini.prompts)
+
+    def test_a_second_run_reuses_the_cache_and_calls_nothing(self):
+        self.prepare()
+        self.run_cli(["run", "--output-dir", self.dir, "--execute",
+                      "--rate-limit", "0"])
+        code, gemini = self.run_cli(
+            ["run", "--output-dir", self.dir, "--execute", "--rate-limit", "0"])
+        self.assertEqual(0, code)
+        self.assertEqual([], gemini.payloads)
+
+    def test_a_provider_failure_does_not_stop_the_run(self):
+        self.prepare()
+        code, gemini = self.run_cli(
+            ["run", "--output-dir", self.dir, "--execute", "--rate-limit", "0"],
+            gemini=FakeGemini(error="upstream exploded"))
+        self.assertEqual(0, code)
+        rows = [json.loads(l) for l in
+                self.read("provider-cache.jsonl").split("\n") if l.strip()]
+        self.assertTrue(rows)
+        self.assertTrue(all(row["ok"] is False for row in rows))
+
+    def test_a_run_without_a_key_refuses_rather_than_pretending(self):
+        self.prepare()
+        code, gemini = self.run_cli(
+            ["run", "--output-dir", self.dir, "--execute"],
+            env={"QRESP_GEMINI_ENABLED": "", "QRESP_GEMINI_API_KEY": ""})
+        self.assertEqual(3, code)
+        self.assertEqual([], gemini.payloads)
+
+    def test_a_leaking_payload_stops_the_run_before_any_call(self):
+        # The builder withholds the answer, so a leak can now only come from
+        # a construction bug. Simulate one and prove the run refuses BEFORE
+        # spending anything, rather than trusting the builder.
+        self.prepare()
+        leaky = lambda record, mode, vocabulary: {
+            "publication": {"title": record["title"]},
+            "qresp_vocabulary": list(record["reference_tags"]),
+        }
+        with mock.patch.object(core, "build_keyword_payload", leaky):
+            code, gemini = self.run_cli(
+                ["run", "--output-dir", self.dir, "--execute",
+                 "--rate-limit", "0"])
+        self.assertEqual(4, code)
+        self.assertEqual([], gemini.payloads)
+
+    def test_the_call_ceiling_is_enforced(self):
+        self.prepare()
+        code, gemini = self.run_cli(
+            ["run", "--output-dir", self.dir, "--execute", "--max-calls", "3"])
+        self.assertEqual(4, code)
+        self.assertEqual([], gemini.payloads)
+
+    def test_no_secret_reaches_the_cache_file(self):
+        self.prepare()
+        self.run_cli(["run", "--output-dir", self.dir, "--execute",
+                      "--rate-limit", "0"])
+        blob = self.read("provider-cache.jsonl")
+        for leak in ("test-gemini-secret", "x-goog-api-key", "Authorization",
+                     "curator@example.com"):
+            self.assertNotIn(leak, blob, leak)
+
+
+class TestSummarize(CliTestCase):
+    def prepare(self, answers=None):
+        self.write_records()
+        self.run_cli(["smoke-sample", "--output-dir", self.dir])
+        self.run_cli(["run", "--output-dir", self.dir, "--execute",
+                      "--rate-limit", "0"],
+                     gemini=FakeGemini(answers=answers) if answers else None)
+
+    def test_summarize_makes_no_provider_call(self):
+        self.prepare()
+        code, gemini = self.run_cli(["summarize", "--output-dir", self.dir])
+        self.assertEqual(0, code)
+        self.assertEqual([], gemini.payloads)
+
+    def test_it_writes_every_output(self):
+        self.prepare()
+        self.run_cli(["summarize", "--output-dir", self.dir])
+        for name in ("keyword-summary.json", "artifact-summary.json",
+                     "keyword-review.tsv", "artifact-review.tsv",
+                     "expert-review.tsv"):
+            self.assertTrue(os.path.isfile(os.path.join(self.dir, name)), name)
+
+    def test_the_summaries_say_they_are_provisional(self):
+        self.prepare()
+        self.run_cli(["summarize", "--output-dir", self.dir])
+        for name in ("keyword-summary.json", "artifact-summary.json"):
+            payload = json.loads(self.read(name))
+            self.assertIn("provisional", payload["evaluation_type"].lower())
+            self.assertIn("NOT expert ground truth",
+                          payload["evaluation_type"])
+            self.assertIn("biased toward itself",
+                          payload["self_evaluation_warning"])
+            self.assertIn("REFERENCE", payload["ground_truth_note"])
+
+    def test_the_two_modes_are_reported_separately(self):
+        self.prepare()
+        self.run_cli(["summarize", "--output-dir", self.dir])
+        summary = json.loads(self.read("keyword-summary.json"))
+        self.assertEqual(sorted(core.KEYWORD_MODES),
+                         sorted(summary["by_mode"]))
+        self.assertIn("artifacts_mode_delta", summary)
+
+    def test_expert_ratings_are_written_blank(self):
+        self.prepare()
+        self.run_cli(["summarize", "--output-dir", self.dir])
+        for name in ("keyword-review.tsv", "artifact-review.tsv",
+                     "expert-review.tsv"):
+            lines = [l for l in self.read(name).split("\n") if l]
+            columns = lines[0].split("\t")
+            index = columns.index("expert_rating")
+            for line in lines[1:]:
+                self.assertEqual("", line.split("\t")[index])
+
+    def test_the_expert_shortlist_is_capped(self):
+        self.prepare()
+        self.run_cli(["summarize", "--output-dir", self.dir])
+        lines = [l for l in self.read("expert-review.tsv").split("\n") if l]
+        self.assertLessEqual(len(lines) - 1, 30)
+
+    def test_a_tool_keyword_is_stripped_and_recorded_as_a_violation(self):
+        record = benchmark_record()
+        candidate = record["rcc_candidates"][3]            # the tool
+        artifact, _ = core.match_candidate(candidate, record)
+        entry = {
+            "unit": {"id": "u1", "record_id": record["record_id"],
+                     "kind": "tool", "has_evidence": True},
+            "artifact": artifact,
+            "payload": {"item": core.build_artifact_payload(candidate,
+                                                            artifact)},
+        }
+        cached = {"ok": True, "answer_text": json.dumps({"items": [{
+            "id": entry["payload"]["item"]["id"],
+            "description": "A lattice simulation library",
+            "keywords": ["lattice"], "confidence": "low",
+            "reason": "the manifest line"}]})}
+        row = assist_eval._score_artifact(entry, cached, [record])
+        # Recorded as a violation...
+        self.assertTrue(any("Tool" in p
+                            for p in row["type_contract_violations"]))
+        # ...and dropped, exactly as the endpoint drops it.
+        self.assertEqual([], row["ai_keywords"])
+        self.assertEqual(["lattice"], row["ai_keywords_before_type_filter"])
+
+    def test_a_malformed_answer_is_contained(self):
+        self.prepare(answers=["not json at all"] * 20)
+        code, _ = self.run_cli(["summarize", "--output-dir", self.dir])
+        self.assertEqual(0, code)
+        summary = json.loads(self.read("keyword-summary.json"))
+        self.assertEqual(0, summary["completed"])
+
+    def test_chart_abstention_is_measured_rather_than_punished(self):
+        self.prepare(answers=[json.dumps({"items": [{
+            "id": "cand-chart", "description": "", "keywords": [],
+            "confidence": "low", "reason": "no evidence"}]})] * 20)
+        self.run_cli(["summarize", "--output-dir", self.dir])
+        summary = json.loads(self.read("artifact-summary.json"))
+        self.assertIn("abstention_rate", summary)
+        self.assertIn("abstaining is the CORRECT behaviour",
+                      summary["chart_note"])
+
+
+class TestNoProductionWrites(CliTestCase):
+    def test_the_benchmark_never_touches_mongo_or_the_quota(self):
+        self.write_records()
+        with mock.patch.object(assist, "_consume_daily_quota") as quota:
+            with mock.patch("project.models.active_papers") as papers:
+                self.run_cli(["smoke-sample", "--output-dir", self.dir])
+                self.run_cli(["run", "--output-dir", self.dir, "--execute",
+                              "--rate-limit", "0"])
+                self.run_cli(["summarize", "--output-dir", self.dir])
+        quota.assert_not_called()
+        papers.assert_not_called()
+
+    def test_the_vocabulary_comes_from_the_collected_file_not_the_database(self):
+        # `assist._qresp_taxonomy` reads Mongo; the benchmark must not.
+        with mock.patch.object(assist, "_qresp_taxonomy") as taxonomy:
+            display, known = core.build_vocabulary(corpus(3))
+        taxonomy.assert_not_called()
+        self.assertTrue(known)
+
+    def test_the_products_field_allowlists_are_imported_not_restated(self):
+        source = io.open(core.__file__, encoding="utf-8").read()
+        self.assertIn("assist._reviewed_context", source)
+        self.assertIn("curation._sanitize_ai_items", source)
+
+
+if __name__ == "__main__":
+    unittest.main()
