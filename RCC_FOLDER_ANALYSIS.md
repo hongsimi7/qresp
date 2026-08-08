@@ -1,11 +1,15 @@
 # RCC Folder Analysis — assisted curation from a file-server folder
-> **This is the only place Qresp uses a language model.** Publication metadata
-> comes from manual entry and the DOI registry; Qresp keywords are typed by the
-> curator. Here, Gemini may propose a *description*, *keywords*, or a second
-> opinion on an uncertain *kind* for candidates the curator explicitly selected
+> **This is one of the two places Qresp uses a language model.** The other is
+> `POST /api/assist/keywords`, which suggests keywords for the record being
+> curated (`backend/project/assist.py`). Publication metadata is not among
+> them: it comes from manual entry and the DOI registry, never from a model.
+> Here, Gemini may propose a *description*, *keywords*, or a second opinion
+> on an uncertain *kind* for candidates the curator explicitly selected
 > — and nothing else. It never produces file paths, `imageFile`, `files`,
 > `notebookFile`, figure numbers or package versions, and no AI output is ever
 > saved or published without the curator accepting it item by item.
+>
+> Both features are benchmarked offline by `AI_ASSIST_EVALUATION.md`.
 
 
 A curator who has selected and saved a File Server folder can analyze it and

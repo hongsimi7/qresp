@@ -1,13 +1,20 @@
-"""Shared Gemini transport for the one AI feature Qresp still has.
+"""Shared Gemini transport, and one of Qresp's two AI features.
 
-This module owns no endpoint of its own. It provides the provider call, the
-configuration, the per-user daily quota and the keyword normalizer that
-`project/curation.py` uses for RCC folder-candidate descriptions -- the only
-place a language model is involved in Qresp.
+This module owns `POST /api/assist/keywords` (`suggest_keywords` below), and
+it provides the provider call, the configuration, the per-user daily quota
+and the keyword normalizer that `project/curation.py` uses for RCC
+folder-candidate descriptions.
+
+Those are the two -- and the only two -- places a language model is involved
+in Qresp:
+
+* keyword suggestions for the record being curated (here), and
+* descriptions/keywords for RCC folder candidates (`project/curation.py`).
+
+Both are opt-in, suggestion-only, and never auto-applied or stored.
 
 Bibliography is NOT one of those places: publication metadata comes from the
-DOI registry and from what the curator types, never from a model. Qresp
-keywords are likewise entered by hand.
+DOI registry and from what the curator types, never from a model.
 
 Disabled by default; configured EXCLUSIVELY via environment variables
 (QRESP_GEMINI_*) -- never config.ini. Google Gemini is the single selected
