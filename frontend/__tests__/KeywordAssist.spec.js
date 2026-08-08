@@ -45,20 +45,25 @@ const STATE = {
       notebookFile: "charts/fig1/plot.ipynb",
     },
   ],
+  // Curator state stores a dataset/script description under `readme` --
+  // the same name artifactFields.js declares and schema.json publishes.
   datasets: [
     {
-      description: "Relaxed geometries",
+      readme: "Relaxed geometries",
       keywords: "geometry",
       URLs: ["https://notebook.rcc.uchicago.edu/files/run/geo"],
       files: ["datasets/geo.xyz"],
     },
   ],
-  scripts: [{ description: "Band plotting", keywords: "matplotlib" }],
+  scripts: [{ readme: "Band plotting", keywords: "matplotlib" }],
+  // A Tool stores its description as `description` and its facility as
+  // `facilityName` -- artifactFields.js, schema.json and every published
+  // record agree.
   tools: [
     {
       packageName: "Quantum ESPRESSO",
       description: "DFT code",
-      facility: "RCC Midway",
+      facilityName: "RCC Midway",
       measurement: "total energy",
       version: "7.2",
     },
@@ -118,12 +123,42 @@ describe("buildKeywordRequest allowlist", () => {
       caption: "Band structure under pressure",
       properties: "band gap",
     });
+    // Canonical names: the backend resolves them into its payload shape.
     expect(request.datasets[0]).toEqual({
-      description: "Relaxed geometries",
+      readme: "Relaxed geometries",
       keywords: "geometry",
     });
+    expect(request.scripts[0]).toEqual({
+      readme: "Band plotting",
+      keywords: "matplotlib",
+    });
     expect(request.tools[0].packageName).toBe("Quantum ESPRESSO");
-    expect(request.tools[0].facility).toBe("RCC Midway");
+    expect(request.tools[0].facilityName).toBe("RCC Midway");
+  });
+
+  it("sends the dataset and script descriptions the curator actually wrote", () => {
+    // The regression this guards: the allowlist asked for `description` and
+    // `facility`, which are not the names state uses, so these values were
+    // read as undefined and silently never sent. The suggestions were made
+    // without the artifacts the UI said they were made with.
+    const request = buildKeywordRequest(STATE);
+    expect(request.datasets[0].readme).toBe("Relaxed geometries");
+    expect(request.scripts[0].readme).toBe("Band plotting");
+    expect(request.tools[0].facilityName).toBe("RCC Midway");
+    expect(request.datasets[0].description).toBeUndefined();
+    expect(request.scripts[0].description).toBeUndefined();
+    expect(request.tools[0].facility).toBeUndefined();
+  });
+
+  it("does not treat the old payload-side names as canonical state", () => {
+    // A record whose state only carries the old names contributes nothing
+    // from those fields -- state does not use them, so reading them would
+    // be guessing.
+    const request = buildKeywordRequest({
+      referenceInfo: { title: "T" },
+      datasets: [{ description: "Only the old name", keywords: "kw" }],
+    });
+    expect(request.datasets[0]).toEqual({ keywords: "kw" });
   });
 
   it("carries nothing else at all", () => {
@@ -277,9 +312,19 @@ describe("Suggest Keywords with AI", () => {
 
   it("is enabled from reviewed artifacts alone", () => {
     renderAssist({
-      state: { referenceInfo: {}, datasets: [{ description: "Geometries" }] },
+      state: { referenceInfo: {}, datasets: [{ readme: "Geometries" }] },
     });
     expect(trigger()).toBeEnabled();
+  });
+
+  it("eligibility follows the same canonical fields the request does", () => {
+    // The button used to light up for a dataset whose only field was
+    // `description` -- a name state does not use -- and then send nothing
+    // from it. Eligibility and payload must agree.
+    renderAssist({
+      state: { referenceInfo: {}, datasets: [{ description: "Geometries" }] },
+    });
+    expect(trigger()).toBeDisabled();
   });
 });
 

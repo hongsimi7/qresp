@@ -384,14 +384,48 @@ KEYWORD_SYSTEM_PROMPT = (
     "most %d short keyword candidates of 1-4 words each." % MAX_SUGGESTIONS
 )
 
-# Exactly what may be read off a candidate, by kind. Anything not listed here
-# never reaches the payload -- notably file paths, URLs, imageFile, notebook
-# names, ids, and anything about the curator or the owner.
+# Exactly what may be read off a candidate, by kind:
+#
+#     kind -> {AI payload field: (accepted input names, best first)}
+#
+# The payload field names are stable -- the model sees the same shape it
+# always has. What changed is the INPUT side: this used to be a flat tuple
+# that doubled as both, and the names it listed were not the names the record
+# actually uses. `readme` (dataset/script description) and `facilityName`
+# (tool facility) therefore matched nothing and were silently dropped, so the
+# artifacts the curator attached contributed far less than the UI promised.
+#
+# Canonical names come first and win. The trailing entries are confirmed
+# legacy spellings -- `description` for a dataset, `facilityname` as declared
+# in models.py -- accepted so an older client or an older record still works.
+# The server resolves these itself and never trusts the client to have picked
+# the right one.
+#
+# Anything not listed here never reaches the payload: file paths, URLs,
+# imageFile, notebookFile, ids, versions, and everything about the curator or
+# the owner.
 CONTEXT_FIELDS = {
-    "charts": ("caption", "properties"),
-    "datasets": ("description", "keywords"),
-    "scripts": ("description", "keywords"),
-    "tools": ("packageName", "description", "facility", "measurement"),
+    "charts": {
+        "caption": ("caption",),
+        "properties": ("properties",),
+    },
+    "datasets": {
+        "description": ("readme", "description"),
+        "keywords": ("keywords",),
+    },
+    "scripts": {
+        "description": ("readme", "description"),
+        "keywords": ("keywords",),
+    },
+    "tools": {
+        "packageName": ("packageName",),
+        # A Tool stores `description` on the wire (schema.json, and every
+        # published record); `readme` is the mongoengine field name and
+        # appears on some legacy documents.
+        "description": ("description", "readme"),
+        "facility": ("facilityName", "facilityname", "facility"),
+        "measurement": ("measurement",),
+    },
 }
 
 
@@ -420,7 +454,12 @@ def _flatten(value):
 def _reviewed_context(body):
     """The artifacts already accepted into the record, reduced to the few
     descriptive fields above. Bounded twice -- by item count and by total
-    characters -- so a large record cannot grow the prompt without limit."""
+    characters -- so a large record cannot grow the prompt without limit.
+
+    Each payload field is filled from the first of its accepted input names
+    that actually carries a value, so a canonical field always wins over a
+    legacy alias. The same text is never sent twice under two names.
+    """
     context = {}
     budget = MAX_CONTEXT_CHARS
     for kind, fields in CONTEXT_FIELDS.items():
@@ -432,10 +471,18 @@ def _reviewed_context(body):
             if not isinstance(entry, dict):
                 continue
             item = {}
-            for field in fields:
-                text = _flatten(entry.get(field))
-                if text:
+            seen_values = set()
+            for field, aliases in fields.items():
+                text = ""
+                for alias in aliases:
+                    text = _flatten(entry.get(alias))
+                    if text:
+                        break
+                # A record that carries the same sentence under both a
+                # canonical name and a legacy one must not pay for it twice.
+                if text and text not in seen_values:
                     item[field] = text
+                    seen_values.add(text)
             if not item:
                 continue
             cost = sum(len(value) for value in item.values())

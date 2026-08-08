@@ -31,11 +31,22 @@ import CuratorContext from "../../Context/Curator/curatorContext";
 
 // The allowlist, in one place, so what leaves the browser is auditable by
 // reading this file rather than by tracing the request.
+//
+// These are the CANONICAL field names Curator state actually uses — the same
+// ones `Utils/artifactFields.js` declares and `schema.json` publishes. They
+// used to be the names the AI payload uses instead (`description` for a
+// dataset, `facility` for a tool), which match nothing in state: those two
+// fields were read as undefined and never sent, so the artifacts a curator
+// had attached contributed nothing to the suggestions.
+//
+// The backend accepts these and normalizes them itself; it does not trust
+// this list. Sending a path, a file name or anything about the account is
+// still impossible here, because only these keys are ever read.
 const ARTIFACT_FIELDS = {
   charts: ["caption", "properties"],
-  datasets: ["description", "keywords"],
-  scripts: ["description", "keywords"],
-  tools: ["packageName", "description", "facility", "measurement"],
+  datasets: ["readme", "keywords"],
+  scripts: ["readme", "keywords"],
+  tools: ["packageName", "description", "facilityName", "measurement"],
 };
 
 const pick = (entry, fields) => {
