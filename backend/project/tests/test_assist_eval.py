@@ -14,6 +14,7 @@ The properties that make these benchmarks worth anything at all:
 import io
 import json
 import os
+import re
 import shutil
 import tempfile
 import unittest
@@ -57,9 +58,12 @@ DETAILS = {
     "scripts": [{"id": "s0", "readme": "Fits the diffraction peaks",
                  "keywords": ["peak fitting"],
                  "files": ["scripts/fit/fit_peaks.py"]}],
+    # The REAL wire shape: schema.json and every published record use
+    # `description` and `facilityName` for a Tool (models.py declares
+    # `readme`/`facilityname`, which only legacy documents carry).
     "tools": [{"id": "t0", "packageName": "RarePackage",
-               "readme": "Simulates the lattice",
-               "facilityname": "Beamline 12", "measurement": "diffraction",
+               "description": "Simulates the lattice",
+               "facilityName": "Beamline 12", "measurement": "diffraction",
                "files": ["tools/rarepackage/manifest.txt"]}],
     # Curator identity, present in the real details payload.
     "firstName": "Curator", "lastName": "Person",
@@ -189,6 +193,176 @@ class TestNormalization(unittest.TestCase):
         self.assertEqual("caption", chart["human_description_field"])
 
 
+class TestToolWireShape(unittest.TestCase):
+    """Where a Tool's human description actually lives.
+
+    Traced, not guessed: models.py declares `readme`/`facilityname`, but
+    schema.json and every published record (project/tests/data.json) carry
+    `description`/`facilityName`, and `Tools` is a DynamicEmbeddedDocument
+    with strict=False so what was submitted is what comes back out of
+    /api/paper/{id}. Reading only `readme` reported described tools as
+    undescribed.
+    """
+
+    def tool_from(self, entry):
+        record = core.to_benchmark_record(
+            search_row(0, "T", "A", ["x"]), {"tools": [entry]})
+        return record["artifacts"]["tools"][0]
+
+    def test_the_canonical_description_field_is_read(self):
+        item = self.tool_from({"id": "t0", "packageName": "West",
+                               "description": "Modified west code",
+                               "facilityName": "APS",
+                               "measurement": "X-ray"})
+        self.assertEqual("Modified west code", item["human_description"])
+        self.assertEqual("description", item["human_description_field"])
+        self.assertEqual("APS", item["facility_name"])
+
+    def test_a_legacy_record_falls_back_to_readme_and_facilityname(self):
+        item = self.tool_from({"id": "t0", "readme": "Legacy text",
+                               "facilityname": "Old beamline"})
+        self.assertEqual("Legacy text", item["human_description"])
+        self.assertEqual("readme", item["human_description_field"])
+        self.assertEqual("Old beamline", item["facility_name"])
+
+    def test_the_canonical_field_wins_when_both_are_present(self):
+        item = self.tool_from({"id": "t0", "description": "Canonical",
+                               "readme": "Legacy",
+                               "facilityName": "New", "facilityname": "Old"})
+        self.assertEqual("Canonical", item["human_description"])
+        self.assertEqual("New", item["facility_name"])
+
+    def test_a_real_published_record_is_read_correctly(self):
+        """The actual /api/paper/{id} shape, straight from the repository's
+        own published-record fixture."""
+        location = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "data.json")
+        with io.open(location, encoding="utf-8") as handle:
+            published = json.load(handle)
+        record = core.to_benchmark_record(
+            {"_Search__id": "real", "_Search__title": "T",
+             "_Search__tags": ["x"]}, published)
+        tools = record["artifacts"]["tools"]
+        self.assertEqual(2, len(tools))
+        software = tools[0]
+        self.assertEqual("Modified west code", software["human_description"])
+        self.assertEqual("West", software["package_name"])
+        self.assertEqual([], software["human_keywords"])   # Tools hold none
+        experiment = tools[1]
+        self.assertEqual("APS", experiment["facility_name"])
+        self.assertEqual("X-ray", experiment["measurement"])
+        # ...and the dataset/script/chart fields of the same record.
+        self.assertEqual("DAT files",
+                         record["artifacts"]["datasets"][0][
+                             "human_description"])
+        self.assertEqual("chart 1",
+                         record["artifacts"]["charts"][0]["human_description"])
+
+
+class TestKeywordAllowlistParity(unittest.TestCase):
+    """The backend allowlist and the frontend's canonical field list must
+    agree, or values silently stop travelling again."""
+
+    FRONTEND = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))),
+        "frontend", "components", "CuratorElements", "KeywordAssist.js")
+
+    def frontend_fields(self):
+        with io.open(self.FRONTEND, encoding="utf-8") as handle:
+            source = handle.read()
+        block = re.search(r"const ARTIFACT_FIELDS = \{(.*?)\};", source,
+                          re.DOTALL).group(1)
+        fields = {}
+        for kind, body in re.findall(r"(\w+):\s*\[(.*?)\]", block, re.DOTALL):
+            fields[kind] = re.findall(r'"([^"]+)"', body)
+        return fields
+
+    def test_every_field_the_browser_sends_is_accepted_by_the_backend(self):
+        for kind, names in self.frontend_fields().items():
+            accepted = set()
+            for aliases in assist.CONTEXT_FIELDS[kind].values():
+                accepted.update(aliases)
+            for name in names:
+                self.assertIn(name, accepted,
+                              "%s.%s is sent but not accepted" % (kind, name))
+
+    def test_the_browser_sends_the_canonical_name_for_each_payload_field(self):
+        # Not merely an accepted alias -- the FIRST one, which is canonical.
+        for kind, names in self.frontend_fields().items():
+            for field, aliases in assist.CONTEXT_FIELDS[kind].items():
+                self.assertIn(aliases[0], names,
+                              "%s should send canonical %r for %r"
+                              % (kind, aliases[0], field))
+
+    def test_the_browser_sends_no_path_file_or_account_field(self):
+        for kind, names in self.frontend_fields().items():
+            for name in names:
+                self.assertNotIn(name.lower(), (
+                    "files", "urls", "imagefile", "notebookfile", "path",
+                    "paths", "fileserverpath", "downloadpath", "emailid",
+                    "owner", "id"), "%s.%s" % (kind, name))
+
+
+class TestBackendAllowlistResolution(unittest.TestCase):
+    """The backend resolves aliases itself and never trusts the client."""
+
+    def test_canonical_names_are_read(self):
+        context = assist._reviewed_context({
+            "datasets": [{"readme": "Raw patterns", "keywords": ["xrd"]}],
+            "scripts": [{"readme": "Fits peaks"}],
+            "tools": [{"packageName": "West", "description": "West code",
+                       "facilityName": "APS", "measurement": "X-ray"}],
+            "charts": [{"caption": "A spectrum", "properties": ["abs"]}],
+        })
+        self.assertEqual("Raw patterns", context["datasets"][0]["description"])
+        self.assertEqual("Fits peaks", context["scripts"][0]["description"])
+        self.assertEqual("West code", context["tools"][0]["description"])
+        self.assertEqual("APS", context["tools"][0]["facility"])
+        self.assertEqual("A spectrum", context["charts"][0]["caption"])
+
+    def test_legacy_aliases_still_work(self):
+        context = assist._reviewed_context({
+            "datasets": [{"description": "Legacy dataset text"}],
+            "tools": [{"readme": "Legacy tool text",
+                       "facilityname": "Legacy beamline"}],
+        })
+        self.assertEqual("Legacy dataset text",
+                         context["datasets"][0]["description"])
+        self.assertEqual("Legacy tool text",
+                         context["tools"][0]["description"])
+        self.assertEqual("Legacy beamline", context["tools"][0]["facility"])
+
+    def test_the_canonical_value_wins_over_a_legacy_one(self):
+        context = assist._reviewed_context({
+            "datasets": [{"readme": "Canonical", "description": "Legacy"}],
+            "tools": [{"description": "Canonical tool", "readme": "Legacy",
+                       "facilityName": "New", "facilityname": "Old"}],
+        })
+        self.assertEqual("Canonical", context["datasets"][0]["description"])
+        self.assertEqual("Canonical tool", context["tools"][0]["description"])
+        self.assertEqual("New", context["tools"][0]["facility"])
+
+    def test_the_same_text_is_never_sent_twice(self):
+        context = assist._reviewed_context({
+            "tools": [{"description": "Same words", "readme": "Same words"}]})
+        values = list(context["tools"][0].values())
+        self.assertEqual(len(values), len(set(values)))
+
+    def test_fields_outside_the_allowlist_are_dropped(self):
+        context = assist._reviewed_context({
+            "datasets": [{"readme": "Text", "files": ["secret/a.dat"],
+                          "URLs": ["https://internal.example.org"],
+                          "id": "d0", "owner_email": "a@b.org"}],
+            "charts": [{"caption": "C", "imageFile": "charts/secret.png",
+                        "notebookFile": "nb.ipynb"}],
+        })
+        blob = json.dumps(context)
+        for leak in ("secret", "https://", "d0", "a@b.org", "ipynb",
+                     "imageFile", "files", "URLs"):
+            self.assertNotIn(leak, blob, leak)
+
+
 # ----------------------------------------------------------- leakage guards
 
 class TestKeywordLeakage(unittest.TestCase):
@@ -310,20 +484,30 @@ class TestKeywordModes(unittest.TestCase):
                      "rcc.uchicago", "://", "manifest.txt"):
             self.assertNotIn(leak, blob, leak)
 
-    def test_the_context_gap_between_stored_and_sent_fields_is_reported(self):
-        # The product reads `description`/`facility`; datasets and scripts
-        # store `readme` and tools store `facilityName`. The values are
-        # therefore never sent, and the benchmark says so instead of
-        # silently scoring a product that does not exist.
+    def test_every_stored_description_now_reaches_the_model(self):
+        # This is the regression the field-name fix closes. Computed by
+        # actually pushing the record through the product's own reducer, not
+        # by asserting zero.
         gaps = core.keyword_context_gaps([benchmark_record()])
-        self.assertEqual(1, gaps["datasets.description"]["stored"])
-        self.assertEqual(0, gaps["datasets.description"]["reaches_ai"])
-        self.assertEqual(1, gaps["datasets.description"]["lost"])
-        self.assertEqual(1, gaps["scripts.description"]["lost"])
-        self.assertEqual(1, gaps["tools.facility"]["lost"])
-        # Charts are unaffected: caption and properties do reach it.
-        self.assertEqual(0, gaps["charts.description"]["lost"])
-        self.assertEqual(0, gaps["charts.keywords"]["lost"])
+        self.assertTrue(gaps)
+        for field, counts in gaps.items():
+            self.assertEqual(0, counts["lost"], "%s: %s" % (field, counts))
+            self.assertEqual(counts["stored"], counts["reaches_ai"], field)
+
+    def test_the_dataset_description_and_tool_facility_actually_travel(self):
+        record = benchmark_record()
+        payload = core.build_keyword_payload(
+            record, core.MODE_WITH_ARTIFACTS, [])
+        artifacts = payload["reviewed_artifacts"]
+        self.assertEqual("Raw diffraction patterns",
+                         artifacts["datasets"][0]["description"])
+        self.assertEqual("Fits the diffraction peaks",
+                         artifacts["scripts"][0]["description"])
+        self.assertEqual("Simulates the lattice",
+                         artifacts["tools"][0]["description"])
+        self.assertEqual("Beamline 12", artifacts["tools"][0]["facility"])
+        self.assertEqual("Absorption spectrum of the film",
+                         artifacts["charts"][0]["caption"])
 
 
 # ------------------------------------------------------------ path matching
@@ -337,13 +521,70 @@ class TestCandidateMatching(unittest.TestCase):
         self.assertEqual("Raw diffraction patterns",
                          artifact["human_description"])
 
-    def test_case_and_separator_differences_still_match(self):
+    def test_windows_separators_and_dot_slash_are_normalized(self):
+        # A backslash is a spelling of the same separator, and `./` and
+        # duplicate slashes name the same file. Case is NOT touched.
         record = benchmark_record()
         candidate = dict(record["rcc_candidates"][1],
-                         paths=["./Datasets\\XRD\\Patterns.dat"])
+                         paths=[".\\datasets\\\\xrd/patterns.dat"])
         artifact, reason = core.match_candidate(candidate, record)
         self.assertEqual(core.MATCH_EXACT_PATH, reason)
         self.assertIsNotNone(artifact)
+
+    def test_a_casing_only_difference_is_refused_not_matched(self):
+        # RCC serves Linux paths: Patterns.dat and patterns.dat are two
+        # different files. Matching them would score a description against
+        # the wrong one and never show a symptom.
+        record = benchmark_record()
+        candidate = dict(record["rcc_candidates"][1],
+                         paths=["Datasets/XRD/Patterns.dat"])
+        artifact, reason = core.match_candidate(candidate, record)
+        self.assertIsNone(artifact)
+        self.assertEqual(core.UNMATCHED_CASE_MISMATCH, reason)
+
+    def test_two_files_differing_only_in_case_are_never_confused(self):
+        record = benchmark_record()
+        record["artifacts"]["charts"] = [
+            {"kind": "charts", "id": "cUpper", "human_description": "UPPER A",
+             "human_description_field": "caption", "human_keywords": [],
+             "human_keyword_field": "properties", "files": [],
+             "image_file": "charts/A.png", "notebook_file": "",
+             "package_name": "", "facility_name": "", "measurement": ""},
+            {"kind": "charts", "id": "cLower", "human_description": "lower a",
+             "human_description_field": "caption", "human_keywords": [],
+             "human_keyword_field": "properties", "files": [],
+             "image_file": "charts/a.png", "notebook_file": "",
+             "package_name": "", "facility_name": "", "measurement": ""},
+        ]
+        upper, reason = core.match_candidate(
+            {"id": "x", "kind": "chart", "paths": ["charts/A.png"]}, record)
+        self.assertEqual(core.MATCH_EXACT_PATH, reason)
+        self.assertEqual("UPPER A", upper["human_description"])
+
+        lower, reason = core.match_candidate(
+            {"id": "y", "kind": "chart", "paths": ["charts/a.png"]}, record)
+        self.assertEqual(core.MATCH_EXACT_PATH, reason)
+        self.assertEqual("lower a", lower["human_description"])
+
+    def test_unusable_path_shapes_are_refused_with_their_own_reason(self):
+        record = benchmark_record()
+        cases = {
+            "https://notebook.rcc.uchicago.edu/x/patterns.dat":
+                core.REJECT_URL,
+            "/absolute/datasets/xrd/patterns.dat": core.REJECT_ABSOLUTE,
+            "C:\\data\\patterns.dat": core.REJECT_ABSOLUTE,
+            "../datasets/xrd/patterns.dat": core.REJECT_TRAVERSAL,
+            "datasets/xrd/patterns.dat?v=2": core.REJECT_QUERY,
+            "datasets/xrd/patterns.dat#top": core.REJECT_QUERY,
+            "datasets/xrd%2Fpatterns.dat": core.REJECT_PERCENT,
+        }
+        for path, expected in cases.items():
+            self.assertEqual(expected, core.path_rejection(path), path)
+            artifact, reason = core.match_candidate(
+                {"id": "x", "kind": "dataset", "paths": [path]}, record)
+            self.assertIsNone(artifact, path)
+            self.assertEqual(expected, reason, path)
+            self.assertEqual("", core.normalize_relative_path(path), path)
 
     def test_a_similar_basename_is_refused_not_guessed(self):
         record = benchmark_record()
@@ -540,7 +781,7 @@ class TestCollect(CliTestCase):
             with mock.patch.object(assist, "call_gemini", gemini):
                 code = assist_eval.main([
                     "collect", "--api-base", "https://qresp.example.org",
-                    "--output-dir", self.dir])
+                    "--output-dir", self.dir, "--execute"])
         self.assertEqual(0, code)
         self.assertEqual([], gemini.payloads)
         records = [json.loads(l) for l in self.read("raw-records.jsonl")
@@ -564,10 +805,157 @@ class TestCollect(CliTestCase):
             with mock.patch.object(assist, "call_gemini", FakeGemini()):
                 assist_eval.main([
                     "collect", "--api-base", "https://x", "--output-dir",
-                    self.dir, "--ids-file", ids])
+                    self.dir, "--ids-file", ids, "--execute"])
         records = [json.loads(l) for l in self.read("raw-records.jsonl")
                    .split("\n") if l.strip()]
         self.assertEqual(["rec01"], [r["record_id"] for r in records])
+
+
+class TestCollectRcc(CliTestCase):
+    """The RCC collection step. It calls the SERVING analysis helpers, so the
+    host allowlist, walk limits and evidence bounds are the production ones,
+    and it contacts nothing without --execute."""
+
+    ANALYSIS = {"candidates": {
+        "charts": [{"id": "c1", "name": "figure1",
+                    "paths": ["charts/figure1/figure1.png"], "context": ""}],
+        "datasets": [{"id": "d1", "name": "xrd",
+                      "paths": ["datasets/xrd/patterns.dat"],
+                      "context": "README: raw patterns"}],
+    }}
+
+    def patched_pipeline(self, analysis=None, fail_for=()):
+        """Stubs for the serving helpers, recording what was asked for."""
+        seen = {"resolved": [], "walked": []}
+
+        def resolve(path):
+            seen["resolved"].append(path)
+            if path in fail_for:
+                raise curation.FolderError("refused")
+            return "https://notebook.rcc.uchicago.edu/files/x"
+
+        def walk(url, list_directory=None):
+            seen["walked"].append(url)
+            return (["datasets/xrd/patterns.dat"], ["datasets"], [], False)
+
+        import contextlib
+        return seen, mock.patch.multiple(
+            curation,
+            resolve_folder_url=mock.Mock(side_effect=resolve),
+            tls_exception_scope=mock.Mock(
+                side_effect=lambda url: contextlib.nullcontext()),
+            walk_folder=mock.Mock(side_effect=walk),
+            _fetch_text=mock.Mock(return_value="README: raw patterns"),
+            analyze_folder_tree=mock.Mock(
+                return_value=analysis or self.ANALYSIS))
+
+    def test_a_dry_run_contacts_no_file_server(self):
+        self.write_records()
+        seen, patches = self.patched_pipeline()
+        with patches:
+            code, gemini = self.run_cli(["collect-rcc", "--output-dir",
+                                         self.dir])
+        self.assertEqual(0, code)
+        self.assertEqual([], seen["walked"])
+        self.assertEqual([], gemini.payloads)
+        self.assertFalse(os.path.isdir(os.path.join(self.dir,
+                                                    "rcc-analyses")))
+
+    def test_execute_uses_the_serving_analysis_helpers(self):
+        self.write_records()
+        seen, patches = self.patched_pipeline()
+        with patches:
+            code, gemini = self.run_cli(
+                ["collect-rcc", "--output-dir", self.dir, "--execute",
+                 "--limit", "2", "--rate-limit", "0"])
+            # Asserted INSIDE the patch, while the mocks still exist: the
+            # production entry points, called with the record's own path.
+            self.assertTrue(curation.resolve_folder_url.called)
+            self.assertTrue(curation.walk_folder.called)
+            self.assertTrue(curation.analyze_folder_tree.called)
+        self.assertEqual(0, code)
+        self.assertEqual(2, len(seen["resolved"]))
+        self.assertEqual(2, len(seen["walked"]))
+        # ...and never Gemini.
+        self.assertEqual([], gemini.payloads)
+
+    def test_it_saves_one_file_per_record_and_reuses_it(self):
+        records = self.write_records()
+        seen, patches = self.patched_pipeline()
+        with patches:
+            self.run_cli(["collect-rcc", "--output-dir", self.dir,
+                          "--execute", "--limit", str(len(records)),
+                          "--rate-limit", "0"])
+        saved = sorted(os.listdir(os.path.join(self.dir, "rcc-analyses")))
+        self.assertEqual(len(records), len(saved))
+
+        # Every folder is now saved, so a second full run reads nothing.
+        seen2, patches2 = self.patched_pipeline()
+        with patches2:
+            self.run_cli(["collect-rcc", "--output-dir", self.dir,
+                          "--execute", "--limit", str(len(records)),
+                          "--rate-limit", "0"])
+        self.assertEqual([], seen2["walked"], "already-saved folders reused")
+
+    def test_refresh_reads_them_again(self):
+        self.write_records()
+        seen, patches = self.patched_pipeline()
+        with patches:
+            self.run_cli(["collect-rcc", "--output-dir", self.dir,
+                          "--execute", "--limit", "1", "--rate-limit", "0"])
+        seen2, patches2 = self.patched_pipeline()
+        with patches2:
+            self.run_cli(["collect-rcc", "--output-dir", self.dir,
+                          "--execute", "--limit", "1", "--rate-limit", "0",
+                          "--refresh"])
+        self.assertEqual(1, len(seen2["walked"]))
+
+    def test_the_limit_is_honoured(self):
+        self.write_records()
+        seen, patches = self.patched_pipeline()
+        with patches:
+            self.run_cli(["collect-rcc", "--output-dir", self.dir,
+                          "--execute", "--limit", "3", "--rate-limit", "0"])
+        self.assertEqual(3, len(seen["walked"]))
+
+    def test_one_failed_folder_does_not_stop_the_rest(self):
+        records = self.write_records()
+        failing = records[0]["file_server_path"]
+        seen, patches = self.patched_pipeline(fail_for=(failing,))
+        with patches:
+            code, _ = self.run_cli(
+                ["collect-rcc", "--output-dir", self.dir, "--execute",
+                 "--limit", "3", "--rate-limit", "0"])
+        self.assertEqual(0, code)
+        saved = os.listdir(os.path.join(self.dir, "rcc-analyses"))
+        self.assertEqual(2, len(saved), "the other two still succeeded")
+
+    def test_the_saved_analysis_feeds_the_artifact_benchmark(self):
+        self.write_records()
+        seen, patches = self.patched_pipeline()
+        with patches:
+            self.run_cli(["collect-rcc", "--output-dir", self.dir,
+                          "--execute", "--rate-limit", "0"])
+        code, gemini = self.run_cli(["audit", "--output-dir", self.dir])
+        self.assertEqual(0, code)
+        report = json.loads(self.read("audit.json"))
+        self.assertGreater(report["artifact_units"], 0)
+        self.assertEqual([], gemini.payloads)
+
+    def test_without_any_analysis_the_artifact_benchmark_is_zero(self):
+        # And the sample must not imply calls that will not happen.
+        records = corpus(3)
+        for record in records:
+            record["rcc_candidates"] = []
+        self.write_records(records)
+        self.run_cli(["audit", "--output-dir", self.dir])
+        report = json.loads(self.read("audit.json"))
+        self.assertEqual(0, report["artifact_units"])
+        self.run_cli(["smoke-sample", "--output-dir", self.dir])
+        sample = json.loads(self.read("smoke-sample.json"))
+        self.assertEqual(0, len(sample["artifact_units"]))
+        self.assertEqual(len(sample["keyword_units"]),
+                         sample["planned_provider_calls"])
 
 
 class TestAuditAndSample(CliTestCase):

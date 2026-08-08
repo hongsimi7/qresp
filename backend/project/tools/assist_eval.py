@@ -1,10 +1,17 @@
 """Benchmarks for Qresp's two AI assist features — read-only, offline QA.
 
-    python -m project.tools.assist_eval collect       --api-base URL ...
-    python -m project.tools.assist_eval audit         --output-dir DIR
-    python -m project.tools.assist_eval smoke-sample  --output-dir DIR
-    python -m project.tools.assist_eval run           --output-dir DIR [--execute]
-    python -m project.tools.assist_eval summarize     --output-dir DIR
+    .\venv\Scripts\python.exe -m project.tools.assist_eval <command>
+
+    collect      --api-base URL --output-dir DIR [--execute]
+    collect-rcc  --output-dir DIR [--execute] [--limit N]
+    audit        --output-dir DIR
+    smoke-sample --output-dir DIR [--seed N]
+    run          --output-dir DIR [--execute]
+    summarize    --output-dir DIR
+
+Every network step is a dry run until `--execute` is given: `collect` reads
+a live Qresp instance, `collect-rcc` reads a live file server, and `run` is
+the only one that reaches Gemini.
 
 WHAT IS MEASURED
 ----------------
@@ -179,7 +186,7 @@ def _load_rcc_analyses(path):
     Accepts one JSON file `{record_id: <analyze-folder response>}` or a
     directory of `<record_id>.json`.
     """
-    if not path:
+    if not path or not os.path.exists(path):
         return {}
     analyses = {}
     if os.path.isdir(path):
@@ -212,6 +219,17 @@ def _load_rcc_analyses(path):
 
 
 def collect(args):
+    if not args.execute:
+        print("DRY RUN: `collect` reads a live Qresp instance over the "
+              "network.")
+        print("  api base      %s" % args.api_base)
+        print("  output dir    %s" % args.output_dir)
+        print("  ids file      %s" % (args.ids_file or "(all records)"))
+        print("  rcc analyses  %s" % (args.rcc_analyses or "(none)"))
+        print("  qresp requests planned: 1 search + 1 details per record")
+        print("\nNo request was made. Add --execute to read the instance.")
+        return 0
+
     import requests
 
     session = requests.Session()
@@ -248,10 +266,142 @@ def collect(args):
     return 0
 
 
+# --------------------------------------------------------------- collect-rcc
+
+def _rcc_dir(output_dir):
+    return os.path.join(output_dir, "rcc-analyses")
+
+
+def analyze_one_folder(folder_path):
+    """One folder, through the SERVING analysis pipeline.
+
+    Calls the same read-only helpers `POST /api/curation/analyze-folder`
+    calls, in the same order, so the host allowlist, the traversal and scheme
+    rejection, the TLS policy, the walk limits, the bounded evidence reads and
+    the candidate builder are all the production ones. No new API is exposed
+    and no authentication or CSRF check is bypassed: this is a library call
+    from a command line, not an HTTP request.
+
+    Returns (analysis, error). Gemini, the quota counter, MongoDB, drafts and
+    publishing are not involved anywhere in this path.
+    """
+    import posixpath
+
+    root_url = curation.resolve_folder_url(folder_path)
+    with curation.tls_exception_scope(root_url):
+        files, dirs, notes, truncated = curation.walk_folder(root_url)
+        if not files and not dirs:
+            return None, "the folder is empty or unreadable"
+        texts = {}
+        wanted = [p for p in files
+                  if posixpath.basename(p).lower() in curation.MANIFEST_NAMES
+                  or posixpath.basename(p).lower() in curation.README_NAMES]
+        wanted += [p for p in files if curation._ext(p)
+                   in curation.SCRIPT_EXTENSIONS
+                   and curation._ext(p) != ".ipynb"]
+        for path in wanted[:curation.MAX_TEXT_FILES]:
+            try:
+                texts[path] = curation._fetch_text(root_url + "/" + path)
+            except Exception as e:
+                # Never the file's content or its URL -- only the failure kind.
+                print("    evidence read skipped (%s)" % type(e).__name__)
+    # Default proposal: no boundary selection, no chart plan, exactly what a
+    # curator sees before touching anything.
+    return curation.analyze_folder_tree(files, dirs, texts), None
+
+
+def collect_rcc(args):
+    records = _load_records(args.output_dir)
+    if not records:
+        print("No raw-records.jsonl in %s. Run `collect --execute` first."
+              % args.output_dir)
+        return 2
+
+    target_dir = _rcc_dir(args.output_dir)
+    wanted = set(_read_lines(args.ids_file)) if args.ids_file else None
+
+    pending, skipped, cached = [], [], []
+    for record in records:
+        record_id = record["record_id"]
+        if wanted is not None and record_id not in wanted:
+            continue
+        folder = (record.get("file_server_path") or "").strip()
+        if not folder:
+            skipped.append((record_id, "record has no fileServerPath"))
+            continue
+        saved = os.path.join(target_dir, "%s.json" % record_id)
+        if os.path.isfile(saved) and not args.refresh:
+            cached.append(record_id)
+            continue
+        pending.append((record_id, folder))
+    if args.limit:
+        pending = pending[:args.limit]
+
+    print("RCC COLLECTION")
+    print("  records considered      %d" % len(records))
+    print("  already saved (reused)  %d" % len(cached))
+    print("  skipped                 %d" % len(skipped))
+    print("  rcc_folders_to_read     %d" % len(pending))
+    print("  rcc requests per folder: 1 listing walk + bounded evidence reads")
+    print("  execute                 %s" % bool(args.execute))
+    for record_id, reason in skipped[:10]:
+        print("    skip %s: %s" % (record_id, reason))
+
+    if not args.execute:
+        print("\nDRY RUN: no file server was contacted. Add --execute to "
+              "read the %d folder(s) above." % len(pending))
+        return 0
+    if not pending:
+        print("\nNothing to read.")
+        return 0
+
+    if not os.path.isdir(target_dir):
+        os.makedirs(target_dir)
+    limiter = RateLimiter(args.rate_limit)
+    ok = failed = 0
+    for index, (record_id, folder) in enumerate(pending, start=1):
+        limiter.wait()
+        # A folder that cannot be read is one record's problem, not the run's.
+        try:
+            analysis, error = analyze_one_folder(folder)
+        except Exception as e:
+            analysis, error = None, type(e).__name__
+        if analysis is None:
+            failed += 1
+            print("  [%d/%d] %s failed (%s)"
+                  % (index, len(pending), record_id, error))
+            continue
+        _write_json(os.path.join(target_dir, "%s.json" % record_id),
+                    {"candidates": analysis.get("candidates", {})})
+        counts = {kind: len(entries or []) for kind, entries
+                  in (analysis.get("candidates") or {}).items()}
+        ok += 1
+        print("  [%d/%d] %s %s" % (index, len(pending), record_id, counts))
+
+    print("\nRead %d folder(s), %d failed. Saved under %s"
+          % (ok, failed, target_dir))
+    print("Next: `collect --execute --rcc-analyses %s` to fold them in, or "
+          "re-run `audit`." % target_dir)
+    return 0
+
+
 # -------------------------------------------------------------------- audit
 
 def _load_records(output_dir):
-    return _read_jsonl(os.path.join(output_dir, "raw-records.jsonl"))
+    """The collected records, with any RCC analyses saved since folded in.
+
+    `collect-rcc` writes into `<output-dir>/rcc-analyses`, and every later
+    step reads from there, so the sequence collect -> audit -> collect-rcc ->
+    audit works without re-reading the Qresp instance.
+    """
+    records = _read_jsonl(os.path.join(output_dir, "raw-records.jsonl"))
+    saved = _load_rcc_analyses(_rcc_dir(output_dir))
+    for record in records:
+        candidates = saved.get(record["record_id"])
+        if candidates is not None:
+            record["rcc_candidates"] = candidates
+        record.setdefault("rcc_candidates", [])
+    return records
 
 
 def _keyword_units(records):
@@ -418,6 +568,11 @@ def smoke_sample(args):
     print("  keyword units   %d  (%d records x %d modes)"
           % (len(keyword_sample), len(keyword_ids), len(core.KEYWORD_MODES)))
     print("  artifact units  %d" % len(artifact_sample))
+    if not artifact_units:
+        # Never imply calls that are not going to happen.
+        print("    NOTE: no RCC analysis is available, so the artifact "
+              "benchmark will evaluate 0 candidates and make 0 calls.")
+        print("    Run `collect-rcc --execute` first if you want it.")
     strata = {}
     for unit in artifact_sample:
         strata[unit["stratum"]] = strata.get(unit["stratum"], 0) + 1
@@ -923,9 +1078,14 @@ def build_parser():
                     "evaluation; never changes served behaviour.")
     sub = parser.add_subparsers(dest="command")
 
-    collect_parser = sub.add_parser("collect", help="read Qresp (no AI call)")
+    collect_parser = sub.add_parser(
+        "collect", help="read Qresp (dry-run unless --execute; no AI call)")
     collect_parser.add_argument("--api-base", required=True)
     collect_parser.add_argument("--output-dir", required=True)
+    collect_parser.add_argument(
+        "--execute", "--live", action="store_true", dest="execute",
+        help="actually read the Qresp instance. Without it nothing is "
+             "requested.")
     collect_parser.add_argument("--ids-file")
     collect_parser.add_argument(
         "--rcc-analyses",
@@ -935,6 +1095,22 @@ def build_parser():
     collect_parser.add_argument("--timeout", type=int, default=20)
     collect_parser.add_argument("--insecure", action="store_true")
     collect_parser.set_defaults(func=collect)
+
+    rcc_parser = sub.add_parser(
+        "collect-rcc",
+        help="run the SERVING folder analysis over each record's saved "
+             "fileServerPath (dry-run unless --execute; never calls Gemini)")
+    rcc_parser.add_argument("--output-dir", required=True)
+    rcc_parser.add_argument(
+        "--execute", "--live", action="store_true", dest="execute",
+        help="actually contact the file server. Without it nothing is read.")
+    rcc_parser.add_argument("--limit", type=int, default=10)
+    rcc_parser.add_argument("--rate-limit", type=float, default=0.5)
+    rcc_parser.add_argument("--ids-file")
+    rcc_parser.add_argument(
+        "--refresh", action="store_true",
+        help="re-read folders that already have a saved analysis")
+    rcc_parser.set_defaults(func=collect_rcc)
 
     audit_parser = sub.add_parser("audit", help="coverage and call estimate")
     audit_parser.add_argument("--output-dir", required=True)

@@ -40,20 +40,30 @@ SEARCH_FIELD_ALIASES = {
     "fileServerPath": ("_Search__fileServerPath", "fileServerPath"),
 }
 
-# Stored model field -> the key the product's AI allowlist actually reads.
-# These differ, and the difference is a live finding rather than a typo to
-# paper over here: see `keyword_context_gaps`.
-ARTIFACT_DESCRIPTION_FIELD = {
-    "charts": "caption",
-    "datasets": "readme",
-    "scripts": "readme",
-    "tools": "readme",
+# Where a HUMAN-authored description actually lives on the wire, canonical
+# first. Traced through models.py, schema.json, ToolsInfoForm.js and a real
+# published record (project/tests/data.json), because guessing here would
+# make an artifact look undescribed when the curator had described it:
+#
+#   chart    caption
+#   dataset  readme          (schema.json + model agree)
+#   script   readme
+#   tool     description     (schema.json and every published record);
+#                            `readme` is the mongoengine field name and shows
+#                            up on some legacy documents
+ARTIFACT_DESCRIPTION_FIELDS = {
+    "charts": ("caption",),
+    "datasets": ("readme", "description"),
+    "scripts": ("readme", "description"),
+    "tools": ("description", "readme"),
 }
-ARTIFACT_KEYWORD_FIELD = {
-    "charts": "properties",
-    "datasets": "keywords",
-    "scripts": "keywords",
+ARTIFACT_KEYWORD_FIELDS = {
+    "charts": ("properties",),
+    "datasets": ("keywords",),
+    "scripts": ("keywords",),
+    "tools": (),                       # a Tool has no keyword field
 }
+ARTIFACT_FACILITY_FIELDS = ("facilityName", "facilityname")
 
 MAX_ABSTRACT_CHARS = 8000
 MAX_TEXT_CHARS = 2000
@@ -107,15 +117,25 @@ def _artifact(entry, kind):
     """
     if not isinstance(entry, dict):
         return None
-    description_field = ARTIFACT_DESCRIPTION_FIELD.get(kind, "readme")
-    keyword_field = ARTIFACT_KEYWORD_FIELD.get(kind)
+
+    def first(names):
+        """The first name that carries a value, and which one it was."""
+        for name in names:
+            value = entry.get(name)
+            if value not in (None, "", [], ()):
+                return value, name
+        return None, (names[0] if names else "")
+
+    description, description_field = first(
+        ARTIFACT_DESCRIPTION_FIELDS.get(kind, ("readme",)))
+    keywords, keyword_field = first(ARTIFACT_KEYWORD_FIELDS.get(kind, ()))
+    facility, _ = first(ARTIFACT_FACILITY_FIELDS)
     item = {
         "kind": kind,
         "id": _text(entry.get("id"), 64),
-        "human_description": _text(entry.get(description_field)),
+        "human_description": _text(description),
         "human_description_field": description_field,
-        "human_keywords": _as_list(entry.get(keyword_field))
-        if keyword_field else [],
+        "human_keywords": _as_list(keywords) if keyword_field else [],
         "human_keyword_field": keyword_field or "",
         # Match keys only.
         "files": [_text(f, 300) for f in (entry.get("files") or [])],
@@ -123,8 +143,7 @@ def _artifact(entry, kind):
         "notebook_file": _text(entry.get("notebookFile"), 300),
         # Tool identity fields, which the AI must never invent.
         "package_name": _text(entry.get("packageName"), 300),
-        "facility_name": _text(entry.get("facilityname")
-                               or entry.get("facilityName"), 300),
+        "facility_name": _text(facility, 300),
         "measurement": _text(entry.get("measurement"), 300),
     }
     return item
@@ -238,7 +257,7 @@ def _artifact_request_entry(item, hide_terms=()):
         entry["keywords"] = ", ".join(keep(item["human_keywords"]))
     elif kind == "tools":
         entry["packageName"] = item["package_name"]
-        entry["readme"] = item["human_description"]
+        entry["description"] = item["human_description"]
         entry["facilityName"] = item["facility_name"]
         entry["measurement"] = item["measurement"]
     return {key: value for key, value in entry.items() if value}
@@ -556,32 +575,65 @@ def keyword_metrics(suggested, reference, known_vocabulary):
 
 # ------------------------------------------------------- RCC path matching
 
-def normalize_relative_path(value):
-    """POSIX, lower-case, no leading `./` or `/`, no query or fragment.
-
-    Matching is done on this form and nothing else. Backslashes become
-    forward slashes because the same file is written both ways across
-    Windows and RCC listings; case is folded because the listings disagree
-    there too. Nothing else is normalized -- no basename fallback, no
-    stemming, no similarity.
-    """
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    text = re.split(r"[?#]", text)[0]
-    text = text.replace("\\", "/")
-    while text.startswith("./"):
-        text = text[2:]
-    text = text.lstrip("/")
-    text = re.sub(r"/{2,}", "/", text)
-    return text.rstrip("/").lower()
-
-
 MATCH_EXACT_PATH = "exact_path"
 UNMATCHED_NO_PATH = "candidate_has_no_usable_path"
 UNMATCHED_NOT_FOUND = "no_artifact_with_this_exact_path"
 UNMATCHED_AMBIGUOUS = "path_matches_more_than_one_artifact"
 UNMATCHED_KIND_MISMATCH = "matched_artifact_is_a_different_kind"
+UNMATCHED_CASE_MISMATCH = "path_case_mismatch"
+# Shapes that are not a relative path inside the record's folder at all.
+REJECT_ABSOLUTE = "path_is_absolute"
+REJECT_URL = "path_is_a_url"
+REJECT_TRAVERSAL = "path_contains_a_parent_reference"
+REJECT_QUERY = "path_carries_a_query_or_fragment"
+REJECT_PERCENT = "path_is_percent_encoded"
+
+_PERCENT_RE = re.compile(r"%[0-9A-Fa-f]{2}")
+
+
+def path_rejection(value):
+    """Why this string cannot be used as a match key, or "" when it can.
+
+    Refused rather than cleaned up: a URL, an absolute path or a `..` segment
+    means the candidate is not describing a file inside the record's own
+    folder, and silently rewriting it into something that matches would be
+    inventing the match.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return UNMATCHED_NO_PATH
+    if "://" in text:
+        return REJECT_URL
+    if _PERCENT_RE.search(text):
+        return REJECT_PERCENT
+    if "?" in text or "#" in text:
+        return REJECT_QUERY
+    candidate = text.replace("\\", "/")
+    if candidate.startswith("/") or re.match(r"^[A-Za-z]:/", candidate):
+        return REJECT_ABSOLUTE
+    if ".." in [segment for segment in candidate.split("/")]:
+        return REJECT_TRAVERSAL
+    return ""
+
+
+def normalize_relative_path(value):
+    """The match key: POSIX separators, no `./`, no duplicate or trailing `/`.
+
+    **Case is preserved.** RCC serves Linux paths, where `Figure.png` and
+    `figure.png` are two different files; folding case would let a benchmark
+    score an AI description against the wrong one and never notice. The only
+    separator normalization is the Windows backslash, which is a spelling of
+    the same character rather than a different name.
+
+    Returns "" for anything `path_rejection` refuses.
+    """
+    if path_rejection(value):
+        return ""
+    text = str(value or "").strip().replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    text = re.sub(r"/{2,}", "/", text)
+    return text.rstrip("/")
 
 
 def _artifact_paths(item):
@@ -616,21 +668,38 @@ def match_candidate(candidate, record):
     if not bucket:
         return None, UNMATCHED_KIND_MISMATCH
 
-    candidate_paths = {normalize_relative_path(p)
-                       for p in (candidate.get("paths") or [])}
-    candidate_paths = {p for p in candidate_paths if p}
+    raw_paths = list(candidate.get("paths") or [])
+    candidate_paths = set()
+    rejections = []
+    for path in raw_paths:
+        reason = path_rejection(path)
+        if reason:
+            rejections.append(reason)
+            continue
+        candidate_paths.add(normalize_relative_path(path))
+    candidate_paths.discard("")
     if not candidate_paths:
-        return None, UNMATCHED_NO_PATH
+        # Report the specific refusal when there was one, so the exclusion is
+        # auditable rather than a generic "no path".
+        return None, (rejections[0] if rejections else UNMATCHED_NO_PATH)
 
-    hits = []
-    for item in (record.get("artifacts") or {}).get(bucket) or []:
-        if _artifact_paths(item) & candidate_paths:
-            hits.append(item)
-    if not hits:
-        return None, UNMATCHED_NOT_FOUND
+    items = (record.get("artifacts") or {}).get(bucket) or []
+    hits = [item for item in items
+            if _artifact_paths(item) & candidate_paths]
     if len(hits) > 1:
         return None, UNMATCHED_AMBIGUOUS
-    return hits[0], MATCH_EXACT_PATH
+    if hits:
+        return hits[0], MATCH_EXACT_PATH
+
+    # Nothing matched exactly. If something matches when case is ignored, say
+    # so specifically: on a case-sensitive file server those are different
+    # files, and "we found a near-miss" is a very different finding from
+    # "this file is not in the record".
+    folded = {p.lower() for p in candidate_paths}
+    for item in items:
+        if {p.lower() for p in _artifact_paths(item)} & folded:
+            return None, UNMATCHED_CASE_MISMATCH
+    return None, UNMATCHED_NOT_FOUND
 
 
 def build_artifact_payload(candidate, artifact):
