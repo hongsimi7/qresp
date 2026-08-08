@@ -595,6 +595,164 @@ def parse_tsv(text):
     return rows, errors
 
 
+# ------------------------------------------------- stratified smoke sample
+
+SMOKE_SAMPLE_LIMIT = 10
+SCORE_BANDS = ("high", "mid", "low")
+GATE_DECISIONS = ("accepted", "rejected")
+
+
+def _score_cuts(scores):
+    """Tertile boundaries for a set of gate scores, computed PER SOURCE.
+
+    Internal and external scores live on different scales -- an internal
+    score of 9 is unremarkable while an external one is high -- so a single
+    global cut would file every external candidate under "low" and the sample
+    would never see a strong external match.
+    """
+    ordered = sorted(scores)
+    if len(ordered) < 3:
+        return None, None
+    return ordered[len(ordered) // 3], ordered[(2 * len(ordered)) // 3]
+
+
+def _band_of(score, low_cut, high_cut):
+    if low_cut is None or high_cut is None:
+        return "mid"
+    if score >= high_cut:
+        return "high"
+    if score >= low_cut:
+        return "mid"
+    return "low"
+
+
+def _both_abstracts(entry):
+    return bool((entry["record"].get("record_abstract") or "").strip()
+                and (entry["candidate"].get("abstract") or "").strip())
+
+
+def select_smoke_sample(entries, limit=SMOKE_SAMPLE_LIMIT):
+    """A deterministic, spread-out handful of pairs for a first real run.
+
+    Taking the first N rows of a review file is what this replaces, and it
+    was actively misleading: the file is grouped by record, so the first five
+    rows were five internal candidates of ONE paper. A smoke test built that
+    way exercises one corner of the behaviour and reads like a verdict on all
+    of it.
+
+    So the pairs are drawn across strata -- (source x gate decision x score
+    band) -- in a fixed order, preferring a record that is not in the sample
+    yet at every step. That buys record diversity, both sources, both
+    verdicts, and a spread of scores in one pass, with no randomness: the
+    same input always yields the same ten.
+
+    Returns (selected, report). Each selected entry carries `why`, naming the
+    stratum it filled and whether it brought a new record.
+    """
+    entries = list(entries or [])
+    if not entries:
+        return [], {"selected": 0, "available": 0, "strata": {}}
+
+    # Bands are per source; decisions and sources come from the data rather
+    # than being assumed, so a review file with only one source still works.
+    cuts = {}
+    for source in {e["candidate"].get("source") for e in entries}:
+        cuts[source] = _score_cuts(
+            [float(e["candidate"].get("gate_score") or 0.0)
+             for e in entries if e["candidate"].get("source") == source])
+
+    cells = {}
+    for entry in entries:
+        candidate = entry["candidate"]
+        source = candidate.get("source")
+        low_cut, high_cut = cuts.get(source, (None, None))
+        band = _band_of(float(candidate.get("gate_score") or 0.0),
+                        low_cut, high_cut)
+        decision = candidate.get("gate_decision") or "rejected"
+        entry = dict(entry)
+        entry["_band"] = band
+        entry["_source"] = source
+        entry["_decision"] = decision
+        cells.setdefault((band, source, decision), []).append(entry)
+
+    # Within a cell: pairs a model can actually read come first, then the
+    # highest score, then the pair id -- deterministic to the last tie.
+    for bucket in cells.values():
+        bucket.sort(key=lambda e: (
+            not _both_abstracts(e),
+            -float(e["candidate"].get("gate_score") or 0.0),
+            str(e["candidate"].get("pair_id") or ""),
+            str(e["candidate"].get("title") or "")))
+
+    sources = sorted({s for _, s, _ in cells})
+    order = [(band, source, decision)
+             for band in SCORE_BANDS
+             for source in sources
+             for decision in GATE_DECISIONS
+             if (band, source, decision) in cells]
+
+    selected, used_records, taken = [], set(), {key: 0 for key in order}
+    while order and len(selected) < limit:
+        progressed = False
+        for key in list(order):
+            if len(selected) >= limit:
+                break
+            bucket = cells[key]
+            index = taken[key]
+            # Prefer a pair from a record not sampled yet; fall back to the
+            # next unused pair in the cell rather than skipping the stratum.
+            pick = None
+            for offset in range(index, len(bucket)):
+                if bucket[offset]["record"]["record_id"] not in used_records:
+                    pick = offset
+                    break
+            if pick is None and index < len(bucket):
+                pick = index
+            if pick is None:
+                order.remove(key)
+                continue
+            entry = bucket.pop(pick)
+            taken[key] = index
+            band, source, decision = key
+            entry["why"] = {
+                "score_band": band,
+                "source": source,
+                "gate_decision": decision,
+                "gate_score": float(entry["candidate"].get("gate_score")
+                                    or 0.0),
+                "new_record": entry["record"]["record_id"] not in used_records,
+                "both_abstracts": _both_abstracts(entry),
+            }
+            used_records.add(entry["record"]["record_id"])
+            selected.append(entry)
+            progressed = True
+        if not progressed:
+            break
+
+    report = {
+        "selected": len(selected),
+        "available": len(entries),
+        "distinct_records": len({e["record"]["record_id"] for e in selected}),
+        "by_source": _tally(selected, lambda e: e["why"]["source"]),
+        "by_gate_decision": _tally(selected,
+                                   lambda e: e["why"]["gate_decision"]),
+        "by_score_band": _tally(selected, lambda e: e["why"]["score_band"]),
+        "with_both_abstracts": sum(1 for e in selected
+                                   if e["why"]["both_abstracts"]),
+        "strata_available": {"%s/%s/%s" % key: len(value)
+                             for key, value in sorted(cells.items())},
+    }
+    return selected, report
+
+
+def _tally(entries, key):
+    counts = {}
+    for entry in entries:
+        value = key(entry)
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 # ------------------------------------------------------------------ metrics
 
 def collection_summary(record_rows, skipped, sample_size, live,

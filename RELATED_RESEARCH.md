@@ -581,8 +581,8 @@ cannot masquerade as a verdict.
 ```text
 backend/project/tests/test_relatedness.py        30 tests — the pure gate + fingerprint
 backend/project/tests/test_related_research.py   63 tests — endpoint/provider/cache/switches
-backend/project/tests/test_related_eval.py       49 tests — the evaluation CLI
-backend/project/tests/test_ai_review.py          62 tests — AI provisional labelling
+backend/project/tests/test_related_eval.py       56 tests — the evaluation CLI
+backend/project/tests/test_ai_review.py          77 tests — AI provisional labelling + smoke sample
 frontend/__tests__/RelatedResearch.spec.js       20 tests — the section
 frontend/__tests__/PaperDetailsRelated.spec.js    4 tests — page composition
 backend/project/tests/test_nginx_config.py       +1 test — the rate-limit zone
@@ -834,23 +834,71 @@ python -m project.tools.related_eval ai-label `
 > review file — will differ. That is expected; report the new count rather
 > than trying to force the old one.
 
+### A smoke sample worth running
+
+`--limit N` takes the first N rows of the review file, and that file is
+grouped by record — so `--limit 5` is five internal candidates of **one**
+paper. The run succeeds and tells you nothing about the other records or
+about the external half at all.
+
+`smoke-sample` writes a deterministic, stratified `ai-smoke-review.tsv`
+instead:
+
+```sh
+python -m project.tools.related_eval smoke-sample --output-dir ../related-eval-v2
+```
+
+At most 10 pairs (`--limit`), drawn across (source × gate decision × score
+band) in a fixed order, preferring a record not yet in the sample at every
+step. Score bands are tertiles computed **per source**, because an internal
+score of 9 is ordinary while an external one is high — a single global cut
+would file every external candidate under "low". Pairs where both papers have
+an abstract come first within a stratum. No randomness: the same input always
+produces the same file.
+
+It contacts nothing, writes only `ai-smoke-review.tsv`, and prints why each
+pair was chosen. The output is a strict subset of the parent review file, so
+`ai-label --review-file ai-smoke-review.tsv` matches it exactly as it would
+the parent.
+
+Against the current 135-row first-pass file it selects 10 pairs across **10
+distinct records**, 5 internal / 5 external, 8 accepted / 2 rejected, and 4
+high / 2 mid / 4 low by score.
+
 ### Smoke test order, once a key exists
 
 ```powershell
+cd C:\Users\hongs\Desktop\qresp_from_server\backend
 $env:QRESP_GEMINI_ENABLED = "1"
 $env:QRESP_GEMINI_API_KEY = "..."        # this session only; never committed
 
-# 1. Plan only. No provider contact. Read PREFLIGHT.
-python -m project.tools.related_eval ai-label --output-dir ..\related-eval-v2 --dry-run
+# 1. Build the stratified sample. No provider contact; prints why each
+#    pair was chosen.
+python -m project.tools.related_eval smoke-sample --output-dir ..\related-eval-v2
 
-# 2. Five real calls, then look at what came back.
-python -m project.tools.related_eval ai-label --output-dir ..\related-eval-v2 --limit 5
-Get-Content ..\related-eval-v2\ai-review.tsv -TotalCount 6
+# 2. Plan the run against that sample. Still no provider contact.
+#    planned_provider_calls is what it will cost.
+python -m project.tools.related_eval ai-label `
+  --output-dir ..\related-eval-v2 `
+  --review-file ..\related-eval-v2\ai-smoke-review.tsv `
+  --dry-run
 
-# 3. The rest. The five above are cached and are not re-asked.
+# 3. The 10 real calls.
+python -m project.tools.related_eval ai-label `
+  --output-dir ..\related-eval-v2 `
+  --review-file ..\related-eval-v2\ai-smoke-review.tsv
+
+# 4. Read what came back before going further.
+Import-Csv ..\related-eval-v2\ai-review.tsv -Delimiter "`t" |
+  Select-Object record_id, source, gate_decision, ai_rating, ai_confidence, ai_reason |
+  Format-Table -Wrap
+Get-Content ..\related-eval-v2\ai-summary.json
+
+# 5. Happy with it? The whole review file. The 10 above are cached and
+#    are not re-asked.
 python -m project.tools.related_eval ai-label --output-dir ..\related-eval-v2
 
-# 4. Interrupt with Ctrl+C at any point and re-run: it resumes.
+# Ctrl+C at any point and re-run: it resumes.
 ```
 
 ### What the expert does with it

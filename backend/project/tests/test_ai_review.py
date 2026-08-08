@@ -939,6 +939,226 @@ class TestReviewFileIsTheWorkList(unittest.TestCase):
         self.assertEqual(before, io.open(path, encoding="utf-8").read())
 
 
+class TestStratifiedSmokeSample(unittest.TestCase):
+    """The bug this replaces: `--limit 5` took the first five rows of a review
+    file that is grouped by record, so all five were internal candidates of
+    ONE paper. The run succeeded and told you nothing about the other
+    seventeen records or about the external half at all."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="smoke-sample-")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def build(self, records=6, internal_per=8, external_per=4,
+              abstracts=True):
+        """A review file shaped like the real one: every candidate of record 0
+        first, then record 1, and so on. Front-loading is the whole point."""
+        entries = []
+        for r in range(records):
+            internal, external = [], []
+            for i in range(internal_per):
+                item = candidate(
+                    title="R%d internal %d" % (r, i),
+                    gate_decision="accepted" if i % 2 == 0 else "rejected",
+                    score=float(20 - i),
+                    abstract=("Internal abstract %d %d" % (r, i)
+                              if abstracts else ""))
+                item["stable_key"] = "r%d-int-%d" % (r, i)
+                item["pair_id"] = pair_id_for("rec%02d" % r, "internal",
+                                              item["stable_key"])
+                internal.append(item)
+            for i in range(external_per):
+                item = candidate(
+                    title="R%d external %d" % (r, i),
+                    source="recommendations_default",
+                    gate_decision="accepted" if i % 2 == 0 else "rejected",
+                    score=float(8 - i),
+                    abstract=("External abstract %d %d" % (r, i)
+                              if abstracts else ""))
+                item["stable_key"] = "r%d-ext-%d" % (r, i)
+                item["pair_id"] = pair_id_for(
+                    "rec%02d" % r, "recommendations_default",
+                    item["stable_key"])
+                external.append(item)
+            entries.append({
+                **record(r),
+                "status": "ok", "flags": [], "provider_outcomes": {},
+                "internal": internal,
+                "external": {"recommendations_default": external},
+            })
+
+        with io.open(os.path.join(self.dir, "raw-results.jsonl"), "w",
+                     encoding="utf-8", newline="\n") as handle:
+            for entry in entries:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+        rows = [core.TSV_COLUMNS]
+        for entry in entries:
+            items = list(entry["internal"])
+            items += entry["external"]["recommendations_default"]
+            for item in items:
+                rows.append((item["pair_id"], entry["record_id"],
+                             entry["record_title"], item["source"],
+                             item["title"], "", str(item["gate_score"]),
+                             item["gate_decision"], "", ""))
+        with io.open(os.path.join(self.dir, "human-review.tsv"), "w",
+                     encoding="utf-8", newline="\n") as handle:
+            handle.write(core.render_tsv(rows))
+        return entries
+
+    def run_sample(self, argv_extra=()):
+        argv = ["smoke-sample", "--output-dir", self.dir]
+        argv.extend(argv_extra)
+        return related_eval.main(argv)
+
+    def sample_rows(self):
+        path = os.path.join(self.dir, "ai-smoke-review.tsv")
+        lines = [l for l in io.open(path, encoding="utf-8").read().split("\n")
+                 if l]
+        header = lines[0].split("\t")
+        return [dict(zip(header, l.split("\t"))) for l in lines[1:]]
+
+    # -- the point of the exercise ----------------------------------------
+
+    def test_it_spreads_across_records_despite_front_loading(self):
+        self.build()
+        self.assertEqual(0, self.run_sample())
+        rows = self.sample_rows()
+        self.assertEqual(10, len(rows))
+        records = {r["record_id"] for r in rows}
+        self.assertGreaterEqual(len(records), 5,
+                                "a sample from one or two records is the bug")
+
+    def test_both_sources_are_represented(self):
+        self.build()
+        self.run_sample()
+        sources = {r["source"] for r in self.sample_rows()}
+        self.assertEqual({"internal", "recommendations_default"}, sources)
+
+    def test_both_gate_decisions_are_represented(self):
+        self.build()
+        self.run_sample()
+        decisions = {r["gate_decision"] for r in self.sample_rows()}
+        self.assertEqual({"accepted", "rejected"}, decisions)
+
+    def test_scores_are_not_all_from_the_top(self):
+        self.build()
+        self.run_sample()
+        scores = sorted(float(r["gate_score"]) for r in self.sample_rows())
+        self.assertGreater(scores[-1] - scores[0], 1.0,
+                           "the sample must span a range of gate scores")
+
+    def test_a_single_record_cannot_dominate(self):
+        # Every candidate of record 0 sits at the front of the file AND
+        # carries the best scores.
+        self.build()
+        self.run_sample()
+        rows = self.sample_rows()
+        counts = {}
+        for row in rows:
+            counts[row["record_id"]] = counts.get(row["record_id"], 0) + 1
+        self.assertLessEqual(max(counts.values()), 3,
+                             "no record may take more than a few slots")
+
+    def test_pairs_with_both_abstracts_are_preferred(self):
+        # Half the candidates have no abstract; the sample should favour the
+        # ones a model can actually read.
+        entries = self.build()
+        for index, entry in enumerate(entries):
+            if index % 2:
+                entry["record_abstract"] = ""
+        with io.open(os.path.join(self.dir, "raw-results.jsonl"), "w",
+                     encoding="utf-8", newline="\n") as handle:
+            for entry in entries:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        self.run_sample()
+        rows = self.sample_rows()
+        readable = {e["record_id"] for e in entries
+                    if e["record_abstract"].strip()}
+        with_abstracts = sum(1 for r in rows if r["record_id"] in readable)
+        self.assertGreaterEqual(with_abstracts, len(rows) // 2)
+
+    # -- determinism -------------------------------------------------------
+
+    def test_the_same_input_always_gives_the_same_ten(self):
+        self.build()
+        self.run_sample()
+        first = self.read_sample_text()
+        self.run_sample()
+        self.assertEqual(first, self.read_sample_text())
+
+    def read_sample_text(self):
+        return io.open(os.path.join(self.dir, "ai-smoke-review.tsv"),
+                       encoding="utf-8").read()
+
+    def test_no_randomness_is_used(self):
+        source = io.open(core.__file__, encoding="utf-8").read()
+        self.assertNotIn("import random", source)
+        self.assertNotIn("random.", source)
+
+    # -- contract ----------------------------------------------------------
+
+    def test_it_contacts_no_provider(self):
+        self.build()
+        with mock.patch("project.assist.call_gemini") as gemini:
+            with mock.patch.object(related_eval.related, "requests") as http:
+                self.assertEqual(0, self.run_sample())
+        self.assertFalse(gemini.called)
+        self.assertFalse(http.get.called)
+
+    def test_it_never_writes_a_human_file(self):
+        self.build()
+        human = os.path.join(self.dir, "human-review.tsv")
+        before = io.open(human, encoding="utf-8").read()
+        self.run_sample()
+        self.assertEqual(before, io.open(human, encoding="utf-8").read())
+
+    def test_the_sample_is_a_strict_subset_of_the_review_file(self):
+        self.build()
+        self.run_sample()
+        review = {(r["record_id"], r["source"], r["candidate_title"])
+                  for r in self.sample_rows()}
+        with io.open(os.path.join(self.dir, "human-review.tsv"),
+                     encoding="utf-8") as handle:
+            parent, _ = core.parse_tsv(handle.read())
+        parent_keys = {(r["record_id"], r["source"], r["candidate_title"])
+                       for r in parent}
+        self.assertTrue(review <= parent_keys)
+
+    def test_human_rating_is_blank_in_the_sample(self):
+        self.build()
+        self.run_sample()
+        for row in self.sample_rows():
+            self.assertEqual("", row["human_rating"])
+            self.assertEqual("", row["human_note"])
+
+    def test_ai_label_can_use_the_sample_directly(self):
+        self.build()
+        self.run_sample()
+        sample = os.path.join(self.dir, "ai-smoke-review.tsv")
+        gemini = FakeGemini()
+        with mock.patch.dict("os.environ", CONFIGURED):
+            with mock.patch("project.assist.call_gemini", gemini):
+                code = related_eval.main([
+                    "ai-label", "--output-dir", self.dir,
+                    "--review-file", sample, "--rate-limit", "0"])
+        self.assertEqual(0, code)
+        self.assertEqual(10, len(gemini.payloads),
+                         "the sample defines exactly ten calls")
+
+    def test_the_limit_is_honoured(self):
+        self.build()
+        self.run_sample(argv_extra=["--limit", "4"])
+        self.assertEqual(4, len(self.sample_rows()))
+
+    def test_a_small_review_file_yields_what_it_has(self):
+        self.build(records=1, internal_per=2, external_per=1)
+        self.run_sample()
+        self.assertEqual(3, len(self.sample_rows()))
+
+
 class TestCollectStoresAbstracts(unittest.TestCase):
     """The abstracts have to actually be in raw-results.jsonl, or every
     judgement silently degrades to titles. Verified through the real collect

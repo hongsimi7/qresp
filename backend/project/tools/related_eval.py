@@ -889,6 +889,120 @@ def _write_ai_outputs(output_dir, rows, model, requested, cached, calls,
     print("Human review files were not touched.")
 
 
+# ------------------------------------------------------ stratified smoke set
+
+SMOKE_REVIEW_FILE = "ai-smoke-review.tsv"
+
+
+def smoke_sample(args):
+    """Write a small, deliberately spread-out review file for a first real
+    run. Reads two files and writes one; contacts nothing."""
+    output_dir = args.output_dir
+    _protected_guard(output_dir)
+
+    raw_path = os.path.join(output_dir, "raw-results.jsonl")
+    if not os.path.isfile(raw_path):
+        print("No raw-results.jsonl in %s - run `collect` first."
+              % output_dir)
+        return 2
+
+    review_path = args.review_file or os.path.join(output_dir,
+                                                   "human-review.tsv")
+    if not os.path.isfile(review_path):
+        print("No review file at %s." % review_path)
+        return 2
+    with io.open(review_path, encoding="utf-8") as handle:
+        review_rows, errors = core.parse_tsv(handle.read())
+    if errors:
+        print("The review file could not be read:")
+        for error in errors:
+            print("  - %s" % error)
+        return 2
+
+    sources = ([s.strip() for s in args.sources.split(",") if s.strip()]
+               if args.sources else None)
+    raw_pairs = _load_pairs(output_dir, sources)
+    if sources:
+        review_rows = [row for row in review_rows
+                       if row.get("source") in sources]
+
+    matched, unmatched, ambiguous = _match_review_rows(review_rows, raw_pairs)
+    if unmatched or ambiguous:
+        print("STOPPING: the review file does not line up with "
+              "raw-results.jsonl (%d unmatched, %d ambiguous)."
+              % (len(unmatched), len(ambiguous)))
+        return 4
+    if not matched:
+        print("No candidate pairs to sample from.")
+        return 1
+
+    # Keep the ORIGINAL review row: the sample is then a strict subset of the
+    # review file, and `ai-label` matches it exactly as it would the parent.
+    by_key = {}
+    for row in review_rows:
+        by_key[(row.get("pair_id") or "", row.get("record_id"),
+                row.get("source"),
+                core._tsv_cell(row.get("candidate_title")).lower())] = row
+    entries = []
+    for record, candidate, _how in matched:
+        key = ((candidate.get("pair_id") or ""), record.get("record_id"),
+               candidate.get("source"),
+               core._tsv_cell(candidate.get("title")).lower())
+        row = by_key.get(key)
+        if row is None:
+            row = by_key.get(("", record.get("record_id"),
+                              candidate.get("source"),
+                              core._tsv_cell(candidate.get("title")).lower()))
+        entries.append({"row": row, "record": record, "candidate": candidate})
+
+    selected, report = core.select_smoke_sample(entries, args.limit)
+
+    rows = [core.TSV_COLUMNS]
+    for entry in selected:
+        row, candidate, record = entry["row"], entry["candidate"], entry["record"]
+        rows.append((
+            core._tsv_cell(candidate.get("pair_id")
+                           or (row or {}).get("pair_id")),
+            core._tsv_cell(record["record_id"]),
+            core._tsv_cell(record.get("record_title")),
+            core._tsv_cell(candidate["source"]),
+            core._tsv_cell(candidate["title"]),
+            core._tsv_cell(" | ".join(candidate.get("reasons") or [])),
+            core._tsv_cell(candidate.get("gate_score")),
+            core._tsv_cell(candidate.get("gate_decision")),
+            "",   # human_rating -- a person's column, blank here as always
+            "",   # human_note
+        ))
+    sample_path = os.path.join(output_dir, SMOKE_REVIEW_FILE)
+    with io.open(sample_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(core.render_tsv(rows))
+
+    print("STRATIFIED SMOKE SAMPLE - no provider was contacted.")
+    print("  drawn from: %s (%d matched pairs)" % (review_path, len(matched)))
+    print("  selected:   %d across %d distinct records"
+          % (report["selected"], report["distinct_records"]))
+    print("  by source:         %s" % report["by_source"])
+    print("  by gate decision:  %s" % report["by_gate_decision"])
+    print("  by score band:     %s" % report["by_score_band"])
+    print("  with both abstracts: %d of %d"
+          % (report["with_both_abstracts"], report["selected"]))
+    print("\n  %-3s %-26s %-24s %-9s %-8s %-6s %-9s %s"
+          % ("#", "record_id", "source", "decision", "band", "score",
+             "abstracts", "record"))
+    for index, entry in enumerate(selected, start=1):
+        why = entry["why"]
+        print("  %-3d %-26s %-24s %-9s %-8s %-6.2f %-9s %s"
+              % (index, entry["record"]["record_id"], why["source"],
+                 why["gate_decision"], why["score_band"], why["gate_score"],
+                 "both" if why["both_abstracts"] else "partial/none",
+                 "new" if why["new_record"] else "repeat"))
+    print("\nWrote %s" % sample_path)
+    print("Next: python -m project.tools.related_eval ai-label "
+          "--output-dir %s --review-file %s --dry-run"
+          % (output_dir, sample_path))
+    return 0
+
+
 # ---------------------------------------------------------------- summarizing
 
 def summarize(args):
@@ -1035,6 +1149,23 @@ def build_parser():
                            help="build and blind-check every payload but "
                                 "contact no provider")
     ai_parser.set_defaults(func=ai_label)
+
+    smoke_parser = sub.add_parser(
+        "smoke-sample",
+        help="write a small, deterministic, spread-out review file for a "
+             "first real ai-label run. Contacts no provider.")
+    smoke_parser.add_argument("--output-dir", required=True)
+    smoke_parser.add_argument(
+        "--review-file",
+        help="review TSV to draw from (default: "
+             "<output-dir>/human-review.tsv)")
+    smoke_parser.add_argument("--limit", type=int,
+                              default=core.SMOKE_SAMPLE_LIMIT,
+                              help="pairs to select (default 10)")
+    smoke_parser.add_argument(
+        "--sources", default="internal,recommendations_default",
+        help="comma-separated candidate sources to draw from")
+    smoke_parser.set_defaults(func=smoke_sample)
 
     summarize_parser = sub.add_parser(
         "summarize", help="score a review file a human has filled in")
