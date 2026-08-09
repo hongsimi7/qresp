@@ -1482,6 +1482,206 @@ class TestRun(CliTestCase):
             self.assertNotIn(leak, blob, leak)
 
 
+class TestFailedUnitsAreRetried(CliTestCase):
+    """A live 10-unit run came back 4 success / 2 MAX_TOKENS / 4 rate-limited,
+    and re-running it retried nothing: `_cache_index` kept every row that had
+    a fingerprint, so a FAILURE counted as a cached answer.
+
+    The rule is that only a successful answer is worth reusing. Failures stay
+    in the file as diagnostics and are always re-planned, which is also what
+    makes a 429 recoverable by waiting and running the same command again.
+    """
+
+    def prepare(self):
+        self.write_records()
+        self.run_cli(["smoke-sample", "--output-dir", self.dir])
+
+    def append_cache(self, rows):
+        path = os.path.join(self.dir, "provider-cache.jsonl")
+        with io.open(path, "a", encoding="utf-8", newline="\n") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def planned_fingerprints(self):
+        """What a dry run would call, without calling anything."""
+        records = assist_eval._load_records(self.dir)
+        sample = json.loads(self.read("smoke-sample.json"))
+        with mock.patch.dict("os.environ", CONFIGURED):
+            cfg = assist._gemini_config()
+        cache = assist_eval._cache_index(self.dir)
+        planned = assist_eval._plan(records, sample, cache, cfg)
+        return ([e["fingerprint"] for e in planned if not e["cached"]],
+                [e["fingerprint"] for e in planned if e["cached"]])
+
+    def all_fingerprints(self):
+        records = assist_eval._load_records(self.dir)
+        sample = json.loads(self.read("smoke-sample.json"))
+        with mock.patch.dict("os.environ", CONFIGURED):
+            cfg = assist._gemini_config()
+        return [e["fingerprint"]
+                for e in assist_eval._plan(records, sample, {}, cfg)]
+
+    def test_a_failed_unit_is_not_treated_as_cached(self):
+        self.prepare()
+        fingerprints = self.all_fingerprints()
+        self.append_cache([{"fingerprint": fingerprints[0], "ok": False,
+                            "error_kind": "max_tokens", "answer_text": ""}])
+        to_call, cached = self.planned_fingerprints()
+        self.assertIn(fingerprints[0], to_call)
+        self.assertNotIn(fingerprints[0], cached)
+
+    def test_a_successful_unit_is_cached(self):
+        self.prepare()
+        fingerprints = self.all_fingerprints()
+        self.append_cache([{"fingerprint": fingerprints[0], "ok": True,
+                            "answer_text": "{}"}])
+        to_call, cached = self.planned_fingerprints()
+        self.assertIn(fingerprints[0], cached)
+        self.assertNotIn(fingerprints[0], to_call)
+
+    def test_a_success_after_a_failure_is_reused(self):
+        # The retry succeeded; the earlier failure row must not shadow it.
+        self.prepare()
+        fingerprints = self.all_fingerprints()
+        self.append_cache([
+            {"fingerprint": fingerprints[0], "ok": False,
+             "error_kind": "rate_limited", "answer_text": ""},
+            {"fingerprint": fingerprints[0], "ok": True,
+             "answer_text": '{"keywords": []}'},
+        ])
+        to_call, cached = self.planned_fingerprints()
+        self.assertIn(fingerprints[0], cached)
+
+    def test_a_failure_written_after_a_success_does_not_shadow_it(self):
+        # Order must not matter: rows are appended, and a later failed retry
+        # of an already-answered unit must not un-cache it.
+        self.prepare()
+        fingerprints = self.all_fingerprints()
+        self.append_cache([
+            {"fingerprint": fingerprints[0], "ok": True,
+             "answer_text": '{"keywords": []}'},
+            {"fingerprint": fingerprints[0], "ok": False,
+             "error_kind": "rate_limited", "answer_text": ""},
+        ])
+        to_call, cached = self.planned_fingerprints()
+        self.assertIn(fingerprints[0], cached)
+        self.assertNotIn(fingerprints[0], to_call)
+
+    def test_the_live_failure_pattern_replans_exactly_the_failures(self):
+        """4 success, 2 MAX_TOKENS, 4 rate-limited -> 4 cached, 6 to call."""
+        self.prepare()
+        fingerprints = self.all_fingerprints()
+        self.assertEqual(20, len(fingerprints))
+        subset = fingerprints[:10]
+        rows = []
+        for fingerprint in subset[:4]:
+            rows.append({"fingerprint": fingerprint, "ok": True,
+                         "answer_text": '{"keywords": []}'})
+        for fingerprint in subset[4:6]:
+            rows.append({"fingerprint": fingerprint, "ok": False,
+                         "error_kind": "max_tokens", "answer_text": ""})
+        for fingerprint in subset[6:10]:
+            rows.append({"fingerprint": fingerprint, "ok": False,
+                         "error_kind": "rate_limited", "answer_text": ""})
+        self.append_cache(rows)
+
+        to_call, cached = self.planned_fingerprints()
+        self.assertEqual(4, len([f for f in cached if f in subset]))
+        self.assertEqual(6, len([f for f in to_call if f in subset]))
+
+        # The six retried and succeeded -> nothing left to call.
+        self.append_cache([{"fingerprint": f, "ok": True,
+                            "answer_text": '{"keywords": []}'}
+                           for f in subset[4:10]])
+        to_call, cached = self.planned_fingerprints()
+        self.assertEqual(10, len([f for f in cached if f in subset]))
+        self.assertEqual(0, len([f for f in to_call if f in subset]))
+
+    def test_summarize_does_not_count_a_failure_as_completed(self):
+        self.prepare()
+        fingerprints = self.all_fingerprints()
+        self.append_cache([{"fingerprint": f, "ok": False,
+                            "error_kind": "max_tokens", "answer_text": ""}
+                           for f in fingerprints])
+        self.run_cli(["summarize", "--output-dir", self.dir])
+        keyword = json.loads(self.read("keyword-summary.json"))
+        artifact = json.loads(self.read("artifact-summary.json"))
+        self.assertEqual(0, keyword["completed"])
+        self.assertEqual(0, artifact["completed"])
+
+    def test_a_429_is_recorded_with_its_kind_and_never_retried(self):
+        self.prepare()
+
+        class RateLimited:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, cfg, payload, prompt, schema,
+                         max_output_tokens=None):
+                self.calls += 1
+                return None, assist.ProviderError(
+                    "You have reached the AI usage limit.",
+                    assist.ERROR_RATE_LIMITED)
+
+        provider = RateLimited()
+        code, _ = self.run_cli(
+            ["run", "--output-dir", self.dir, "--execute", "--rate-limit",
+             "0"], gemini=provider)
+        self.assertEqual(0, code)
+        # One call per unit, and NOT ONE retry: a retried paid call is
+        # accidental spend, and the operator re-runs deliberately instead.
+        sample = json.loads(self.read("smoke-sample.json"))
+        self.assertEqual(sample["planned_provider_calls"], provider.calls)
+        rows = [json.loads(l) for l in self.read("provider-cache.jsonl")
+                .split("\n") if l.strip()]
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertFalse(row["ok"])
+            self.assertEqual("rate_limited", row["error_kind"])
+        # ...and every one of them is planned again next time.
+        to_call, cached = self.planned_fingerprints()
+        self.assertEqual([], cached)
+        self.assertEqual(sample["planned_provider_calls"], len(to_call))
+
+    def test_the_failure_kinds_are_distinguishable_in_the_output(self):
+        self.prepare()
+        kinds = iter([assist.ERROR_MAX_TOKENS, assist.ERROR_RATE_LIMITED,
+                      assist.ERROR_TIMEOUT, assist.ERROR_UNAVAILABLE,
+                      assist.ERROR_MALFORMED, assist.ERROR_BLOCKED])
+
+        def failing(cfg, payload, prompt, schema, max_output_tokens=None):
+            try:
+                kind = next(kinds)
+            except StopIteration:
+                kind = assist.ERROR_OTHER
+            return None, assist.ProviderError("a safe message", kind)
+
+        self.run_cli(["run", "--output-dir", self.dir, "--execute",
+                      "--rate-limit", "0"], gemini=failing)
+        rows = [json.loads(l) for l in self.read("provider-cache.jsonl")
+                .split("\n") if l.strip()]
+        observed = {row["error_kind"] for row in rows}
+        for kind in ("max_tokens", "rate_limited", "timeout",
+                     "provider_unavailable", "malformed", "blocked"):
+            self.assertIn(kind, observed, kind)
+
+    def test_no_secret_or_provider_body_reaches_the_cache_or_stdout(self):
+        self.prepare()
+
+        def leaky(cfg, payload, prompt, schema, max_output_tokens=None):
+            return None, assist.ProviderError(
+                "The AI provider returned an error.", assist.ERROR_OTHER)
+
+        with mock.patch.dict("os.environ", CONFIGURED):
+            self.run_cli(["run", "--output-dir", self.dir, "--execute",
+                          "--rate-limit", "0"], gemini=leaky)
+        blob = self.read("provider-cache.jsonl")
+        for leak in ("test-gemini-secret", "x-goog-api-key", "Authorization",
+                     "system_instruction", "qresp_vocabulary",
+                     "curator@example.com"):
+            self.assertNotIn(leak, blob, leak)
+
+
 class TestSummarize(CliTestCase):
     def prepare(self, answers=None):
         self.write_records()

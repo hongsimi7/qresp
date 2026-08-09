@@ -61,7 +61,10 @@ from project.tools import assist_core as core
 BENCH_KEYWORDS = "keywords"
 BENCH_ARTIFACTS = "artifacts"
 
-DEFAULT_RATE_LIMIT = 0.5          # provider requests per second
+# Provider requests per SECOND. Deliberately slow: a free-tier Gemini project
+# rate-limits well below one per second, and this tool never retries, so a
+# 429 costs the operator a re-run rather than the tool a hidden extra call.
+DEFAULT_RATE_LIMIT = 0.08
 DEFAULT_KEYWORD_RECORDS = 5       # x 2 modes = 10 calls
 DEFAULT_ARTIFACT_CANDIDATES = 10
 HARD_CALL_CEILING = 40            # refuses to plan more without --i-know
@@ -646,8 +649,42 @@ def _provider_config():
 
 
 def _cache_index(output_dir):
-    rows = _read_jsonl(os.path.join(output_dir, "provider-cache.jsonl"))
-    return {row["fingerprint"]: row for row in rows if row.get("fingerprint")}
+    """Answers worth reusing: the SUCCESSFUL ones, keyed by fingerprint.
+
+    A failure is not an answer. Treating one as cached is what made a
+    rate-limited run unrecoverable -- a live sweep came back 4 success, 2
+    MAX_TOKENS and 4 HTTP 429, and re-running the same command retried none
+    of the six, because every row with a fingerprint counted as cached.
+
+    Failures stay in `provider-cache.jsonl` as diagnostics and are simply not
+    indexed here, so the operator's recovery for a 429 is to wait and run the
+    same command again. That is also why there is no automatic retry: a
+    retried paid call is spend nobody asked for.
+
+    A success wins over a failure for the same fingerprint whichever order
+    they were appended in -- a later failed retry of an already-answered unit
+    must not un-cache it.
+    """
+    index = {}
+    for row in _read_jsonl(os.path.join(output_dir, "provider-cache.jsonl")):
+        fingerprint = row.get("fingerprint")
+        if not fingerprint or not row.get("ok"):
+            continue
+        index.setdefault(fingerprint, row)
+    return index
+
+
+def _cache_failures(output_dir):
+    """Failed attempts by kind, for the run report. Diagnostics only."""
+    counts = {}
+    index = _cache_index(output_dir)
+    for row in _read_jsonl(os.path.join(output_dir, "provider-cache.jsonl")):
+        fingerprint = row.get("fingerprint")
+        if not fingerprint or row.get("ok") or fingerprint in index:
+            continue
+        kind = row.get("error_kind") or assist.ERROR_OTHER
+        counts[kind] = counts.get(kind, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _plan(records, sample, cache, cfg):
@@ -727,7 +764,8 @@ def run(args):
     print("  provider configured        %s" % ready)
     print("  model                      %s" % cfg["MODEL"])
     print("  units planned              %d" % len(planned))
-    print("  already cached             %d" % (len(planned) - len(to_call)))
+    print("  already cached             %d  (successful answers reused)"
+          % (len(planned) - len(to_call)))
     print("  planned_provider_calls     %d" % len(to_call))
     print("  execute                    %s" % bool(args.execute))
 
@@ -782,14 +820,17 @@ def run(args):
                 # The provider's own words, kept for re-aggregation. Never
                 # printed: only the outcome is.
                 "answer_text": answer_text if not error else "",
-                "error_kind": "provider_error" if error else "",
+                # The classification, never the provider's error body: enough
+                # to tell a truncated answer from a rate limit without
+                # storing anything sensitive.
+                "error_kind": assist.error_kind(error),
             }
             handle.write(json.dumps(row, ensure_ascii=False,
                                     sort_keys=True) + "\n")
             handle.flush()
-            print("  [%d/%d] %s %s" % (made, len(to_call),
-                                       entry["unit"]["id"],
-                                       "ok" if not error else "failed"))
+            print("  [%d/%d] %s %s"
+                  % (made, len(to_call), entry["unit"]["id"],
+                     "ok" if not error else assist.error_kind(error)))
     print("\nMade %d provider call(s). Next: `summarize`." % made)
     return 0
 
@@ -1160,7 +1201,9 @@ def build_parser():
         "--execute", "--live", action="store_true", dest="execute",
         help="actually contact the file server. Without it nothing is read.")
     rcc_parser.add_argument("--limit", type=int, default=10)
-    rcc_parser.add_argument("--rate-limit", type=float, default=0.5)
+    rcc_parser.add_argument(
+        "--rate-limit", type=float, default=0.5,
+        help="file-server requests per SECOND (not an interval)")
     rcc_parser.add_argument("--ids-file")
     rcc_parser.add_argument(
         "--refresh", action="store_true",
@@ -1185,8 +1228,13 @@ def build_parser():
     run_parser.add_argument("--output-dir", required=True)
     run_parser.add_argument("--execute", action="store_true",
                             help="actually call the provider")
-    run_parser.add_argument("--rate-limit", type=float,
-                            default=DEFAULT_RATE_LIMIT)
+    run_parser.add_argument(
+        "--rate-limit", type=float, default=DEFAULT_RATE_LIMIT,
+        help="provider requests per SECOND (not an interval). 0.08 is about "
+             "one every 12.5s and suits a free-tier Gemini project; 1.0 is "
+             "60/min and will be rate limited. Nothing is retried "
+             "automatically -- on HTTP 429 wait a minute and re-run the same "
+             "command, successful units are reused.")
     run_parser.add_argument("--max-calls", type=int,
                             default=HARD_CALL_CEILING)
     run_parser.set_defaults(func=run)
