@@ -171,7 +171,7 @@ could light up for a dataset whose text would then not be sent.
 **Fixed.** The frontend now sends the canonical names, and the backend
 resolves them itself:
 
-```
+```text
 kind -> {AI payload field: (accepted input names, best first)}
 ```
 
@@ -411,12 +411,64 @@ raises, so a call cannot happen by mistake.
 
 ```powershell
 .\venv\Scripts\python.exe -m project.tools.assist_eval run `
-  --output-dir ..\assist-eval-out --execute --rate-limit 0.5
+  --output-dir ..\assist-eval-out --execute --rate-limit 0.08
 ```
 
-One call per unit, paced. Answers are cached by **model + prompt + input
-fingerprint**, so a re-run costs nothing and an interrupted run resumes.
-`--max-calls` (default 40) refuses a run costing more than expected.
+**`--rate-limit` is REQUESTS PER SECOND**, not an interval. `0.08` is roughly
+one request every 12.5 seconds, which a free-tier Gemini project tolerates;
+`1.0` means 60 per minute and is far too fast for one. A real sweep at `1.0`
+got six answers and then four HTTP 429s.
+
+One call per unit. **Nothing is retried automatically** — a retried paid call
+is spend nobody asked for. `--max-calls` (default 40) refuses a run costing
+more than expected.
+
+#### Only successful answers are cached
+
+Answers are cached by **model + prompt + input fingerprint**, and **only when
+the provider actually answered**. A failure is written to
+`provider-cache.jsonl` as a diagnostic and is *not* indexed, so it is planned
+again next time. That is what makes a run resumable:
+
+| Situation | Next run |
+| --- | --- |
+| unit answered | reused, costs nothing |
+| unit hit 429, MAX_TOKENS, timeout… | **called again** |
+| unit failed, then succeeded on a retry | reused |
+| unit succeeded, then a later attempt failed | still reused |
+
+**Recovering from a 429:** wait at least a minute, then run **the same
+command against the same `--output-dir`**. Successful units are not called
+again, so only the unanswered ones cost anything. Lower `--rate-limit`
+first if it keeps happening.
+
+A dry run before re-executing shows exactly what it will cost:
+
+```powershell
+.\venv\Scripts\python.exe -m project.tools.assist_eval run `
+  --output-dir ..\assist-eval-out
+```
+
+```text
+units planned              10
+already cached             4  (successful answers reused)
+planned_provider_calls     6
+```
+
+#### Failure kinds
+
+`provider-cache.jsonl` records an `error_kind` per failed attempt, and `run`
+prints the tally. The kinds are `max_tokens`, `rate_limited`, `timeout`,
+`provider_unavailable`, `malformed`, `blocked` and `other_provider_error`.
+Only the classification is stored — never the provider's error body, the
+prompt, the payload, the key or any header.
+
+`max_tokens` should no longer appear for keyword units: the keyword call's
+output budget was raised from 256 to 1024 tokens, sized from the response
+schema's worst case (8 × {keyword ≤ 60, reason ≤ 160} ≈ 1,990 characters
+≈ 663 tokens at 3 chars/token), and the schema and prompt now bound the
+generated strings. That budget is passed explicitly at the call site, so
+`QRESP_GEMINI_MAX_OUTPUT_TOKENS` does not govern it.
 
 ### 9. `summarize` — cached answers only, zero calls
 
@@ -458,6 +510,11 @@ hold; if any does not, the real run will measure the wrong thing.
 | `records_with_rcc_candidates` | **> 0** |
 | `artifact_units` | **> 0** |
 | `planned_provider_calls` | **<= 20** |
+
+After a run, also check the failure tally `run` prints. `max_tokens` on a
+keyword unit would mean the output budget is short again; `rate_limited`
+means slow `--rate-limit` down and re-run. Neither is cached, so re-running
+the same command only pays for the unanswered units.
 
 `records_with_stale_rcc_cache` should be 0 after a successful `collect-rcc`.
 If it is not, run `collect-rcc --execute` again (or `--refresh`), or start
