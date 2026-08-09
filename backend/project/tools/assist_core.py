@@ -575,6 +575,115 @@ def keyword_metrics(suggested, reference, known_vocabulary):
 
 # ------------------------------------------------------- RCC path matching
 
+# --------------------------------------------------- RCC analysis envelopes
+
+# The benchmark's own cache format. Bumped when the saved shape changes, so a
+# file written by an older build is re-analysed instead of being trusted.
+# Version 2 exists because version 1 (unversioned) always saved `{}`: it read
+# `analysis["candidates"]` from the PURE analyzer result, which has no such
+# key -- only the HTTP handler adds that wrapper.
+RCC_CACHE_FORMAT_VERSION = 2
+
+# The only four groups that hold candidates. `analyze_folder_tree` returns
+# them beside structure metadata -- `structure_issues`, `grouped_unclassified`,
+# `chart_image_groups`, `boundary_trees`, `applied_chart_plan`,
+# `unclassified` -- which are also arrays and must never be mistaken for
+# candidates.
+CANDIDATE_BUCKETS = ("charts", "datasets", "scripts", "tools")
+BUCKET_TO_KIND = {"charts": "chart", "datasets": "dataset",
+                  "scripts": "script", "tools": "tool"}
+
+
+def extract_candidate_buckets(payload):
+    """The four candidate groups, from any shape this tool may be handed.
+
+    Understands, in one place:
+
+    * the PURE `analyze_folder_tree` result -- groups flat at the top level;
+    * the HTTP response `{"candidates": <pure result>, ...}`, which a curator
+      may have saved out of DevTools;
+    * this tool's own `format_version: 2` cache.
+
+    Anything outside the four buckets is dropped, so metadata cannot leak in
+    as a candidate.
+    """
+    if not isinstance(payload, dict):
+        return {bucket: [] for bucket in CANDIDATE_BUCKETS}
+    nested = payload.get("candidates")
+    source = nested if isinstance(nested, dict) else payload
+    buckets = {}
+    for bucket in CANDIDATE_BUCKETS:
+        entries = source.get(bucket)
+        buckets[bucket] = [entry for entry in entries
+                           if isinstance(entry, dict)] \
+            if isinstance(entries, list) else []
+    return buckets
+
+
+def rcc_cache_payload(analysis):
+    """What `collect-rcc` writes: the candidates, and nothing else."""
+    return {
+        "format_version": RCC_CACHE_FORMAT_VERSION,
+        "analysis_completed": True,
+        "candidates": extract_candidate_buckets(analysis),
+    }
+
+
+def rcc_cache_is_current(payload):
+    """Whether a saved file may be reused.
+
+    Version, not content: an analysis that legitimately found no candidates
+    is a result worth keeping, while the pre-fix `{"candidates": {}}` -- which
+    looks identical -- is a bug's output and must be analysed again. Only the
+    stamp can tell them apart.
+    """
+    return (isinstance(payload, dict)
+            and payload.get("format_version") == RCC_CACHE_FORMAT_VERSION)
+
+
+def normalize_rcc_candidate(entry, bucket):
+    """One analyzer candidate, reduced to what the AI request needs.
+
+    Two fields have to be translated, and getting either wrong loses data
+    silently:
+
+    * the display name is `label` (the analyzer stopped inferring a `name`
+      from the file list); and
+    * there is no `context` -- there is an `evidence` list, which the product
+      frontend joins into the context it sends. The same is done here.
+
+    Everything else is dropped: file counts, confidence, proposals,
+    field_evidence, image options. `curation._sanitize_ai_items` applies the
+    real allowlist and clipping when the payload is actually built.
+    """
+    name = entry.get("label") or entry.get("name") or ""
+    context = entry.get("context")
+    if not context:
+        context = " ".join(
+            str(item).strip() for item in (entry.get("evidence") or [])
+            if str(item or "").strip())
+    paths = [str(path) for path in (entry.get("paths") or [])
+             if str(path or "").strip()]
+    return {
+        "id": str(entry.get("id") or ""),
+        "kind": BUCKET_TO_KIND[bucket],
+        "name": _text(name, curation.MAX_AI_NAME_CHARS),
+        "paths": paths,
+        "context": _text(context, curation.MAX_AI_CONTEXT_CHARS),
+    }
+
+
+def rcc_candidates_from(payload):
+    """Every usable candidate in a saved analysis, already normalized."""
+    candidates = []
+    for bucket, entries in extract_candidate_buckets(payload).items():
+        for entry in entries:
+            candidate = normalize_rcc_candidate(entry, bucket)
+            if candidate["id"]:
+                candidates.append(candidate)
+    return candidates
+
+
 MATCH_EXACT_PATH = "exact_path"
 UNMATCHED_NO_PATH = "candidate_has_no_usable_path"
 UNMATCHED_NOT_FOUND = "no_artifact_with_this_exact_path"

@@ -192,30 +192,50 @@ def _load_rcc_analyses(path):
     if os.path.isdir(path):
         for name in sorted(os.listdir(path)):
             if name.lower().endswith(".json"):
-                analyses[os.path.splitext(name)[0]] = _read_json(
-                    os.path.join(path, name))
+                try:
+                    analyses[os.path.splitext(name)[0]] = _read_json(
+                        os.path.join(path, name))
+                except Exception as e:
+                    print("  ! unreadable analysis %s (%s)"
+                          % (name, type(e).__name__))
     else:
         payload = _read_json(path)
         if isinstance(payload, dict):
             analyses = payload
-    candidates = {}
-    for record_id, response in analyses.items():
-        buckets = (response or {}).get("candidates") or {}
-        found = []
-        for kind_plural, entries in buckets.items():
-            kind = kind_plural.rstrip("s")
-            for entry in entries or []:
-                if not isinstance(entry, dict):
-                    continue
-                found.append({
-                    "id": str(entry.get("id") or ""),
-                    "kind": kind,
-                    "name": entry.get("name") or "",
-                    "paths": list(entry.get("paths") or []),
-                    "context": entry.get("context") or "",
-                })
-        candidates[str(record_id)] = found
-    return candidates
+    # `assist_core` understands every shape -- pure analyzer result, HTTP
+    # response, and this tool's own cache -- and normalizes label/evidence.
+    return {str(record_id): core.rcc_candidates_from(response)
+            for record_id, response in analyses.items()}
+
+
+def _load_rcc_cache_states(output_dir):
+    """Per record: is there a saved analysis, and may it be reused?
+
+    "An analysis exists" and "the analysis found candidates" are different
+    facts. A legitimately empty folder analyses fine and yields nothing, and
+    reporting that as "no analysis" sends someone hunting for a network
+    problem that is not there.
+    """
+    states = {}
+    directory = _rcc_dir(output_dir)
+    if not os.path.isdir(directory):
+        return states
+    for name in sorted(os.listdir(directory)):
+        if not name.lower().endswith(".json"):
+            continue
+        record_id = os.path.splitext(name)[0]
+        try:
+            payload = _read_json(os.path.join(directory, name))
+        except Exception:
+            states[record_id] = {"present": True, "current": False,
+                                 "candidates": 0}
+            continue
+        states[record_id] = {
+            "present": True,
+            "current": core.rcc_cache_is_current(payload),
+            "candidates": len(core.rcc_candidates_from(payload)),
+        }
+    return states
 
 
 def collect(args):
@@ -307,6 +327,11 @@ def analyze_one_folder(folder_path):
                 print("    evidence read skipped (%s)" % type(e).__name__)
     # Default proposal: no boundary selection, no chart plan, exactly what a
     # curator sees before touching anything.
+    #
+    # This is the PURE result -- candidate groups flat at the top level. Only
+    # `POST /api/curation/analyze-folder` wraps it in {"candidates": ...}, so
+    # reading `["candidates"]` off THIS is always empty. `rcc_cache_payload`
+    # is the one place that translation happens.
     return curation.analyze_folder_tree(files, dirs, texts), None
 
 
@@ -320,7 +345,8 @@ def collect_rcc(args):
     target_dir = _rcc_dir(args.output_dir)
     wanted = set(_read_lines(args.ids_file)) if args.ids_file else None
 
-    pending, skipped, cached = [], [], []
+    cache_states = _load_rcc_cache_states(args.output_dir)
+    pending, skipped, cached, stale = [], [], [], []
     for record in records:
         record_id = record["record_id"]
         if wanted is not None and record_id not in wanted:
@@ -329,10 +355,15 @@ def collect_rcc(args):
         if not folder:
             skipped.append((record_id, "record has no fileServerPath"))
             continue
-        saved = os.path.join(target_dir, "%s.json" % record_id)
-        if os.path.isfile(saved) and not args.refresh:
+        state = cache_states.get(record_id)
+        if state and state["current"] and not args.refresh:
             cached.append(record_id)
             continue
+        if state and not state["current"]:
+            # A file written by an older build -- most importantly the
+            # pre-fix one that always saved `{"candidates": {}}`. Re-analyse
+            # rather than trust it.
+            stale.append(record_id)
         pending.append((record_id, folder))
     if args.limit:
         pending = pending[:args.limit]
@@ -340,6 +371,7 @@ def collect_rcc(args):
     print("RCC COLLECTION")
     print("  records considered      %d" % len(records))
     print("  already saved (reused)  %d" % len(cached))
+    print("  stale cache, re-reading %d" % len(stale))
     print("  skipped                 %d" % len(skipped))
     print("  rcc_folders_to_read     %d" % len(pending))
     print("  rcc requests per folder: 1 listing walk + bounded evidence reads")
@@ -371,17 +403,25 @@ def collect_rcc(args):
             print("  [%d/%d] %s failed (%s)"
                   % (index, len(pending), record_id, error))
             continue
-        _write_json(os.path.join(target_dir, "%s.json" % record_id),
-                    {"candidates": analysis.get("candidates", {})})
-        counts = {kind: len(entries or []) for kind, entries
-                  in (analysis.get("candidates") or {}).items()}
+        payload = core.rcc_cache_payload(analysis)
+        _write_json(os.path.join(target_dir, "%s.json" % record_id), payload)
+        counts = {bucket: len(entries)
+                  for bucket, entries in payload["candidates"].items()}
         ok += 1
-        print("  [%d/%d] %s %s" % (index, len(pending), record_id, counts))
+        total = sum(counts.values())
+        if not total:
+            # A real answer, not a failure -- but say so, because an empty
+            # cache used to mean the tool was broken.
+            print("  [%d/%d] %s analysed, no candidates (empty or "
+                  "unsupported folder)" % (index, len(pending), record_id))
+        else:
+            print("  [%d/%d] %s %s" % (index, len(pending), record_id,
+                                       counts))
 
     print("\nRead %d folder(s), %d failed. Saved under %s"
           % (ok, failed, target_dir))
-    print("Next: `collect --execute --rcc-analyses %s` to fold them in, or "
-          "re-run `audit`." % target_dir)
+    print("Every later step reads this directory automatically. "
+          "Next: `audit`.")
     return 0
 
 
@@ -457,7 +497,7 @@ def _artifact_units(records):
     return units, excluded
 
 
-def _audit_report(records):
+def _audit_report(records, cache_states=None):
     keyword_units = _keyword_units(records)
     artifact_units, excluded = _artifact_units(records)
     by_kind = {}
@@ -473,8 +513,19 @@ def _audit_report(records):
             1 for r in records if r.get("reference_tags")),
         "records_with_artifacts": sum(
             1 for r in records if any((r.get("artifacts") or {}).values())),
+        # An analysis that legitimately found nothing IS an analysis. Only a
+        # missing or stale cache counts as "not analysed" -- conflating the
+        # two sends someone looking for a network fault that is not there.
         "records_with_rcc_analysis": sum(
+            1 for r in records
+            if (cache_states or {}).get(r["record_id"], {}).get("current")),
+        "records_with_rcc_candidates": sum(
             1 for r in records if r.get("rcc_candidates")),
+        "records_with_stale_rcc_cache": sum(
+            1 for r in records
+            if (cache_states or {}).get(r["record_id"], {}).get("present")
+            and not (cache_states or {}).get(r["record_id"], {}).get(
+                "current")),
         "keyword_units": len(keyword_units),
         "keyword_units_by_mode": {
             mode: sum(1 for u in keyword_units if u["mode"] == mode)
@@ -495,10 +546,11 @@ def audit(args):
         print("No raw-records.jsonl in %s. Run `collect` first."
               % args.output_dir)
         return 2
-    report = _audit_report(records)
+    report = _audit_report(records, _load_rcc_cache_states(args.output_dir))
     print("AUDIT (no provider call)")
     for key in ("records", "records_with_reference_tags",
                 "records_with_artifacts", "records_with_rcc_analysis",
+                "records_with_rcc_candidates", "records_with_stale_rcc_cache",
                 "keyword_units", "artifact_units",
                 "artifact_candidates_excluded",
                 "full_corpus_provider_calls_if_unsampled"):
@@ -511,13 +563,16 @@ def audit(args):
             print("    %-42s %d" % (reason, count))
     gaps = report["keyword_context_gaps"]
     if gaps:
-        print("\n  Human artifact text the product's allowlist cannot reach")
-        print("  (stored by curators, never sent to the keyword AI):")
+        print("\n  Human artifact text vs what reaches the keyword AI")
         for field, counts in gaps.items():
-            if counts["lost"]:
-                print("    %-30s stored=%d reaches_ai=%d LOST=%d"
-                      % (field, counts["stored"], counts["reaches_ai"],
-                         counts["lost"]))
+            print("    %-24s stored=%-5d reaches_ai=%-5d "
+                  "DEDUPLICATED=%-4d TRUE_LOST=%d"
+                  % (field, counts["stored"], counts["reaches_ai"],
+                     counts["deduplicated_same_text"], counts["true_lost"]))
+        print("    DEDUPLICATED: identical to another field already sent, so "
+              "the product")
+        print("      sends it once. Not a loss.")
+        print("    TRUE_LOST is the number that matters; it should be 0.")
     _write_json(os.path.join(args.output_dir, "audit.json"), report)
     print("\nWrote audit.json. Next: `smoke-sample`.")
     return 0
