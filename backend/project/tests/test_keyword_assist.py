@@ -332,3 +332,141 @@ class TestOutputHandling(KeywordTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOutputBudget(KeywordTestBase):
+    """The keyword call must be able to hold the answer its own schema
+    allows.
+
+    A live benchmark run returned `finishReason=MAX_TOKENS` on two
+    publication_plus_artifacts units. The budget was 256 tokens, passed
+    EXPLICITLY at the call site -- so raising QRESP_GEMINI_MAX_OUTPUT_TOKENS
+    would not have helped -- while the schema permitted eight
+    keyword/reason objects, roughly 1,990 characters in the worst case.
+    """
+
+    def test_the_request_carries_the_keyword_budget_not_the_global_default(self):
+        self.login()
+        _, http = self.configured_post(BODY)
+        config = http.post.call_args.kwargs["json"]["generationConfig"]
+        self.assertEqual(assist.KEYWORD_OUTPUT_TOKENS,
+                        config["maxOutputTokens"])
+        self.assertNotEqual(assist.GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
+                            config["maxOutputTokens"])
+
+    def test_the_budget_covers_the_schemas_worst_case_answer(self):
+        # 8 x ({"keyword":"","reason":""} + 60 + 160) + envelope, at a
+        # conservative 3 characters per token.
+        per_object = len('{"keyword":"","reason":""}') \
+            + assist.MAX_KEYWORD_CHARS + assist.MAX_REASON_CHARS
+        worst_chars = (len('{"keywords":[]}')
+                       + assist.MAX_SUGGESTIONS * per_object
+                       + (assist.MAX_SUGGESTIONS - 1))
+        worst_tokens = worst_chars / 3.0
+        self.assertGreater(assist.KEYWORD_OUTPUT_TOKENS, worst_tokens)
+        # ...and stays inside the global ceiling.
+        self.assertLessEqual(assist.KEYWORD_OUTPUT_TOKENS,
+                             assist.GEMINI_MAX_OUTPUT_TOKENS_CEILING)
+
+    def test_the_schema_bounds_both_generated_strings(self):
+        items = assist.KEYWORD_RESPONSE_SCHEMA[
+            "properties"]["keywords"]["items"]["properties"]
+        self.assertEqual(assist.MAX_KEYWORD_CHARS,
+                         items["keyword"]["maxLength"])
+        self.assertEqual(assist.MAX_REASON_CHARS, items["reason"]["maxLength"])
+        self.assertEqual(assist.MAX_SUGGESTIONS,
+                         assist.KEYWORD_RESPONSE_SCHEMA[
+                             "properties"]["keywords"]["maxItems"])
+
+    def test_the_prompt_asks_for_a_short_reason(self):
+        self.assertIn("20 words", assist.KEYWORD_SYSTEM_PROMPT)
+        self.assertIn("ONE sentence", assist.KEYWORD_SYSTEM_PROMPT)
+
+    def test_reasons_still_reach_the_caller(self):
+        # The UI shows these; shortening them must not remove them.
+        self.login()
+        response, _ = self.configured_post(BODY, keywords=[
+            {"keyword": "liquid water", "reason": "the abstract measures it"}])
+        self.assertEqual(200, response.status_code)
+        suggestion = response.json()["keywords"][0]
+        self.assertEqual("the abstract measures it", suggestion["reason"])
+        self.assertIn("existing", suggestion)
+
+
+class TestProviderErrorKinds(KeywordTestBase):
+    """Failures carry a machine-readable kind for diagnostics, while the
+    message the user sees stays the same safe sentence."""
+
+    def call_with(self, response):
+        with mock.patch.dict(os.environ, CONFIGURED):
+            with mock.patch("project.assist.requests") as http:
+                http.post.return_value = response
+                cfg = assist._gemini_config()
+                return assist.call_gemini(cfg, {"a": 1}, "prompt", {})
+
+    def test_max_tokens_is_classified_not_parsed_as_broken_json(self):
+        # The truncated text is often ALMOST valid JSON; letting it reach a
+        # parser turns a budget problem into an unexplained decode error.
+        truncated = MockResponse({"candidates": [{
+            "content": {"parts": [{"text": '{"keywords": [{"keyword": "a"'}]},
+            "finishReason": "MAX_TOKENS"}]})
+        answer, error = self.call_with(truncated)
+        self.assertIsNone(answer)
+        self.assertEqual(assist.ERROR_MAX_TOKENS, assist.error_kind(error))
+        self.assertIn("truncated", str(error))
+
+    def test_a_rate_limit_is_its_own_kind(self):
+        answer, error = self.call_with(MockResponse({"error": "quota"}, 429))
+        self.assertIsNone(answer)
+        self.assertEqual(assist.ERROR_RATE_LIMITED, assist.error_kind(error))
+
+    def test_an_upstream_outage_is_its_own_kind(self):
+        answer, error = self.call_with(MockResponse({}, 503))
+        self.assertEqual(assist.ERROR_UNAVAILABLE, assist.error_kind(error))
+
+    def test_a_blocked_prompt_is_its_own_kind(self):
+        blocked = MockResponse({"promptFeedback": {"blockReason": "SAFETY"}})
+        answer, error = self.call_with(blocked)
+        self.assertEqual(assist.ERROR_BLOCKED, assist.error_kind(error))
+
+    def test_an_unreadable_envelope_is_malformed(self):
+        answer, error = self.call_with(MockResponse(["not", "an", "object"]))
+        self.assertEqual(assist.ERROR_MALFORMED, assist.error_kind(error))
+
+    def test_a_thought_part_before_the_answer_is_still_read(self):
+        # Thinking models emit a thought part first; the answer follows.
+        answered = MockResponse({"candidates": [{
+            "content": {"parts": [
+                {"text": "I should list keywords", "thought": True},
+                {"text": '{"keywords": [{"keyword": "water"}]}'}]},
+            "finishReason": "STOP"}]})
+        answer, error = self.call_with(answered)
+        self.assertIsNone(error)
+        self.assertNotIn("I should list keywords", answer)
+        self.assertIn("water", answer)
+
+    def test_the_error_is_still_a_plain_string_for_existing_callers(self):
+        answer, error = self.call_with(MockResponse({"error": "quota"}, 429))
+        self.assertIsInstance(error, str)
+        self.assertEqual("You have reached the AI usage limit.", str(error))
+        # Serializes exactly as before, so an HTTP body is unchanged.
+        self.assertEqual(json.dumps("You have reached the AI usage limit."),
+                         json.dumps(error))
+
+    def test_a_plain_string_error_reports_the_generic_kind(self):
+        self.assertEqual(assist.ERROR_OTHER, assist.error_kind("legacy"))
+        self.assertEqual("", assist.error_kind(None))
+
+    def test_no_kind_or_provider_body_reaches_the_http_response(self):
+        self.login()
+        with mock.patch.dict(os.environ, CONFIGURED):
+            with mock.patch("project.assist.requests") as http:
+                http.post.return_value = MockResponse(
+                    {"error": {"message": "quota exceeded for key SECRET"}},
+                    429)
+                response = self.post(BODY)
+        self.assertEqual(502, response.status_code)
+        body = response.text
+        for leak in ("SECRET", "quota exceeded", "rate_limited",
+                     "error_kind"):
+            self.assertNotIn(leak, body, leak)

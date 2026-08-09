@@ -62,14 +62,57 @@ GEMINI_DEFAULT_MAX_MANUSCRIPT_CHARS = 60000
 GEMINI_MAX_MANUSCRIPT_CHARS_CEILING = 200000
 GEMINI_DEFAULT_DAILY_LIMIT = 20
 GEMINI_DEFAULT_MAX_OUTPUT_TOKENS = 256
-# A keyword list fits in 256 tokens. A batch of folder-candidate descriptions
-# does not: eight candidates of JSON ran past the cap, the answer came back
-# truncated with finishReason=MAX_TOKENS, and the truncated JSON then failed
-# to parse. The ceiling used to be 256 as well, so raising the environment
-# variable had no effect at all.
+# The global ceiling on any single call. It used to be 256 as well, so
+# raising the environment variable had no effect at all; 2048 leaves room for
+# the structured answers this codebase actually asks for. Each feature passes
+# its OWN budget explicitly (see KEYWORD_OUTPUT_TOKENS and
+# curation.AI_OUTPUT_TOKENS), sized from its response schema -- the
+# environment variable is the outer bound, not the per-feature setting.
 GEMINI_MAX_OUTPUT_TOKENS_CEILING = 2048
 
 MAX_SUGGESTIONS = 8
+
+# ------------------------------------------------------- provider failures
+#
+# What went wrong, as a label a program can branch on. The MESSAGE stays the
+# safe, user-facing sentence it always was; the kind is for diagnostics and
+# offline analysis and is never put in an HTTP response.
+ERROR_MAX_TOKENS = "max_tokens"
+ERROR_RATE_LIMITED = "rate_limited"
+ERROR_TIMEOUT = "timeout"
+ERROR_UNAVAILABLE = "provider_unavailable"
+ERROR_MALFORMED = "malformed"
+ERROR_BLOCKED = "blocked"
+ERROR_OTHER = "other_provider_error"
+
+PROVIDER_ERROR_KINDS = (ERROR_MAX_TOKENS, ERROR_RATE_LIMITED, ERROR_TIMEOUT,
+                        ERROR_UNAVAILABLE, ERROR_MALFORMED, ERROR_BLOCKED,
+                        ERROR_OTHER)
+
+
+class ProviderError(str):
+    """The user-facing message, carrying a machine-readable `kind`.
+
+    A `str` subclass on purpose. `call_gemini` has always returned
+    `(answer, message)`, and every caller puts that message straight into a
+    JSON error body; those callers keep working untouched, and the value
+    still serializes as the same plain string. Only code that WANTS the
+    classification reads `.kind` — which is why the kind can be specific
+    without any of it reaching a user.
+    """
+
+    kind = ERROR_OTHER
+
+    def __new__(cls, message, kind=ERROR_OTHER):
+        error = super(ProviderError, cls).__new__(cls, message)
+        error.kind = kind if kind in PROVIDER_ERROR_KINDS else ERROR_OTHER
+        return error
+
+
+def error_kind(error):
+    """The kind of a failure `call_gemini` returned, for any caller that
+    wants it. Plain strings from older code report `other_provider_error`."""
+    return getattr(error, "kind", ERROR_OTHER) if error else ""
 
 
 def _truthy(value):
@@ -244,28 +287,35 @@ def call_gemini(cfg, payload, system_prompt, schema, max_output_tokens=None):
         # Distinct from "unreachable": the provider is there and simply slow,
         # and the useful advice is different.
         print("AI assist provider timeout: %s" % type(e).__name__)
-        return None, ("The AI provider did not respond in time. Try again or "
-                      "select fewer items.")
+        return None, ProviderError(
+            "The AI provider did not respond in time. Try again or select "
+            "fewer items.", ERROR_TIMEOUT)
     except Exception as e:
         print("AI assist provider unreachable: %s" % type(e).__name__)
-        return None, "The server could not reach the AI provider."
+        return None, ProviderError(
+            "The server could not reach the AI provider.", ERROR_UNAVAILABLE)
     if response.status_code == 429:
         print("AI assist provider rate limited")
-        return None, "You have reached the AI usage limit."
+        return None, ProviderError("You have reached the AI usage limit.",
+                                   ERROR_RATE_LIMITED)
     if response.status_code in (500, 502, 503, 504):
         print("AI assist provider error: HTTP %s" % response.status_code)
-        return None, ("The AI provider is temporarily unavailable. Try again "
-                      "shortly.")
+        return None, ProviderError(
+            "The AI provider is temporarily unavailable. Try again shortly.",
+            ERROR_UNAVAILABLE)
     if response.status_code != 200:
         print("AI assist provider error: HTTP %s" % response.status_code)
-        return None, "The AI provider returned an error."
+        return None, ProviderError("The AI provider returned an error.",
+                                   ERROR_OTHER)
     try:
         data = response.json()
         if not isinstance(data, dict):
             raise ValueError("body is not an object")
     except Exception as e:
         print("AI assist response unparseable envelope: %s" % type(e).__name__)
-        return None, "The AI provider returned an unreadable suggestion."
+        return None, ProviderError(
+            "The AI provider returned an unreadable suggestion.",
+            ERROR_MALFORMED)
 
     # Sanitized diagnostics only: shapes and category labels, never response
     # text, prompt text, manuscript content, or credentials.
@@ -284,25 +334,32 @@ def call_gemini(cfg, payload, system_prompt, schema, max_output_tokens=None):
 
     # 1. The prompt itself was blocked upstream.
     if block_reason:
-        return None, ("The AI suggestion service declined this request. Try "
-                      "again with different text.")
+        return None, ProviderError(
+            "The AI suggestion service declined this request. Try again with "
+            "different text.", ERROR_BLOCKED)
     # 2. Nothing usable came back (no candidate at all).
     if not candidates:
-        return None, "The AI suggestion service did not return suggestions."
+        return None, ProviderError(
+            "The AI suggestion service did not return suggestions.",
+            ERROR_MALFORMED)
     # 3. The answer ran out of output budget. This MUST be caught here: the
     #    truncated text is often almost-valid JSON, and letting it reach a
     #    parser turns a budget problem into an unexplained JSONDecodeError.
     if finish_reason and str(finish_reason).upper() == "MAX_TOKENS":
-        return None, ("The AI response was truncated. Select fewer items or "
-                      "try again.")
+        return None, ProviderError(
+            "The AI response was truncated. Select fewer items or try again.",
+            ERROR_MAX_TOKENS)
     # 4. The candidate was terminated by a safety/policy rule.
     if finish_reason and str(finish_reason).upper() in _BLOCKING_FINISH_REASONS:
-        return None, ("The AI suggestion service declined this request. Try "
-                      "again with different text.")
+        return None, ProviderError(
+            "The AI suggestion service declined this request. Try again with "
+            "different text.", ERROR_BLOCKED)
     # 5. A candidate exists but carries no answer text (only reasoning parts
     #    came back).
     if not answer_text:
-        return None, "The AI suggestion service did not return suggestions."
+        return None, ProviderError(
+            "The AI suggestion service did not return suggestions.",
+            ERROR_MALFORMED)
     return answer_text, None
 
 
@@ -341,12 +398,37 @@ MAX_CONTEXT_ITEMS = 40
 MAX_CONTEXT_CHARS = 12000
 MAX_BASENAME_CHARS = 80
 MAX_BASENAMES = 20
-KEYWORD_OUTPUT_TOKENS = 256
+# Output budget for ONE keyword request, sized from the response schema's
+# worst case rather than from a guess:
+#
+#   8 objects x ({"keyword":"","reason":""} = 26 chars + 60 + 160)  = 1,968
+#   + {"keywords":[]} and the separating commas                     =    22
+#                                                                     ------
+#   worst-case answer                                          ~1,990 chars
+#
+# At a conservative 3 characters per token that is ~663 tokens, and thinking
+# tokens share this budget even at `thinkingLevel: minimal`. 256 could not
+# hold it: a real run returned finishReason=MAX_TOKENS on the two
+# publication_plus_artifacts units, whose longer input produced longer
+# reasons. 1024 clears the worst case with room for the minimal-thinking
+# allowance and tokenizer variance, and stays at half the 2048 global
+# ceiling so QRESP_GEMINI_MAX_OUTPUT_TOKENS still governs everything else.
+#
+# This value is passed EXPLICITLY at the call site, so raising the
+# environment variable alone would not have helped.
+KEYWORD_OUTPUT_TOKENS = 1024
 
 # How much of the existing Qresp vocabulary is worth showing the model. Two
 # hundred is enough to anchor it on the site's real language without turning
 # the prompt into a dictionary.
 MAX_TAXONOMY_TERMS = 200
+
+# Generation-side limits, so the model is asked for something that fits.
+# The parser already trims a keyword to 60 and a reason to 200, but trimming
+# happens AFTER generation: an answer that ran past the output budget arrives
+# truncated mid-JSON and is lost entirely, not shortened.
+MAX_KEYWORD_CHARS = 60
+MAX_REASON_CHARS = 160
 
 KEYWORD_RESPONSE_SCHEMA = {
     "type": "object",
@@ -357,8 +439,10 @@ KEYWORD_RESPONSE_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "keyword": {"type": "string"},
-                    "reason": {"type": "string"},
+                    "keyword": {"type": "string",
+                                "maxLength": MAX_KEYWORD_CHARS},
+                    "reason": {"type": "string",
+                               "maxLength": MAX_REASON_CHARS},
                 },
                 "required": ["keyword"],
             },
@@ -381,7 +465,10 @@ KEYWORD_SYSTEM_PROMPT = (
     "one. Do not propose author names, institutions, file names, paths, "
     "URLs, journal names or years. Respond with ONLY a JSON object of the "
     'form {"keywords": [{"keyword": "...", "reason": "..."}]} containing at '
-    "most %d short keyword candidates of 1-4 words each." % MAX_SUGGESTIONS
+    "most %d short keyword candidates of 1-4 words each. Each `reason` must "
+    "be ONE sentence of at most 20 words saying what in the record supports "
+    "that keyword; do not restate the keyword, and do not explain your "
+    "process." % MAX_SUGGESTIONS
 )
 
 # Exactly what may be read off a candidate, by kind:
