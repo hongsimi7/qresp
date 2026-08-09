@@ -195,6 +195,27 @@ length, item and context budgets are untouched.
 the product's own reducer — it is not hardcoded to zero, so if the two sides
 drift apart again the audit will say so.
 
+### Deduplicated text is not lost text
+
+The audit separates three outcomes per field:
+
+| Column | Means |
+| --- | --- |
+| `reaches_ai` | the model received it |
+| `deduplicated_same_text` | the model received this exact string under **another** field; `_reviewed_context` sends a given string once |
+| `true_lost` | stored, not delivered, not a duplicate — **the number that matters, and it should be 0** |
+
+A real 64-record corpus reported `charts.keywords LOST=16`. All sixteen were
+charts whose Figure Caption and Keywords were the **same string**, which the
+product deliberately sends once, as the caption. Nothing was missing; the
+accounting was. Those now read `deduplicated_same_text=16, true_lost=0`.
+
+The comparison is the product's own: `_clip` whitespace normalization and
+length limit, then **case-sensitive** equality. `Band Gap` and `band gap` are
+two strings and are not treated as duplicates — folding them would be
+inventing a rule the product does not have. The legacy `lost` key remains,
+defined as exactly `true_lost`.
+
 ---
 
 ## Running it (Windows PowerShell)
@@ -273,6 +294,82 @@ one record's problem; the run continues. Results land in
 `..\assist-eval-out\rcc-analyses\<record_id>.json` and are reused next time
 unless `--refresh` is given.
 
+### The RCC cache — format, staleness, and what "analysed" means
+
+`collect-rcc` writes one file per record:
+
+```json
+{
+  "format_version": 2,
+  "analysis_completed": true,
+  "candidates": {
+    "charts": [], "datasets": [], "scripts": [], "tools": []
+  }
+}
+```
+
+Only those four buckets are candidates. `analyze_folder_tree` returns them
+**flat, at the top level**, beside structure metadata (`structure_issues`,
+`grouped_unclassified`, `chart_image_groups`, `boundary_trees`,
+`applied_chart_plan`, `unclassified`) — all arrays too, none of them
+candidates. Only `POST /api/curation/analyze-folder` wraps the result as
+`{"candidates": …}`.
+
+> **Version 1 of this cache was always empty.** It read
+> `analysis["candidates"]` off the PURE result, which has no such key, so
+> every file saved `{"candidates": {}}` — 23 bytes — while reporting success.
+> `format_version` exists so those files are recognised and re-analysed.
+
+**Staleness is decided by the version stamp, not by the contents.** A folder
+that is empty or unsupported analyses perfectly well and yields no
+candidates; that is a result worth keeping. It looks identical to the buggy
+output, and only the stamp tells them apart.
+
+| Saved file | Reused? |
+| --- | --- |
+| `format_version: 2` | yes |
+| `format_version: 2`, zero candidates | yes — a real answer |
+| no `format_version` (pre-fix `{"candidates": {}}`) | **no**, re-analysed |
+| any other `format_version` | **no**, re-analysed |
+| any of the above with `--refresh` | **no**, re-analysed |
+
+`collect-rcc` prints `stale cache, re-reading N` so the re-analysis is
+visible. **The safest QA is a fresh `--output-dir`**, which sidesteps the
+question entirely.
+
+The loader also accepts two shapes it did not write, so a curator's own saved
+file still works: the raw `analyze_folder_tree` result, and the real HTTP
+response `{"candidates": <result>, …}`.
+
+### Analysis present vs candidates found
+
+`audit` reports both, because they are different facts:
+
+| Field | Means |
+| --- | --- |
+| `records_with_rcc_analysis` | a **current** cache file exists |
+| `records_with_rcc_candidates` | that analysis produced at least one candidate |
+| `records_with_stale_rcc_cache` | a file exists but will be re-analysed |
+
+A record can have an analysis and no candidates. Reporting that as "no
+analysis" sends someone hunting for a network fault that is not there.
+
+### Candidate field translation
+
+The analyzer's candidates do not use the field names the AI request does:
+
+| AI request field | Read from |
+| --- | --- |
+| `name` | `label` (the analyzer stopped inferring a name from the file list), then legacy `name` |
+| `context` | explicit legacy `context`, otherwise the `evidence` array joined in order — the same thing the product frontend does |
+| `id`, `kind`, `paths` | as-is |
+
+Everything else the analyzer produces — `confidence`, `proposal`,
+`field_evidence`, `file_count`, `image_options` — is dropped, and
+`curation._sanitize_ai_items` applies the real allowlist and clipping when
+the payload is built. File contents, image bytes, absolute paths, RCC URLs
+and account data cannot reach a provider payload.
+
 ### 5. `audit` again — now with artifacts
 
 ```powershell
@@ -280,8 +377,9 @@ unless `--refresh` is given.
   --output-dir ..\assist-eval-out
 ```
 
-`artifact_units` should now be non-zero. If it is still 0 the artifact
-benchmark will make **0 calls**, and the tool says so rather than implying ten.
+`records_with_rcc_analysis` and `records_with_rcc_candidates` should both be
+non-zero. If `artifact_units` is still 0 the artifact benchmark will make
+**0 calls**, and the tool says so rather than implying ten.
 
 ### 6. `smoke-sample` — deterministic, seeded, no AI call
 
@@ -345,6 +443,25 @@ fingerprint**, so a re-run costs nothing and an interrupted run resumes.
 | `expert-review.tsv` | ≤ 30 flagged rows — the short list worth a human's time |
 
 `expert_rating` is always written **blank**. No AI fills it in.
+
+---
+
+## Before spending anything on Gemini
+
+Check these in `audit.json` and the `smoke-sample` output. All five should
+hold; if any does not, the real run will measure the wrong thing.
+
+| Check | Expected |
+| --- | --- |
+| `keyword_context_gaps[*].true_lost` | **0** for every field |
+| `records_with_rcc_analysis` | **> 0** |
+| `records_with_rcc_candidates` | **> 0** |
+| `artifact_units` | **> 0** |
+| `planned_provider_calls` | **<= 20** |
+
+`records_with_stale_rcc_cache` should be 0 after a successful `collect-rcc`.
+If it is not, run `collect-rcc --execute` again (or `--refresh`), or start
+from a fresh `--output-dir`.
 
 ---
 
