@@ -512,6 +512,97 @@ class TestKeywordModes(unittest.TestCase):
 
 # ------------------------------------------------------------ path matching
 
+class TestContextGapAccounting(unittest.TestCase):
+    """Text sent once under another name is not text that was lost.
+
+    On the real 64-record corpus this reported `charts.keywords LOST=16`.
+    All 16 were charts whose Figure Caption and Keywords were the SAME
+    string, which `_reviewed_context` deliberately sends once. Nothing was
+    missing; the accounting was.
+    """
+
+    def chart_record(self, caption, keywords, record_id="rec00"):
+        return {
+            "record_id": record_id,
+            "artifacts": {"charts": [{
+                "kind": "charts", "id": "c0",
+                "human_description": caption,
+                "human_description_field": "caption",
+                "human_keywords": list(keywords),
+                "human_keyword_field": "properties",
+                "files": [], "image_file": "", "notebook_file": "",
+                "package_name": "", "facility_name": "", "measurement": ""}],
+                "datasets": [], "scripts": [], "tools": []},
+        }
+
+    def test_identical_caption_and_keywords_are_deduplicated_not_lost(self):
+        record = self.chart_record("band gap", ["band gap"])
+        # The product really does send it once -- checked directly.
+        context = assist._reviewed_context(
+            {"charts": [{"caption": "band gap", "properties": "band gap"}]})
+        values = list(context["charts"][0].values())
+        self.assertEqual(1, len(values))
+
+        gaps = core.keyword_context_gaps([record])
+        entry = gaps["charts.keywords"]
+        self.assertEqual(1, entry["stored"])
+        self.assertEqual(0, entry["reaches_ai"])
+        self.assertEqual(1, entry["deduplicated_same_text"])
+        self.assertEqual(0, entry["true_lost"])
+        self.assertEqual(entry["true_lost"], entry["lost"])
+
+    def test_the_observed_sixteen_shaped_fixture(self):
+        # 645 stored, 629 delivered, 16 identical to their caption.
+        records = []
+        for index in range(20):
+            records.append(self.chart_record(
+                "caption %d" % index, ["keyword %d" % index],
+                record_id="distinct%d" % index))
+        for index in range(16):
+            same = "identical text %d" % index
+            records.append(self.chart_record(same, [same],
+                                             record_id="same%d" % index))
+        gaps = core.keyword_context_gaps(records)
+        entry = gaps["charts.keywords"]
+        self.assertEqual(36, entry["stored"])
+        self.assertEqual(20, entry["reaches_ai"])
+        self.assertEqual(16, entry["deduplicated_same_text"])
+        self.assertEqual(0, entry["true_lost"])
+
+    def test_a_case_only_difference_is_not_a_duplicate(self):
+        # The product compares strings; "Band Gap" and "band gap" are two.
+        record = self.chart_record("Band Gap", ["band gap"])
+        gaps = core.keyword_context_gaps([record])
+        entry = gaps["charts.keywords"]
+        self.assertEqual(1, entry["reaches_ai"])
+        self.assertEqual(0, entry["deduplicated_same_text"])
+        self.assertEqual(0, entry["true_lost"])
+
+    def test_whitespace_is_normalized_the_way_the_product_normalizes_it(self):
+        record = self.chart_record("band   gap", ["band gap"])
+        gaps = core.keyword_context_gaps([record])
+        self.assertEqual(1, gaps["charts.keywords"][
+            "deduplicated_same_text"])
+
+    def test_text_that_reaches_nothing_at_all_is_true_lost(self):
+        # A field the allowlist genuinely cannot read: simulated by removing
+        # its payload field, so nothing carries the value.
+        record = self.chart_record("A caption", ["a keyword"])
+        with mock.patch.dict(assist.CONTEXT_FIELDS["charts"], clear=True,
+                             values={"caption": ("caption",)}):
+            gaps = core.keyword_context_gaps([record])
+        entry = gaps["charts.keywords"]
+        self.assertEqual(1, entry["stored"])
+        self.assertEqual(0, entry["reaches_ai"])
+        self.assertEqual(0, entry["deduplicated_same_text"])
+        self.assertEqual(1, entry["true_lost"])
+
+    def test_the_healthy_corpus_reports_no_true_loss(self):
+        gaps = core.keyword_context_gaps([benchmark_record()])
+        for field, counts in gaps.items():
+            self.assertEqual(0, counts["true_lost"], field)
+
+
 class TestCandidateMatching(unittest.TestCase):
     def test_an_exact_relative_path_matches(self):
         record = benchmark_record()
@@ -956,6 +1047,276 @@ class TestCollectRcc(CliTestCase):
         self.assertEqual(0, len(sample["artifact_units"]))
         self.assertEqual(len(sample["keyword_units"]),
                          sample["planned_provider_calls"])
+
+
+class TestCollectRccAgainstTheRealAnalyzer(CliTestCase):
+    """The bug the mocked tests could not see.
+
+    `TestCollectRcc` above stubs `analyze_folder_tree` with the HTTP
+    ENVELOPE shape (`{"candidates": {...}}`). The real function returns the
+    candidate groups FLAT, at the top level, with no `candidates` key at all
+    -- only `POST /api/curation/analyze-folder` adds that wrapper. So
+    `analysis.get("candidates", {})` always produced `{}` and every saved
+    cache file was 23 bytes of nothing, while every test passed.
+
+    These tests mock only the NETWORK boundary and call the real analyzer.
+    """
+
+    STANDARD = ["datasets/set1/data.csv", "charts/fig1/preview.png",
+                "scripts/run1/analyze.py", "tools/tool1/README.md"]
+    STANDARD_DIRS = ["datasets", "datasets/set1", "charts", "charts/fig1",
+                     "scripts", "scripts/run1", "tools", "tools/tool1"]
+    LEGACY = ["data/DFT/result.dat",
+              "figures_tables/figure_1/figure_1.png",
+              "scripts/analysis/run.py", "doc/README.md"]
+    LEGACY_DIRS = ["data", "data/DFT", "figures_tables",
+                   "figures_tables/figure_1", "scripts", "scripts/analysis",
+                   "doc"]
+
+    def real_pipeline(self, files, dirs, texts=None):
+        """Only the network boundary is stubbed; the analyzer is real."""
+        import contextlib
+        texts = texts or {}
+        return mock.patch.multiple(
+            curation,
+            resolve_folder_url=mock.Mock(
+                return_value="https://notebook.rcc.uchicago.edu/files/x"),
+            tls_exception_scope=mock.Mock(
+                side_effect=lambda url: contextlib.nullcontext()),
+            walk_folder=mock.Mock(return_value=(files, dirs, [], False)),
+            _fetch_text=mock.Mock(
+                side_effect=lambda url: texts.get(url.rsplit("/", 1)[-1],
+                                                  "# a short header")))
+
+    def collect_one(self, files, dirs):
+        self.write_records(corpus(1))
+        with self.real_pipeline(files, dirs):
+            code, gemini = self.run_cli(
+                ["collect-rcc", "--output-dir", self.dir, "--execute",
+                 "--limit", "1", "--rate-limit", "0"])
+        self.assertEqual(0, code)
+        self.assertEqual([], gemini.payloads, "collect-rcc never calls Gemini")
+        saved = os.path.join(self.dir, "rcc-analyses", "rec00.json")
+        self.assertTrue(os.path.isfile(saved))
+        with io.open(saved, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    # -- the reproduction -------------------------------------------------
+
+    def test_a_standard_folder_saves_real_candidates(self):
+        payload = self.collect_one(self.STANDARD, self.STANDARD_DIRS)
+        self.assertEqual(2, payload["format_version"])
+        self.assertTrue(payload["analysis_completed"])
+        candidates = payload["candidates"]
+        self.assertEqual(sorted(("charts", "datasets", "scripts", "tools")),
+                         sorted(candidates))
+        total = sum(len(v) for v in candidates.values())
+        self.assertGreater(total, 0, "the cache must not be empty: %r"
+                                     % candidates)
+        self.assertTrue(candidates["datasets"])
+        self.assertTrue(candidates["charts"])
+
+    def test_a_legacy_folder_saves_real_candidates(self):
+        payload = self.collect_one(self.LEGACY, self.LEGACY_DIRS)
+        total = sum(len(v) for v in payload["candidates"].values())
+        self.assertGreater(total, 0)
+
+    def test_structure_metadata_never_becomes_a_candidate(self):
+        # The pure result also carries structure_issues, grouped_unclassified,
+        # chart_image_groups, boundary_trees, applied_chart_plan... all
+        # arrays, none of them candidates.
+        payload = self.collect_one(self.STANDARD, self.STANDARD_DIRS)
+        self.assertEqual(sorted(("charts", "datasets", "scripts", "tools")),
+                         sorted(payload["candidates"]))
+        for forbidden in ("structure_issues", "grouped_unclassified",
+                          "chart_image_groups", "applied_chart_plan",
+                          "boundary_trees", "unclassified",
+                          "normalized_roles"):
+            self.assertNotIn(forbidden, payload["candidates"], forbidden)
+
+    def test_the_saved_candidates_survive_a_round_trip(self):
+        self.collect_one(self.STANDARD, self.STANDARD_DIRS)
+        records = assist_eval._load_records(self.dir)
+        candidates = records[0]["rcc_candidates"]
+        self.assertTrue(candidates)
+        for candidate in candidates:
+            self.assertIn(candidate["kind"],
+                          ("chart", "dataset", "script", "tool"))
+            self.assertTrue(candidate["id"])
+            self.assertTrue(candidate["paths"])
+
+    def test_the_candidate_name_comes_from_label(self):
+        self.collect_one(self.STANDARD, self.STANDARD_DIRS)
+        records = assist_eval._load_records(self.dir)
+        names = [c["name"] for c in records[0]["rcc_candidates"]]
+        self.assertTrue(any(names), "a candidate kept no display name")
+
+    def test_evidence_becomes_bounded_context(self):
+        payload = self.collect_one(self.STANDARD, self.STANDARD_DIRS)
+        raw = [c for group in payload["candidates"].values() for c in group]
+        self.assertTrue(any(c.get("evidence") for c in raw),
+                        "fixture produced no evidence to carry")
+        records = assist_eval._load_records(self.dir)
+        contexts = [c["context"] for c in records[0]["rcc_candidates"]]
+        self.assertTrue(any(contexts), "evidence never reached context")
+        for context in contexts:
+            self.assertLessEqual(len(context), curation.MAX_AI_CONTEXT_CHARS)
+
+    def test_the_artifact_benchmark_now_has_units(self):
+        self.collect_one(self.STANDARD, self.STANDARD_DIRS)
+        # Give the record artifacts whose paths match the analysed files, so
+        # the exact-path matcher can pair them.
+        records = _read_jsonl_file(
+            os.path.join(self.dir, "raw-records.jsonl"))
+        records[0]["artifacts"]["datasets"] = [{
+            "kind": "datasets", "id": "d0",
+            "human_description": "The set-1 data",
+            "human_description_field": "readme", "human_keywords": ["csv"],
+            "human_keyword_field": "keywords",
+            "files": ["datasets/set1/data.csv"], "image_file": "",
+            "notebook_file": "", "package_name": "", "facility_name": "",
+            "measurement": ""}]
+        self.write_records(records)
+        code, _ = self.run_cli(["audit", "--output-dir", self.dir])
+        self.assertEqual(0, code)
+        report = json.loads(self.read("audit.json"))
+        self.assertGreater(report["records_with_rcc_analysis"], 0)
+        self.assertGreater(report["records_with_rcc_candidates"], 0)
+        self.assertGreater(report["artifact_units"], 0)
+
+    def test_no_file_content_url_or_absolute_path_reaches_the_payload(self):
+        self.collect_one(self.STANDARD, self.STANDARD_DIRS)
+        records = assist_eval._load_records(self.dir)
+        record = records[0]
+        for candidate in record["rcc_candidates"]:
+            artifact = {"human_description": "", "human_keywords": []}
+            payload = core.build_artifact_payload(candidate, artifact)
+            if payload is None:
+                continue
+            self.assertEqual(sorted(curation.AI_ALLOWED_KEYS),
+                             sorted(payload))
+            self.assertEqual([], core.payload_is_safe(payload))
+
+
+def _read_jsonl_file(path):
+    with io.open(path, encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
+
+
+class TestRccCacheFormat(CliTestCase):
+    """Which saved files may be reused, and which must be analysed again."""
+
+    def write_cache(self, payload, record_id="rec00"):
+        target = os.path.join(self.dir, "rcc-analyses")
+        if not os.path.isdir(target):
+            os.makedirs(target)
+        path = os.path.join(target, "%s.json" % record_id)
+        with io.open(path, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle)
+        return path
+
+    def current_cache(self, candidates=None):
+        return {"format_version": 2, "analysis_completed": True,
+                "candidates": candidates or {
+                    "charts": [], "datasets": [
+                        {"id": "d1", "label": "set1",
+                         "paths": ["datasets/set1/data.csv"],
+                         "evidence": ["README: the set"]}],
+                    "scripts": [], "tools": []}}
+
+    def collect_again(self, extra=()):
+        self.write_records(corpus(1))
+        seen = {"walked": 0}
+
+        import contextlib
+
+        def walk(url, list_directory=None):
+            seen["walked"] += 1
+            return (["datasets/set1/data.csv"], ["datasets", "datasets/set1"],
+                    [], False)
+
+        with mock.patch.multiple(
+                curation,
+                resolve_folder_url=mock.Mock(return_value="https://x/y"),
+                tls_exception_scope=mock.Mock(
+                    side_effect=lambda url: contextlib.nullcontext()),
+                walk_folder=mock.Mock(side_effect=walk),
+                _fetch_text=mock.Mock(return_value="readme")):
+            self.run_cli(["collect-rcc", "--output-dir", self.dir,
+                          "--execute", "--limit", "1", "--rate-limit", "0"]
+                         + list(extra))
+        return seen["walked"]
+
+    def test_a_current_cache_is_reused(self):
+        self.write_cache(self.current_cache())
+        self.assertEqual(0, self.collect_again())
+
+    def test_refresh_re_reads_even_a_current_cache(self):
+        self.write_cache(self.current_cache())
+        self.assertEqual(1, self.collect_again(["--refresh"]))
+
+    def test_the_empty_cache_the_bug_produced_is_stale(self):
+        # Exactly what shipped: 23 bytes, no format_version.
+        self.write_cache({"candidates": {}})
+        self.assertEqual(1, self.collect_again(),
+                         "a pre-fix empty cache must be analysed again")
+
+    def test_an_older_format_version_is_stale(self):
+        self.write_cache({"format_version": 1, "candidates": {}})
+        self.assertEqual(1, self.collect_again())
+
+    def test_a_completed_analysis_with_no_candidates_is_still_an_analysis(self):
+        # An empty or unsupported folder analyses fine and yields nothing.
+        # That is a result, not a missing cache.
+        self.write_cache(self.current_cache(candidates={
+            "charts": [], "datasets": [], "scripts": [], "tools": []}))
+        self.write_records(corpus(1))
+        self.run_cli(["audit", "--output-dir", self.dir])
+        report = json.loads(self.read("audit.json"))
+        self.assertEqual(1, report["records_with_rcc_analysis"])
+        self.assertEqual(0, report["records_with_rcc_candidates"])
+        self.assertEqual(0, report["artifact_units"])
+        # ...and it is not re-analysed.
+        self.assertEqual(0, self.collect_again())
+
+    def test_no_cache_file_at_all_is_no_analysis(self):
+        records = corpus(1)
+        records[0]["rcc_candidates"] = []
+        self.write_records(records)
+        self.run_cli(["audit", "--output-dir", self.dir])
+        report = json.loads(self.read("audit.json"))
+        self.assertEqual(0, report["records_with_rcc_analysis"])
+        self.assertEqual(0, report["records_with_rcc_candidates"])
+
+    def test_a_users_saved_http_response_is_still_readable(self):
+        # `{"candidates": <pure result>}` -- what /api/curation/analyze-folder
+        # actually returns, which a curator may have saved by hand.
+        self.write_cache({"candidates": {
+            "charts": [], "datasets": [
+                {"id": "d1", "label": "set1", "kind": "dataset",
+                 "paths": ["datasets/set1/data.csv"], "evidence": ["r"]}],
+            "scripts": [], "tools": [],
+            "structure_mode": "standard", "structure_issues": [],
+            "grouped_unclassified": [], "chart_image_groups": []}})
+        self.write_records(corpus(1))
+        records = assist_eval._load_records(self.dir)
+        candidates = records[0]["rcc_candidates"]
+        self.assertEqual(1, len(candidates))
+        self.assertEqual("dataset", candidates[0]["kind"])
+        self.assertEqual("set1", candidates[0]["name"])
+
+    def test_a_bare_pure_analysis_result_is_readable_too(self):
+        self.write_cache({
+            "charts": [], "scripts": [], "tools": [],
+            "datasets": [{"id": "d1", "label": "set1",
+                          "paths": ["datasets/set1/data.csv"],
+                          "evidence": ["r"]}],
+            "structure_mode": "standard", "structure_issues": [],
+            "chart_image_groups": [{"folder": "charts/fig1"}]})
+        self.write_records(corpus(1))
+        records = assist_eval._load_records(self.dir)
+        self.assertEqual(1, len(records[0]["rcc_candidates"]))
+        self.assertEqual("dataset", records[0]["rcc_candidates"][0]["kind"])
 
 
 class TestAuditAndSample(CliTestCase):

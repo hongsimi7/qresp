@@ -408,37 +408,62 @@ def payload_hides_reference_tags(payload, reference_tags, exclusive=None):
 
 
 def keyword_context_gaps(records):
-    """Human artifact text the product's allowlist cannot actually reach.
+    """What a curator stored, against what the keyword AI actually receives.
 
-    `assist.CONTEXT_FIELDS` reads `description` for datasets and scripts and
-    `facility` for tools, but those artifacts store `readme` and
-    `facilityName`. The values therefore never reach the keyword model. This
-    counts what is being lost so the "with artifacts" mode is read for what
-    it is, rather than as evidence that artifacts do not help.
+    Computed by pushing each artifact through the PRODUCT's own reducer, so
+    it measures the shipped behaviour rather than an assumption about it.
+
+    Three outcomes, and only one of them is a problem:
+
+    * **reaches_ai** -- the model got it.
+    * **deduplicated_same_text** -- the model got this exact text under
+      ANOTHER field. `_reviewed_context` sends a given string once, so a
+      Chart whose Caption and Keywords are the same words contributes it as
+      the caption and not again as the properties. Nothing is lost; counting
+      it as loss produced a phantom "LOST=16" on a real corpus, where exactly
+      16 charts had Caption == Keywords.
+    * **true_lost** -- stored, not delivered, and not a duplicate. The number
+      that actually matters, and it should be 0.
+
+    The comparison is the product's: `_clip`'s whitespace normalization and
+    length limit, and a case-SENSITIVE equality. No synonym or case-folding
+    judgement is made here -- "XRD" and "xrd" are two strings, and deciding
+    otherwise would be inventing a rule the product does not have.
     """
     gaps = {}
     for record in records or []:
         for kind, items in (record.get("artifacts") or {}).items():
             for item in items:
-                # Through the PRODUCT's own reducer: whatever comes out the
-                # other side is what the model would see.
                 entry = _artifact_request_entry(item)
                 delivered = assist._reviewed_context({kind: [entry]})
                 sent = (delivered.get(kind) or [{}])[0] if delivered else {}
-                for label, present in (
-                        ("description", bool(item["human_description"])),
-                        ("keywords", bool(item["human_keywords"])),
-                        ("facility", bool(item["facility_name"])
+                # Exactly the strings the model received, normalized the way
+                # the product normalized them.
+                sent_values = {value for value in sent.values() if value}
+                for label, value in (
+                        ("description", item["human_description"]),
+                        ("keywords", ", ".join(item["human_keywords"])),
+                        ("facility", item["facility_name"]
                          if kind == "tools" else None)):
-                    if present is None or not present:
+                    if value is None or not value:
                         continue
-                    bucket = gaps.setdefault("%s.%s" % (kind, label),
-                                             {"stored": 0, "reaches_ai": 0})
+                    bucket = gaps.setdefault(
+                        "%s.%s" % (kind, label),
+                        {"stored": 0, "reaches_ai": 0,
+                         "deduplicated_same_text": 0})
                     bucket["stored"] += 1
                     if _reaches_payload(label, sent):
                         bucket["reaches_ai"] += 1
+                    elif assist._clip(value,
+                                      assist.MAX_KEYWORD_FIELD_CHARS) \
+                            in sent_values:
+                        # Present in the payload, just under another name.
+                        bucket["deduplicated_same_text"] += 1
     for value in gaps.values():
-        value["lost"] = value["stored"] - value["reaches_ai"]
+        value["true_lost"] = (value["stored"] - value["reaches_ai"]
+                              - value["deduplicated_same_text"])
+        # Kept for compatibility with earlier output; same number.
+        value["lost"] = value["true_lost"]
     return dict(sorted(gaps.items()))
 
 
