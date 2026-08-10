@@ -779,6 +779,60 @@ exercises the DOI-first resolution and returns a non-trivial external set.
       still show, with the dated "Showing the last successful external
       results…" warning (`stale: true`)
 
+### Federated records (opened from the Explorer with `?server=`)
+
+This is what the first staging pass got wrong: a record opened from another
+Qresp server made the browser ask the LOCAL backend about an id only that
+server has, which could only answer 404 — and the section then hid itself.
+
+- [ ] Open a record on a federated server through the Explorer
+      (`/paperdetails/<their id>?server=<their origin>`). The browser request
+      is `GET /api/paper/<their id>/related?server=<url-encoded origin>` — the
+      `server` parameter must be present (DevTools → Network)
+- [ ] That request → **200**, `enabled: true`, `source_server` equal to that
+      origin, `internal.status: "ok"`. Not 404
+- [ ] The Suggested Related Papers section renders, and its Related Qresp
+      Records are records **from that server** — cross-check two of them
+      against that server's own Explorer listing
+- [ ] Each internal result's link goes to `?server=<their origin>`, and
+      following it loads that record on that server (not a local 404)
+- [ ] Backend log shows exactly two reads of the peer per uncached request:
+      `/api/paper/<id>` and `/api/search`. No other outbound host
+- [ ] `db.papers.count()` is unchanged after loading several federated
+      records — the remote record is scored and discarded, never stored
+- [ ] `db.related_research_cache.find({}, {paper_id: 1})`: the federated entry
+      is keyed `<origin>|<id>`, and any pre-existing local entry still has its
+      bare id (no migration, no duplicate)
+- [ ] A local record still works exactly as before: no `server` parameter on
+      the request, `source_server: ""`, and no outbound peer request at all
+- [ ] `?server=https://localhost:8443` (the tunnel itself) is answered locally
+      — no outbound request
+
+**Refused servers** — each of these → **400**
+`{"error": "This Qresp server is not available."}`, and **no** outbound
+request appears in the backend log:
+
+- [ ] `?server=https://not-in-the-registry.example.net`
+- [ ] `?server=http://<a registry server>` (plaintext)
+- [ ] `?server=https://169.254.169.254` and `?server=https://10.0.0.5`
+- [ ] `?server=https://user:pw@<a registry server>`
+- [ ] `?server=https://<a registry server>@evil.example.net`
+- [ ] `?server=https://<a registry server>.evil.example.net`
+- [ ] `?server=https://<a registry server>/../admin` and `…?x=1`
+- [ ] `?server=file:///etc/passwd`
+- [ ] Asking for a **local** id with a refused `?server=` → 400, and the
+      response body does NOT contain the local record's title (no silent
+      fallback to the local database)
+
+**Peer failures** — the section must say so, not claim nothing is related:
+
+- [ ] Block outbound access to the peer, reload a federated record → 200 with
+      `internal.status: "unavailable"`, the UI shows "Related research is
+      unavailable right now…" **with a Try again button**, and the rest of the
+      detail page is intact
+- [ ] Click **Try again** with access restored → the lists appear
+- [ ] A federated id the peer does not have → 404, same body as a local miss
+
 ### Read-only and access
 
 - [ ] `GET /api/paper/<deactivated id>/related` signed out → 404

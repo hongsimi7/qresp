@@ -34,10 +34,12 @@ page is byte-for-byte what it was before.
 | --- | --- |
 | Pure scoring, evidence, quality gate | `backend/project/relatedness.py` |
 | Endpoint, provider call, cache | `backend/project/related.py` |
+| Reading a record from another Qresp server | `backend/project/federation.py` |
 | Cache document | `backend/project/models.py` (`RelatedResearchCache`) |
 | API contract | `backend/project/swagger.yml` |
 | Rate limit | `nginx/default.conf` (`api_related` zone) |
 | UI section | `frontend/components/Paper/RelatedResearch.js` |
+| Federation allowlist (ships with the backend) | `backend/project/data/qresp_servers.json` |
 | AI provisional labelling (dev/QA) | `backend/project/tools/ai_review.py` |
 | Page wiring | `frontend/pages/paperdetails/[id].js` |
 
@@ -50,8 +52,12 @@ scoring honest — it cannot reach for anything it was not handed.
 ## API contract
 
 ```http
-GET /api/paper/{id}/related        (public, read-only, no CSRF, no session)
+GET /api/paper/{id}/related?server=…   (public, read-only, no CSRF, no session)
 ```
+
+`server` is optional and names the Qresp server that **holds** the record —
+the same `?server=` the Explorer already puts on a detail-page URL. See
+[Federated records](#federated-records).
 
 **200** — always, when the record is visible:
 
@@ -59,8 +65,9 @@ GET /api/paper/{id}/related        (public, read-only, no CSRF, no session)
 {
   "paper_id": "5f2b…",
   "enabled": true,
+  "source_server": "",                     // "" = this server; otherwise the peer's origin
   "internal": {
-    "status": "ok",
+    "status": "ok",                        // ok | disabled | unavailable
     "count": 2,
     "results": [
       {
@@ -71,6 +78,7 @@ GET /api/paper/{id}/related        (public, read-only, no CSRF, no session)
         "doi": "10.1038/…",                // null when unknown
         "url": null,                       // internal results link by id
         "source": "internal",
+        "server": "",                      // which Qresp server holds it; null for external
         "reasons": ["…", "…"]              // 0–3, grounded, never model-written
       }
     ]
@@ -90,6 +98,7 @@ GET /api/paper/{id}/related        (public, read-only, no CSRF, no session)
         "doi": "10.1021/…",
         "url": "https://doi.org/10.1021/…", // HTTPS DOI preferred
         "source": "external",
+        "server": null,                     // not a Qresp record
         "reasons": ["…"]
       }
     ]
@@ -103,9 +112,26 @@ owner/editor/admin. The same body and status for all three: a related lookup
 must not become an existence probe. This matches the details API's policy for
 deactivated records (`GET /api/paper/{id}` answers 404 with the same message)
 and the 404 the other paper sub-resources (`/permissions`, `/raw`) already use.
+With `?server=` it also covers "that peer does not have this record".
+
+**400** — `{"error": "This Qresp server is not available."}` when `?server=`
+is not a server this deployment federates with. There is deliberately **no
+fallback to the local database**: answering with whichever local record
+happens to share the id would be a wrong answer presented as a right one.
 
 Each list is capped at **5** and is **never padded**. Both may be empty; that
 is a correct answer, not a failure.
+
+### Internal statuses
+
+| status | meaning | UI |
+| --- | --- | --- |
+| `ok` | the list was computed (possibly empty) | results, or "No sufficiently related papers were found." |
+| `disabled` | feature switch is off | nothing renders at all |
+| `unavailable` | the source server could not be read (federated records only) | "Related research is unavailable right now…", with a retry |
+
+`unavailable` exists so that "we could not ask" is never displayed as
+"nothing is related". Only the second is a statement about the record.
 
 ### External statuses
 
@@ -140,6 +166,118 @@ call report all three independently.
 > a durable, wrong claim about the record, and the section stayed empty for a
 > week after a momentary blip. A non-answer now expires within the hour and
 > never overwrites a good answer.
+
+---
+
+## Federated records
+
+Qresp has always been federated **in the browser**: the Explorer lets a reader
+pick servers, `pages/search.js` fetches `/api/search` from each, and
+`pages/paperdetails/[id].js` fetches `/api/paper/{id}` from whichever server
+`?server=` names. The backend was never part of that — every handler it has
+answers from its own MongoDB.
+
+That is enough while a page only needs to **display** a remote record. It stops
+being enough the moment a backend feature has to **reason** about one.
+
+> **The bug this fixed.** Opening a PaperStack record through the Explorer
+> (`/paperdetails/5983…?server=https://paperstack.uchicago.edu`) made the
+> browser call `/api/paper/5983…/related` on the **local** server, with no
+> mention of the server the record actually lives on. That id is not in the
+> local database, so the endpoint answered `404 {"error": "This record is not
+> available."}` — correctly, for the question it was asked. The UI caught the
+> error and rendered `null`, so the entire section vanished, and a reader had
+> no way to tell that from a deployment without the feature.
+
+### How a federated request is answered
+
+| `?server=` | What happens |
+| --- | --- |
+| absent | local MongoDB, exactly as before |
+| loopback (`https://localhost:8443`, `127.0.0.1`, `*.localhost`) | local — the staging tunnel is this server |
+| this server's own host | local — no loop back out through nginx |
+| an **allowlisted** HTTPS peer | the record and the corpus are read from that peer |
+| anything else | **400**, and no request is made |
+
+Two reads, both public and unauthenticated, and **both must succeed**:
+
+| Read | Purpose |
+| --- | --- |
+| `GET {peer}/api/paper/{id}` | the record being scored |
+| `GET {peer}/api/search` | the corpus it is scored against |
+
+The corpus is the peer's, not this server's. Scoring a PaperStack record
+against a local corpus would measure "specific to this field" with the wrong
+vocabulary and label the results with the wrong server, so a corpus that
+cannot be read is an `unavailable` section — never a silent substitution.
+
+Everything downstream — profiles, IDF, the evidence families, the quality
+gate, the five-result cap, the external provider — is the **same code** on the
+same shapes. The only difference is where the two record sets came from.
+
+### What is copied out of a peer's answer
+
+`/api/paper/{id}` carries the curator's name, e-mail and affiliation, the RCC
+server path, the file-server path, and the download/notebook paths. **None of
+it crosses the boundary.** `federation.py` allowlists exactly the fields
+`build_internal_profile` reads and `metadata_fingerprint` hashes:
+
+| Level | Copied |
+| --- | --- |
+| Record | title, abstract, DOI, year, authors, tags, collections |
+| Chart | `caption`, `properties` |
+| Dataset / Script | `readme`, `keywords` |
+| Tool | `packageName`, `programName`, `facilityname`, `facilityName`, `measurement`, `readme` |
+
+The allowlist is positive, so a field a peer invents is dropped by
+construction rather than by a blocklist that has to keep up.
+
+**Nothing is written.** A federated record is read, scored and discarded; it
+never reaches this server's `paper` collection, so a Qresp node can never
+accumulate shadow copies of another node's records. The only write is the
+external-recommendation cache row, keyed by server **and** id.
+
+### Verified against a live peer
+
+Run read-only against `https://paperstack.uchicago.edu` (65 active records) on
+2026-08-10, through the real endpoint, plus a headless-Chrome render of each
+detail page:
+
+| Check | Result |
+| --- | --- |
+| Five named published records answered | 200, `internal.status: "ok"`, 5 results each |
+| Every result labelled with the peer | yes, all 25 |
+| Candidates drawn from the peer's corpus | yes; zero local records in any answer |
+| Records written to the local database | **0** |
+| Cap respected across all 65 records | 5 max; one record (`Testing`) correctly returns **0** |
+| Results resting on a shared author alone | **0 of 25** — every result carries a `strong` term or text signal, and the author signal is only ever corroboration |
+| Section present in the browser | 5 of 5 pages, 5 results each, links carrying `?server=` |
+| Section present when the peer read fails | yes — "Related research is unavailable right now" with a retry, and **not** the empty message |
+
+One caveat found by the same run: the *tail* of a saturated list can be weak.
+64 of 65 records have five candidates clearing the gate, so slot 5 is often the
+least convincing one — for instance a "shares 5 specific research terms"
+strong signal built from `atom, classical, particular, region, yield`, which
+are ordinary English words that happen to be rare in a 65-record corpus. The
+top two or three results were topically right in every case checked. This is a
+property of `relatedness.py`'s `is_specific`, not of federation, and it is
+recorded here rather than changed: adjusting it moves local results too.
+
+### Known limits
+
+- A `/api/search` entry carries **no artifacts**, so a federated corpus is
+  scored on title, abstract, tags, collections, authors and DOI alone. That
+  makes remote scoring slightly more conservative than local, never more
+  permissive.
+- Each federated request pulls the peer's whole corpus. There is no
+  cross-request cache of it (caching another server's corpus would be a copy);
+  the `api_related` nginx zone is what bounds the cost.
+- The allowlist comes from the federated registry, which `util.Servers`
+  fetches with `verify=False` — a pre-existing weakness, untouched here. The
+  refusals below are what limit its blast radius.
+- DNS rebinding is not defended against: an allowlisted **name** that resolves
+  into a private range would still be fetched. Literal private addresses are
+  refused outright.
 
 ---
 
@@ -348,6 +486,19 @@ keyed by paper id. Recommendations are never written into the canonical `Paper`
 document: pinning them would freeze them at curation time and make a read look
 like an edit.
 
+**The key is server + id**, because a 24-hex ObjectId is only unique within one
+server. `federation.cache_key` builds it:
+
+| Record | `paper_id` |
+| --- | --- |
+| on this server | `5983afce759061384c1aae48` — the bare id |
+| on a peer | `https://peer.example.org\|5983afce759061384c1aae48` |
+
+A local record therefore keeps exactly the key it had before federation
+existed: **every entry written earlier is still a hit, and there is no
+migration.** A remote record is namespaced by its origin, so two servers that
+happen to issue the same id can never serve each other's recommendations.
+
 - **Only external results are cached.** Internal ones are recomputed per
   request (see above).
 - **Default TTL 7 days** (`QRESP_RELATED_RESEARCH_CACHE_DAYS`, capped at 90).
@@ -421,6 +572,31 @@ changes, which invalidates every entry computed under the old one.
   renders with every detail page). A regex location so it wins over the `/api`
   prefix without disturbing any other paper sub-resource.
 
+### `?server=` is not a URL this server will fetch
+
+The parameter selects from a list; it never supplies a target. Checks are
+applied in this order, so a later one can never be reached around:
+
+| # | Rule | Refuses |
+| --- | --- | --- |
+| 1 | shape (`federation.parse_origin`) | credentials (`https://u:p@host`), a query or fragment, any path, non-http(s) schemes, a non-ASCII/percent-encoded/malformed host, an out-of-range port |
+| 2 | "is this us" | loopback and this server's own host → answered locally, never fetched |
+| 3 | HTTPS | plaintext to a peer, even if the registry lists it |
+| 4 | literal address | loopback, private, link-local (`169.254.169.254`), unique-local, multicast, reserved — **before** the allowlist, so a compromised registry cannot name one |
+| 5 | allowlist | exact origin match against the federated registry — no prefix, suffix or subdomain rule a lookalike could satisfy |
+
+Then, on the request itself: `allow_redirects=False` (a redirect is how an
+allowlisted origin would otherwise become a request somewhere else), an 8 s
+timeout, and an 8 MB cap enforced **while reading** rather than from a
+`Content-Length` the peer controls.
+
+A registry outage yields an **empty** allowlist, so every remote request is
+refused and every local one is untouched. Failing closed is the only honest
+option: an empty allowlist cannot authorise anything.
+
+Nothing is sent to a peer but two plain GETs — no credential, no session, no
+user data, no header beyond the `User-Agent`.
+
 ---
 
 ## Environment variables
@@ -437,6 +613,7 @@ should be settable (or accidentally committable) there.
 | `QRESP_SEMANTIC_SCHOLAR_API_KEY` | *(none)* | **Optional.** Semantic Scholar serves this API without a key at a lower rate limit. Without one, no credential header is sent and everything still works; with one it is sent as `x-api-key` only. |
 | `QRESP_SEMANTIC_SCHOLAR_TIMEOUT_SECONDS` | `8` | Capped at 30. |
 | `QRESP_RELATED_RESEARCH_CACHE_DAYS` | `7` | Capped at 90. |
+| `QRESP_FEDERATION_SERVERS` | *(unset)* | Comma-separated Qresp origins. When set it is the **only** allowlist source — the registry and the shipped list are both ignored. Set it to a single space to switch federation off entirely. |
 
 The internal list never depends on any of the last three: a missing key or a
 dead provider leaves Related Qresp Records fully working.
@@ -580,10 +757,14 @@ cannot masquerade as a verdict.
 
 ```text
 backend/project/tests/test_relatedness.py        30 tests — the pure gate + fingerprint
-backend/project/tests/test_related_research.py   63 tests — endpoint/provider/cache/switches
+backend/project/tests/test_related_research.py   89 tests — endpoint/provider/cache/switches
+                                                            + federated records
+backend/project/tests/test_federation.py         52 tests — allowlist, refusals, SSRF,
+                                                            transport bounds, what is copied
 backend/project/tests/test_related_eval.py       56 tests — the evaluation CLI
 backend/project/tests/test_ai_review.py          99 tests — AI provisional labelling + smoke sample
-frontend/__tests__/RelatedResearch.spec.js       20 tests — the section
+frontend/__tests__/RelatedResearch.spec.js       37 tests — the section, its four
+                                                            states, and the existence contract
 frontend/__tests__/PaperDetailsRelated.spec.js    4 tests — page composition
 backend/project/tests/test_nginx_config.py       +1 test — the rate-limit zone
 ```
@@ -615,6 +796,36 @@ The existing policies are unchanged by any of this: at most five per list,
 candidates below the quality gate stay hidden, an empty list is an acceptable
 answer, and every candidate comes from a real Qresp record or a real provider
 result. Nothing generates a title, a DOI or a paper.
+
+### The section exists, or it is explicitly off
+
+On a published detail page with the master switch on, the section **always
+renders**. There are four visible states and exactly three ways to render
+nothing:
+
+| State | When | What a reader sees |
+| --- | --- | --- |
+| loading | request in flight | "Looking for related research…" + progress bar |
+| results | at least one list is non-empty | the lists |
+| empty | the backend answered and nothing cleared the gate | "No sufficiently related papers were found." |
+| unavailable | the request failed, or the source Qresp server could not be read | "Related research is unavailable right now…" + **Try again** |
+| *(nothing)* | `enabled: false` | the deployment does not have this feature |
+| *(nothing)* | unpublished preview | excluded by the page, which never mounts the component |
+| *(nothing)* | the record itself failed to load | there is no detail page at all |
+
+Only the external half may fail on its own: a Semantic Scholar timeout or 429
+leaves Related Qresp Records intact and marks the external subsection alone.
+
+> **Why this is written down.** The section used to catch any error and render
+> `null`. A failed request, a deployment without the feature, and "nothing is
+> related to this paper" were then indistinguishable — all three were an
+> absent section. Only the last of those is a statement about the record, and
+> a reader had no way to know which one they were looking at.
+
+`useEffect` depends on **both** `paperId` and `server`, and resets `loading`,
+`data` and the error flag when either changes: the same id on a different
+Qresp server is a different paper, so showing the previous server's answer
+while the new one loads would attribute one server's results to another.
 
 ---
 
