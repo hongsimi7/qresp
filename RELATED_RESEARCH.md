@@ -35,6 +35,7 @@ page is byte-for-byte what it was before.
 | Pure scoring, evidence, quality gate | `backend/project/relatedness.py` |
 | Endpoint, provider call, cache | `backend/project/related.py` |
 | Reading a record from another Qresp server | `backend/project/federation.py` |
+| TTL / single-flight / stale-while-revalidate | `backend/project/relatedcache.py` |
 | Cache document | `backend/project/models.py` (`RelatedResearchCache`) |
 | API contract | `backend/project/swagger.yml` |
 | Rate limit | `nginx/default.conf` (`api_related` zone) |
@@ -85,6 +86,12 @@ the same `?server=` the Explorer already puts on a detail-page URL. See
   },
   "external": {
     "status": "ok",                        // ok | disabled | unresolved | unavailable
+    "reason": "ok",                        // WHY -- see the table below
+    "pipeline": {                          // where the candidates went
+      "resolved": true, "provider_status": "found",
+      "raw_candidates": 20, "after_dedupe": 19,
+      "after_gate": 1, "shown": 1
+    },
     "provider": "Semantic Scholar",
     "count": 1,
     "stale": false,                        // true => last successful results, refresh failed
@@ -119,7 +126,7 @@ is not a server this deployment federates with. There is deliberately **no
 fallback to the local database**: answering with whichever local record
 happens to share the id would be a wrong answer presented as a right one.
 
-Each list is capped at **5** and is **never padded**. Both may be empty; that
+Each list is capped at **3** and is **never padded**. Both may be empty; that
 is a correct answer, not a failure.
 
 ### Internal statuses
@@ -145,6 +152,32 @@ is a correct answer, not a failure.
 `stale: true` is orthogonal: results that came from an earlier success but are
 being served under a non-`ok` status are always flagged, whether they come
 from the refresh path or from the failure-retry window.
+
+### Why the external list is empty — `reason`
+
+"No external papers" has five causes and used to have one sentence. `status`
+is what the UI switches on; `reason` is the diagnosis, and the two are not
+interchangeable — the first two rows below are a perfectly healthy `ok`.
+
+| `reason` | `status` | Meaning | Cached for |
+| --- | --- | --- | --- |
+| `ok` | `ok` | results were shown | full TTL |
+| `provider_returned_no_candidates` | `ok` | the provider answered with an empty list | full TTL |
+| `all_candidates_below_quality_gate` | `ok` | it proposed candidates; none cleared Qresp's gate | full TTL |
+| `source_paper_not_in_provider_index` | `unresolved` | this paper could not be identified at the provider | full TTL |
+| `provider_rate_limited` | `unavailable` | HTTP 429 | 1 hour |
+| `provider_timeout` | `unavailable` | the provider never answered | 1 hour |
+| `provider_error` | `unavailable` | 5xx, unreadable body, unexpected shape | 1 hour |
+
+`pipeline` carries the counts behind that verdict — `resolved`,
+`provider_status`, `raw_candidates`, `after_dedupe`, `after_gate`, `shown` —
+so "the external list is empty" is answerable without re-asking the provider.
+Counts only: no title, no abstract, no provider body, no credential.
+
+**An empty answer and a failure are never cached the same way.** A healthy
+empty list is a fact about the record and keeps the full TTL; a failure keeps
+an hour and never overwrites a good answer. The quality gate is never relaxed
+to fill the list.
 
 ### Provider outcome → status → how long it is kept
 
@@ -272,12 +305,15 @@ recorded here rather than changed: adjusting it moves local results too.
 - Each federated request pulls the peer's whole corpus. There is no
   cross-request cache of it (caching another server's corpus would be a copy);
   the `api_related` nginx zone is what bounds the cost.
-- The allowlist comes from the federated registry, which `util.Servers`
-  fetches with `verify=False` — a pre-existing weakness, untouched here. The
-  refusals below are what limit its blast radius.
-- DNS rebinding is not defended against: an allowlisted **name** that resolves
-  into a private range would still be fetched. Literal private addresses are
-  refused outright.
+- Federation reads the registry itself, **with certificate verification** and
+  redirects refused. `util.Servers` still fetches the same URL with
+  `verify=False` for the legacy curator and publish flows; that is out of
+  scope here and deliberately untouched, but it is no longer what decides
+  which servers this feature may contact.
+- DNS **rebinding** is still not defeated: the check and the connection are
+  separate steps, so a name that changes its answer in between would slip
+  through. Closing that needs the connection pinned to the address that was
+  checked, which `requests` does not expose.
 
 ---
 
@@ -405,8 +441,12 @@ A candidate is shown only when it has
 - **at least one STRONG** piece of evidence, **or**
 - **at least two MEDIUM** pieces from **independent families**.
 
-Families: `citation`, `terms`, `methods`, `text`, `authors`. Only the strongest
-evidence per family is kept, so two views of one overlap count once.
+Families: `citation`, `terms`, `methods`, `text`. Only the strongest evidence
+per family is kept, so two views of one overlap count once.
+
+**Every family is about subject matter.** There is no family a person's name
+can reach, so removing every author from both records cannot change a verdict
+— `test_relatedness_quality.py` asserts exactly that.
 
 ### Strong
 
@@ -416,6 +456,7 @@ evidence per family is kept, so two views of one overlap count once.
 | Several specific shared research terms | ≥ 3 **independent** shared specific terms **and** combined IDF ≥ 4.5 |
 | High title/abstract similarity | IDF-weighted cosine ≥ 0.34 |
 | Same method/tool on a related topic | a shared specific tool/facility/measurement **and** topic overlap that is not itself the tool |
+| Both titles are about the same concepts | ≥ 2 independent shared specific terms present in **both titles** |
 
 ### Medium
 
@@ -423,19 +464,60 @@ evidence per family is kept, so two views of one overlap count once.
 | --- | --- |
 | Shared specific keywords | ≥ 1 shared **explicit** keyword (tag, chart property, artifact keyword) |
 | Shared specific research terms | ≥ 2 independent shared specific free-text terms (when no shared keyword) |
-| Shared author on a related topic | shared author **and** topic overlap |
 | Same research area + significant similarity | shared collection/field **and** cosine ≥ 0.16 |
 | Shared specific tool or facility | a shared tool with **no** topic overlap |
 
+### What counts as a "specific research term"
+
+**Two independent conditions, and both are required.**
+
+1. **The term has to look like subject vocabulary** at all
+   (`is_intrinsically_technical`), by one of these, none of them
+   domain-specific:
+   - a multi-word phrase with a non-ordinary part (`spin coating`);
+   - a digit inside the token (`g0w0`, `c60`, `bivo4`);
+   - an internal hyphen (`dielectric-dependent`, `nitrogen-vacancy`);
+   - written as an acronym, formula or mixed-case name in the **original**
+     text (`DFT`, `MBPT`, `NaCl`, `QDs`) — read from the author's own
+     typography, before lowercasing;
+   - a curated tag, chart property, artifact keyword or tool name;
+   - failing all of those, a plain word of ≥ `LONG_TECHNICAL_LENGTH` (9).
+2. **It has to still be rare on this corpus** (`is_rare_enough`), so a term
+   carried by more than 15 % of records is a field label, not a fingerprint.
+
+> **Why both.** Rarity used to be the only test. On a 65-record server that
+> promoted any word appearing in fewer than ten abstracts to a "specific
+> research term", and readers were shown `python`, `http`, `user`, `another`,
+> `related`, `discussed`, `play`, `will`, `proper`, `class`, `comparing`,
+> `particular`, `region` and `yield` as the reason two papers were related.
+> `particular` in two records out of 32 is arithmetically as rare as
+> `chalcogenide`, and no amount of document counting can tell them apart.
+
+The accepted cost: a short free-text term that is never tagged, never
+capitalised and never hyphenated (`exciton`, `phonon`, `qubit`) is not counted
+from prose alone. That loses recommendations rather than inventing them, which
+is the direction this feature is required to fail in.
+
 ### Never evidence, alone or in combination
 
+**A shared author.** It says who did the work, not what it was about. On a
+real server one PI co-authors half the corpus, so the signal fired almost
+everywhere and, paired with any second weak signal, pushed unrelated subjects
+through. It is now counted only to ORDER candidates that already passed on
+their own topic, and it never appears in a reason. There is deliberately no
+rule that guesses which author is the PI.
+
 Same journal. Adjacent years. A single broad field. Generic words (`study`,
-`data`, `analysis`, `simulation`, and ~90 more in `GENERIC_TERMS`). The
-provider's own ranking position. **None of these produce an Evidence object at
-all**, so none of them can push a candidate through the gate. Generic words are
-additionally stripped from the text vectors, so two abstracts that share
-nothing but "study / data / analysis / simulation" measure as *unrelated*, not
-as a strong match.
+`data`, `analysis`, `simulation`, and ~90 more in `GENERIC_TERMS`), ordinary
+English, academic boilerplate and web/file vocabulary (`NON_TECHNICAL_TERMS`).
+The provider's own ranking position. **None of these produce an Evidence
+object at all**, so none of them can push a candidate through the gate. They
+are additionally stripped from the text vectors, so two abstracts that share
+nothing but such words measure as *unrelated*, not as a strong match.
+
+Both word lists are singular-folded at import (`_fold_variants`), because
+`tokenize` folds plurals before anything else sees a token — an entry written
+as `technologies` would otherwise never match the `technologie` that arrives.
 
 ### Why these thresholds
 
@@ -476,6 +558,86 @@ without reading the algorithm.
 `3 × strong + 1 × medium + cosine + min(shared IDF, 10)/10`, then year
 descending, then title. Ordering is presentation only; it can never promote a
 candidate that failed the gate.
+
+---
+
+## Caching and API economy
+
+### No language model, no Gemini quota
+
+Related Research calls **no** language model. Qresp's two AI features live in
+`assist.py` and `curation.py`; nothing on this path imports either, and no
+Gemini token or quota is consumed by rendering this section — asserted by
+`test_related_cache.py::TestNoLanguageModelIsInvolved`, which also pins that
+the only outbound hosts are the federated peer and Semantic Scholar.
+
+### What is cached where, and why
+
+| Layer | Where | Key | TTL |
+| --- | --- | --- | --- |
+| Semantic Scholar answer | **MongoDB** (`RelatedResearchCache`) | server + id (+ fingerprint, + algorithm version) | 7 days |
+| Computed response (federated only) | memory | normalized server + id + **algorithm version** | 5 min fresh, +1 h stale |
+| A peer's copy of one record | memory | origin + id | 15 min |
+| A peer's whole corpus | memory | origin | 15 min |
+| A peer or provider failure | memory | as above | **45 s** |
+
+Only the provider answer is persisted. The rest is another server's data —
+which Qresp must not keep — or a cheap recomputation, so it lives in the
+process and disappears on restart. **No second Mongo collection was added**,
+and the existing provider cache is still what prevents the second provider
+call.
+
+**Local records are computed every time.** There is nothing to save: the whole
+answer comes from this server's own database and costs no peer and no provider
+request. Caching it would have bought nothing and broken promises the product
+already makes — a deactivated record disappears on the next reload, a newly
+published one appears on it.
+
+### Choosing the TTLs
+
+The feature exists so that a follow-up study published years later shows up on
+an old record, so every number here is a trade between that and load:
+
+- **7 days** for the provider answer: a recommendation index does not change
+  hour to hour, and this is the only expensive third-party call. A record edit
+  bypasses it anyway through the fingerprint.
+- **5 minutes** fresh for a computed response, **plus an hour** stale: five
+  minutes is far shorter than a curator's edit-and-check cycle, and the stale
+  hour means a reader never waits for a peer, only ever for a background
+  refresh they do not see.
+- **15 minutes** for a peer's record and corpus: the corpus is the expensive
+  read (every active record on that server) and is shared by every reader of
+  every record on that peer.
+- **45 seconds** for a failure: long enough that a hot detail page cannot turn
+  one outage into a request storm, short enough that a reader who retries gets
+  a real attempt rather than a cached "no".
+
+### Single flight and stale-while-revalidate
+
+Five readers opening the same federated record at the same moment cost the
+peer **one** round of reads, not five: the first caller computes, the rest
+wait on the same key and read what it stored.
+
+Once an entry is stale, the reader gets the previous answer **immediately** and
+the refresh runs behind them (`relatedcache.spawn_background`, replaced in
+tests so its requests are counted deterministically).
+
+Measured, and pinned by `test_related_cache.py`:
+
+| Scenario | Peer requests | Provider requests |
+| --- | --- | --- |
+| 5 reloads of one federated record | **2** (was 10) | **2** (was 2) |
+| 5 concurrent readers, same record | **2** | **2** |
+| a second record on the same peer | +1 (corpus reused) | +2 |
+| 5 reloads while the peer is failing | **1** | 0 |
+
+### Algorithm version
+
+`ALGORITHM_VERSION` is part of every cache key, in memory and in Mongo. A
+tightened quality gate therefore takes effect at once instead of waiting for
+entries to age out — which matters most for exactly the entries a tightening
+is meant to correct: the weak and empty ones. An entry written before the
+field existed has none, so it is a miss. That is the whole migration.
 
 ---
 
@@ -583,7 +745,8 @@ applied in this order, so a later one can never be reached around:
 | 2 | "is this us" | loopback and this server's own host → answered locally, never fetched |
 | 3 | HTTPS | plaintext to a peer, even if the registry lists it |
 | 4 | literal address | loopback, private, link-local (`169.254.169.254`), unique-local, multicast, reserved — **before** the allowlist, so a compromised registry cannot name one |
-| 5 | allowlist | exact origin match against the federated registry — no prefix, suffix or subdomain rule a lookalike could satisfy |
+| 5 | allowlist | exact origin match — no prefix, suffix or subdomain rule a lookalike could satisfy |
+| 6 | **DNS** | every address the name currently resolves to must be public, and a name that does not resolve is refused. The allowlist controls names; DNS controls where a name points, and an allowlisted host answering `127.0.0.1` is the standard way an allowlist becomes a request against the machine itself |
 
 Then, on the request itself: `allow_redirects=False` (a redirect is how an
 allowlisted origin would otherwise become a request somewhere else), an 8 s
@@ -613,7 +776,7 @@ should be settable (or accidentally committable) there.
 | `QRESP_SEMANTIC_SCHOLAR_API_KEY` | *(none)* | **Optional.** Semantic Scholar serves this API without a key at a lower rate limit. Without one, no credential header is sent and everything still works; with one it is sent as `x-api-key` only. |
 | `QRESP_SEMANTIC_SCHOLAR_TIMEOUT_SECONDS` | `8` | Capped at 30. |
 | `QRESP_RELATED_RESEARCH_CACHE_DAYS` | `7` | Capped at 90. |
-| `QRESP_FEDERATION_SERVERS` | *(unset)* | Comma-separated Qresp origins. When set it is the **only** allowlist source — the registry and the shipped list are both ignored. Set it to a single space to switch federation off entirely. |
+| `QRESP_FEDERATION_SERVERS` | *(unset)* | Comma-separated Qresp origins. When set it is the **only** allowlist source — the registry and the shipped list are both ignored. This is the authoritative way to configure federation in a deployment. Set it to a single space to switch federation off entirely. |
 
 The internal list never depends on any of the last three: a missing key or a
 dead provider leaves Related Qresp Records fully working.
@@ -759,12 +922,19 @@ cannot masquerade as a verdict.
 backend/project/tests/test_relatedness.py        30 tests — the pure gate + fingerprint
 backend/project/tests/test_related_research.py   89 tests — endpoint/provider/cache/switches
                                                             + federated records
-backend/project/tests/test_federation.py         52 tests — allowlist, refusals, SSRF,
+backend/project/tests/test_federation.py         56 tests — allowlist, refusals, SSRF, DNS,
                                                             transport bounds, what is copied
+backend/project/tests/test_relatedness_quality.py 13 tests — the product rule: technical
+                                                            overlap, and nothing else
+backend/project/tests/test_related_cache.py      23 tests — call counts, TTL, single flight,
+                                                            SWR, why the list is empty,
+                                                            zero Gemini
 backend/project/tests/test_related_eval.py       56 tests — the evaluation CLI
 backend/project/tests/test_ai_review.py          99 tests — AI provisional labelling + smoke sample
-frontend/__tests__/RelatedResearch.spec.js       37 tests — the section, its four
-                                                            states, and the existence contract
+frontend/__tests__/RelatedResearch.spec.js       46 tests — the section, its four states,
+                                                            the existence contract, 0-3 results
+frontend/__tests__/ExplorerServers.spec.js        4 tests — one federation list, from the
+                                                            backend that enforces it
 frontend/__tests__/PaperDetailsRelated.spec.js    4 tests — page composition
 backend/project/tests/test_nginx_config.py       +1 test — the rate-limit zone
 ```
