@@ -21,9 +21,12 @@ A candidate is shown only if it has
   * at least one STRONG piece of evidence, or
   * at least two MEDIUM pieces of evidence from INDEPENDENT families.
 
-"Independent" means different signal families (terms / text / authors /
-methods / citation): two mediums derived from the same overlap are one
-observation, not two.
+"Independent" means different signal families (terms / text / methods /
+citation): two mediums derived from the same overlap are one observation, not
+two. Every one of those families is about SUBJECT MATTER -- a shared author is
+not evidence and cannot open the gate; it only orders candidates that have
+already passed. At most MAX_RESULTS (3) are shown, and the list is never
+padded to reach it.
 
 Deliberately NOT evidence, alone or together
 --------------------------------------------
@@ -216,16 +219,21 @@ MODERATE_TEXT_SIMILARITY = 0.16
 STRONG = "strong"
 MEDIUM = "medium"
 
-# Independent signal families. Two mediums must come from two of these.
+# Independent signal families. Two mediums must come from two of these, and
+# every one of them is about SUBJECT MATTER.
 FAMILY_CITATION = "citation"
 FAMILY_TERMS = "terms"
 FAMILY_TEXT = "text"
-FAMILY_AUTHORS = "authors"
 FAMILY_METHODS = "methods"
+# Kept as a name so an assessment can still be described, and so a test can
+# assert its absence -- but NO evidence is ever created with it, so the gate
+# cannot see it. A shared author orders candidates that already passed; it
+# never passes one. See the note in `assess`.
+FAMILY_AUTHORS = "authors"
 
 # Display order when trimming to the three reasons the UI shows.
 FAMILY_PRIORITY = (FAMILY_CITATION, FAMILY_TERMS, FAMILY_METHODS,
-                   FAMILY_TEXT, FAMILY_AUTHORS)
+                   FAMILY_TEXT)
 
 STRENGTH_WEIGHT = {STRONG: 3.0, MEDIUM: 1.0}
 

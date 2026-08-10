@@ -103,9 +103,10 @@ auto-saved or auto-published.
   own published scientific metadata (`project/relatedness.py`, pure and
   unit-tested). Specificity is measured against this server's own corpus, so
   no vocabulary, material or method is hardcoded.
-- Quality gate: one STRONG, or two MEDIUM from independent families. Same
-  journal, adjacent years, one broad field, generic words, and the provider's
-  own ranking are never evidence.
+- Quality gate: one STRONG, or two MEDIUM from independent families, all of
+  them about subject matter. Same journal, adjacent years, one broad field,
+  generic words, a shared author, and the provider's own ranking are never
+  evidence. At most three per list, never padded.
 - Off by default (`QRESP_RELATED_RESEARCH_ENABLED`); external results cached
   outside the Paper document (`RelatedResearchCache`, 7-day TTL, stale
   fallback), keyed additionally by a SHA-256 fingerprint of the record's

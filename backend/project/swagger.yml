@@ -630,7 +630,7 @@ paths:
       responses:
         200:
           description: >-
-            Two independent lists, each capped at five and never padded.
+            Two independent lists, each capped at three and never padded.
             `internal[].id` links to the Qresp detail page and
             `internal[].server` names the Qresp server it lives on (empty for
             this one); `external[].url` prefers an HTTPS DOI link.

@@ -174,6 +174,18 @@ interchangeable — the first two rows below are a perfectly healthy `ok`.
 so "the external list is empty" is answerable without re-asking the provider.
 Counts only: no title, no abstract, no provider body, no credential.
 
+| field | meaning |
+| --- | --- |
+| `raw_candidates` | what the provider proposed |
+| `after_dedupe` | …minus this paper itself and repeats |
+| `after_gate` | …minus everything the quality gate rejected, **before the cap** |
+| `shown` | …after the cap: always `0 <= shown <= 3` and `shown <= after_gate` |
+
+`reason` and `pipeline` are **stored with the answer**, so a cache hit explains
+itself exactly as the live computation did. An entry written before the field
+existed simply has no `pipeline`: the key is omitted rather than invented, and
+the next real refresh fills it in.
+
 **An empty answer and a failure are never cached the same way.** A healthy
 empty list is a fact about the record and keeps the full TTL; a failure keeps
 an hour and never overwrites a good answer. The quality gate is never relaxed
@@ -245,7 +257,7 @@ vocabulary and label the results with the wrong server, so a corpus that
 cannot be read is an `unavailable` section — never a silent substitution.
 
 Everything downstream — profiles, IDF, the evidence families, the quality
-gate, the five-result cap, the external provider — is the **same code** on the
+gate, the three-result cap, the external provider — is the **same code** on the
 same shapes. The only difference is where the two record sets came from.
 
 ### What is copied out of a peer's answer
@@ -441,6 +453,11 @@ A candidate is shown only when it has
 - **at least one STRONG** piece of evidence, **or**
 - **at least two MEDIUM** pieces from **independent families**.
 
+The cut to three happens LAST: gate, then sort, then cut. `pipeline.after_gate`
+reports how many cleared the gate and `pipeline.shown` how many survived the
+cap, so `after_gate >= shown` and the difference is visible rather than hidden
+by counting the truncated list.
+
 Families: `citation`, `terms`, `methods`, `text`. Only the strongest evidence
 per family is kept, so two views of one overlap count once.
 
@@ -593,6 +610,27 @@ request. Caching it would have bought nothing and broken promises the product
 already makes — a deactivated record disappears on the next reload, a newly
 published one appears on it.
 
+### The federation allowlist, exactly
+
+Presence of `QRESP_FEDERATION_SERVERS` is decided by environment MEMBERSHIP,
+never by whether its value looks empty.
+
+| `QRESP_FEDERATION_SERVERS` | Allowlist |
+| --- | --- |
+| absent | the registry (HTTPS only) **plus** the shipped list |
+| `https://a.example, https://b.example` | exactly those two |
+| `""`, `" "`, `","`, `" , , "` | **empty — this server federates with nobody** |
+| junk only (`not a url`) | **empty** — an explicit instruction naming nothing usable still means nobody |
+
+An empty allowlist can never become an open one: every `?server=` is refused
+with a 400, and the Explorer, which reads the same list from
+`/api/federation/servers`, offers nothing rather than falling back.
+
+> **The bug this replaced.** The value was `.strip()`ed and an empty result
+> read as "not set", so `QRESP_FEDERATION_SERVERS=" "` — the documented way to
+> switch federation off — silently restored the shipped list. An operator
+> disabling a feature got it enabled.
+
 ### Choosing the TTLs
 
 The feature exists so that a follow-up study published years later shows up on
@@ -619,8 +657,18 @@ peer **one** round of reads, not five: the first caller computes, the rest
 wait on the same key and read what it stored.
 
 Once an entry is stale, the reader gets the previous answer **immediately** and
-the refresh runs behind them (`relatedcache.spawn_background`, replaced in
-tests so its requests are counted deterministically).
+**one** of them refreshes behind the others. `SingleFlight` is the wrong tool
+for that — nobody is waiting for the result — so `RefreshGuard` instead lets
+exactly one reader start the work and tells the rest there is nothing to do.
+
+A background refresh that FAILS does not replace a real answer with an empty
+one: the reader keeps being served the last good result for the rest of its
+stale window. The failure is still recorded, as a **45-second cooldown** on
+that key, so one unreachable peer is not re-tried by every page view; after the
+cooldown exactly one new attempt is let through. The guard is released in a
+`finally`, so an exception cannot strand a key, and it holds an entry only
+while a refresh is in flight or a cooldown is unexpired — it tracks concurrent
+work, not every record ever viewed.
 
 Measured, and pinned by `test_related_cache.py`:
 
@@ -746,6 +794,7 @@ applied in this order, so a later one can never be reached around:
 | 3 | HTTPS | plaintext to a peer, even if the registry lists it |
 | 4 | literal address | loopback, private, link-local (`169.254.169.254`), unique-local, multicast, reserved — **before** the allowlist, so a compromised registry cannot name one |
 | 5 | allowlist | exact origin match — no prefix, suffix or subdomain rule a lookalike could satisfy |
+| 5a | registry transport | the registry itself is fetched over **HTTPS only**; an `http://` registry is not requested at all and degrades to "no registry" (the shipped list still applies). It decides the outbound allowlist, so reading it in plaintext would let anyone on the path add themselves to it |
 | 6 | **DNS** | every address the name currently resolves to must be public, and a name that does not resolve is refused. The allowlist controls names; DNS controls where a name points, and an allowlisted host answering `127.0.0.1` is the standard way an allowlist becomes a request against the machine itself |
 
 Then, on the request itself: `allow_redirects=False` (a redirect is how an
@@ -776,7 +825,7 @@ should be settable (or accidentally committable) there.
 | `QRESP_SEMANTIC_SCHOLAR_API_KEY` | *(none)* | **Optional.** Semantic Scholar serves this API without a key at a lower rate limit. Without one, no credential header is sent and everything still works; with one it is sent as `x-api-key` only. |
 | `QRESP_SEMANTIC_SCHOLAR_TIMEOUT_SECONDS` | `8` | Capped at 30. |
 | `QRESP_RELATED_RESEARCH_CACHE_DAYS` | `7` | Capped at 90. |
-| `QRESP_FEDERATION_SERVERS` | *(unset)* | Comma-separated Qresp origins. When set it is the **only** allowlist source — the registry and the shipped list are both ignored. This is the authoritative way to configure federation in a deployment. Set it to a single space to switch federation off entirely. |
+| `QRESP_FEDERATION_SERVERS` | *(absent)* | Comma-separated Qresp origins. When set it is the **only** allowlist source — the registry and the shipped list are both ignored. This is the authoritative way to configure federation in a deployment. Set it to `""`, a space or a comma to switch federation off entirely — an empty value means **nobody**, never "fall back to the shipped list". |
 
 The internal list never depends on any of the last three: a missing key or a
 dead provider leaves Related Qresp Records fully working.
