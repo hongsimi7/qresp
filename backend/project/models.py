@@ -304,6 +304,17 @@ class RelatedResearchCache(Document):
     # instead of waiting out the TTL. Absent on entries written before this
     # field existed => also a miss, which is why no migration is needed.
     fingerprint = StringField(max_length=64)
+    # Which version of the scoring rules produced `results`. An entry computed
+    # under an older algorithm is a MISS whatever its expiry says, so
+    # tightening the quality gate immediately stops the weak and empty answers
+    # the old gate produced from being served. Absent on entries written
+    # before this field existed => also a miss, which is the whole migration.
+    algorithm_version = StringField(max_length=16)
+    # Why the list is what it is: `ok`, `provider_returned_no_candidates`,
+    # `all_candidates_below_quality_gate`, `provider_rate_limited`, ... Kept
+    # so "the external list is empty" can be diagnosed from the cache without
+    # re-asking the provider. A code, never a provider message.
+    reason = StringField(max_length=64)
     provider = StringField(max_length=64)
     # 'ok' (provider answered), 'unresolved' (this paper could not be
     # identified confidently enough to ask), 'unavailable' (provider failed).

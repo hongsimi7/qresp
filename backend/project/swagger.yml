@@ -577,6 +577,22 @@ paths:
           description: Paper with this id does not exist
         409:
           description: Record already has a different owner (use force)
+  /federation/servers:
+    get:
+      operationId: "project.federation.federation_servers"
+      tags:
+        - "Paper details"
+      summary: "The Qresp servers this deployment federates with"
+      description: "The single authoritative federation list: the same set
+        `?server=` is checked against, published so the Explorer offers
+        exactly the servers the backend will accept. Derived and read-only;
+        every origin is still re-checked (HTTPS, literal address, DNS) before
+        any request is made to it."
+      responses:
+        200:
+          description: "`{servers: [{qresp_server_url, isActive,
+            qresp_maintainer_emails}]}`, in the shape the federated registry
+            has always used"
   /paper/{id}/related:
     get:
       operationId: "project.related.related_research"

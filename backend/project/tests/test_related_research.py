@@ -231,12 +231,16 @@ class RelatedTestCase(unittest.TestCase):
         mongoengine.disconnect_all()
         mongoengine.connect('mongoenginetest',
                             mongo_client_class=mongomock.MongoClient)
+        # The response, peer-record and peer-corpus caches live in the
+        # process, so one test's answer would otherwise be served to the next.
+        related.reset_caches()
         self.papers = seed_corpus()
         self.subject_id = str(self.papers["subject"].id)
 
     def tearDown(self):
         Paper.drop_collection()
         RelatedResearchCache.drop_collection()
+        related.reset_caches()
         mongoengine.disconnect_all()
 
     def fetch(self, paper_id=None, env=None, provider=None):
@@ -415,7 +419,7 @@ class TestInternalRecommendations(RelatedTestCase):
         self.assertNotIn("Rareword resonance of gadgetite thin films",
                          [i["title"] for i in after.json()["internal"]["results"]])
 
-    def test_at_most_five_internal_results(self):
+    def test_at_most_three_internal_results(self):
         for i in range(9):
             Paper(**paper_doc(
                 "clone%d" % i,
@@ -426,7 +430,9 @@ class TestInternalRecommendations(RelatedTestCase):
                 authors=["Robin Sharedname"],
                 doi="10.1000/clone%d" % i)).save()
         response, _ = self.fetch()
-        self.assertEqual(5, len(response.json()["internal"]["results"]))
+        self.assertEqual(related.MAX_RESULTS,
+                         len(response.json()["internal"]["results"]))
+        self.assertEqual(3, related.MAX_RESULTS)
 
 
 # ------------------------------------------------------------ external list
@@ -617,7 +623,7 @@ class TestExternalProvider(RelatedTestCase):
         self.assertEqual("https://doi.org/10.2000/external-a", item["url"])
         self.assertEqual("10.2000/external-a", item["doi"])
 
-    def test_at_most_five_external_results(self):
+    def test_at_most_three_external_results(self):
         # Distinct words, not digits: the title key drops numbers, so
         # "... sample 1" and "... sample 2" are correctly one work, not nine.
         shapes = ("films", "crystals", "powders", "whiskers", "nanorods",
@@ -628,7 +634,8 @@ class TestExternalProvider(RelatedTestCase):
             "cryogenic spectrometer and a tunable oscillator.",
             doi="10.2000/clone-%s" % shape) for shape in shapes]
         response, _ = self.fetch(provider=ProviderStub(recommendations=clones))
-        self.assertEqual(5, len(response.json()["external"]["results"]))
+        self.assertEqual(related.MAX_RESULTS,
+                         len(response.json()["external"]["results"]))
 
 
 class TestExternalDeduplication(RelatedTestCase):
@@ -1141,9 +1148,16 @@ class FederatedTestCase(RelatedTestCase):
     def setUp(self):
         super(FederatedTestCase, self).setUp()
         federation._allowlist = {"origins": frozenset(), "at": None}
+        federation._dns_cache.clear()
+        # No test resolves a real name.
+        self._dns = mock.patch.object(federation, "_resolve_addresses",
+                                      return_value={"93.184.216.34"})
+        self._dns.start()
+        self.addCleanup(self._dns.stop)
 
     def tearDown(self):
         federation._allowlist = {"origins": frozenset(), "at": None}
+        federation._dns_cache.clear()
         super(FederatedTestCase, self).tearDown()
 
     def fetch_from(self, server, paper_id="remote-subject", env=None,
@@ -1153,12 +1167,11 @@ class FederatedTestCase(RelatedTestCase):
         (response, provider stub, peer stub)."""
         stub = provider if provider is not None else ProviderStub()
         peer = peer if peer is not None else PeerStub()
-        servers = mock.Mock(getServersList=lambda: registry)
         with mock.patch.dict('os.environ', env or ENABLED):
             with mock.patch.object(related, 'requests', stub):
                 with mock.patch.object(federation, 'requests', peer):
-                    with mock.patch.object(federation, 'Servers',
-                                           return_value=servers):
+                    with mock.patch.object(federation, '_registry_servers',
+                                           return_value=registry):
                         response = self.client.get(
                             '/api/paper/%s/related' % paper_id,
                             params={"server": server})
@@ -1172,18 +1185,18 @@ class TestLocalRecordsAreUnaffected(FederatedTestCase):
     def test_no_server_parameter_contacts_no_peer(self):
         peer = PeerStub()
         stub = ProviderStub()
-        servers = mock.Mock(getServersList=mock.Mock(return_value=REGISTRY))
+        registry = mock.Mock(return_value=REGISTRY)
         with mock.patch.dict('os.environ', ENABLED):
             with mock.patch.object(related, 'requests', stub):
                 with mock.patch.object(federation, 'requests', peer):
-                    with mock.patch.object(federation, 'Servers',
-                                           return_value=servers):
+                    with mock.patch.object(federation, '_registry_servers',
+                                           registry):
                         response = self.client.get(
                             '/api/paper/%s/related' % self.subject_id)
         self.assertEqual(200, response.status_code)
         self.assertEqual([], peer.calls)
         # Not even the registry is consulted: there is nothing to authorise.
-        self.assertEqual(0, servers.getServersList.call_count)
+        self.assertEqual(0, registry.call_count)
         body = response.json()
         self.assertTrue(body["enabled"])
         self.assertEqual("", body["source_server"])

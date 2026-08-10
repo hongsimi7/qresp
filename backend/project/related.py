@@ -41,8 +41,8 @@ the record and the corpus it is scored against are then read from that peer via
 `project/federation.py`, which is also what refuses every server that is not in
 the federated registry. The peer must be an allowlisted HTTPS origin; only
 allowlisted published metadata is copied out of its answer; nothing is written
-to this server's database. Scoring, the quality gate, the five-result cap and
-the external provider are the same code in both modes -- the only difference is
+to this server's database. Scoring, the quality gate, the result cap and the
+external provider are the same code in both modes -- the only difference is
 where the two record sets came from.
 
 What leaves this server
@@ -66,10 +66,11 @@ from urllib.parse import quote
 
 import requests
 
-from project import federation
+from project import federation, relatedcache
 from project.auth import can_edit_paper, get_current_user
 from project.federation import FOUND, NOT_FOUND, UNAVAILABLE
 from project.models import Paper, RelatedResearchCache, active_papers
+from project.relatedness import MAX_RESULTS as relatedness_max_results
 from project.relatedness import (CorpusStats, build_external_profile,
                                  build_internal_profile, metadata_fingerprint,
                                  normalize_doi, normalize_title_key, rank,
@@ -117,11 +118,18 @@ EXTERNAL_CANDIDATE_LIMIT = 20
 # The candidate pool is deliberately NOT overridden: the request carries no
 # `from` parameter, so the provider uses its default.
 #
-# This was measured against the live API, and the measurement is the reason
-# the external half of this feature is not yet useful for Qresp:
+# Measured against the live API, and the measurement has been REVISED. An
+# earlier note here concluded from two DOIs that the default pool always
+# answers empty and that the external half was therefore useless for Qresp.
+# That was too pessimistic, and instrumenting the pipeline is what showed it:
 #
-#   from=recent (the default)  ->  200 with an EMPTY list. Two real DOIs from
-#                                  two fields both returned zero candidates.
+#   from=recent (the default)  ->  the provider RESOLVES the paper every time
+#                                  (`resolved: true`), and then returns either
+#                                  0 candidates or a full 20. Of three real
+#                                  PaperStack records checked, one came back
+#                                  with 20 candidates, of which 3 cleared
+#                                  Qresp's gate and were shown; the other two
+#                                  came back with 0.
 #   from=all-cs                ->  18-20 candidates, but from Computer
 #                                  Science whatever the source paper's field.
 #                                  Against a condensed-matter and a materials
@@ -131,13 +139,15 @@ EXTERNAL_CANDIDATE_LIMIT = 20
 #                                  specific terms. All 38 were correctly
 #                                  rejected by the quality gate.
 #
-# So `all-cs` would buy nothing but 20 irrelevant papers fetched per record,
-# forever. Until a provider that covers Qresp's domains is chosen (see
-# RELATED_RESEARCH.md), the honest behaviour is to ask the default way and
-# report an empty external list.
+# So the default pool DOES work for some Qresp records, and an empty answer
+# from it is the provider's coverage, not a Qresp bug -- which is exactly what
+# `REASON_PROVIDER_EMPTY` now says, instead of the reader being shown the same
+# sentence as for a rate limit. `all-cs` would still buy nothing but 20
+# irrelevant papers per record, so it stays off.
 RECOMMENDATION_POOL = None
-# Shown to the user, per list. The lists are never padded to reach it.
-MAX_RESULTS = 5
+# Shown to the user, per list. Defined by the scoring module so the cap and
+# the gate cannot drift apart, and never padded to reach.
+MAX_RESULTS = relatedness_max_results
 
 # A title lookup must be an unambiguous match on the paper Qresp holds; below
 # this the external list is skipped entirely rather than risk recommending
@@ -168,6 +178,99 @@ STATUS_UNAVAILABLE = "unavailable"
 #
 # Collapsing those two was the bug: a rate-limited or timing-out provider was
 # recorded as "this paper is not in the index" and kept for seven days.
+
+
+class Outcome(str):
+    """An outcome that also remembers WHY, without changing what it is.
+
+    `outcome == UNAVAILABLE` still works everywhere, because this is a `str`
+    subclass carrying the same value; `outcome.detail` additionally says
+    whether that non-answer was a 429, a timeout or something else.
+
+    That distinction is the point: "Related External Papers is empty" has at
+    least five different causes -- the provider had nothing, the gate rejected
+    everything, the paper is not in the index, we were rate limited, the
+    provider never answered -- and a reader was shown one sentence for all of
+    them.
+    """
+    detail = ""
+
+    def __new__(cls, value, detail=""):
+        outcome = super(Outcome, cls).__new__(cls, value)
+        outcome.detail = detail
+        return outcome
+
+
+def outcome_detail(outcome):
+    return getattr(outcome, "detail", "") or ""
+
+
+# Why the external list is what it is. `status` is what the UI switches on;
+# `reason` is the diagnosis, and the two are NOT interchangeable --
+# `provider_returned_no_candidates` and `all_candidates_below_quality_gate`
+# are both a perfectly healthy `ok`.
+REASON_OK = "ok"
+REASON_PROVIDER_EMPTY = "provider_returned_no_candidates"
+REASON_ALL_FILTERED = "all_candidates_below_quality_gate"
+REASON_SOURCE_UNRESOLVED = "source_paper_not_in_provider_index"
+REASON_RATE_LIMITED = "provider_rate_limited"
+REASON_TIMEOUT = "provider_timeout"
+REASON_PROVIDER_ERROR = "provider_error"
+REASON_DISABLED = "disabled"
+
+# HTTP/transport detail -> the reason it maps to.
+_DETAIL_REASONS = {
+    "rate_limited": REASON_RATE_LIMITED,
+    "timeout": REASON_TIMEOUT,
+}
+
+# Bumped whenever a change here or in relatedness.py could change what a
+# reader is shown. It is part of every cache key, so a deployment that
+# tightens the quality gate stops serving answers computed under the old one
+# -- including the weak and empty ones, which are exactly the entries a
+# tightening is meant to correct.
+#
+#   1  original gate: five results, a shared author counted as evidence,
+#      any rare word counted as a "specific research term"
+#   2  topic-only gate, technical-term vocabulary, three results
+ALGORITHM_VERSION = "2"
+
+# ------------------------------------------------------------------- caching
+#
+# See project/relatedcache.py for why none of this is persisted.
+
+# A computed response. Short, because it is cheap to rebuild and because the
+# whole point of the feature is that a NEW record shows up on an old one.
+RESULT_TTL_SECONDS = 300
+# ...followed by a window in which the previous answer is still served while a
+# fresh one is computed behind it. A reader never waits for a peer.
+RESULT_STALE_TTL_SECONDS = 3600
+
+# A peer's copy of one record. Longer than the response: published metadata
+# changes rarely, and the fingerprint check still catches an edit.
+REMOTE_RECORD_TTL_SECONDS = 900
+# A peer's whole corpus. This is the expensive read -- every active record on
+# that server -- and it is what a reader pressing reload used to pay for
+# twice per view.
+REMOTE_CORPUS_TTL_SECONDS = 900
+
+# A provider or peer failure is remembered just long enough to stop a hot
+# detail page turning one outage into a request storm, and no longer: a
+# reader who retries after a minute must get a real attempt.
+NEGATIVE_TTL_SECONDS = 45
+
+_result_cache = relatedcache.TTLCache()
+_remote_record_cache = relatedcache.TTLCache()
+_remote_corpus_cache = relatedcache.TTLCache(max_entries=16)
+_result_flight = relatedcache.SingleFlight()
+
+
+def reset_caches():
+    """Drop every in-process cache. For tests and for `__main__` reloads;
+    never called on a request path."""
+    _result_cache.clear()
+    _remote_record_cache.clear()
+    _remote_corpus_cache.clear()
 
 
 # ------------------------------------------------------------ configuration
@@ -248,26 +351,34 @@ def _get(url, cfg, params=None):
                                 headers=_provider_headers(cfg),
                                 timeout=cfg["TIMEOUT"])
     except Exception as e:
-        print("Related research provider unreachable: %s" % type(e).__name__)
-        return None, UNAVAILABLE
+        kind = type(e).__name__
+        print("Related research provider unreachable: %s" % kind)
+        # A timeout is worth telling apart from a refused connection: one says
+        # "too slow", the other "not there", and an operator reads them
+        # differently. Matched on the class name so no `requests` exception
+        # type has to be imported here.
+        detail = "timeout" if "Timeout" in kind else "unreachable"
+        return None, Outcome(UNAVAILABLE, detail)
     if response.status_code == 404:
-        return None, NOT_FOUND
+        return None, Outcome(NOT_FOUND, "not_indexed")
     if response.status_code != 200:
         print("Related research provider error: HTTP %s"
               % response.status_code)
-        return None, UNAVAILABLE
+        detail = ("rate_limited" if response.status_code == 429
+                  else "http_%d" % response.status_code)
+        return None, Outcome(UNAVAILABLE, detail)
     try:
         payload = response.json()
     except Exception:
         print("Related research provider returned an unreadable response")
-        return None, UNAVAILABLE
+        return None, Outcome(UNAVAILABLE, "unreadable_body")
     # All three provider endpoints document a JSON OBJECT. Anything else is a
     # shape this code cannot read, and reading it as "no match" would cache a
     # non-answer as a fact.
     if not isinstance(payload, dict):
         print("Related research provider returned an unexpected shape")
-        return None, UNAVAILABLE
-    return payload, FOUND
+        return None, Outcome(UNAVAILABLE, "unexpected_shape")
+    return payload, Outcome(FOUND, "ok")
 
 
 def _title_overlap(left, right):
@@ -303,7 +414,7 @@ def resolve_provider_paper(title, doi, cfg):
             SEMANTIC_SCHOLAR_PAPER_URL + "DOI:" + quote(doi, safe="/"),
             cfg, {"fields": RESOLUTION_FIELDS})
         if outcome == UNAVAILABLE:
-            return None, UNAVAILABLE
+            return None, outcome
         if outcome == NOT_FOUND or not isinstance(payload, dict):
             return None, NOT_FOUND
         if not payload.get("paperId"):
@@ -318,7 +429,7 @@ def resolve_provider_paper(title, doi, cfg):
     payload, outcome = _get(SEMANTIC_SCHOLAR_TITLE_MATCH_URL, cfg,
                             {"query": title, "fields": RESOLUTION_FIELDS})
     if outcome == UNAVAILABLE:
-        return None, UNAVAILABLE
+        return None, outcome
     if outcome == NOT_FOUND or not isinstance(payload, dict):
         # The title-match endpoint answers 404 when nothing matches.
         return None, NOT_FOUND
@@ -402,13 +513,13 @@ def fetch_external_candidates(paper_id, cfg, pool=None):
         # A 200 without the documented key is not an answer this endpoint can
         # read; treating it as "no recommendations" would cache a lie.
         print("Related research provider returned an unexpected shape")
-        return None, UNAVAILABLE
+        return None, Outcome(UNAVAILABLE, "unexpected_shape")
     candidates = []
     for item in raw[:EXTERNAL_CANDIDATE_LIMIT]:
         candidate = _normalize_candidate(item)
         if candidate:
             candidates.append(candidate)
-    return candidates, FOUND
+    return candidates, Outcome(FOUND, "ok")
 
 
 def dedupe_candidates(candidates, current_doi, current_title):
@@ -459,7 +570,8 @@ def _load_cache(paper_id):
         return None
 
 
-def _store_cache(paper_id, status, results, cfg, fingerprint, previous=None):
+def _store_cache(paper_id, status, results, cfg, fingerprint, previous=None,
+                 reason=REASON_OK):
     """Persist the external outcome. Only gate-passing public bibliographic
     metadata, the reasons Qresp computed, and the metadata fingerprint are
     written -- never the API key, a request header, a provider error body, or
@@ -492,6 +604,8 @@ def _store_cache(paper_id, status, results, cfg, fingerprint, previous=None):
             set__status=status,
             set__results=stored,
             set__fingerprint=fingerprint,
+            set__algorithm_version=ALGORITHM_VERSION,
+            set__reason=reason,
             set__fetched_at=now,
             set__last_success_at=last_success_at,
             set__expires_at=expires_at,
@@ -508,8 +622,15 @@ def _cache_is_usable(entry, fingerprint, now):
     An entry written before the fingerprint field existed has none, so it can
     never match: legacy documents degrade to a miss and are rewritten on the
     next request. That is the whole migration.
+
+    The same is true of the algorithm version. An answer computed under an
+    older set of scoring rules describes a product that no longer exists, and
+    the entries that matter most here are the WEAK and EMPTY ones -- exactly
+    what a tightened gate is supposed to stop showing.
     """
     if entry is None or not entry.expires_at or entry.expires_at <= now:
+        return False
+    if entry.algorithm_version != ALGORITHM_VERSION:
         return False
     return bool(entry.fingerprint) and entry.fingerprint == fingerprint
 
@@ -522,7 +643,8 @@ def _section_from_entry(entry):
     status = entry.status or STATUS_OK
     return _external_section(status, results,
                              stale=(status != STATUS_OK and bool(results)),
-                             updated_at=entry.last_success_at)
+                             updated_at=entry.last_success_at,
+                             reason=entry.reason or None)
 
 
 # ------------------------------------------------------- recommendation core
@@ -599,15 +721,50 @@ def _record_dict(paper):
     return data
 
 
-def _external_section(status, results, stale=False, updated_at=None):
-    return {
+def _external_section(status, results, stale=False, updated_at=None,
+                      reason=None, pipeline=None):
+    """One external section.
+
+    `reason` and `pipeline` are the answer to "why is this empty?". The UI
+    switches on `status` alone -- the contract it had before is unchanged --
+    but an operator reading the response, or the QA CLI, can now tell a
+    rate limit from an empty index from a gate that rejected everything.
+
+    `pipeline` counts what survived each stage. Counts only: no title, no
+    abstract, no provider body, no key.
+    """
+    section = {
         "status": status,
         "provider": PROVIDER_NAME,
         "results": results,
         "count": len(results),
         "stale": bool(stale),
         "updated_at": updated_at.isoformat() if updated_at else None,
+        "reason": reason or (REASON_OK if status == STATUS_OK
+                             else REASON_DISABLED),
     }
+    if pipeline is not None:
+        section["pipeline"] = pipeline
+    return section
+
+
+def _pipeline(resolved=False, provider_status="", raw=0, after_dedupe=0,
+              after_gate=0, shown=0):
+    """Where the candidates went. Requirement B, one dict.
+
+    Every "External Papers is empty" report has to be answerable from these
+    six numbers alone:
+
+      resolved         did the provider recognise THIS paper at all?
+      provider_status  found / not_found / unavailable, from the provider
+      raw              candidates it proposed
+      after_dedupe     ...minus this paper itself and repeats
+      after_gate       ...minus everything Qresp's quality gate rejected
+      shown            ...capped at MAX_RESULTS
+    """
+    return {"resolved": bool(resolved), "provider_status": provider_status,
+            "raw_candidates": raw, "after_dedupe": after_dedupe,
+            "after_gate": after_gate, "shown": shown}
 
 
 def _external_for(paper_id, current_record, stats, cfg):
@@ -629,13 +786,15 @@ def _external_for(paper_id, current_record, stats, cfg):
     if _cache_is_usable(entry, fingerprint, now):
         return _section_from_entry(entry)
 
-    def failed(status):
-        stored = _store_cache(paper_id, status, [], cfg, fingerprint, entry)
+    def failed(status, reason, pipeline):
+        stored = _store_cache(paper_id, status, [], cfg, fingerprint, entry,
+                              reason=reason)
         return _external_section(
             status, list(stored),
             # Results only ever survive here from an EARLIER success.
             stale=bool(stored),
-            updated_at=entry.last_success_at if entry else None)
+            updated_at=entry.last_success_at if entry else None,
+            reason=reason, pipeline=pipeline)
 
     reference = current_record.get("reference") or {}
     doi = normalize_doi(reference.get("DOI"))
@@ -643,22 +802,51 @@ def _external_for(paper_id, current_record, stats, cfg):
 
     provider_paper_id, outcome = resolve_provider_paper(title, doi, cfg)
     if outcome == UNAVAILABLE:
-        return failed(STATUS_UNAVAILABLE)
+        # The provider did not answer. Which way it failed decides what the
+        # reader is told and how long it is remembered.
+        reason = _DETAIL_REASONS.get(outcome_detail(outcome),
+                                     REASON_PROVIDER_ERROR)
+        return failed(STATUS_UNAVAILABLE, reason,
+                      _pipeline(provider_status=UNAVAILABLE))
     if outcome != FOUND or not provider_paper_id:
-        return failed(STATUS_UNRESOLVED)
+        # The provider answered, and this paper is not in its index. A fact
+        # about the record, not a malfunction.
+        return failed(STATUS_UNRESOLVED, REASON_SOURCE_UNRESOLVED,
+                      _pipeline(provider_status=NOT_FOUND))
 
     candidates, outcome = fetch_external_candidates(provider_paper_id, cfg)
     if outcome == UNAVAILABLE:
-        return failed(STATUS_UNAVAILABLE)
+        reason = _DETAIL_REASONS.get(outcome_detail(outcome),
+                                     REASON_PROVIDER_ERROR)
+        return failed(STATUS_UNAVAILABLE, reason,
+                      _pipeline(resolved=True, provider_status=UNAVAILABLE))
     if outcome != FOUND or candidates is None:
-        return failed(STATUS_UNRESOLVED)
+        return failed(STATUS_UNRESOLVED, REASON_SOURCE_UNRESOLVED,
+                      _pipeline(resolved=True, provider_status=NOT_FOUND))
 
+    raw_count = len(candidates)
     candidates = dedupe_candidates(candidates, doi, title)
     # No citation source is wired (see RESOLUTION_FIELDS): the citation family
     # simply never fires, rather than being inferred from something weaker.
     results = external_recommendations(current_record, candidates, stats)
-    _store_cache(paper_id, STATUS_OK, results, cfg, fingerprint, entry)
-    return _external_section(STATUS_OK, results, stale=False, updated_at=now)
+    pipeline = _pipeline(resolved=True, provider_status=FOUND, raw=raw_count,
+                         after_dedupe=len(candidates), after_gate=len(results),
+                         shown=len(results))
+    # An empty list here is an ANSWER, and the two ways of arriving at it are
+    # different facts: the provider had nothing to propose, or it proposed
+    # candidates and none of them cleared Qresp's gate. Both are `ok` -- the
+    # gate is never relaxed to fill the list -- but only one of them is a
+    # statement about the provider's coverage.
+    if results:
+        reason = REASON_OK
+    elif raw_count == 0:
+        reason = REASON_PROVIDER_EMPTY
+    else:
+        reason = REASON_ALL_FILTERED
+    _store_cache(paper_id, STATUS_OK, results, cfg, fingerprint, entry,
+                 reason=reason)
+    return _external_section(STATUS_OK, results, stale=False, updated_at=now,
+                             reason=reason, pipeline=pipeline)
 
 
 def _local_hostname():
@@ -702,6 +890,42 @@ def _local_source(paper_id):
     return current_record, corpus, FOUND
 
 
+def _cached_remote_record(origin, paper_id):
+    """A peer's copy of one record, at most once per REMOTE_RECORD_TTL_SECONDS.
+
+    A negative result is cached too, briefly: without it, a detail page that a
+    peer is failing to serve turns every reload into another request to a
+    server that is already in trouble.
+    """
+    key = (origin, str(paper_id))
+    cached, state = _remote_record_cache.get(key)
+    if state != "miss":
+        return cached
+    record, outcome = federation.fetch_record(origin, paper_id)
+    ttl = (REMOTE_RECORD_TTL_SECONDS if outcome == FOUND
+           else NEGATIVE_TTL_SECONDS)
+    _remote_record_cache.set(key, (record, outcome), ttl)
+    return record, outcome
+
+
+def _cached_remote_corpus(origin):
+    """A peer's whole active corpus, at most once per
+    REMOTE_CORPUS_TTL_SECONDS PER ORIGIN.
+
+    This is the read worth caching: it is every active record on that server,
+    it was being fetched twice per page view, and it is the same answer for
+    every reader of every record on that peer. One entry serves all of them.
+    """
+    cached, state = _remote_corpus_cache.get(origin)
+    if state != "miss":
+        return cached
+    corpus, outcome = federation.fetch_corpus(origin)
+    ttl = (REMOTE_CORPUS_TTL_SECONDS if outcome == FOUND
+           else NEGATIVE_TTL_SECONDS)
+    _remote_corpus_cache.set(origin, (corpus, outcome), ttl)
+    return corpus, outcome
+
+
 def _remote_source(origin, paper_id):
     """A federated peer's answer to the same question, read through
     project.federation. Returns (current_record, corpus, outcome).
@@ -715,10 +939,10 @@ def _remote_source(origin, paper_id):
     Nothing read here is stored. The dicts returned are allowlisted copies
     that live for the length of this request.
     """
-    current_record, outcome = federation.fetch_record(origin, paper_id)
+    current_record, outcome = _cached_remote_record(origin, paper_id)
     if outcome != FOUND:
         return None, None, outcome
-    corpus, outcome = federation.fetch_corpus(origin)
+    corpus, outcome = _cached_remote_corpus(origin)
     if outcome != FOUND:
         return None, None, UNAVAILABLE
     if all(record.get("_id") != current_record["_id"] for record in corpus):
@@ -762,11 +986,77 @@ def related_research(id, server=None):
         # presented as a right one.
         return {"error": "This Qresp server is not available."}, 400
 
+    if kind != federation.REMOTE:
+        # Local records are computed every time. There is nothing to save:
+        # the whole answer comes from this server's own database, costs no
+        # peer and no provider request (Semantic Scholar has its own durable
+        # cache), and recomputing is what keeps the promises the product
+        # already makes -- a deactivated record disappears on the next reload,
+        # a newly published one appears on it.
+        return _compute(None, id)
+
+    key = _result_key(origin, id)
+    cached, state = _result_cache.get(key)
+    if state == "fresh":
+        return cached
+    if state == "stale":
+        # STALE-WHILE-REVALIDATE. The reader gets the previous answer now and
+        # never waits for a peer; the refresh happens behind them.
+        relatedcache.spawn_background(lambda: _refresh(key, origin, id))
+        return cached
+
+    def already_done():
+        value, inner_state = _result_cache.get(key)
+        return (inner_state != "miss", value)
+
+    # SINGLE FLIGHT. Five readers opening the same federated record together
+    # cost the peer one round of reads, not five.
+    return _result_flight.run(key, lambda: _refresh(key, origin, id),
+                              already_done)
+
+
+def _result_key(origin, paper_id):
+    """Normalized source server + paper id + algorithm version.
+
+    The version is in the key so that tightening the quality gate takes effect
+    at once. Without it, a deployment would keep serving the weak answers the
+    previous rules produced until every entry aged out.
+    """
+    return "%s|%s" % (federation.cache_key(origin, paper_id),
+                      ALGORITHM_VERSION)
+
+
+def _refresh(key, origin, paper_id):
+    """Compute the response for a federated record and cache it.
+
+    What is cached, and for how long, depends on what came back:
+
+    * a real answer keeps RESULT_TTL_SECONDS fresh plus
+      RESULT_STALE_TTL_SECONDS servable-while-refreshing;
+    * a peer failure keeps NEGATIVE_TTL_SECONDS only -- long enough to stop a
+      hot page turning one outage into a request storm, short enough that a
+      reader who retries gets a real attempt;
+    * a 404 is not cached here at all: it is cheap, and the peer's own
+      negative cache already covers the repeated lookup.
+    """
+    response = _compute(origin, paper_id)
+    body, status = response
+    if status != 200:
+        return response
+    if body.get("internal", {}).get("status") == STATUS_UNAVAILABLE:
+        _result_cache.set(key, response, NEGATIVE_TTL_SECONDS)
+    else:
+        _result_cache.set(key, response, RESULT_TTL_SECONDS,
+                          RESULT_STALE_TTL_SECONDS)
+    return response
+
+
+def _compute(origin, id):
+    """The answer itself, with no caching of its own."""
     cfg = config()
-    if kind == federation.REMOTE:
+    if origin:
         current_record, corpus, outcome = _remote_source(origin, id)
     else:
-        origin = None
         current_record, corpus, outcome = _local_source(id)
 
     if outcome == NOT_FOUND:
