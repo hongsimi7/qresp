@@ -151,6 +151,86 @@ class SingleFlight(object):
             self._release(key)
 
 
+class RefreshGuard(object):
+    """At most one BACKGROUND refresh per key, plus a cooldown after failure.
+
+    `SingleFlight` above serialises callers that are all waiting for the same
+    answer. This is the other half: work that nobody waits for. A stale entry
+    is returned to every reader immediately, so nothing blocks -- but without
+    a guard, every one of those readers would also start a refresh, and five
+    readers arriving together on an expired record would each read the peer.
+
+    Two states per key:
+
+      ACTIVE     a refresh is running; `acquire` refuses until it finishes.
+      COOLDOWN   the last refresh FAILED; `acquire` refuses until the cooldown
+                 expires, so one unreachable peer cannot be re-tried by every
+                 page view. After it expires, exactly one new attempt is let
+                 through.
+
+    Bounded by construction: an entry exists only while a refresh is in
+    flight or a cooldown is unexpired. Successful releases drop the key
+    entirely, and expired cooldowns are pruned on every call, so the maps
+    track concurrent work rather than every record ever viewed.
+    """
+
+    def __init__(self, clock=time.monotonic, max_cooldowns=DEFAULT_MAX_ENTRIES):
+        self._active = set()
+        self._cooldowns = {}
+        self._lock = threading.Lock()
+        self._clock = clock
+        self._max_cooldowns = max_cooldowns
+
+    def _prune(self, now):
+        expired = [key for key, until in self._cooldowns.items() if until <= now]
+        for key in expired:
+            del self._cooldowns[key]
+        # A pathological number of distinct failing keys must not accumulate
+        # either; the oldest deadlines go first.
+        if len(self._cooldowns) > self._max_cooldowns:
+            for key in sorted(self._cooldowns, key=self._cooldowns.get)[
+                    :len(self._cooldowns) - self._max_cooldowns]:
+                del self._cooldowns[key]
+
+    def acquire(self, key):
+        """True if the caller may refresh `key` now, and False otherwise.
+
+        A caller that gets True MUST call `release`."""
+        now = self._clock()
+        with self._lock:
+            self._prune(now)
+            if key in self._active:
+                return False
+            if self._cooldowns.get(key, 0) > now:
+                return False
+            self._active.add(key)
+            return True
+
+    def release(self, key, failed=False, cooldown=0.0):
+        """Hand the key back. `failed` starts a cooldown; success clears one."""
+        now = self._clock()
+        with self._lock:
+            self._active.discard(key)
+            if failed and cooldown > 0:
+                self._cooldowns[key] = now + cooldown
+            else:
+                self._cooldowns.pop(key, None)
+            self._prune(now)
+
+    def holders(self):
+        with self._lock:
+            return set(self._active)
+
+    def clear(self):
+        with self._lock:
+            self._active.clear()
+            self._cooldowns.clear()
+
+    def __len__(self):
+        with self._lock:
+            return len(self._active) + len(self._cooldowns)
+
+
 def spawn_background(function):
     """Run `function()` off the request path, never letting it raise into the
     process.

@@ -263,6 +263,8 @@ _result_cache = relatedcache.TTLCache()
 _remote_record_cache = relatedcache.TTLCache()
 _remote_corpus_cache = relatedcache.TTLCache(max_entries=16)
 _result_flight = relatedcache.SingleFlight()
+# At most one BACKGROUND refresh per key, and a cooldown after one fails.
+_refresh_guard = relatedcache.RefreshGuard()
 
 
 def reset_caches():
@@ -271,6 +273,7 @@ def reset_caches():
     _result_cache.clear()
     _remote_record_cache.clear()
     _remote_corpus_cache.clear()
+    _refresh_guard.clear()
 
 
 # ------------------------------------------------------------ configuration
@@ -705,6 +708,7 @@ def external_recommendations(current_record, candidates, stats,
     evidence Qresp can name, and the ones that clear the gate are the only
     ones returned. Rarity is still measured against the Qresp corpus, so
     "specific" means the same thing in both lists.
+
     """
     current = build_internal_profile(current_record)
     profiles = [build_external_profile(candidate) for candidate in candidates]
@@ -846,7 +850,7 @@ def _external_for(paper_id, current_record, stats, cfg):
     _store_cache(paper_id, STATUS_OK, results, cfg, fingerprint, entry,
                  reason=reason)
     return _external_section(STATUS_OK, results, stale=False, updated_at=now,
-                             reason=reason, pipeline=pipeline)
+                             reason=reason)
 
 
 def _local_hostname():
@@ -960,7 +964,7 @@ def related_research(id, server=None):
     naming this server, it means exactly what it always did: read from the
     local database. Naming an allowlisted federated peer, the record and the
     corpus are read from that peer instead, and everything downstream --
-    scoring, the quality gate, the five-result cap, the external provider --
+    scoring, the quality gate, the three-result cap, the external provider --
     is the same code operating on the same shapes.
 
     Read-only in both modes: it never changes a Paper, a draft, an ownership
@@ -1001,8 +1005,8 @@ def related_research(id, server=None):
         return cached
     if state == "stale":
         # STALE-WHILE-REVALIDATE. The reader gets the previous answer now and
-        # never waits for a peer; the refresh happens behind them.
-        relatedcache.spawn_background(lambda: _refresh(key, origin, id))
+        # never waits for a peer; ONE of the readers refreshes behind them.
+        _start_stale_refresh(key, origin, id)
         return cached
 
     def already_done():
@@ -1026,8 +1030,52 @@ def _result_key(origin, paper_id):
                       ALGORITHM_VERSION)
 
 
-def _refresh(key, origin, paper_id):
+def _start_stale_refresh(key, origin, paper_id):
+    """Refresh a stale entry behind the reader, once.
+
+    Nobody waits for this, so `SingleFlight` -- which serialises callers that
+    all want the same answer -- is the wrong tool: it would make four of five
+    readers queue for work whose result they have already been given. The
+    guard instead lets exactly one reader start the refresh and tells the
+    others there is nothing for them to do.
+    """
+    if not _refresh_guard.acquire(key):
+        # Already refreshing, or cooling down after a failure.
+        return None
+
+    def refresh():
+        failed = True
+        try:
+            # The REFRESH's own outcome, not the response it chose to return:
+            # preserving a good stale answer is the right thing to serve and
+            # still a failed refresh, and reading success off the served value
+            # would clear the cooldown that failure is supposed to start.
+            _response, failed = _refresh_and_report(
+                key, origin, paper_id, preserve_stale=True)
+        except Exception as e:
+            # A background refresh must never surface anywhere. The kind is
+            # logged; nothing about the peer's answer is.
+            print("Related research stale refresh failed: %s"
+                  % type(e).__name__)
+        finally:
+            _refresh_guard.release(key, failed=failed,
+                                   cooldown=NEGATIVE_TTL_SECONDS)
+
+    return relatedcache.spawn_background(refresh)
+
+
+def _refresh(key, origin, paper_id, preserve_stale=False):
+    """The response only. See `_refresh_and_report` for what it does."""
+    return _refresh_and_report(key, origin, paper_id, preserve_stale)[0]
+
+
+def _refresh_and_report(key, origin, paper_id, preserve_stale=False):
     """Compute the response for a federated record and cache it.
+
+    Returns `(response, refresh_failed)`. The second value is about THIS
+    attempt, not about the response: a background refresh that fails while a
+    good stale answer survives returns that good answer and still reports a
+    failure, which is what starts the cooldown.
 
     What is cached, and for how long, depends on what came back:
 
@@ -1038,17 +1086,31 @@ def _refresh(key, origin, paper_id):
       reader who retries gets a real attempt;
     * a 404 is not cached here at all: it is cheap, and the peer's own
       negative cache already covers the repeated lookup.
+
+    `preserve_stale` is what a BACKGROUND refresh passes. A refresh that fails
+    must not replace a real answer with an empty one: the reader was already
+    being served something true, and a peer being briefly unreachable is not a
+    reason to take it away. The failure is still recorded -- by the guard's
+    cooldown -- so it is not retried on every view either.
     """
     response = _compute(origin, paper_id)
     body, status = response
     if status != 200:
-        return response
-    if body.get("internal", {}).get("status") == STATUS_UNAVAILABLE:
-        _result_cache.set(key, response, NEGATIVE_TTL_SECONDS)
-    else:
+        return response, True
+    degraded = body.get("internal", {}).get("status") == STATUS_UNAVAILABLE
+    if not degraded:
         _result_cache.set(key, response, RESULT_TTL_SECONDS,
                           RESULT_STALE_TTL_SECONDS)
-    return response
+        return response, False
+    if preserve_stale:
+        previous, state = _result_cache.get(key)
+        if state != "miss" and previous and previous[0].get(
+                "internal", {}).get("status") == STATUS_OK:
+            # Keep serving the last good answer for the rest of its stale
+            # window rather than downgrading it to "unavailable".
+            return previous, True
+    _result_cache.set(key, response, NEGATIVE_TTL_SECONDS)
+    return response, True
 
 
 def _compute(origin, id):
