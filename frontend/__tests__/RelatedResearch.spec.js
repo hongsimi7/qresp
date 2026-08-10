@@ -622,6 +622,132 @@ describe("RelatedResearch", () => {
     });
   });
 
+  // An ANSWER and a FAILURE read differently, and the two ways of arriving
+  // at an empty answer read the same: the gate is never relaxed to fill a
+  // list, so "the provider had nothing" and "nothing cleared the bar" are
+  // both simply "nothing to show".
+  describe("why the external list is empty", () => {
+    const externalWith = (overrides) =>
+      payload({
+        internal: { status: "ok", count: 1, results: [internalResult()] },
+        external: {
+          status: "ok",
+          provider: "Semantic Scholar",
+          count: 0,
+          results: [],
+          stale: false,
+          updated_at: null,
+          ...overrides,
+        },
+      });
+
+    it("says nothing was found when the provider proposed nothing", async () => {
+      renderSection(
+        externalWith({ reason: "provider_returned_no_candidates" })
+      );
+      const external = await sectionFor(/related external papers/i);
+      expect(
+        within(external).getByText(
+          "No sufficiently related papers were found."
+        )
+      ).toBeInTheDocument();
+    });
+
+    it("says the same when every candidate failed the quality gate", async () => {
+      renderSection(
+        externalWith({ reason: "all_candidates_below_quality_gate" })
+      );
+      const external = await sectionFor(/related external papers/i);
+      expect(
+        within(external).getByText(
+          "No sufficiently related papers were found."
+        )
+      ).toBeInTheDocument();
+      expect(
+        within(external).queryByText(/unavailable right now/i)
+      ).not.toBeInTheDocument();
+    });
+
+    it("says unavailable on a rate limit, and keeps the Qresp list", async () => {
+      renderSection(
+        externalWith({ status: "unavailable", reason: "provider_rate_limited" })
+      );
+      const external = await sectionFor(/related external papers/i);
+      expect(
+        within(external).getByText(/external recommendations are unavailable/i)
+      ).toBeInTheDocument();
+      // The internal half is untouched.
+      expect(screen.getByText(/gadgetite thin films/)).toBeInTheDocument();
+      expect(
+        screen.queryByText(/related research is unavailable right now/i)
+      ).not.toBeInTheDocument();
+    });
+
+    it("says unavailable on a provider timeout", async () => {
+      renderSection(
+        externalWith({ status: "unavailable", reason: "provider_timeout" })
+      );
+      const external = await sectionFor(/related external papers/i);
+      expect(
+        within(external).getByText(/external recommendations are unavailable/i)
+      ).toBeInTheDocument();
+    });
+
+    it("says so when this record is not in the provider's index", async () => {
+      renderSection(
+        externalWith({
+          status: "unresolved",
+          reason: "source_paper_not_in_provider_index",
+        })
+      );
+      const external = await sectionFor(/related external papers/i);
+      expect(
+        within(external).getByText(/could not be matched in the external index/i)
+      ).toBeInTheDocument();
+    });
+  });
+
+  // The cap is three, and a shorter list is shown as it is.
+  describe.each([0, 1, 2, 3])("with %i results", (count) => {
+    const results = (source) =>
+      Array.from({ length: count }, (unused, index) =>
+        source === "internal"
+          ? internalResult({
+              id: `internal-${index}`,
+              title: `Internal result ${index}`,
+            })
+          : externalResult({
+              doi: `10.2000/external-${index}`,
+              url: `https://doi.org/10.2000/external-${index}`,
+              title: `External result ${index}`,
+            })
+      );
+
+    it("renders exactly that many in each list", async () => {
+      renderSection(
+        payload({
+          internal: { status: "ok", count, results: results("internal") },
+          external: {
+            status: "ok",
+            provider: "Semantic Scholar",
+            count,
+            results: results("external"),
+            stale: false,
+            updated_at: null,
+          },
+        })
+      );
+      await screen.findByRole("heading", { name: /related qresp records/i });
+      const rendered = screen.queryAllByTestId("related-result");
+      expect(rendered).toHaveLength(count * 2);
+      if (count === 0) {
+        expect(
+          screen.getAllByText("No sufficiently related papers were found.")
+        ).toHaveLength(2);
+      }
+    });
+  });
+
   // Same id, different server = a different paper.
   it("refetches when only the server changes, and shows no stale answer", async () => {
     axios.get.mockResolvedValueOnce({

@@ -36,12 +36,14 @@ import ipaddress
 import json
 import os
 import re
+import socket
 import time
 from urllib.parse import quote, urlsplit
 
 import requests
 
-from project.util import Servers
+from project import relatedcache
+from project.config import Config
 
 # Identifies Qresp politely, exactly as the other outbound callers do.
 FEDERATION_HEADERS = {"User-Agent": "Qresp/2.0 (research data curation)"}
@@ -74,6 +76,16 @@ PAPER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # The federated registry is refreshed at most this often. Without this, every
 # Related Research request on a remote record would first fetch the registry.
 ALLOWLIST_TTL_SECONDS = 300
+
+# How long a hostname's DNS verdict is trusted. Short, because the whole point
+# of the check is that an answer can change; long enough that it is not one
+# lookup per page view.
+DNS_CACHE_SECONDS = 120
+# A refusal is remembered for less time than an approval: a transient resolver
+# failure must not lock a legitimate peer out for two minutes.
+DNS_FAILURE_CACHE_SECONDS = 30
+
+_dns_cache = relatedcache.TTLCache(max_entries=64)
 
 # The outcome of ONE outbound call, shared by every remote read in Qresp.
 #
@@ -190,6 +202,60 @@ def is_local_hostname(hostname):
         return False
 
 
+def _resolve_addresses(hostname):
+    """Every IP `hostname` currently resolves to. Replaced in tests, which
+    must not depend on DNS."""
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except Exception as e:
+        print("Federated server hostname did not resolve: %s"
+              % type(e).__name__)
+        return None
+    return {info[4][0] for info in infos if info[4]}
+
+
+def resolves_to_public_addresses(hostname):
+    """Does this NAME currently point somewhere a peer is allowed to be?
+
+    Refusing literal private addresses is not enough on its own: an allowlisted
+    hostname whose DNS answer is `127.0.0.1` or `169.254.169.254` would still
+    be fetched, which is the standard way an allowlist is turned into a
+    request against the machine itself. Every resolved address must be
+    public, and a name that does not resolve at all is refused rather than
+    attempted.
+
+    Cached briefly so this costs one lookup per host per DNS_CACHE_SECONDS
+    rather than one per page view.
+
+    Residual risk, stated rather than papered over: this is a check followed
+    by a separate connection, so a name that changes its answer in between
+    (DNS rebinding) is not defeated by it. Closing that needs the connection
+    itself to be pinned to the address that was checked, which `requests` does
+    not expose.
+    """
+    hostname = (hostname or "").lower().strip("[]")
+    if not hostname:
+        return False
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+    else:
+        # Already a literal; `is_public_address` is the whole answer.
+        return is_public_address(hostname)
+
+    cached, state = _dns_cache.get(hostname)
+    if state != "miss":
+        return cached
+    addresses = _resolve_addresses(hostname)
+    allowed = bool(addresses) and all(is_public_address(a) for a in addresses)
+    if not allowed and addresses:
+        print("Federated server resolves to a non-public address; refused")
+    _dns_cache.set(hostname, allowed,
+                   DNS_CACHE_SECONDS if allowed else DNS_FAILURE_CACHE_SECONDS)
+    return allowed
+
+
 def is_public_address(hostname):
     """False for an address a peer must never be: loopback, private, link-local
     (169.254.169.254 -- the cloud metadata service), unique-local, multicast,
@@ -246,6 +312,52 @@ def _shipped_servers():
         return []
 
 
+def _registry_servers():
+    """The federated registry, fetched WITH certificate verification.
+
+    `util.Servers` fetches this same URL with `verify=False`, which is how the
+    legacy publish flow has always read it. That is not acceptable for a list
+    whose job is to decide what this server may contact: an attacker able to
+    intercept an unverified fetch could add themselves to the allowlist. So
+    the registry is read here directly -- same URL, same shape, same
+    fail-soft behaviour -- with TLS actually checked, and redirects refused.
+
+    `util.Servers` is deliberately left alone: changing it would alter the
+    curator and publish flows, which are out of scope here.
+    """
+    try:
+        url = (Config.get_setting('GLOBAL', 'QRESP_SERVER_URL') or "").strip()
+    except Exception:
+        return []
+    if not parse_origin_of(url):
+        return []
+    try:
+        response = requests.get(url, headers=FEDERATION_HEADERS,
+                                timeout=REQUEST_TIMEOUT_SECONDS,
+                                allow_redirects=False)
+        if response.status_code != 200:
+            print("Federated server registry unavailable: HTTP %s"
+                  % response.status_code)
+            return []
+        entries = response.json()
+    except Exception as e:
+        print("Federated server registry unavailable: %s" % type(e).__name__)
+        return []
+    return entries if isinstance(entries, list) else []
+
+
+def parse_origin_of(url):
+    """The origin of a full URL (which, unlike a server entry, may have a
+    path). Used to sanity-check the configured registry URL."""
+    try:
+        parts = urlsplit(str(url or ""))
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return None
+    return parse_origin("%s://%s" % (parts.scheme, parts.netloc))
+
+
 def _configured_servers():
     """`QRESP_FEDERATION_SERVERS`: a comma-separated list of origins.
 
@@ -288,17 +400,34 @@ def allowed_origins(refresh=False):
     if configured is not None:
         origins = _origins_from_entries(configured)
     else:
-        try:
-            registry = Servers().getServersList()
-        except Exception as e:
-            print("Federated server registry unavailable: %s"
-                  % type(e).__name__)
-            registry = []
-        origins = _origins_from_entries(registry) | _origins_from_entries(
-            _shipped_servers())
+        origins = _origins_from_entries(
+            _registry_servers()) | _origins_from_entries(_shipped_servers())
     _allowlist["origins"] = frozenset(origins)
     _allowlist["at"] = now
     return _allowlist["origins"]
+
+
+def federation_servers():
+    """
+    The Qresp servers this deployment federates with
+    Handler for GET: /api/federation/servers
+
+    ONE list, published by the server that enforces it. The Explorer used to
+    ship its own copy in `frontend/data/qresp_servers.js`, so the list a
+    reader could pick from and the list the backend would actually contact
+    were two files that nobody kept in step -- a server could be offered in
+    the UI and then refused with a 400, or the reverse.
+
+    This is the same set `resolve_server` allows, rendered in the shape the
+    registry has always used, so the Explorer needs no new vocabulary. It is
+    public, read-only and derived: no credential, no per-user data, and
+    nothing here decides anything on its own -- every origin still has to
+    survive the HTTPS, literal-address and DNS checks at request time.
+    """
+    return {"servers": [{"qresp_server_url": origin,
+                         "isActive": "Yes",
+                         "qresp_maintainer_emails": []}
+                        for origin in sorted(allowed_origins())]}, 200
 
 
 LOCAL = "local"
@@ -340,6 +469,10 @@ def resolve_server(raw, local_hostname=None):
     if not is_public_address(hostname):
         return REFUSED, None
     if origin not in allowed_origins():
+        return REFUSED, None
+    # LAST, and still before any request leaves this process: an allowlisted
+    # NAME must not currently resolve somewhere a peer may not be.
+    if not resolves_to_public_addresses(hostname):
         return REFUSED, None
     return REMOTE, origin
 

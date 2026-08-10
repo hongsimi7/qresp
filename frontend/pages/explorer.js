@@ -22,6 +22,28 @@ const explorer = ({ error }) => {
   const [servers, setServers] = useState(error ? [] : allServers);
   const { setAlert, unsetAlert } = useContext(AlertContext);
 
+  // The backend owns the federation list: it is the thing that enforces it,
+  // and a server offered here but refused there (or the reverse) is a bug a
+  // reader has no way to understand. The checked-in list above is only the
+  // offline fallback, for a backend too old to publish this.
+  useEffect(() => {
+    let cancelled = false;
+    apiEndpoint
+      .get("/api/federation/servers")
+      .then((res) => {
+        const published = (res.data || {}).servers;
+        if (!cancelled && Array.isArray(published) && published.length) {
+          setServers(published);
+        }
+      })
+      .catch(() => {
+        /* keep the shipped list */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const explorerDescription =
     "The explorer provides a portal for the scientific community to access datasets, explore workflows and download curated data, published in scientific papers.";
 

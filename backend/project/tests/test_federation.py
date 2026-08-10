@@ -59,17 +59,31 @@ class RequestsStub:
 
 class FederationTestCase(unittest.TestCase):
     def setUp(self):
-        # The allowlist is cached per process; every test starts cold so one
-        # test's registry can never authorise another's request.
+        # The allowlist and the DNS verdicts are cached per process; every
+        # test starts cold so one test's registry can never authorise
+        # another's request.
         federation._allowlist = {"origins": frozenset(), "at": None}
+        federation._dns_cache.clear()
+        # No test resolves a real name. Every hostname is answered with one
+        # public address unless a test says otherwise.
+        self._dns = mock.patch.object(federation, "_resolve_addresses",
+                                      side_effect=self.resolve)
+        self._dns.start()
+        self.addCleanup(self._dns.stop)
+        self.dns_answers = {}
+
+    def resolve(self, hostname):
+        # A genuinely global address: 203.0.113.0/24 is documentation
+        # space, which `ipaddress` correctly reports as not global.
+        return self.dns_answers.get(hostname, {"93.184.216.34"})
 
     def tearDown(self):
         federation._allowlist = {"origins": frozenset(), "at": None}
+        federation._dns_cache.clear()
 
     def allowing(self, servers=REGISTRY):
-        return mock.patch.object(
-            federation, "Servers",
-            return_value=mock.Mock(getServersList=lambda: servers))
+        return mock.patch.object(federation, "_registry_servers",
+                                 return_value=servers)
 
 
 # --------------------------------------------------------------- URL shapes
@@ -143,9 +157,8 @@ class TestAllowlist(FederationTestCase):
         # normal case, not the exotic one: without the shipped list the
         # allowlist would be permanently empty and this server could federate
         # with nobody.
-        broken = mock.Mock()
-        broken.getServersList.side_effect = IOError("registry down")
-        with mock.patch.object(federation, "Servers", return_value=broken):
+        with mock.patch.object(federation, "_registry_servers",
+                               return_value=[]):
             origins = federation.allowed_origins()
         self.assertTrue(origins)
         self.assertEqual(origins, federation._origins_from_entries(
@@ -162,9 +175,8 @@ class TestAllowlist(FederationTestCase):
     def test_an_unreadable_shipped_list_still_fails_closed(self):
         # Nothing to fall back to must mean nothing is authorised -- never
         # "anything".
-        broken = mock.Mock()
-        broken.getServersList.side_effect = IOError("registry down")
-        with mock.patch.object(federation, "Servers", return_value=broken):
+        with mock.patch.object(federation, "_registry_servers",
+                               return_value=[]):
             with mock.patch.object(federation, "_shipped_servers",
                                    return_value=[]):
                 self.assertEqual(frozenset(), federation.allowed_origins())
@@ -215,11 +227,11 @@ class TestAllowlist(FederationTestCase):
         self.assertIn(PEER, origins)
 
     def test_the_registry_is_not_fetched_once_per_request(self):
-        servers = mock.Mock(getServersList=mock.Mock(return_value=REGISTRY))
-        with mock.patch.object(federation, "Servers", return_value=servers):
+        registry = mock.Mock(return_value=REGISTRY)
+        with mock.patch.object(federation, "_registry_servers", registry):
             for _ in range(5):
                 federation.allowed_origins()
-        self.assertEqual(1, servers.getServersList.call_count)
+        self.assertEqual(1, registry.call_count)
 
 
 # ------------------------------------------------------------ what is local
@@ -245,9 +257,8 @@ class TestLocalTargets(FederationTestCase):
 
     def test_a_local_target_needs_no_allowlist_and_no_registry(self):
         # Deciding "this is us" must not depend on a remote registry being up.
-        broken = mock.Mock()
-        broken.getServersList.side_effect = IOError("registry down")
-        with mock.patch.object(federation, "Servers", return_value=broken):
+        registry = mock.Mock(side_effect=AssertionError("must not be asked"))
+        with mock.patch.object(federation, "_registry_servers", registry):
             self.assertEqual((federation.LOCAL, None),
                              federation.resolve_server("https://localhost"))
 
@@ -293,6 +304,41 @@ class TestRemoteRefusals(FederationTestCase):
             for raw in targets:
                 self.assertEqual((federation.REFUSED, None),
                                  federation.resolve_server(raw), raw)
+
+    def test_an_allowlisted_name_that_resolves_privately_is_refused(self):
+        # The allowlist controls NAMES; DNS controls where a name points. An
+        # allowlisted host answering 127.0.0.1 or the cloud metadata address
+        # is the standard way an allowlist becomes a request against the
+        # machine itself.
+        for address in ("127.0.0.1", "169.254.169.254", "10.1.2.3",
+                        "192.168.5.5", "172.20.0.1", "::1", "fd00::1"):
+            federation._dns_cache.clear()
+            self.dns_answers = {"peer.example.org": {address}}
+            with self.allowing():
+                self.assertEqual((federation.REFUSED, None),
+                                 federation.resolve_server(PEER), address)
+
+    def test_one_private_address_among_several_is_enough_to_refuse(self):
+        federation._dns_cache.clear()
+        self.dns_answers = {"peer.example.org": {"93.184.216.34", "127.0.0.1"}}
+        with self.allowing():
+            self.assertEqual((federation.REFUSED, None),
+                             federation.resolve_server(PEER))
+
+    def test_a_name_that_does_not_resolve_is_refused(self):
+        federation._dns_cache.clear()
+        self.dns_answers = {"peer.example.org": None}
+        with self.allowing():
+            self.assertEqual((federation.REFUSED, None),
+                             federation.resolve_server(PEER))
+
+    def test_dns_is_not_resolved_once_per_request(self):
+        resolver = mock.Mock(return_value={"93.184.216.34"})
+        with mock.patch.object(federation, "_resolve_addresses", resolver):
+            with self.allowing():
+                for _ in range(5):
+                    federation.resolve_server(PEER)
+        self.assertEqual(1, resolver.call_count)
 
     def test_a_refusal_is_never_silently_downgraded_to_local(self):
         # REFUSED must be its own answer: falling back to the local database

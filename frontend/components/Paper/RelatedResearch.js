@@ -241,6 +241,16 @@ const ResultList = ({ results, server }) => (
 // `disabled` is NOT one of those cases: a server running internal-only has no
 // external half at all, so the heading is dropped rather than explained. A
 // reader should not be told about a feature this deployment does not have.
+// The contract, stated once:
+//
+//   provider answered, nothing to show  -> "No sufficiently related papers
+//                                           were found."  (an ANSWER)
+//   provider could not be asked/reached -> "unavailable"  (a FAILURE)
+//
+// `ok` covers both "the provider proposed nothing" and "it proposed
+// candidates and none cleared the quality gate". Both are answers, and the
+// gate is never relaxed to fill the list, so both read the same to a reader.
+// The backend distinguishes them in `external.reason` for operators.
 const externalNotice = (external) => {
   if (external.status === "unresolved") {
     return (
