@@ -358,17 +358,29 @@ def parse_origin_of(url):
     return parse_origin("%s://%s" % (parts.scheme, parts.netloc))
 
 
+FEDERATION_SERVERS_ENV = "QRESP_FEDERATION_SERVERS"
+
+
 def _configured_servers():
     """`QRESP_FEDERATION_SERVERS`: a comma-separated list of origins.
 
-    When set it is the ONLY source -- an operator naming servers means those
-    servers, not those plus whatever else is lying around. It is the supported
-    way to widen or narrow federation without editing a shipped file, and the
-    way to switch federation off entirely (set it to a single space).
+    Returns None when the variable is ABSENT, and a (possibly empty) list when
+    it is present. That distinction is the whole point, and it is decided by
+    `os.environ` membership -- never by whether the value looks empty.
+
+    When present it is the ONLY source: an operator naming servers means those
+    servers, not those plus whatever else is lying around, and an operator
+    setting it to nothing means NOBODY. Setting it to "", " " or "," switches
+    federation off completely.
+
+    The bug this replaced: the value was stripped and an empty result was read
+    as "not set", so `QRESP_FEDERATION_SERVERS=" "` -- the documented way to
+    turn federation off -- silently restored the shipped list instead. An
+    operator disabling a feature got it enabled.
     """
-    raw = (os.environ.get("QRESP_FEDERATION_SERVERS") or "").strip()
-    if not raw:
+    if FEDERATION_SERVERS_ENV not in os.environ:
         return None
+    raw = os.environ[FEDERATION_SERVERS_ENV] or ""
     return [{"qresp_server_url": part.strip()}
             for part in raw.split(",") if part.strip()]
 

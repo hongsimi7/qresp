@@ -24,20 +24,28 @@ const explorer = ({ error }) => {
 
   // The backend owns the federation list: it is the thing that enforces it,
   // and a server offered here but refused there (or the reverse) is a bug a
-  // reader has no way to understand. The checked-in list above is only the
-  // offline fallback, for a backend too old to publish this.
+  // reader has no way to understand.
+  //
+  // An EMPTY published list is an answer, not a failure. An operator who set
+  // QRESP_FEDERATION_SERVERS to nothing has switched federation off, and
+  // offering the shipped peers anyway would present servers the backend will
+  // refuse with a 400. The checked-in list is the fallback for exactly two
+  // cases: the request failed (no endpoint, backend down), or the answer was
+  // not the documented shape.
   useEffect(() => {
     let cancelled = false;
     apiEndpoint
       .get("/api/federation/servers")
       .then((res) => {
+        if (cancelled) return;
         const published = (res.data || {}).servers;
-        if (!cancelled && Array.isArray(published) && published.length) {
+        if (Array.isArray(published)) {
           setServers(published);
         }
+        // Not an array: a malformed answer. Keep the shipped list.
       })
       .catch(() => {
-        /* keep the shipped list */
+        /* no endpoint, or unreachable: keep the shipped list */
       });
     return () => {
       cancelled = true;

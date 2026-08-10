@@ -76,16 +76,39 @@ describe("Explorer federation list", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps the shipped list when the backend publishes an empty list", async () => {
-    // An empty answer is far more likely to be a misconfigured registry than
-    // a deliberate "federate with nobody", and blanking the Explorer would
-    // strand a reader with no way to search at all.
+  it("respects an empty published list and offers nothing", async () => {
+    // An empty list is an ANSWER: the operator set QRESP_FEDERATION_SERVERS
+    // to nothing, so this deployment federates with nobody. Offering the
+    // shipped peers anyway would show servers the backend refuses with a 400.
     apiEndpoint.get.mockResolvedValue({ data: { servers: [] } });
     const { container } = renderExplorer();
     await waitFor(() => expect(apiEndpoint.get).toHaveBeenCalled());
     await userEvent.click(container.querySelector("input"));
-    expect(
-      await screen.findByText(shippedServers[0].qresp_server_url)
-    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.queryByText(shippedServers[0].qresp_server_url)
+      ).not.toBeInTheDocument()
+    );
+    for (const server of shippedServers) {
+      expect(
+        screen.queryByText(server.qresp_server_url)
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  it("keeps the shipped list when the answer is not the documented shape", async () => {
+    // Malformed is not the same as empty: it says nothing about what this
+    // deployment federates with, so the offline fallback still applies.
+    for (const data of [{}, { servers: null }, { servers: "nope" }, null]) {
+      apiEndpoint.get.mockResolvedValue({ data });
+      const { container, unmount } = renderExplorer();
+      await waitFor(() => expect(apiEndpoint.get).toHaveBeenCalled());
+      await userEvent.click(container.querySelector("input"));
+      expect(
+        await screen.findByText(shippedServers[0].qresp_server_url)
+      ).toBeInTheDocument();
+      unmount();
+      apiEndpoint.get.mockClear();
+    }
   });
 });
