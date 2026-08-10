@@ -211,12 +211,21 @@ class TestSpecificity(unittest.TestCase):
         self.assertFalse(stats.is_specific("fieldword"))
         self.assertTrue(stats.is_specific("thing1"))
 
-    def test_a_term_shared_by_only_the_compared_pair_is_specific(self):
+    def test_a_term_shared_by_only_the_compared_pair_is_rare_enough(self):
+        # Rarity is one HALF of specificity. A term carried by exactly the two
+        # records being compared is as rare as a term gets.
         corpus = filler(20) + [
             record("a", "Rareword measurements"),
             record("b", "More rareword measurements"),
         ]
-        self.assertTrue(stats_for(corpus).is_specific("rareword"))
+        stats = stats_for(corpus)
+        self.assertTrue(stats.is_rare_enough("rareword"))
+        # ...and rarity alone is not enough: the term must also look like
+        # subject vocabulary. `gadgetite` does; `rareword` is under the
+        # plain-word length bar and only qualifies when a curator tags it.
+        self.assertTrue(stats.is_specific("gadgetite"))
+        self.assertFalse(stats.is_specific("rareword"))
+        self.assertTrue(stats.is_specific("rareword resonance"))
 
 
 class TestQualityGate(unittest.TestCase):
@@ -277,22 +286,42 @@ class TestQualityGate(unittest.TestCase):
         self.assertTrue(any(e.strength == R.STRONG for e in outcome.evidence))
 
     def test_two_independent_mediums_pass(self):
-        # Medium 1: a shared explicit keyword. Medium 2: a shared author on a
-        # topic that overlaps. Two different families.
+        # Medium 1: a shared explicit keyword. Medium 2: the same research
+        # area with real text similarity. Two different families, both about
+        # subject matter -- the only kind the gate accepts.
+        current = record("a", "Alpha rareword resonance",
+                         "Rareword resonance in alpha gadgetite lattices "
+                         "probed with a frumious spectrometer.",
+                         tags=["rareword resonance"],
+                         collections=["miccom"])
+        candidate = record("b", "Beta rareword transport",
+                           "Rareword resonance in beta gadgetite lattices "
+                           "probed with a frumious spectrometer.",
+                           tags=["rareword resonance"],
+                           collections=["miccom"])
+        outcome = self.assess(current, candidate,
+                              filler(20) + [current, candidate])
+        self.assertTrue(outcome.passes)
+        families = {e.family for e in outcome.evidence}
+        self.assertIn(R.FAMILY_TERMS, families)
+        self.assertIn(R.FAMILY_TEXT, families)
+
+    def test_authors_are_not_a_family_the_gate_can_see(self):
+        # The rule this replaced: a shared author used to be a MEDIUM, and one
+        # PI on half a corpus therefore supplied half of every gate decision.
         current = record("a", "Alpha rareword resonance",
                          "Rareword resonance in alpha lattices.",
                          tags=["rareword resonance"],
                          authors=["Robin Sharedname"])
-        candidate = record("b", "Beta rareword transport",
-                           "Rareword transport in beta lattices.",
-                           tags=["rareword resonance"],
+        candidate = record("b", "Coastal borogove migration",
+                           "Seasonal migration of coastal borogoves.",
+                           tags=["ornithology"],
                            authors=["Robin Sharedname"])
         outcome = self.assess(current, candidate,
                               filler(20) + [current, candidate])
-        self.assertTrue(outcome.passes)
-        families = {e.family for e in outcome.evidence if e.strength == R.MEDIUM}
-        self.assertIn(R.FAMILY_TERMS, families)
-        self.assertIn(R.FAMILY_AUTHORS, families)
+        self.assertFalse(outcome.passes)
+        self.assertNotIn(R.FAMILY_AUTHORS,
+                         {e.family for e in outcome.evidence})
 
     def test_two_mediums_from_the_same_family_are_one_observation(self):
         # A shared keyword AND the same keyword's words overlapping in text is

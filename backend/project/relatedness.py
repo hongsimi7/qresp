@@ -86,12 +86,87 @@ provide provided perform performed consider considered include included
 allow allows enable enables find finds obtained combined based
 """.split())
 
+# Ordinary English, academic boilerplate and web/file vocabulary that a SMALL
+# corpus can make look rare. This list is the answer to a specific failure: on
+# a 65-record server, `python`, `http`, `user`, `another`, `related`,
+# `discussed`, `play`, `will`, `proper`, `class`, `comparing`, `particular`,
+# `region` and `yield` were all being reported to readers as "specific
+# research terms", because document frequency was the only thing deciding.
+#
+# Nothing here is domain vocabulary: no material, method, facility, element or
+# field name appears, and none may ever be added. These are words that are
+# equally at home in any paper on any subject, which is exactly why sharing
+# one says nothing about two records being related.
+NON_TECHNICAL_TERMS = frozenset("""
+another other others related relating relate relates discussed discuss
+discusses discussion discussions mentioned mentioning note noted notes
+particular particularly especially specifically respectively additionally
+furthermore moreover overall generally typically usually often sometimes
+always never likely unlikely possible possibly probable probably able unable
+will shall may might would could should must can play plays played playing
+role roles proper properly appropriate suitable reasonable relevant
+comparing compares comparable similar similarly different differently
+region regions area areas position positions place places part parts side
+yield yields yielded give gives given giving take takes taken taking
+make makes made making get gets got put puts keep keeps hold holds
+class classes group groups kind kinds sort sorts form forms level levels
+range ranges scale scales amount amounts quantity quantities degree degrees
+first second third last next previous following above below here there
+main major minor primary secondary basic simple complex complicated
+good better best bad worse worst great greater greatest less least more
+increase increases increased increasing decrease decreases decreased
+change changes changed changing remain remains remained
+account accounts including included follow follows followed
+finding findings indicate indicates indicated highlight highlights
+suggest suggests suggested imply implies implied conclude concluded
+conclusion conclusions summary abstract introduction discussion references
+acknowledgment acknowledgments appendix supplementary supporting
+detail details detailed brief briefly full fully partial partially
+excellent good accurate accuracy precise precision correct correctness
+exact exactly approximate approximately estimate estimated estimation
+current currently recently previously earlier later future
+python http https www html htm json xml csv txt pdf zip tar gzip
+url uri link links website web page pages site sites server servers
+user users username password login account folder directory path paths
+filename filepath download upload input output config configuration
+readme license copyright github gitlab repository repo commit branch
+notebook notebooks jupyter script scripts python2 python3 pip conda
+condition conditions environment environments situation situations
+technology technologies requirement requirements capability capabilities
+opportunity opportunities challenge challenges advantage advantages
+limitation limitations motivation background consequence consequences
+importance presence absence addition description evaluation evaluations
+implementation implementations contribution contributions experience
+knowledge understanding attention interest community literature
+reference references publication publications author authors journal
+represent represents representing representative detrimental beneficial
+investigating examining exploring assessing addressing enabling
+difference differences parameter parameters criterion criteria
+formation variation variations selection selection combination
+""".split())
+
 # Tokens shorter than this are noise ("of", "we", "eV" units, indices).
 MIN_TOKEN_LENGTH = 3
 # A single word must be at least this long to count as a *specific* research
 # term. Multi-word keyword phrases are exempt -- "spin coating" is specific
 # even though neither half is long.
 MIN_SPECIFIC_LENGTH = 4
+# A PLAIN lowercase word -- no digit, no hyphen, not an acronym, not a curated
+# keyword -- has to be at least this long before it is treated as technical.
+#
+# This is the rule that stops a small corpus from inventing vocabulary. Rarity
+# alone cannot make a word technical: `particular` in two records out of 32 is
+# arithmetically as rare as `chalcogenide`, and the difference between them is
+# not something document frequency can see. Length is a crude proxy for
+# "someone coined this for a subject", and it is deliberately crude -- it is
+# only ONE of the ways a term can qualify (see `is_intrinsically_technical`),
+# so a short real term still gets in as a tag, an acronym or a formula.
+#
+# The cost is real and accepted: a short free-text term that is never tagged,
+# never capitalised and never hyphenated (`exciton`, `phonon`, `qubit`) is not
+# counted from prose alone. That loses recommendations rather than inventing
+# them, which is the direction this feature is required to fail in.
+LONG_TECHNICAL_LENGTH = 9
 
 # ---------------------------------------------------------------- thresholds
 #
@@ -117,6 +192,17 @@ STRONG_SHARED_TERM_WEIGHT = 4.5
 # ("functional", "spectrum") is a coincidence between neighbouring fields, so
 # free-text overlap needs at least two before it counts as anything.
 MEDIUM_SHARED_TERM_COUNT = 2
+
+# Concepts BOTH titles carry. Two is enough to be strong on its own: a title
+# is a deliberate summary, so two independent technical terms appearing in
+# both is a much stronger statement than the same pair found in two abstracts.
+STRONG_SHARED_TITLE_COUNT = 2
+
+# How many of each list a reader is shown. Three, not five: on a real corpus
+# five slots were filled by relaxing what counted as evidence, and the fifth
+# was routinely the least convincing. The lists are capped AFTER the gate and
+# the sort, never padded to reach this number.
+MAX_RESULTS = 3
 
 # IDF-weighted cosine over title+abstract (+ artifact descriptions). At/above
 # HIGH the two abstracts are describing the same system or the same
@@ -149,6 +235,17 @@ MAX_TERMS_IN_REASON = 3
 _WORD_RE = re.compile(r"[a-z0-9]+(?:[-'][a-z0-9]+)*")
 _NUMERIC_RE = re.compile(r"^[0-9]+$")
 
+# What a technical token LOOKS like, in any field, before it is lowercased:
+# an acronym (DFT, GW, MBPT, WEST), a formula or named method carrying a digit
+# (G0W0, BiVO4, C60), or an internal capital (BiVO4, NaCl, TiO2).
+#
+# This is how a SHORT real term gets in without a domain dictionary. It reads
+# the author's own typography rather than guessing at meaning.
+_SURFACE_TECHNICAL_RE = re.compile(
+    r"\b(?:[A-Z]{2,}[A-Za-z0-9]*"          # DFT, MBPT, WEST
+    r"|[A-Za-z]+[0-9]+[A-Za-z0-9]*"        # G0W0, C60, BiVO4
+    r"|[A-Z][a-z]*[A-Z][A-Za-z0-9]*)\b")   # NaCl, BiVO4
+
 
 # ------------------------------------------------------------- normalization
 
@@ -167,6 +264,24 @@ def _singular(token):
             ("ss", "us", "is", "as", "os")):
         return token[:-1]
     return token
+
+
+def _fold_variants(words):
+    """Add the singular-folded spelling of every listed word.
+
+    `tokenize` folds plurals before anything else sees a token, so a blocklist
+    entry written in the plural would never match: "technologies" arrives as
+    "technologie". Folding the lists themselves means an entry can be written
+    either way and still work, instead of the list silently having a hole.
+    """
+    folded = set(words)
+    folded.update(_singular(word) for word in words)
+    return frozenset(folded)
+
+
+STOPWORDS = _fold_variants(STOPWORDS)
+GENERIC_TERMS = _fold_variants(GENERIC_TERMS)
+NON_TECHNICAL_TERMS = _fold_variants(NON_TECHNICAL_TERMS)
 
 
 def tokenize(value):
@@ -190,6 +305,63 @@ def normalize_phrase(value):
     'spin coating'). Stopword-only or empty phrases return ''."""
     tokens = tokenize(value)
     return " ".join(tokens)
+
+
+def is_ordinary(term):
+    """Is this a word any paper on any subject could use?"""
+    return (not term or term in STOPWORDS or term in GENERIC_TERMS
+            or term in NON_TECHNICAL_TERMS)
+
+
+def is_intrinsically_technical(term):
+    """Could this term identify a SUBJECT, judged from the term alone?
+
+    Deliberately independent of the corpus. Document frequency answers "is
+    this rare here", which on a small server is mostly noise; this answers "is
+    this the kind of word somebody coined for a topic", which is the question
+    that actually decides whether sharing it means anything.
+
+    Qualifying shapes, none of them domain-specific:
+
+      * a multi-word phrase with at least one non-ordinary part -- a curated
+        tag like "spin coating" is a deliberate statement about the record;
+      * a digit inside the token (`g0w0`, `c60`, `bivo4`);
+      * an internal hyphen (`dielectric-dependent`, `bethe-salpeter`);
+      * failing all of those, a plain word of at least
+        LONG_TECHNICAL_LENGTH characters.
+
+    Acronyms and formulas that survive none of these once lowercased (`dft`,
+    `gw`, `nacl`) are recognised from their SURFACE form instead, per profile
+    -- see `Profile.add_text`.
+    """
+    if not term:
+        return False
+    if " " in term:
+        parts = term.split()
+        return any(not is_ordinary(part) for part in parts)
+    if is_ordinary(term):
+        return False
+    # A page range, a year span or a figure number is not a research term.
+    # `1-2` survives tokenization because hyphens are kept for the sake of
+    # `dielectric-dependent`, so numbers-and-punctuation are ruled out here.
+    if not any(character.isalpha() for character in term):
+        return False
+    if any(character.isdigit() for character in term):
+        return True
+    if "-" in term:
+        return True
+    return len(term) >= LONG_TECHNICAL_LENGTH
+
+
+def surface_technical_terms(value):
+    """Normalized tokens that were written as an acronym, a formula or a
+    mixed-case name in the ORIGINAL text."""
+    found = set()
+    for match in _SURFACE_TECHNICAL_RE.finditer(str(value or "")):
+        for token in tokenize(match.group(0)):
+            if not is_ordinary(token):
+                found.add(token)
+    return found
 
 
 def normalize_doi(value):
@@ -231,7 +403,8 @@ class Profile(object):
 
     __slots__ = ("key", "title", "doi", "year", "authors", "url", "source",
                  "text_counts", "keyword_terms", "method_terms",
-                 "field_terms", "author_keys", "author_names", "title_key")
+                 "field_terms", "author_keys", "author_names", "title_key",
+                 "surface_terms", "title_terms")
 
     def __init__(self, key, title="", doi="", year=None, authors=(), url="",
                  source="internal"):
@@ -246,6 +419,15 @@ class Profile(object):
         self.keyword_terms = set()
         self.method_terms = set()
         self.field_terms = set()
+        # Tokens the author wrote as an acronym, a formula or a mixed-case
+        # name. Kept apart from text_counts because case is destroyed by
+        # normalization, and it is the only evidence that a SHORT token is
+        # technical rather than ordinary.
+        self.surface_terms = set()
+        # Terms from the title specifically. A title is the most deliberate
+        # sentence in a record, so an overlap there is worth more than the
+        # same overlap buried in an abstract.
+        self.title_terms = set()
         # key -> the name as this side spells it, so a reason can name the
         # person rather than the matching key.
         self.author_names = {}
@@ -256,15 +438,18 @@ class Profile(object):
         self.author_keys = set(self.author_names)
         self.title_key = normalize_title_key(self.title)
 
-    def add_text(self, value, weight=1):
-        # Generic words are dropped here rather than only at the specificity
+    def add_text(self, value, weight=1, is_title=False):
+        # Ordinary words are dropped HERE rather than only at the specificity
         # check, so they cannot inflate text similarity either. Two abstracts
-        # that share nothing but "study", "data", "analysis" and "simulation"
-        # must measure as unrelated, not as a strong match.
+        # that share nothing but "study", "data", "analysis", "particular" and
+        # "discussed" must measure as unrelated, not as a strong match.
+        self.surface_terms |= surface_technical_terms(value)
         for token in tokenize(value):
-            if token in GENERIC_TERMS:
+            if is_ordinary(token):
                 continue
             self.text_counts[token] += weight
+            if is_title:
+                self.title_terms.add(token)
 
     def add_keyword(self, value):
         phrase = normalize_phrase(value)
@@ -290,6 +475,26 @@ class Profile(object):
         terms = set(self.text_counts)
         terms |= self.keyword_terms
         terms |= self.method_terms
+        return terms
+
+    @property
+    def technical_terms(self):
+        """The terms of this record that could identify a SUBJECT.
+
+        A term qualifies by its own shape (`is_intrinsically_technical`), or
+        because the author wrote it as an acronym or formula, or because a
+        curator chose it as a tag, chart property, artifact keyword or tool
+        name. Curated single words still have to clear MIN_SPECIFIC_LENGTH
+        and not be ordinary -- a "python" tag is a fact about the toolchain,
+        not a statement that two records study the same thing.
+        """
+        terms = {t for t in self.all_terms if is_intrinsically_technical(t)}
+        terms |= {t for t in self.surface_terms if not is_ordinary(t)}
+        for curated in self.keyword_terms | self.method_terms:
+            if is_ordinary(curated):
+                continue
+            if " " in curated or len(curated) >= MIN_SPECIFIC_LENGTH:
+                terms.add(curated)
         return terms
 
 
@@ -342,7 +547,7 @@ def build_internal_profile(record):
         source="internal",
     )
     # The title carries more signal per word than the abstract does.
-    profile.add_text(profile.title, weight=2)
+    profile.add_text(profile.title, weight=2, is_title=True)
     profile.add_text(reference.get("publishedAbstract"))
 
     for tag in record.get("tags") or []:
@@ -455,7 +660,7 @@ def build_external_profile(paper):
         url=paper.get("url") or "",
         source="external",
     )
-    profile.add_text(profile.title, weight=2)
+    profile.add_text(profile.title, weight=2, is_title=True)
     profile.add_text(paper.get("abstract"))
     for field in paper.get("fields") or []:
         profile.add_field(field)
@@ -486,17 +691,9 @@ class CorpusStats(object):
         df = self.document_frequency.get(term, 0)
         return math.log((self.document_count + 1.0) / (df + 1.0)) + 1.0
 
-    def is_specific(self, term):
-        """A term precise enough to justify a recommendation on its own
-        merit: not generic, long enough (or a phrase), and not carried by a
-        large share of the corpus."""
-        if not term or term in GENERIC_TERMS or term in STOPWORDS:
-            return False
-        if " " not in term and len(term) < MIN_SPECIFIC_LENGTH:
-            return False
-        if " " in term and all(part in GENERIC_TERMS
-                               for part in term.split()):
-            return False
+    def is_rare_enough(self, term):
+        """Is this term still a fingerprint on THIS corpus, or has it become a
+        field label? Rarity is necessary, never sufficient."""
         # Floor of 2, not 1: a term carried by exactly the two records being
         # compared and nobody else is the *most* specific overlap there is.
         # A ratio-only ceiling would rule it out on any corpus smaller than
@@ -505,8 +702,28 @@ class CorpusStats(object):
                       SPECIFIC_DOCUMENT_FREQUENCY_RATIO * self.document_count)
         return self.document_frequency.get(term, 0) <= ceiling
 
+    def is_specific(self, term):
+        """A term precise enough to justify a recommendation on its own merit.
+
+        TWO independent conditions, and both are required:
+
+          * the term must look like subject vocabulary at all
+            (`is_intrinsically_technical`), and
+          * it must still be rare on this corpus (`is_rare_enough`).
+
+        The first half is what was missing. Rarity used to be the only test,
+        so on a 65-record server any ordinary word appearing in fewer than ten
+        abstracts was promoted to a "specific research term" and shown to
+        readers as the reason two papers were related.
+        """
+        if not is_intrinsically_technical(term):
+            return False
+        return self.is_rare_enough(term)
+
     def specific_terms(self, profile):
-        return {t for t in profile.all_terms if self.is_specific(t)}
+        """The subject vocabulary of one record, as this corpus sees it."""
+        return {t for t in profile.technical_terms
+                if not is_ordinary(t) and self.is_rare_enough(t)}
 
     def similarity(self, left, right):
         """IDF-weighted cosine over the two text bags. 0.0 when either side
@@ -553,10 +770,14 @@ class Assessment(object):
     """Verdict for one candidate."""
 
     __slots__ = ("passes", "score", "evidence", "similarity",
-                 "shared_terms", "shared_weight")
+                 "shared_terms", "shared_weight", "author_overlap")
 
     def __init__(self, passes, score, evidence, similarity, shared_terms,
-                 shared_weight=0.0):
+                 shared_weight=0.0, author_overlap=0):
+        # How many authors the two records share. Recorded for ORDERING only:
+        # it is not evidence, it cannot pass a candidate, and it is never
+        # rendered into a reason.
+        self.author_overlap = author_overlap
         self.passes = passes
         self.score = score
         self.evidence = evidence
@@ -624,16 +845,27 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
     shared_specific = independent_terms(current_specific & candidate_specific)
     shared_weight = sum(stats.idf(t) for t in shared_specific)
     similarity = stats.similarity(current, candidate)
+    # Counted, never gated on. See the note above the gate.
     shared_authors = current.author_keys & candidate.author_keys
+    # Curated overlap is filtered through the SAME specific-term test as free
+    # text, so a tag can never smuggle in an ordinary word that prose could
+    # not. Short curated terms still qualify -- a tag is a deliberate
+    # statement, which is why `Profile.technical_terms` admits them.
     shared_methods = {t for t in current.method_terms & candidate.method_terms
-                      if stats.is_specific(t)}
+                      if t in current_specific and t in candidate_specific}
     shared_keywords = {t for t in current.keyword_terms & candidate.keyword_terms
-                       if stats.is_specific(t)}
+                       if t in current_specific and t in candidate_specific}
     shared_fields = current.field_terms & candidate.field_terms
-    # "The same topic", used to corroborate an author or a tool. A shared tool
-    # with no topic overlap is a lab habit, not a relationship -- so the tool
-    # names themselves are excluded from what counts as the topic, or every
-    # shared tool would corroborate itself.
+    # Concepts both records put in their TITLE. A title is the most deliberate
+    # sentence a record has, so an overlap there is a much stronger statement
+    # than the same overlap buried in an abstract.
+    shared_titles = independent_terms(
+        {t for t in shared_specific
+         if t in current.title_terms and t in candidate.title_terms})
+    # "The same topic", used to corroborate a shared tool. A shared tool with
+    # no topic overlap is a lab habit, not a relationship -- so the tool names
+    # themselves are excluded from what counts as the topic, or every shared
+    # tool would corroborate itself.
     topic_terms = shared_specific - shared_methods
     topic_overlap = bool(topic_terms) or similarity >= MODERATE_TEXT_SIMILARITY
 
@@ -661,6 +893,12 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
             "Same method or tool (%s) on a related topic"
             % _term_list(shared_methods, stats)))
 
+    if len(shared_titles) >= STRONG_SHARED_TITLE_COUNT:
+        evidence.append(Evidence(
+            FAMILY_TERMS, STRONG,
+            "Both titles are about %s"
+            % _term_list(shared_titles, stats)))
+
     # -- medium ------------------------------------------------------------
     if shared_keywords:
         evidence.append(Evidence(
@@ -673,17 +911,15 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
             "Shares %d specific research terms: %s"
             % (len(shared_specific), _term_list(shared_specific, stats))))
 
-    if shared_authors and topic_overlap:
-        names = sorted(candidate.author_names.get(k) or current.author_names[k]
-                       for k in shared_authors)
-        shown = names[:MAX_TERMS_IN_REASON]
-        listed = ", ".join(shown)
-        if len(names) > len(shown):
-            listed += " and %d more" % (len(names) - len(shown))
-        evidence.append(Evidence(
-            FAMILY_AUTHORS, MEDIUM,
-            "Shared author%s (%s) on a related topic"
-            % ("s" if len(names) > 1 else "", listed)))
+    # NOTE: there is deliberately NO author evidence.
+    #
+    # A shared author says who did the work, not what it was about. On a real
+    # server one PI co-authors half the corpus, so "shared author" fires
+    # almost everywhere and, paired with any second weak signal, pushed
+    # unrelated subjects through the gate. It is now counted (below) purely to
+    # order candidates that have ALREADY passed on their own topic, and it
+    # never appears in a reason -- what a reader is shown has to be the
+    # technical overlap that actually decided the verdict.
 
     if shared_fields and similarity >= MODERATE_TEXT_SIMILARITY:
         evidence.append(Evidence(
@@ -707,6 +943,10 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
             strongest[item.family] = item
     evidence = [strongest[f] for f in FAMILY_PRIORITY if f in strongest]
 
+    # The gate is TOPIC-ONLY. Every family that can contribute is a statement
+    # about subject matter; there is no family here that a person's name can
+    # reach, so removing every author from both records cannot change this
+    # verdict. `test_relatedness_quality.py` asserts exactly that.
     strong_count = sum(1 for e in evidence if e.strength == STRONG)
     medium_families = {e.family for e in evidence if e.strength == MEDIUM}
     passes = strong_count >= 1 or len(medium_families) >= 2
@@ -716,15 +956,23 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
     score += min(shared_weight, 10.0) / 10.0
 
     return Assessment(passes, round(score, 6), evidence, similarity,
-                      sorted(shared_specific), shared_weight)
+                      sorted(shared_specific), shared_weight,
+                      author_overlap=len(shared_authors))
 
 
-def rank(current, candidates, stats, citation_dois=frozenset(), limit=5):
+def rank(current, candidates, stats, citation_dois=frozenset(),
+         limit=MAX_RESULTS):
     """Assess every candidate, drop the ones that fail the gate, and return
     at most `limit` of them as (profile, assessment), best first.
 
-    The list is NOT padded: a short list -- including an empty one -- is the
-    correct answer when nothing else clears the bar.
+    Order of operations, and it matters: **gate, then sort, then cut**. The
+    cut is the last thing that happens, so a short list -- including an empty
+    one -- is what a reader gets when nothing else clears the bar. Nothing
+    here relaxes the gate to reach `limit`.
+
+    The shared-author count is a TIE-BREAKER and nothing more: it is consulted
+    only after the topical score, between candidates the gate already passed
+    on their own subject matter.
     """
     scored = []
     for candidate in candidates:
@@ -735,6 +983,7 @@ def rank(current, candidates, stats, citation_dois=frozenset(), limit=5):
             continue
         scored.append((candidate, assessment))
     scored.sort(key=lambda pair: (-pair[1].score,
+                                  -pair[1].author_overlap,
                                   -(pair[0].year or 0),
                                   pair[0].title.lower()))
     return scored[:limit]
