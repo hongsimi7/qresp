@@ -103,7 +103,11 @@ describe("Paper Details / Suggested Related Papers", () => {
     expect(
       await screen.findByRole("heading", { name: /related qresp records/i })
     ).toBeInTheDocument();
-    expect(axios.get).toHaveBeenCalledWith("/api/paper/abc123/related");
+    // The page's `?server=` is forwarded: on a federated record it is the
+    // only thing that tells the backend where the record lives.
+    expect(axios.get).toHaveBeenCalledWith("/api/paper/abc123/related", {
+      params: { server: "https://localhost:8443" },
+    });
     // The page's own content is still there.
     expect(screen.getByText("charts-stub")).toBeInTheDocument();
     expect(
@@ -129,14 +133,14 @@ describe("Paper Details / Suggested Related Papers", () => {
     expect(screen.getByText("charts-stub")).toBeInTheDocument();
   });
 
-  it("renders the page unchanged when the related request fails", async () => {
+  it("keeps the rest of the page when the related request fails", async () => {
+    // The section reports its own failure and offers a retry; what it must
+    // never do is take the record's own content down with it.
     axios.get.mockRejectedValue(new Error("boom"));
     renderPage();
-    await waitFor(() =>
-      expect(
-        screen.queryByText(/suggested related papers/i)
-      ).not.toBeInTheDocument()
-    );
+    expect(
+      await screen.findByText(/related research is unavailable right now/i)
+    ).toBeInTheDocument();
     expect(screen.getByText("charts-stub")).toBeInTheDocument();
     expect(
       screen.getAllByText(/gadgetite lattices/i).length

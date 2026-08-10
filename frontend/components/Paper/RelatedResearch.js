@@ -6,21 +6,51 @@ import Link from "next/link";
 import { Box, Chip, Divider, LinearProgress, Typography } from "@mui/material";
 
 import Drawer from "../drawer";
+import { SmallStyledButton } from "../button";
 
 // Related Research, computed by the backend at view time (never pinned into
 // the record) from GET /api/paper/{id}/related.
 //
-// Two independent lists: Qresp records this server holds, and external papers
-// proposed by Semantic Scholar. Both are already filtered by the backend's
-// quality gate and capped at five, so this component renders exactly what it
-// is given and never pads a short list. Every result carries the grounded
-// reasons the backend computed; nothing here invents text.
+// Two independent lists: Qresp records the SOURCE server holds, and external
+// papers proposed by Semantic Scholar. Both are already filtered by the
+// backend's quality gate and capped at five, so this component renders exactly
+// what it is given and never pads a short list. Every result carries the
+// grounded reasons the backend computed; nothing here invents text.
 //
-// The whole section is opt-in server-side: when the feature is off the
-// response says so and this renders nothing at all, leaving the detail page
-// exactly as it was.
+// The source server is whichever one the detail page is showing: this page can
+// be opened on a federated record (`/paperdetails/{id}?server=...`), whose id
+// exists on that server and nowhere else. `server` is therefore forwarded to
+// the request — without it the backend is asked about an id it cannot have,
+// and can only answer 404.
+//
+// EXISTENCE CONTRACT. On a published detail page, with the feature switched
+// on, this section ALWAYS renders. There are exactly four visible states and
+// exactly two ways to render nothing:
+//
+//   loading      the request is in flight
+//   results      at least one list has something
+//   empty        the backend answered and nothing cleared the quality gate --
+//                a real result, not a malfunction
+//   unavailable  the request failed, or the backend could not read the source
+//                Qresp server -> say THAT, and offer a retry
+//
+//   (nothing)    `enabled: false` -- the deployment does not have this
+//                feature, so there is nothing to explain to a reader
+//   (nothing)    no paperId -- there is no record to ask about
+//
+// An unpublished preview is excluded by the PAGE, which does not mount this
+// component at all; there is nothing to compute for a record that is not
+// published yet.
+//
+// The failure state is the point. Catching the error and rendering `null` --
+// what this did before -- made a broken request indistinguishable from a
+// deployment that never had the feature, and there was no way for a reader
+// to tell either from "nothing is related to this paper".
 
 const EMPTY_MESSAGE = "No sufficiently related papers were found.";
+const UNAVAILABLE_MESSAGE =
+  "Related research is unavailable right now. This is a problem loading the " +
+  "suggestions, not a statement about this record.";
 const MAX_REASONS = 3;
 const HEADING = "Suggested Related Papers";
 
@@ -60,12 +90,18 @@ const ResultTitle = ({ result, server }) => {
   const style = { fontWeight: "bold", wordBreak: "break-word" };
   // Internal results stay inside Qresp; external ones go to the publisher via
   // the HTTPS DOI link the backend preferred.
+  //
+  // A result names the Qresp server it lives on. That is what the link must
+  // carry: a federated record's id resolves only on its own server, so
+  // dropping the origin here would send the reader to a 404 — or, if the id
+  // happened to exist locally too, to the wrong paper. `server` (this page's)
+  // is the fallback for a backend that predates `result.server`.
   if (result.source === "internal" && result.id) {
     return (
       <Link
         href={{
           pathname: `/paperdetails/${result.id}`,
-          query: { server: server || "" },
+          query: { server: result.server || server || "" },
         }}
         style={style}
       >
@@ -224,20 +260,46 @@ const externalNotice = (external) => {
 const RelatedResearch = ({ paperId, server }) => {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
+  const [failed, setFailed] = useState(false);
+  // Bumped by the retry button. It is the only dependency that changes on a
+  // retry, so it is what re-runs the effect.
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (!paperId) return undefined;
+    if (!paperId) {
+      // Nothing to ask about. Not a failure -- see the guard below.
+      setLoading(false);
+      return undefined;
+    }
     let cancelled = false;
+    // Both the record and the server it lives on are dependencies, and both
+    // reset the state: the same id on a different Qresp server is a different
+    // paper, so showing the previous server's answer while the new one loads
+    // would attribute one server's results to another.
     setLoading(true);
+    setFailed(false);
+    setData(null);
     axios
-      .get(`/api/paper/${encodeURIComponent(paperId)}/related`)
+      .get(`/api/paper/${encodeURIComponent(paperId)}/related`, {
+        // Which Qresp server holds this record. Omitted when the page is not
+        // federated, so a local record produces the exact request it always
+        // did.
+        params: server ? { server } : {},
+      })
       .then((res) => {
-        if (!cancelled) setData(res.data);
+        if (cancelled) return;
+        setData(res.data);
+        // The backend answered, but could not read the source server. An
+        // empty list here would be a claim about the record that nobody
+        // actually checked.
+        setFailed((res.data || {}).internal?.status === "unavailable");
       })
       .catch(() => {
-        // Older backends, previews, or a hidden record: the section simply
-        // does not appear. It must never break the page it sits on.
-        if (!cancelled) setData(null);
+        // A transport failure, a backend without this endpoint, or a record
+        // this server will not serve. The section stays, and says so.
+        if (cancelled) return;
+        setData(null);
+        setFailed(true);
       })
       .then(() => {
         if (!cancelled) setLoading(false);
@@ -245,7 +307,11 @@ const RelatedResearch = ({ paperId, server }) => {
     return () => {
       cancelled = true;
     };
-  }, [paperId]);
+  }, [paperId, server, attempt]);
+
+  // No record to ask about: the section has no subject, so it does not exist.
+  // Distinct from a failure, which does.
+  if (!paperId) return null;
 
   if (loading) {
     return (
@@ -267,7 +333,30 @@ const RelatedResearch = ({ paperId, server }) => {
     );
   }
 
-  if (!data || data.enabled === false) return null;
+  // The feature is off on this deployment: there is nothing to explain to a
+  // reader, so the section does not exist. Checked before the failure state so
+  // an explicit "disabled" answer never renders as a problem.
+  if (data && data.enabled === false) return null;
+
+  // No answer and not disabled means the request did not succeed. There is no
+  // path from here back to rendering nothing: a failure is a state of this
+  // section, not its absence.
+  if (failed || !data) {
+    return (
+      <Drawer heading={HEADING} defaultOpen>
+        <Box sx={{ py: 1 }}>
+          <Note color="error">{UNAVAILABLE_MESSAGE}</Note>
+          <Box sx={{ mt: 1.5 }}>
+            <SmallStyledButton
+              onClick={() => setAttempt((value) => value + 1)}
+            >
+              Try again
+            </SmallStyledButton>
+          </Box>
+        </Box>
+      </Drawer>
+    );
+  }
 
   const internal = data.internal || { results: [] };
   const external = data.external || { results: [], status: "disabled" };
