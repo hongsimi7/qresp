@@ -32,9 +32,26 @@ credential nor the switch for an external call should be configurable (or
 accidentally committed) there. Both switches are OFF by default, and the
 external one is subordinate to the master one -- see `config()`.
 
+Federated records
+-----------------
+The Explorer can open a record that lives on ANOTHER Qresp server
+(`/paperdetails/{id}?server=https://peer.example.org`). Such a record is not in
+this server's database, so `?server=` is passed through to this endpoint too:
+the record and the corpus it is scored against are then read from that peer via
+`project/federation.py`, which is also what refuses every server that is not in
+the federated registry. The peer must be an allowlisted HTTPS origin; only
+allowlisted published metadata is copied out of its answer; nothing is written
+to this server's database. Scoring, the quality gate, the five-result cap and
+the external provider are the same code in both modes -- the only difference is
+where the two record sets came from.
+
 What leaves this server
 -----------------------
-Only what is needed to identify THIS paper to the provider: its DOI, or --
+To a federated peer: two plain GETs, `/api/paper/{id}` and `/api/search`, both
+public reads carrying no credential and no user data.
+
+To the recommendation provider, only what is needed to identify THIS paper: its
+DOI, or --
 when it has none -- its published title. Nothing else: no abstract, no
 authors, no keywords, no RCC URL, no file path, no file content, no owner,
 editor, curator or session data, and no other record. The provider host is a
@@ -49,7 +66,9 @@ from urllib.parse import quote
 
 import requests
 
+from project import federation
 from project.auth import can_edit_paper, get_current_user
+from project.federation import FOUND, NOT_FOUND, UNAVAILABLE
 from project.models import Paper, RelatedResearchCache, active_papers
 from project.relatedness import (CorpusStats, build_external_profile,
                                  build_internal_profile, metadata_fingerprint,
@@ -140,23 +159,15 @@ STATUS_DISABLED = "disabled"
 STATUS_UNRESOLVED = "unresolved"
 STATUS_UNAVAILABLE = "unavailable"
 
-# Outcome of one provider call. The distinction that matters is between an
-# ANSWER and a NON-ANSWER:
+# Outcome of one outbound call -- FOUND / NOT_FOUND / UNAVAILABLE, imported
+# from project.federation, which documents the three-way split at length. The
+# distinction that matters is between an ANSWER and a NON-ANSWER: a 404 is the
+# provider saying "no such paper" (a stable fact about this record, cached for
+# the full TTL), while a timeout, 429 or 5xx says nothing about the record and
+# is remembered for an hour only.
 #
-#   FOUND        the provider answered and the answer is usable
-#   NOT_FOUND    the provider answered, and the answer is "no such paper" --
-#                a real 404, or a well-formed response with no match. A stable
-#                fact about this record, so it is cached for the full TTL.
-#   UNAVAILABLE  the provider did not answer: timeout, connection error, 429,
-#                5xx, unreadable body, or a 200 whose shape is not what this
-#                endpoint documents. Says nothing about the record, so it is
-#                remembered for an hour and never overwrites a good answer.
-#
-# Collapsing these two was the bug: a rate-limited or timing-out provider was
+# Collapsing those two was the bug: a rate-limited or timing-out provider was
 # recorded as "this paper is not in the index" and kept for seven days.
-FOUND = "found"
-NOT_FOUND = "not_found"
-UNAVAILABLE = "unavailable"
 
 
 # ------------------------------------------------------------ configuration
@@ -523,7 +534,7 @@ def _display_authors(names, limit=8):
     return ", ".join(names)
 
 
-def _result(profile, assessment, source):
+def _result(profile, assessment, source, server=None):
     return {
         "id": profile.key if source == "internal" else None,
         "title": profile.title,
@@ -532,24 +543,35 @@ def _result(profile, assessment, source):
         "doi": profile.doi or None,
         "url": profile.url or None,
         "source": source,
+        # WHICH Qresp server holds this record. Empty means "the one that
+        # answered", which is what every result meant before federation; a
+        # federated result names its origin so the link goes back to the
+        # server the record actually lives on, not to this one, where the id
+        # would resolve to nothing (or, worse, to a different record).
+        # External results belong to no Qresp server and say so with None.
+        "server": (server or "") if source == "internal" else None,
         "reasons": assessment.reasons(3),
     }
 
 
 def internal_recommendations(current_record, corpus_records,
-                             citation_dois=frozenset()):
+                             citation_dois=frozenset(), server=None):
     """Related Qresp Records for `current_record`.
 
     `corpus_records` are the active/published records (the current one
     included, so corpus rarity is measured over everything this server
     holds). The current record is never recommended to itself.
+
+    `server` is the origin those records came from: None/empty for this
+    server's own corpus, a canonical origin when they were read from a
+    federated peer. It only ever labels the results; the scoring is identical.
     """
     current = build_internal_profile(current_record)
     profiles = [build_internal_profile(record) for record in corpus_records]
     stats = CorpusStats(profiles)
     candidates = [p for p in profiles if p.key and p.key != current.key]
     ranked = rank(current, candidates, stats, citation_dois, MAX_RESULTS)
-    return [_result(profile, assessment, "internal")
+    return [_result(profile, assessment, "internal", server)
             for profile, assessment in ranked], stats
 
 
@@ -639,14 +661,88 @@ def _external_for(paper_id, current_record, stats, cfg):
     return _external_section(STATUS_OK, results, stale=False, updated_at=now)
 
 
-def related_research(id):
+def _local_hostname():
+    """The host this request came in on, or None outside a request context.
+
+    nginx forwards `Host $host`, which carries no port, so only the HOSTNAME
+    is compared. That is all this is for: recognising "the server the reader
+    is already on" so a federated URL pointing back here is answered from the
+    local database instead of looping out through the proxy. It can only ever
+    make a target MORE local, never turn a refused server into an allowed one.
+    """
+    try:
+        from flask import request
+        return (request.host or "").split(":")[0].lower() or None
+    except Exception:
+        return None
+
+
+def _local_source(paper_id):
+    """This server's own answer to "what record is this, and what corpus does
+    it live in". Returns (current_record, corpus, outcome).
+
+    Unchanged from before federation existed, including the deliberate refusal
+    to distinguish "no such record" from "hidden record" -- a related lookup
+    must not become an existence probe.
+    """
+    try:
+        paper = Paper.objects.get(id=str(paper_id))
+    except Exception:
+        return None, None, NOT_FOUND
+    if paper.is_active is False:
+        allowed, _ = can_edit_paper(paper, get_current_user())
+        if not allowed:
+            return None, None, NOT_FOUND
+    current_record = _record_dict(paper)
+    corpus = [_record_dict(record) for record in active_papers()]
+    if all(record.get("_id") != current_record["_id"] for record in corpus):
+        # A deactivated record its owner is allowed to see: score it against
+        # the public corpus without adding it to that corpus.
+        corpus = corpus + [current_record]
+    return current_record, corpus, FOUND
+
+
+def _remote_source(origin, paper_id):
+    """A federated peer's answer to the same question, read through
+    project.federation. Returns (current_record, corpus, outcome).
+
+    Two reads, and both must succeed: the record identifies what is being
+    scored, and the peer's corpus is what "specific to this field" is measured
+    against. Scoring a remote record against THIS server's corpus would
+    silently rank it by the wrong vocabulary, so a corpus that cannot be read
+    is a failure of the section, not a reason to substitute a local one.
+
+    Nothing read here is stored. The dicts returned are allowlisted copies
+    that live for the length of this request.
+    """
+    current_record, outcome = federation.fetch_record(origin, paper_id)
+    if outcome != FOUND:
+        return None, None, outcome
+    corpus, outcome = federation.fetch_corpus(origin)
+    if outcome != FOUND:
+        return None, None, UNAVAILABLE
+    if all(record.get("_id") != current_record["_id"] for record in corpus):
+        corpus = corpus + [current_record]
+    return current_record, corpus, FOUND
+
+
+def related_research(id, server=None):
     """
     Related Qresp records and related external papers for one record
     Handler for GET: /api/paper/{id}/related
 
-    Read-only: it never changes a Paper, a draft, an ownership field, a
-    publication state, or any curation state. The only write it can make is to
-    the separate `related_research_cache` collection.
+    `server` names the Qresp server that HOLDS the record, mirroring the
+    `?server=` the Explorer already puts on a detail-page URL. Absent, or
+    naming this server, it means exactly what it always did: read from the
+    local database. Naming an allowlisted federated peer, the record and the
+    corpus are read from that peer instead, and everything downstream --
+    scoring, the quality gate, the five-result cap, the external provider --
+    is the same code operating on the same shapes.
+
+    Read-only in both modes: it never changes a Paper, a draft, an ownership
+    field, a publication state or any curation state, and a federated record
+    is never written to this server's database. The only write it can make is
+    to the separate `related_research_cache` collection.
     """
     if not config()["ENABLED"]:
         # Off by default. A 200 with empty sections keeps the detail page
@@ -654,31 +750,42 @@ def related_research(id):
         return {
             "paper_id": str(id),
             "enabled": False,
+            "source_server": "",
             "internal": {"status": STATUS_DISABLED, "results": [], "count": 0},
             "external": _external_section(STATUS_DISABLED, []),
         }, 200
 
-    unavailable = {"error": "This record is not available."}
-    try:
-        paper = Paper.objects.get(id=str(id))
-    except Exception:
-        # Same answer for "no such record" and "hidden record": a related
-        # lookup must not become an existence probe.
-        return unavailable, 404
-    if paper.is_active is False:
-        allowed, _ = can_edit_paper(paper, get_current_user())
-        if not allowed:
-            return unavailable, 404
+    kind, origin = federation.resolve_server(server, _local_hostname())
+    if kind == federation.REFUSED:
+        # Never fall back to the local database: answering about whichever
+        # local record happens to share this id would be a wrong answer
+        # presented as a right one.
+        return {"error": "This Qresp server is not available."}, 400
 
     cfg = config()
-    current_record = _record_dict(paper)
-    corpus = [_record_dict(record) for record in active_papers()]
-    if all(record.get("_id") != current_record["_id"] for record in corpus):
-        # A deactivated record its owner is allowed to see: score it against
-        # the public corpus without adding it to that corpus.
-        corpus = corpus + [current_record]
+    if kind == federation.REMOTE:
+        current_record, corpus, outcome = _remote_source(origin, id)
+    else:
+        origin = None
+        current_record, corpus, outcome = _local_source(id)
 
-    internal_results, stats = internal_recommendations(current_record, corpus)
+    if outcome == NOT_FOUND:
+        return {"error": "This record is not available."}, 404
+    if outcome != FOUND:
+        # The peer did not answer. That is a failure of this section, not of
+        # the record: say so, with an empty list, and let the page offer a
+        # retry rather than pretend nothing is related.
+        return {
+            "paper_id": str(id),
+            "enabled": True,
+            "source_server": origin or "",
+            "internal": {"status": STATUS_UNAVAILABLE, "results": [],
+                         "count": 0},
+            "external": _external_section(STATUS_UNAVAILABLE, []),
+        }, 200
+
+    internal_results, stats = internal_recommendations(
+        current_record, corpus, server=origin)
 
     if not cfg["EXTERNAL_ENABLED"]:
         # Internal-only. No provider request, and the external cache is
@@ -687,7 +794,10 @@ def related_research(id):
         external = _external_section(STATUS_DISABLED, [])
     else:
         try:
-            external = _external_for(str(paper.id), current_record, stats, cfg)
+            # Keyed by server AND id: the same 24-hex id on two Qresp servers
+            # is two different papers, and must never share a cache row.
+            external = _external_for(federation.cache_key(origin, id),
+                                     current_record, stats, cfg)
         except Exception as e:
             # A provider or cache problem degrades this one section; it never
             # becomes a 500 for a page that has perfectly good internal
@@ -697,8 +807,10 @@ def related_research(id):
             external = _external_section(STATUS_UNAVAILABLE, [])
 
     return {
-        "paper_id": str(paper.id),
+        "paper_id": str(current_record.get("_id") or id),
         "enabled": True,
+        # Which server the two lists were computed from. Empty means this one.
+        "source_server": origin or "",
         "internal": {
             "status": STATUS_OK,
             "results": internal_results,

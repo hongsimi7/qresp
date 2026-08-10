@@ -15,7 +15,7 @@ from unittest import mock
 import mongoengine
 import mongomock
 
-from project import connexionapp, related
+from project import connexionapp, federation, related
 from project.models import Paper, RelatedResearchCache
 
 ENABLED = {"QRESP_RELATED_RESEARCH_ENABLED": "1",
@@ -985,6 +985,450 @@ class TestAccessPolicy(RelatedTestCase):
                      "insertedBy", "owner_email", "editor_emails",
                      "test-s2-super-secret"):
             self.assertNotIn(leak, text, leak)
+
+
+# ---------------------------------------------------------- federated records
+#
+# The Explorer can open a record that lives on ANOTHER Qresp server. Its id
+# exists there and nowhere else, so before `?server=` was honoured this
+# endpoint could only ever answer 404 for it -- and the detail page, catching
+# that, hid the whole section.
+
+PEER = "https://peer.example.org"
+REGISTRY = [{"qresp_server_url": PEER, "isActive": "Yes"}]
+
+
+def search_entry(paper_id, doc):
+    """One entry of a peer's `/api/search`, name-mangled exactly as
+    `util.Search` serializes. Deliberately carries the RCC and file-server
+    paths a real answer carries, so the tests can prove they are dropped."""
+    reference = doc["reference"]
+    return {
+        "_Search__id": paper_id,
+        "_Search__title": reference["title"],
+        "_Search__abstract": reference["publishedAbstract"],
+        "_Search__doi": reference["DOI"],
+        "_Search__year": reference["year"],
+        "_Search__authors": ", ".join(
+            "%s %s" % (a["firstName"], a["lastName"])
+            for a in reference["authors"]),
+        "_Search__tags": list(doc["tags"]),
+        "_Search__collections": list(doc["collections"]),
+        "_Search__publication": "Journal of Placeholder Science 1, 1-2",
+        "_Search__serverPath": "https://rcc.peer.example.org/secret",
+        "_Search__fileServerPath": "https://files.peer.example.org/secret",
+        "_Search__folderAbsolutePath": "/home/peercurator/secret",
+    }
+
+
+def details_payload(paper_id, doc):
+    """A peer's `/api/paper/{id}` answer: `util.PaperDetails`, plain keys,
+    including everything this server must refuse to copy."""
+    reference = doc["reference"]
+    return {
+        "id": paper_id,
+        "title": reference["title"],
+        "abstract": reference["publishedAbstract"],
+        "doi": reference["DOI"],
+        "year": reference["year"],
+        "authors": ", ".join("%s %s" % (a["firstName"], a["lastName"])
+                             for a in reference["authors"]),
+        "tags": list(doc["tags"]),
+        "collections": list(doc["collections"]),
+        "charts": [], "datasets": [], "scripts": [],
+        "tools": list(doc["tools"]),
+        "workflows": {}, "heads": [],
+        "firstName": "Peer", "lastName": "Curator",
+        "emailId": "peercurator@example.org",
+        "affiliation": "Peer University",
+        "serverPath": "https://rcc.peer.example.org/secret",
+        "fileServerPath": "https://files.peer.example.org/secret",
+        "folderAbsolutePath": "/home/peercurator/secret",
+        "downloadPath": "https://files.peer.example.org/secret.zip",
+        "notebookPath": "https://notebook.peer.example.org/secret",
+        "notebookFile": "secret.ipynb",
+        "license": "cc-by", "timeStamp": "2021-01-01 00:00:00",
+    }
+
+
+def peer_corpus():
+    """The same shaped corpus as the local one, on the peer, under ids that
+    could not be mistaken for local ObjectIds."""
+    docs = {
+        "remote-subject": paper_doc(
+            "remote-subject", "Rareword resonance of gadgetite lattices",
+            "Rareword resonance in gadgetite lattices is probed with a "
+            "cryogenic spectrometer and an oscillator of tunable frequency.",
+            tags=["rareword resonance", "gadgetite"],
+            authors=["Robin Sharedname", "Casey Otherperson"],
+            doi="10.3000/remote-subject", tools=["RarePackage"]),
+        "remote-near": paper_doc(
+            "remote-near", "Rareword resonance of gadgetite thin films",
+            "Rareword resonance in gadgetite lattices is measured with a "
+            "cryogenic spectrometer and a tunable oscillator.",
+            tags=["rareword resonance", "gadgetite"],
+            authors=["Robin Sharedname"], doi="10.3000/remote-near",
+            tools=["RarePackage"]),
+        "remote-unrelated": paper_doc(
+            "remote-unrelated", "Seasonal migration of coastal birds",
+            "Observations of coastal bird migration over several seasons.",
+            tags=["ornithology"], authors=["Sam Nobody"],
+            doi="10.3000/remote-unrelated"),
+    }
+    for i in range(20):
+        docs["remote-filler%d" % i] = paper_doc(
+            "remote-filler%d" % i, "Unrelated subject %d" % i,
+            "An abstract about topic%d and matter%d." % (i, i),
+            tags=["topic%d" % i], authors=["Person%d Sur%d" % (i, i)],
+            doi="10.3000/remote-filler%d" % i, collections=["other"])
+    return docs
+
+
+class PeerStub:
+    """The federated peer, standing in for `federation.requests`.
+
+    `record_mode` and `corpus_mode` fail one read or the other, so "the peer
+    has no such record" and "the peer did not answer" can be told apart.
+    """
+
+    def __init__(self, record_mode="ok", corpus_mode="ok", docs=None):
+        self.record_mode = record_mode
+        self.corpus_mode = corpus_mode
+        self.docs = docs if docs is not None else peer_corpus()
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append(dict(kwargs, url=url))
+        corpus = url.endswith("/api/search")
+        mode = self.corpus_mode if corpus else self.record_mode
+        if mode == "timeout":
+            raise ProviderTimeout("peer did not answer")
+        if mode == "not_found":
+            return PeerResponse(status_code=404)
+        if mode == "server_error":
+            return PeerResponse(status_code=503)
+        if mode == "redirect":
+            return PeerResponse(status_code=302)
+        if mode == "malformed":
+            return PeerResponse(body=b"<html>not json</html>")
+        if corpus:
+            return PeerResponse([search_entry(key, doc)
+                                 for key, doc in sorted(self.docs.items())])
+        paper_id = url.rsplit("/", 1)[-1]
+        doc = self.docs.get(paper_id)
+        if doc is None:
+            return PeerResponse(status_code=404)
+        return PeerResponse(details_payload(paper_id, doc))
+
+
+class PeerResponse:
+    def __init__(self, payload=None, status_code=200, body=None):
+        self.status_code = status_code
+        if body is not None:
+            self._body = body
+        else:
+            self._body = json.dumps(payload if payload is not None
+                                    else {}).encode("utf-8")
+
+    def iter_content(self, size):
+        yield self._body
+
+    def close(self):
+        pass
+
+
+class FederatedTestCase(RelatedTestCase):
+    def setUp(self):
+        super(FederatedTestCase, self).setUp()
+        federation._allowlist = {"origins": frozenset(), "at": None}
+
+    def tearDown(self):
+        federation._allowlist = {"origins": frozenset(), "at": None}
+        super(FederatedTestCase, self).tearDown()
+
+    def fetch_from(self, server, paper_id="remote-subject", env=None,
+                   provider=None, peer=None, registry=REGISTRY):
+        """GET the endpoint for a record on `server`, with the peer, the
+        registry and the recommendation provider all stubbed. Returns
+        (response, provider stub, peer stub)."""
+        stub = provider if provider is not None else ProviderStub()
+        peer = peer if peer is not None else PeerStub()
+        servers = mock.Mock(getServersList=lambda: registry)
+        with mock.patch.dict('os.environ', env or ENABLED):
+            with mock.patch.object(related, 'requests', stub):
+                with mock.patch.object(federation, 'requests', peer):
+                    with mock.patch.object(federation, 'Servers',
+                                           return_value=servers):
+                        response = self.client.get(
+                            '/api/paper/%s/related' % paper_id,
+                            params={"server": server})
+        return response, stub, peer
+
+
+class TestLocalRecordsAreUnaffected(FederatedTestCase):
+    """The regression guard: a local record must behave exactly as it did
+    before federation existed."""
+
+    def test_no_server_parameter_contacts_no_peer(self):
+        peer = PeerStub()
+        stub = ProviderStub()
+        servers = mock.Mock(getServersList=mock.Mock(return_value=REGISTRY))
+        with mock.patch.dict('os.environ', ENABLED):
+            with mock.patch.object(related, 'requests', stub):
+                with mock.patch.object(federation, 'requests', peer):
+                    with mock.patch.object(federation, 'Servers',
+                                           return_value=servers):
+                        response = self.client.get(
+                            '/api/paper/%s/related' % self.subject_id)
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], peer.calls)
+        # Not even the registry is consulted: there is nothing to authorise.
+        self.assertEqual(0, servers.getServersList.call_count)
+        body = response.json()
+        self.assertTrue(body["enabled"])
+        self.assertEqual("", body["source_server"])
+        self.assertTrue(body["internal"]["results"])
+
+    def test_this_very_server_is_answered_locally(self):
+        # `testserver` is the host the test client sends. A URL naming the
+        # server the reader is already on means the local database, not a loop
+        # back out through nginx -- and it is NOT in the registry, so this
+        # also proves the check happens before the allowlist.
+        response, _, peer = self.fetch_from("https://testserver",
+                                            paper_id=self.subject_id)
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], peer.calls)
+        self.assertEqual("", response.json()["source_server"])
+
+    def test_a_loopback_server_is_answered_locally(self):
+        # The staging tunnel (https://localhost:8443) is the common case.
+        response, _, peer = self.fetch_from("https://localhost:8443",
+                                            paper_id=self.subject_id)
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], peer.calls)
+        self.assertEqual("", response.json()["source_server"])
+        self.assertEqual(
+            "", response.json()["internal"]["results"][0]["server"])
+
+    def test_local_results_still_carry_an_empty_server(self):
+        response, _, _ = self.fetch_from(None, paper_id=self.subject_id)
+        for result in response.json()["internal"]["results"]:
+            self.assertEqual("", result["server"])
+
+
+class TestFederatedRecord(FederatedTestCase):
+    def test_an_id_only_this_peer_has_is_answered_with_200(self):
+        # The exact staging failure: the record is not in the local database.
+        self.assertEqual(0, Paper.objects(id__in=[]).count())
+        response, _, peer = self.fetch_from(PEER)
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertTrue(body["enabled"])
+        self.assertEqual(PEER, body["source_server"])
+        self.assertEqual("ok", body["internal"]["status"])
+        self.assertTrue(body["internal"]["results"])
+
+    def test_both_the_record_and_the_corpus_come_from_the_peer(self):
+        response, _, peer = self.fetch_from(PEER)
+        urls = sorted(call["url"] for call in peer.calls)
+        self.assertEqual(["%s/api/paper/remote-subject" % PEER,
+                          "%s/api/search" % PEER], urls)
+        # Scored against the PEER's corpus: the neighbour returned is the
+        # peer's, never the local record with the same title.
+        ids = [r["id"] for r in response.json()["internal"]["results"]]
+        self.assertIn("remote-near", ids)
+        local_ids = {str(p.id) for p in Paper.objects()}
+        self.assertFalse(set(ids) & local_ids)
+
+    def test_every_federated_result_names_the_server_it_lives_on(self):
+        response, _, _ = self.fetch_from(PEER)
+        results = response.json()["internal"]["results"]
+        self.assertTrue(results)
+        for result in results:
+            self.assertEqual(PEER, result["server"])
+
+    def test_the_record_is_never_written_to_this_servers_database(self):
+        before = {str(p.id) for p in Paper.objects()}
+        self.fetch_from(PEER)
+        self.fetch_from(PEER)
+        self.assertEqual(before, {str(p.id) for p in Paper.objects()})
+        self.assertEqual(0, Paper.objects(
+            reference__DOI="10.3000/remote-subject").count())
+
+    def test_no_peer_curator_or_file_server_data_reaches_the_response(self):
+        response, _, _ = self.fetch_from(PEER, env=ENABLED_WITH_KEY)
+        text = response.text
+        for leak in ("peercurator@example.org", "Peer University",
+                     "rcc.peer.example.org", "files.peer.example.org",
+                     "/home/peercurator/secret", "secret.ipynb",
+                     "notebook.peer.example.org", "test-s2-super-secret"):
+            self.assertNotIn(leak, text, leak)
+
+    def test_the_external_provider_is_asked_about_the_remote_doi(self):
+        response, provider, _ = self.fetch_from(PEER)
+        self.assertEqual(200, response.status_code)
+        resolution = provider.calls[0]
+        self.assertIn("10.3000/remote-subject", resolution["url"])
+        # And the local subject's DOI is nowhere near the provider call.
+        self.assertNotIn("10.1000/subject", resolution["url"])
+
+    def test_the_peer_is_read_over_https_only(self):
+        _, _, peer = self.fetch_from(PEER)
+        for call in peer.calls:
+            self.assertTrue(call["url"].startswith("https://"), call["url"])
+            self.assertFalse(call["allow_redirects"])
+
+    def test_a_rate_limited_external_provider_keeps_the_federated_list(self):
+        # The two halves fail independently. A 429 from Semantic Scholar must
+        # not cost the reader the Related Qresp Records computed from the
+        # peer's own corpus.
+        provider = ProviderStub()
+        provider.resolution_mode = "rate_limited"
+        response, _, _ = self.fetch_from(PEER, provider=provider)
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("ok", body["internal"]["status"])
+        self.assertTrue(body["internal"]["results"])
+        self.assertEqual("unavailable", body["external"]["status"])
+
+    def test_a_federated_record_with_nothing_related_is_an_empty_ok(self):
+        # An answer, not a failure: the peer was read and nothing cleared the
+        # quality gate.
+        lonely = {"remote-lonely": paper_doc(
+            "remote-lonely", "Seasonal migration of coastal birds",
+            "Observations of coastal bird migration over several seasons.",
+            tags=["ornithology"], authors=["Sam Nobody"],
+            doi="10.3000/remote-lonely")}
+        lonely.update({k: v for k, v in peer_corpus().items()
+                       if k.startswith("remote-filler")})
+        response, _, _ = self.fetch_from(
+            PEER, paper_id="remote-lonely", peer=PeerStub(docs=lonely))
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("ok", body["internal"]["status"])
+        self.assertEqual([], body["internal"]["results"])
+        self.assertEqual(0, body["internal"]["count"])
+
+
+class TestFederatedFailures(FederatedTestCase):
+    def test_a_record_the_peer_does_not_have_is_a_404(self):
+        response, _, _ = self.fetch_from(PEER, paper_id="remote-missing")
+        self.assertEqual(404, response.status_code)
+        self.assertEqual("This record is not available.",
+                         response.json()["error"])
+
+    def test_a_peer_timeout_is_reported_not_rendered_as_no_results(self):
+        response, _, _ = self.fetch_from(
+            PEER, peer=PeerStub(record_mode="timeout"))
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertTrue(body["enabled"])
+        self.assertEqual("unavailable", body["internal"]["status"])
+        self.assertEqual([], body["internal"]["results"])
+
+    def test_every_way_a_peer_read_can_fail_is_unavailable_not_empty(self):
+        for mode in ("timeout", "server_error", "redirect", "malformed"):
+            for where in ("record_mode", "corpus_mode"):
+                response, _, _ = self.fetch_from(
+                    PEER, peer=PeerStub(**{where: mode}))
+                self.assertEqual(200, response.status_code, (mode, where))
+                self.assertEqual("unavailable",
+                                 response.json()["internal"]["status"],
+                                 (mode, where))
+
+    def test_a_corpus_the_peer_cannot_serve_is_never_replaced_by_the_local_one(self):
+        # Scoring a remote record against this server's corpus would rank it
+        # by the wrong vocabulary and label the results with the wrong server.
+        response, _, _ = self.fetch_from(
+            PEER, peer=PeerStub(corpus_mode="server_error"))
+        self.assertEqual([], response.json()["internal"]["results"])
+
+    def test_a_failed_peer_read_writes_nothing_to_the_cache(self):
+        self.fetch_from(PEER, peer=PeerStub(record_mode="timeout"))
+        self.assertEqual(0, RelatedResearchCache.objects.count())
+
+
+class TestRefusedServers(FederatedTestCase):
+    def assert_refused(self, server, peer=None):
+        peer = peer if peer is not None else PeerStub()
+        response, _, peer = self.fetch_from(server, peer=peer)
+        self.assertEqual(400, response.status_code, server)
+        self.assertEqual("This Qresp server is not available.",
+                         response.json()["error"])
+        # Refused means refused: no request left this process.
+        self.assertEqual([], peer.calls, server)
+        return response
+
+    def test_a_server_outside_the_registry_is_refused(self):
+        self.assert_refused("https://evil.example.net")
+
+    def test_ssrf_shapes_are_refused(self):
+        for server in ("https://169.254.169.254", "https://10.0.0.5",
+                       "https://192.168.0.1", "https://[fd00::1]",
+                       "file:///etc/passwd", "javascript:alert(1)",
+                       "https://user:pw@peer.example.org",
+                       "https://peer.example.org@evil.example.net",
+                       "https://peer.example.org/../admin",
+                       "https://peer.example.org?x=1",
+                       "https://peer.example.org.evil.net",
+                       "http://peer.example.org",
+                       "https://paperstack.uchicagо.edu"):
+            self.assert_refused(server)
+
+    def test_a_refused_server_never_falls_back_to_the_local_record(self):
+        # The local subject id EXISTS here. Asking for it "on" a server this
+        # deployment does not federate with must not quietly answer with the
+        # local record.
+        response, _, _ = self.fetch_from("https://evil.example.net",
+                                         paper_id=self.subject_id)
+        self.assertEqual(400, response.status_code)
+        self.assertNotIn("Rareword", response.text)
+
+    def test_a_server_no_list_names_is_refused(self):
+        # With the registry empty, only the shipped federation list is left,
+        # and this peer is not on it.
+        response, _, peer = self.fetch_from(PEER, registry=[])
+        self.assertEqual(400, response.status_code)
+        self.assertEqual([], peer.calls)
+
+    def test_the_feature_switch_still_wins(self):
+        # Off means off, whatever the server parameter says.
+        response, _, peer = self.fetch_from("https://evil.example.net",
+                                            env=DISABLED)
+        self.assertEqual(200, response.status_code)
+        self.assertFalse(response.json()["enabled"])
+        self.assertEqual([], peer.calls)
+
+
+class TestFederatedCacheIsolation(FederatedTestCase):
+    def test_the_same_id_on_two_servers_gets_two_cache_rows(self):
+        # A 24-hex ObjectId is only unique within one server.
+        local_id = self.subject_id
+        self.fetch_from(None, paper_id=local_id)
+        peer = PeerStub(docs={local_id: peer_corpus()["remote-subject"]})
+        self.fetch_from(PEER, paper_id=local_id, peer=peer)
+        keys = sorted(e.paper_id for e in RelatedResearchCache.objects())
+        self.assertEqual([local_id, "%s|%s" % (PEER, local_id)], keys)
+
+    def test_a_local_entry_keeps_its_bare_id(self):
+        # Backward compatibility: an entry written before federation existed
+        # is still found by the local path.
+        self.fetch_from(None, paper_id=self.subject_id)
+        entry = RelatedResearchCache.objects.first()
+        self.assertEqual(self.subject_id, entry.paper_id)
+
+    def test_a_remote_answer_is_never_served_for_the_local_record(self):
+        local_id = self.subject_id
+        peer = PeerStub(docs={local_id: peer_corpus()["remote-subject"]})
+        self.fetch_from(PEER, paper_id=local_id, peer=peer)
+        remote_titles = {r["title"] for r in RelatedResearchCache.objects(
+            paper_id="%s|%s" % (PEER, local_id)).first().results}
+        response, provider, _ = self.fetch_from(None, paper_id=local_id)
+        self.assertEqual(200, response.status_code)
+        # The local request went to the provider itself rather than reading
+        # the remote row.
+        self.assertTrue(provider.calls)
+        del remote_titles
 
 
 if __name__ == "__main__":

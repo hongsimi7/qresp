@@ -290,7 +290,13 @@ class RelatedResearchCache(Document):
     `last_success_at` outlives a failed refresh on purpose: it is what lets a
     stale-but-real answer be served when the provider is unreachable.
     """
-    paper_id = StringField(required=True, unique=True, max_length=64)
+    # The record this entry is about, ACROSS servers
+    # (project.federation.cache_key). A record on this server keeps its bare
+    # id, so every entry written before federation existed is still a hit and
+    # no migration is needed; a record read from a federated peer is prefixed
+    # with that peer's canonical origin, so two servers that happen to issue
+    # the same ObjectId can never serve each other's recommendations.
+    paper_id = StringField(required=True, unique=True, max_length=320)
     # SHA-256 of the record's public scientific metadata at the moment these
     # results were computed (project.relatedness.metadata_fingerprint). An
     # entry whose fingerprint no longer matches the record is a MISS whatever

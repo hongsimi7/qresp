@@ -598,16 +598,34 @@ paths:
           type: string
           required: true
           description: Paper Id
+        - in: query
+          name: server
+          type: string
+          required: false
+          description: >-
+            The Qresp server that holds the record, as on the detail page URL
+            (e.g. https://paperstack.example.org). Omitted, or naming this
+            server, the record and the corpus are read locally exactly as
+            before. Naming a server in the federated registry, both are read
+            from that server over HTTPS and scored against ITS corpus; the
+            record is never copied into this server's database. Any other
+            value is refused with 400 — no arbitrary URL is fetched, and there
+            is no fallback to the local database.
       responses:
         200:
           description: >-
             Two independent lists, each capped at five and never padded.
-            `internal[].id` links to the Qresp detail page;
-            `external[].url` prefers an HTTPS DOI link. Every result carries
-            grounded `reasons` (at most three). The external section reports
-            `status` (`ok`, `disabled`, `unresolved`, `unavailable`) and
-            `stale`, which is true when a refresh failed and the last
-            successful results are being served.
+            `internal[].id` links to the Qresp detail page and
+            `internal[].server` names the Qresp server it lives on (empty for
+            this one); `external[].url` prefers an HTTPS DOI link.
+            `source_server` echoes the server both lists were computed from.
+            Every result carries grounded `reasons` (at most three). Each
+            section reports a `status`: `ok`, `disabled`, `unavailable`, and
+            for the external one also `unresolved` and `stale`, which is true
+            when a refresh failed and the last successful results are being
+            served.
+        400:
+          description: The requested Qresp server is not one this server federates with
         404:
           description: No such record, or the record is not publicly available
   /paper/{id}/permissions:
