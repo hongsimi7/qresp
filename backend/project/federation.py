@@ -329,7 +329,17 @@ def _registry_servers():
         url = (Config.get_setting('GLOBAL', 'QRESP_SERVER_URL') or "").strip()
     except Exception:
         return []
-    if not parse_origin_of(url):
+    origin = parse_origin_of(url)
+    # HTTPS ONLY, and no request at all otherwise. This list decides what this
+    # server may contact, so reading it over plaintext would let anyone on the
+    # path add themselves to the outbound allowlist -- the exact thing
+    # verifying the certificate is meant to prevent. A misconfigured registry
+    # therefore degrades to "no registry", and the shipped list still applies.
+    #
+    # The URL is never logged: it comes from config.ini and may name an
+    # internal host.
+    if not origin or not origin.startswith("https://"):
+        print("Federated server registry is not an https URL; ignored")
         return []
     try:
         response = requests.get(url, headers=FEDERATION_HEADERS,
