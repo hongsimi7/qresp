@@ -315,6 +315,12 @@ class RelatedResearchCache(Document):
     # so "the external list is empty" can be diagnosed from the cache without
     # re-asking the provider. A code, never a provider message.
     reason = StringField(max_length=64)
+    # Where the provider's candidates went: booleans, a status string and
+    # counts, and nothing else -- no title, no abstract, no provider body, no
+    # credential. Stored so a cached answer can explain itself exactly as the
+    # live one did. Absent on entries written before this field existed, which
+    # is why every reader treats it as optional.
+    pipeline = DictField()
     provider = StringField(max_length=64)
     # 'ok' (provider answered), 'unresolved' (this paper could not be
     # identified confidently enough to ask), 'unavailable' (provider failed).

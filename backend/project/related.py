@@ -574,7 +574,7 @@ def _load_cache(paper_id):
 
 
 def _store_cache(paper_id, status, results, cfg, fingerprint, previous=None,
-                 reason=REASON_OK):
+                 reason=REASON_OK, pipeline=None):
     """Persist the external outcome. Only gate-passing public bibliographic
     metadata, the reasons Qresp computed, and the metadata fingerprint are
     written -- never the API key, a request header, a provider error body, or
@@ -609,6 +609,7 @@ def _store_cache(paper_id, status, results, cfg, fingerprint, previous=None,
             set__fingerprint=fingerprint,
             set__algorithm_version=ALGORITHM_VERSION,
             set__reason=reason,
+            set__pipeline=pipeline or {},
             set__fetched_at=now,
             set__last_success_at=last_success_at,
             set__expires_at=expires_at,
@@ -644,10 +645,14 @@ def _section_from_entry(entry):
     the refresh path makes, kept for the hour a failure is remembered."""
     results = list(entry.results or [])
     status = entry.status or STATUS_OK
+    # A cached answer explains itself exactly as the live one did. An entry
+    # written before `pipeline` existed simply has none: the counts are
+    # omitted rather than invented, and the next real refresh fills them in.
     return _external_section(status, results,
                              stale=(status != STATUS_OK and bool(results)),
                              updated_at=entry.last_success_at,
-                             reason=entry.reason or None)
+                             reason=entry.reason or None,
+                             pipeline=entry.pipeline or None)
 
 
 # ------------------------------------------------------- recommendation core
@@ -701,7 +706,7 @@ def internal_recommendations(current_record, corpus_records,
 
 
 def external_recommendations(current_record, candidates, stats,
-                             citation_dois=frozenset()):
+                             citation_dois=frozenset(), limit=MAX_RESULTS):
     """Apply Qresp's own gate to the provider's candidates.
 
     The provider's ordering is discarded: candidates are re-ranked by the
@@ -709,10 +714,17 @@ def external_recommendations(current_record, candidates, stats,
     ones returned. Rarity is still measured against the Qresp corpus, so
     "specific" means the same thing in both lists.
 
+    `limit=None` returns EVERY candidate that cleared the gate, still in
+    score order, so the caller can report how many passed before the cap was
+    applied. The default is unchanged, so other callers keep the capped list
+    they already expect. The order is the same either way -- gate, sort, then
+    cut -- and the cut is the caller's to make.
     """
     current = build_internal_profile(current_record)
     profiles = [build_external_profile(candidate) for candidate in candidates]
-    ranked = rank(current, profiles, stats, citation_dois, MAX_RESULTS)
+    if limit is None:
+        limit = len(profiles)
+    ranked = rank(current, profiles, stats, citation_dois, limit)
     return [_result(profile, assessment, "external")
             for profile, assessment in ranked]
 
@@ -792,7 +804,7 @@ def _external_for(paper_id, current_record, stats, cfg):
 
     def failed(status, reason, pipeline):
         stored = _store_cache(paper_id, status, [], cfg, fingerprint, entry,
-                              reason=reason)
+                              reason=reason, pipeline=pipeline)
         return _external_section(
             status, list(stored),
             # Results only ever survive here from an EARLIER success.
@@ -832,10 +844,17 @@ def _external_for(paper_id, current_record, stats, cfg):
     candidates = dedupe_candidates(candidates, doi, title)
     # No citation source is wired (see RESOLUTION_FIELDS): the citation family
     # simply never fires, rather than being inferred from something weaker.
-    results = external_recommendations(current_record, candidates, stats)
+    #
+    # EVERY candidate that clears the gate is counted, and only then is the
+    # list cut to MAX_RESULTS. Counting the cut list made `after_gate` and
+    # `shown` identical by construction, which hid the one thing the pair was
+    # there to show: how much the cap is discarding.
+    passing = external_recommendations(current_record, candidates, stats,
+                                       limit=None)
+    results = passing[:MAX_RESULTS]
     pipeline = _pipeline(resolved=True, provider_status=FOUND, raw=raw_count,
-                         after_dedupe=len(candidates), after_gate=len(results),
-                         shown=len(results))
+                         after_dedupe=len(candidates),
+                         after_gate=len(passing), shown=len(results))
     # An empty list here is an ANSWER, and the two ways of arriving at it are
     # different facts: the provider had nothing to propose, or it proposed
     # candidates and none of them cleared Qresp's gate. Both are `ok` -- the
@@ -848,9 +867,9 @@ def _external_for(paper_id, current_record, stats, cfg):
     else:
         reason = REASON_ALL_FILTERED
     _store_cache(paper_id, STATUS_OK, results, cfg, fingerprint, entry,
-                 reason=reason)
+                 reason=reason, pipeline=pipeline)
     return _external_section(STATUS_OK, results, stale=False, updated_at=now,
-                             reason=reason)
+                             reason=reason, pipeline=pipeline)
 
 
 def _local_hostname():

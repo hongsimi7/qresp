@@ -67,6 +67,22 @@ class CacheTestCase(RelatedTestCase):
                             self.assertEqual(200, response.status_code)
         return peer, provider
 
+    def external(self, provider=None, peer=None):
+        """ONE view, so the pipeline counts come from the live computation
+        rather than from the stored answer."""
+        provider = provider if provider is not None else ProviderStub()
+        peer = peer if peer is not None else PeerStub()
+        with mock.patch.dict('os.environ', ENABLED):
+            with mock.patch.object(related, 'requests', provider):
+                with mock.patch.object(federation, 'requests', peer):
+                    with mock.patch.object(federation, '_registry_servers',
+                                           return_value=REGISTRY):
+                        response = self.client.get(
+                            '/api/paper/remote-subject/related',
+                            params={"server": PEER})
+        self.assertEqual(200, response.status_code)
+        return response.json()["external"]
+
 
 class TestPeerRequestsAreNotMultiplied(CacheTestCase):
     def test_five_reloads_of_one_record_read_the_peer_once(self):
@@ -213,22 +229,6 @@ class TestStaleWhileRevalidate(CacheTestCase):
 class TestWhyTheExternalListIsEmpty(CacheTestCase):
     """Requirement B: five causes, five reason codes, and the pipeline counts
     that let an operator see where the candidates went."""
-
-    def external(self, provider=None, peer=None):
-        """ONE view, so the pipeline counts come from the live computation
-        rather than from the stored answer."""
-        provider = provider if provider is not None else ProviderStub()
-        peer = peer if peer is not None else PeerStub()
-        with mock.patch.dict('os.environ', ENABLED):
-            with mock.patch.object(related, 'requests', provider):
-                with mock.patch.object(federation, 'requests', peer):
-                    with mock.patch.object(federation, '_registry_servers',
-                                           return_value=REGISTRY):
-                        response = self.client.get(
-                            '/api/paper/remote-subject/related',
-                            params={"server": PEER})
-        self.assertEqual(200, response.status_code)
-        return response.json()["external"]
 
     def test_a_healthy_answer_with_results(self):
         section = self.external()
