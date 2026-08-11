@@ -220,12 +220,19 @@ class TestSpecificity(unittest.TestCase):
         ]
         stats = stats_for(corpus)
         self.assertTrue(stats.is_rare_enough("rareword"))
-        # ...and rarity alone is not enough: the term must also look like
-        # subject vocabulary. `gadgetite` does; `rareword` is under the
-        # plain-word length bar and only qualifies when a curator tags it.
-        self.assertTrue(stats.is_specific("gadgetite"))
+        # ...and rarity alone is not enough. `is_specific` is now the
+        # conservative half of the test -- SHAPE plus rarity -- so a plain
+        # lowercase word does not qualify from its spelling however long it
+        # is. That is the whole point: `gadgetite` and `conventional` are the
+        # same shape, and the length rule that used to separate them was
+        # separating nothing. Provenance admits the real one; see
+        # `pair_specific_terms`.
+        self.assertFalse(stats.is_specific("gadgetite"))
         self.assertFalse(stats.is_specific("rareword"))
+        self.assertFalse(stats.is_specific("conventional"))
+        # A multi-word curated phrase and a formula still qualify on shape.
         self.assertTrue(stats.is_specific("rareword resonance"))
+        self.assertTrue(stats.is_specific("bivo4"))
 
 
 class TestQualityGate(unittest.TestCase):
@@ -352,7 +359,12 @@ class TestQualityGate(unittest.TestCase):
         self.assertFalse(outcome.passes)
         self.assertTrue(all(e.strength == R.MEDIUM for e in outcome.evidence))
 
-    def test_the_same_tool_on_the_same_topic_is_strong(self):
+    def test_the_same_tool_is_never_more_than_medium(self):
+        # It used to be STRONG when a topic overlapped, which is the door
+        # `facilityName` walked through: "argonne national lab" was read as a
+        # method, so a shared employer plus any topic word was a strong
+        # verdict. Software and technique overlap now needs a second,
+        # independent family before it can open the gate at all.
         current = record("a", "Rareword resonance of gadgetite",
                          "Rareword resonance measured in gadgetite lattices.",
                          tags=["rareword resonance"], tools=["RarePackage"])
@@ -362,7 +374,10 @@ class TestQualityGate(unittest.TestCase):
         outcome = self.assess(current, candidate,
                               filler(20) + [current, candidate])
         methods = [e for e in outcome.evidence if e.family == R.FAMILY_METHODS]
-        self.assertEqual([R.STRONG], [e.strength for e in methods])
+        self.assertEqual([R.MEDIUM], [e.strength for e in methods])
+        # The pair still passes -- on its shared curated topic, which is what
+        # should have been carrying it all along.
+        self.assertTrue(outcome.passes)
 
     def test_a_direct_citation_is_strong_and_never_inferred(self):
         current = record("a", "Alpha widget resonance", "Alpha widgets.")
