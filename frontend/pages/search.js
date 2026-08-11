@@ -2,7 +2,14 @@ import { useEffect, useContext, Fragment, useState } from "react";
 
 import { useRouter } from "next/router";
 
-import { Container, Typography, Box, Divider } from "@mui/material";
+import {
+  Alert,
+  Box,
+  CircularProgress,
+  Container,
+  Divider,
+  Typography,
+} from "@mui/material";
 
 import SEO from "../components/seo";
 
@@ -93,14 +100,36 @@ const search = ({ initialdata, error, selectedservers }) => {
 
   useEffect(() => {
     setSelected(selectedservers);
-    if (error.is || (data && data.error)) {
-      setAlert(
-        "Search Error !",
-        error.msg,
-        <RegularStyledButton onClick={refresh}>Retry</RegularStyledButton>
-      );
-    }
   }, []);
+
+  // Explorer sends every visitor straight here, so a navigation to /search is
+  // now the front door and its latency is visible. Next keeps the PREVIOUS
+  // page mounted while it fetches the next one's props, which would leave a
+  // stale record count on screen reading as the new one -- so the count is
+  // replaced by an explicit loading state instead. "0 Records Available" is
+  // never used to mean "still working": it is what a healthy empty node says.
+  const [navigating, setNavigating] = useState(false);
+  useEffect(() => {
+    const { events } = router;
+    if (!events) return undefined;
+    const start = (url) => {
+      if (String(url || "").startsWith("/search")) setNavigating(true);
+    };
+    const done = () => setNavigating(false);
+    events.on("routeChangeStart", start);
+    events.on("routeChangeComplete", done);
+    events.on("routeChangeError", done);
+    return () => {
+      events.off("routeChangeStart", start);
+      events.off("routeChangeComplete", done);
+      events.off("routeChangeError", done);
+    };
+  }, [router]);
+
+  const failed = (error && error.failed) || [];
+  // EVERY node failed. There is nothing to show and nothing to filter, and
+  // saying "0 Records Available" here would be a different, wrong claim.
+  const unavailable = Boolean(error && error.total);
 
   return (
     <Fragment>
@@ -111,23 +140,70 @@ const search = ({ initialdata, error, selectedservers }) => {
       />
       <Container>
         <Box sx={{ display: "flex", flexDirection: "column", m: 2 }}>
-          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", p: 2 }}>
-            <Typography variant="h4">
-              <Box sx={{ fontWeight: "bold" }}>{`${rows.length}  Records Available`}</Box>
-            </Typography>
-          </Box>
-          <Box>
-            <AdvancedSearch
-              collections={collections}
-              authors={authors}
-              publications={publications}
-              tags={Array.from(taglist)}
-              setData={setData}
-              clearSearch={clearSearch}
-            />
-          </Box>
-          <Divider />
-          <RecordTable rows={rows} columns={columns} />
+          {/* Some nodes answered and some did not. The ones that answered are
+              still worth reading, so this is a notice beside the results --
+              never a modal over them, which cannot be dismissed past. */}
+          {!unavailable && failed.length > 0 ? (
+            <Box sx={{ mb: 2 }} data-testid="search-partial-failure">
+              <Alert severity="warning">
+                Some Qresp nodes could not be reached, so their records are
+                missing from these results: {failed.join(", ")}.
+              </Alert>
+            </Box>
+          ) : null}
+
+          {unavailable ? (
+            <Box sx={{ my: 4 }} data-testid="search-unavailable">
+              <Alert
+                severity="error"
+                action={
+                  <RegularStyledButton onClick={refresh}>
+                    Retry
+                  </RegularStyledButton>
+                }
+              >
+                {failed.length
+                  ? `These Qresp nodes could not be reached: ${failed.join(
+                      ", "
+                    )}.`
+                  : "No Qresp node could be reached."}{" "}
+                No records could be loaded — this is a connection problem, not
+                an empty node.
+              </Alert>
+            </Box>
+          ) : (
+            <Fragment>
+              <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", p: 2 }}>
+                {navigating ? (
+                  <Box
+                    sx={{ display: "flex", alignItems: "center", gap: 1.5 }}
+                    data-testid="search-loading"
+                  >
+                    <CircularProgress size={22} />
+                    <Typography variant="h6">Searching…</Typography>
+                  </Box>
+                ) : (
+                  <Typography variant="h4" data-testid="record-count">
+                    <Box sx={{ fontWeight: "bold" }}>
+                      {`${rows.length}  Records Available`}
+                    </Box>
+                  </Typography>
+                )}
+              </Box>
+              <Box>
+                <AdvancedSearch
+                  collections={collections}
+                  authors={authors}
+                  publications={publications}
+                  tags={Array.from(taglist)}
+                  setData={setData}
+                  clearSearch={clearSearch}
+                />
+              </Box>
+              <Divider />
+              <RecordTable rows={rows} columns={columns} />
+            </Fragment>
+          )}
         </Box>
       </Container>
     </Fragment>
@@ -137,7 +213,12 @@ const search = ({ initialdata, error, selectedservers }) => {
 export async function getServerSideProps(ctx) {
   // Query contains the args from the url
   const { query } = ctx;
-  const error = { is: false, msg: "" };
+  // `failed` and `total` are what the page renders from: WHICH nodes were
+  // unreachable, and whether any node answered at all. `is`/`msg` are kept
+  // because other callers and tests read them, but "some nodes are down" and
+  // "nothing loaded" are different situations and the page must not show the
+  // same thing for both.
+  const error = { is: false, msg: "", failed: [], total: false };
   const data = {
     papers: {},
     authors: [],
@@ -147,6 +228,7 @@ export async function getServerSideProps(ctx) {
 
   if (!query.servers || query.servers.length == 0) {
     error.is = true;
+    error.total = true;
     error["msg"] = "No servers selected to be searched";
     return {
       props: { initialdata: data, error: error, servers: null },
@@ -182,14 +264,18 @@ export async function getServerSideProps(ctx) {
       } catch (e) {
         console.error(e);
         error.is = true;
-        error.msg += (i == 0 ? "" : ", ") + server;
+        if (!error.failed.includes(server)) error.failed.push(server);
         break;
       }
     }
   }
 
   if (error.is) {
-    error.msg = "Could not fetch data from these servers: " + error.msg;
+    error.msg =
+      "Could not fetch data from these servers: " + error.failed.join(", ");
+    // Every node asked for was unreachable: there is nothing partial about
+    // it, and the page shows an unavailable state rather than an empty table.
+    error.total = error.failed.length >= servers.length;
   }
 
   return {
