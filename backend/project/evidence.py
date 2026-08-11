@@ -398,6 +398,37 @@ KIND_SOURCES = {
     "tool": ("readme", "manifest", "comment_header"),
 }
 
+# Source types a kind carries that the extractors above do NOT produce.
+# `declarations` is parsed by curation.parse_manifest / parse_module_loads
+# from the same texts and appended to the Tool bundle there.
+APPENDED_SOURCES = {
+    "tool": ("declarations",),
+}
+
+
+def accepted_source_types(kind):
+    """Every source type this record kind may carry — the ONE table.
+
+    Both directions read it: `build_sources` uses `KIND_SOURCES` to decide
+    what to extract, and the endpoint uses this to decide what to ACCEPT back
+    from the browser. They have to be the same list. A Chart has no docstring
+    and a Dataset has no function names, so a bundle that arrives carrying one
+    did not come from this analyzer, and it is not evidence about that
+    candidate whatever it says.
+    """
+    return tuple(KIND_SOURCES.get(kind, ())) + tuple(
+        APPENDED_SOURCES.get(kind, ()))
+
+
+def all_source_types():
+    """The union across kinds, for the coarse global allowlist."""
+    seen = []
+    for kind in KIND_SOURCES:
+        for source_type in accepted_source_types(kind):
+            if source_type not in seen:
+                seen.append(source_type)
+    return tuple(seen)
+
 
 def _source(kind, path, excerpt="", names=None):
     source = {"type": kind, "path": path}

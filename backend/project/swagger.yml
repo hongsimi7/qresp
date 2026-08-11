@@ -996,7 +996,11 @@ paths:
                       description: The candidate's `ai_sources`, echoed back
                         from analyze-folder. Every entry is re-validated,
                         re-redacted and re-bounded on the server, so a client
-                        cannot widen what travels.
+                        cannot widen what travels. The enum below is a first
+                        gate only — the server additionally drops any type
+                        the candidate's own `kind` cannot carry (a Chart has
+                        no docstring; a Dataset has no function names), which
+                        a spec enum cannot express.
                       items:
                         type: object
                         properties:
@@ -1020,7 +1024,15 @@ paths:
                               type: string
       responses:
         200:
-          description: Suggestions returned for the curator to review
+          description: >-
+            Suggestions returned for the curator to review, OR a
+            deterministic abstention. When the candidate has no usable
+            source of a type its own record kind can carry, the server
+            answers with an empty `suggestions` object and the candidate id
+            in `no_suggestion`, WITHOUT reading the provider configuration,
+            touching the daily quota, or calling the provider — including on
+            a server where no API key is configured. Authentication, CSRF,
+            consent and the one-candidate rule still apply.
         400:
           description: Consent missing, or not exactly one candidate
         401:

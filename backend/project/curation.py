@@ -1440,10 +1440,11 @@ MAX_AI_SOURCES = 8
 MAX_AI_SOURCE_CHARS = 1200
 MAX_AI_SOURCE_NAMES = 12
 MAX_AI_EVIDENCE_CHARS = 3000
-AI_SOURCE_TYPES = (
-    "readme", "docstring", "python_symbols", "comment_header",
-    "notebook_markdown", "manifest", "declarations",
-)
+# The coarse union, DERIVED from the per-kind table rather than repeated
+# beside it: a list maintained in two places is a list that drifts. The
+# per-kind check in `_sanitize_sources` is the one that actually matters —
+# this only keeps swagger.yml's enum and the global check honest.
+AI_SOURCE_TYPES = ev.all_source_types()
 # One candidate, one call, one budget. Batching is gone, so there is no
 # arithmetic here any more: 512 tokens is generous for a 40-word description
 # and five keywords, and stays well inside the configured global cap.
@@ -1594,22 +1595,31 @@ def _sanitize_inventory(raw):
             "sample_names": names}
 
 
-def _sanitize_sources(raw_sources):
-    """Re-validate and re-bound the structured evidence bundle.
+def _sanitize_sources(raw_sources, kind):
+    """Re-validate and re-bound the structured evidence bundle, FOR THIS KIND.
 
     The browser sends back the `ai_sources` the analysis gave it, so this is a
     round trip through an untrusted client. Everything is therefore checked
-    again here — the type must be one we produce, the path must be a plain
-    relative path, redaction is re-run, and the per-source and per-candidate
-    character budgets are re-applied. A client that invents a source can only
-    ever invent something inside these bounds.
+    again here — the type must be one THIS RECORD KIND can carry, the path
+    must be a plain relative path, redaction is re-run, and the per-source and
+    per-candidate character budgets are re-applied. A client that invents a
+    source can only ever invent something inside these bounds.
+
+    The per-kind check is not decoration. The global allowlist alone let a
+    tampered client hang a `docstring` on a Chart, and a Chart caption built
+    from a docstring is exactly the unfounded caption the whole feature is
+    arranged to refuse — the analyzer never produces one, because a Chart
+    boundary holds an image, a README and a notebook, not source code.
+    `swagger.yml` cannot express this: an enum knows the seven type names but
+    not which kind may hold which.
     """
+    accepted = ev.accepted_source_types(kind)
     sources, budget = [], MAX_AI_EVIDENCE_CHARS
     for entry in (raw_sources or [])[:MAX_AI_SOURCES * 4]:
         if not isinstance(entry, dict):
             continue
         source_type = _clip(entry.get("type"), 32)
-        if source_type not in AI_SOURCE_TYPES:
+        if source_type not in accepted:
             continue
         path = _clip(entry.get("path"), MAX_AI_NAME_CHARS)
         if "://" in path or path.startswith("/") or "\\" in path:
@@ -1689,8 +1699,9 @@ def _sanitize_ai_items(raw_items):
             # Locally extracted evidence, boundary-confined by the analysis
             # and re-bounded here: README/docstring/notebook-markdown
             # excerpts, top-level symbol names, manifest declarations. Never
-            # raw data, never image bytes, never the curator's own draft.
-            "sources": _sanitize_sources(entry.get("sources")),
+            # raw data, never image bytes, never the curator's own draft, and
+            # never a source type this record kind cannot carry.
+            "sources": _sanitize_sources(entry.get("sources"), kind),
         })
         if len(items) >= MAX_AI_ITEMS:
             break
@@ -1799,6 +1810,31 @@ def describe_candidates(body):
     if len(items) != 1:
         return {"error": "That candidate could not be read."}, 400
 
+    item = items[0]
+
+    # NO CANDIDATE-SPECIFIC EVIDENCE, NO REQUEST.
+    #
+    # The system prompt asks the model to return an empty description when
+    # `sources` is empty. That is a request, not a guarantee: the server
+    # called Gemini anyway, spent a quota unit anyway, and passed back
+    # whatever came out -- which for a Chart holding nothing but an image
+    # meant a caption assembled from the file name and the paper's abstract,
+    # the one thing the prompt most explicitly forbids.
+    #
+    # Abstention is decided HERE instead, from the evidence, before the
+    # provider configuration is even read. It cannot be argued out of, it
+    # costs the curator nothing, and it answers identically on a server with
+    # no API key -- because whether this candidate can be described is a
+    # property of the folder, not of the provider.
+    #
+    # This sits AFTER authentication, CSRF, consent and the one-candidate
+    # rule, all of which still apply exactly as before. It is not a shortcut
+    # around them.
+    if not item["sources"]:
+        print("Folder AI abstained: no usable evidence for a %s candidate "
+              "(no provider call, no quota spent)" % item["kind"])
+        return {"suggestions": {}, "no_suggestion": [item["id"]]}, 200
+
     cfg = _gemini_config()
     if not _gemini_ready(cfg):
         return {"error": "AI descriptions are not configured on this "
@@ -1816,8 +1852,8 @@ def describe_candidates(body):
 
     # The evidence bundle, exactly as documented: the paper as BACKGROUND, the
     # artifact and its inventory, and the boundary-confined sources. One
-    # candidate, one bundle, one call.
-    item = items[0]
+    # candidate, one bundle, one call. `sources` is non-empty by the check
+    # above, so the model is never asked to describe nothing.
     payload = {
         "paper_context": _sanitize_paper_context(body.get("paper_context")),
         "artifact": {
