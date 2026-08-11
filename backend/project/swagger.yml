@@ -924,11 +924,16 @@ paths:
           required: true
           description: Explicit consent plus the allowlisted, bounded
             description of EXACTLY ONE candidate (id, kind, name, relative
-            paths, locally extracted text). Batching produced partial and
-            noticeably worse answers, so zero or more than one item is
-            rejected with 400 before the provider or the quota is touched. No
-            file contents, image bytes, credentials, or user data are
-            accepted here.
+            paths, file-kind inventory, and the structured evidence sources
+            the analysis extracted from inside that candidate's own
+            boundary). Batching produced partial and noticeably worse
+            answers, so zero or more than one item is rejected with 400
+            before the provider or the quota is touched. No raw dataset
+            values, image bytes, notebook code cells or outputs, function
+            bodies, credentials, or user data are accepted here. The former
+            free-text `context` key is IGNORED, because the browser used to
+            fill it with the curator's own draft readme/description, which
+            fed the answer back as its own input.
           schema:
             type: object
             required:
@@ -937,6 +942,17 @@ paths:
             properties:
               consent:
                 type: boolean
+              paper_context:
+                type: object
+                description: The paper's own title and abstract, sent as
+                  BACKGROUND for the research topic. The system prompt
+                  forbids using it as evidence for what an individual
+                  artifact does; both fields are clipped and redacted.
+                properties:
+                  title:
+                    type: string
+                  abstract:
+                    type: string
               items:
                 type: array
                 minItems: 1
@@ -955,8 +971,53 @@ paths:
                       type: array
                       items:
                         type: string
-                    context:
-                      type: string
+                    inventory:
+                      type: object
+                      description: File kinds and counts for this candidate
+                        only — never the file list.
+                      properties:
+                        file_count:
+                          type: integer
+                        extensions:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              extension:
+                                type: string
+                              count:
+                                type: integer
+                        sample_names:
+                          type: array
+                          items:
+                            type: string
+                    sources:
+                      type: array
+                      description: The candidate's `ai_sources`, echoed back
+                        from analyze-folder. Every entry is re-validated,
+                        re-redacted and re-bounded on the server, so a client
+                        cannot widen what travels.
+                      items:
+                        type: object
+                        properties:
+                          type:
+                            type: string
+                            enum:
+                              - readme
+                              - docstring
+                              - python_symbols
+                              - comment_header
+                              - notebook_markdown
+                              - manifest
+                              - declarations
+                          path:
+                            type: string
+                          excerpt:
+                            type: string
+                          names:
+                            type: array
+                            items:
+                              type: string
       responses:
         200:
           description: Suggestions returned for the curator to review
