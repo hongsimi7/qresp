@@ -190,14 +190,20 @@ class TestAiFieldsPerType(unittest.TestCase):
         # One candidate per request now, so the cross-candidate instruction
         # is gone with the batching it existed for.
         self.assertIn("wants_keywords", curation.AI_SYSTEM_PROMPT)
-        self.assertIn("You are given ONE item", curation.AI_SYSTEM_PROMPT)
+        self.assertIn("describe ONE artifact", curation.AI_SYSTEM_PROMPT)
 
     def test_wants_keywords_is_in_the_allowlist(self):
         self.assertIn("wants_keywords", curation.AI_ALLOWED_KEYS)
         # ...and the allowlist has not quietly grown anything else.
+        # `context` is deliberately GONE: it was the free-text field the
+        # browser filled with the curator's own draft readme/description.
+        # `inventory` and `sources` replaced it with bounded, typed,
+        # boundary-confined evidence.
         self.assertEqual(
             set(curation.AI_ALLOWED_KEYS),
-            {"id", "kind", "name", "paths", "context", "wants_keywords"})
+            {"id", "kind", "name", "paths", "inventory", "sources",
+             "wants_keywords"})
+        self.assertNotIn("context", curation.AI_ALLOWED_KEYS)
 
     def test_layout_words_are_not_useful_keywords(self):
         useful = curation._useful_keywords(

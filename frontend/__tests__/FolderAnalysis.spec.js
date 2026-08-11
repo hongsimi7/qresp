@@ -38,6 +38,14 @@ const analysis = {
         ],
         needs_input: ["caption", "number", "properties"],
         paths: ["figures/figure1.png"],
+        // An image and nothing else: no README, no notebook markdown, so
+        // there is nothing to caption FROM.
+        ai_sources: [],
+        inventory: {
+          file_count: 1,
+          extensions: [{ extension: ".png", count: 1 }],
+          sample_names: ["figure1.png"],
+        },
         proposal: {
           imageFile: "figures/figure1.png",
           files: [],
@@ -59,6 +67,18 @@ const analysis = {
         evidence: ["2 data file(s) in data/short_traj"],
         needs_input: ["readme"],
         paths: ["data/short_traj/traj_1.xyz", "data/short_traj/traj_2.xyz"],
+        ai_sources: [
+          {
+            type: "readme",
+            path: "data/short_traj/README.md",
+            excerpt: "A short 2 ps trajectory of 64 water molecules.",
+          },
+        ],
+        inventory: {
+          file_count: 2,
+          extensions: [{ extension: ".xyz", count: 2 }],
+          sample_names: ["traj_1.xyz", "traj_2.xyz"],
+        },
         proposal: {
           files: ["data/short_traj/traj_1.xyz", "data/short_traj/traj_2.xyz"],
           readme: "",
@@ -81,6 +101,23 @@ const analysis = {
         ],
         needs_input: ["readme"],
         paths: ["scripts/plot_vdos.py"],
+        ai_sources: [
+          {
+            type: "docstring",
+            path: "scripts/plot_vdos.py",
+            excerpt: "Plot the vibrational density of states.",
+          },
+          {
+            type: "python_symbols",
+            path: "scripts/plot_vdos.py",
+            names: ["load_vdos", "plot_vdos"],
+          },
+        ],
+        inventory: {
+          file_count: 1,
+          extensions: [{ extension: ".py", count: 1 }],
+          sample_names: ["plot_vdos.py"],
+        },
         proposal: {
           files: ["scripts/plot_vdos.py"],
           readme: "",
@@ -99,6 +136,14 @@ const analysis = {
         evidence: ["numpy 1.26.4 pinned in requirements.txt"],
         needs_input: ["description"],
         paths: ["requirements.txt"],
+        ai_sources: [
+          { type: "declarations", path: "", names: ["numpy 1.26.4"] },
+        ],
+        inventory: {
+          file_count: 1,
+          extensions: [{ extension: ".txt", count: 1 }],
+          sample_names: ["requirements.txt"],
+        },
         proposal: {
           kind: "software",
           packageName: "numpy",
@@ -1590,14 +1635,21 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     expect(screen.getByTestId("ai-consent-fields")).toHaveTextContent(
       /caption and keywords/i
     );
+    // The scope list is what is actually sent, and it must stay truthful:
+    // paper background and notebook MARKDOWN are now in the payload.
+    const scope = screen.getByTestId("ai-consent-scope");
+    expect(scope).toHaveTextContent(
+      /relative paths, file names and folder names/i
+    );
+    expect(scope).toHaveTextContent(/title and abstract, as background/i);
+    expect(scope).toHaveTextContent(
+      /README, module docstring, top-level function and class names/i
+    );
+    expect(scope).toHaveTextContent(/notebook\s*markdown\s*cells/i);
     expect(
-      screen.getByText(/relative paths, file names and folder names/i)
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/readme, docstring and dependency-manifest excerpts/i)
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/raw datasets, image bytes,\s*notebook contents, credentials/i)
+      screen.getByText(
+        /raw dataset values, image bytes,\s*notebook code cells/i
+      )
     ).toBeInTheDocument();
     expect(
       screen.getByText(/nothing is filled in, added,\s*saved or published/i)
@@ -1666,11 +1718,12 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     expect(body.items).toHaveLength(1);
     const item = body.items[0];
     expect(Object.keys(item).sort()).toEqual([
-      "context",
       "id",
+      "inventory",
       "kind",
       "name",
       "paths",
+      "sources",
     ]);
     item.paths.forEach((path) => {
       expect(path.startsWith("/")).toBe(false);
@@ -1681,7 +1734,113 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     expect(serialized).not.toContain("chart-0");
     expect(serialized).not.toContain("dataset-0");
     expect(serialized).not.toContain("tool-0");
-    expect(serialized).not.toContain("README.md");
+    // ...nor another candidate's README.
+    expect(serialized).not.toContain("data/short_traj/README.md");
+    expect(serialized).not.toContain("64 water molecules");
+  });
+
+  it("sends the candidate's own structured evidence, not free text", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(
+      user, /scripts \(1\)/i, /select plot_vdos\.py/i
+    );
+    await consentAndSend(user, { suggestions: {} });
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+
+    const item = axios.post.mock.calls[1][1].items[0];
+    expect(item.sources).toEqual([
+      {
+        type: "docstring",
+        path: "scripts/plot_vdos.py",
+        excerpt: "Plot the vibrational density of states.",
+      },
+      {
+        type: "python_symbols",
+        path: "scripts/plot_vdos.py",
+        names: ["load_vdos", "plot_vdos"],
+      },
+    ]);
+    expect(item.inventory.file_count).toBe(1);
+  });
+
+  it("never sends what the curator typed into this candidate", async () => {
+    // The exact leak this replaced: `context` used to be built from
+    // draft.readme + draft.description, so the model was handed the
+    // curator's own answer to the field it was being asked to fill.
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    // selectAndOpenConsent opens the fields itself, so the value is typed
+    // between opening them and opening the consent dialog.
+    await user.click(await screen.findByRole("tab", { name: /scripts \(1\)/i }));
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Proposal" })
+    );
+    const readme = await screen.findByLabelText(/^description ?\*?$/i);
+    await user.clear(readme);
+    await user.type(readme, "LEAKCANARY");
+
+    await user.click(screen.getByTestId("enhance-script-0"));
+    await screen.findByRole("heading", { name: /send .* to gemini\?/i });
+    await consentAndSend(user, { suggestions: {} });
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+
+    const body = axios.post.mock.calls[1][1];
+    expect(JSON.stringify(body)).not.toContain("LEAKCANARY");
+    expect(body.items[0].context).toBeUndefined();
+  }, 20000);
+
+  it("sends the paper's title and abstract as background", async () => {
+    const user = userEvent.setup();
+    const collectDraftState = jest.fn(() => ({
+      referenceInfo: {
+        title: "Vibrational spectra of liquid water",
+        abstract: "We compute the VDOS of liquid water.",
+        doi: "10.1021/secret",
+      },
+    }));
+    renderWith({ collectDraftState });
+    await openAnalysis(user);
+    await selectAndOpenConsent(
+      user, /scripts \(1\)/i, /select plot_vdos\.py/i
+    );
+    await consentAndSend(user, { suggestions: {} });
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+
+    const body = axios.post.mock.calls[1][1];
+    expect(body.paper_context).toEqual({
+      title: "Vibrational spectra of liquid water",
+      abstract: "We compute the VDOS of liquid water.",
+    });
+    // Nothing else about the paper: the DOI is not background.
+    expect(JSON.stringify(body)).not.toContain("10.1021/secret");
+  });
+
+  it("the consent dialog lists the exact sources that will be sent", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(
+      user, /scripts \(1\)/i, /select plot_vdos\.py/i
+    );
+    const listed = await screen.findByTestId("ai-consent-sources");
+    expect(listed).toHaveTextContent("docstring");
+    expect(listed).toHaveTextContent("scripts/plot_vdos.py");
+    expect(listed).toHaveTextContent("python_symbols");
+  });
+
+  it("warns in the consent dialog when a candidate has no readable text", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(
+      user, /charts \(1\)/i, /select figure1\.png/i
+    );
+    const listed = await screen.findByTestId("ai-consent-sources");
+    expect(listed).toHaveTextContent(/no readable text/i);
+    expect(listed).toHaveTextContent(/not enough evidence/i);
   });
 
   it("shows suggestions in a labelled AI area, applying nothing", async () => {

@@ -1254,14 +1254,32 @@ class TestAnalyzeFolderResponse(CurationTestBase):
         self.analyze()
         self.assertEqual(before, Paper.objects.count())
 
-    def test_only_manifests_and_scripts_are_read_never_data_or_images(self):
+    def test_only_readable_text_is_read_never_data_or_images(self):
         self.login()
         _, _, fetch = self.analyze()
         read = [call.args[0] for call in fetch.call_args_list]
         for url in read:
             self.assertFalse(url.endswith((".xyz", ".png", ".cube", ".dat")),
                              url)
-        self.assertIn(FOLDER + "/requirements.txt", read)
+        # The scripts ARE read, and their headers are now used rather than
+        # fetched and discarded.
+        self.assertIn(FOLDER + "/scripts/plot_vdos.py", read)
+
+    def test_reads_are_confined_to_candidate_boundaries(self):
+        # The root requirements.txt is deliberately no longer fetched. Under
+        # the Folder Standard a root file is not a candidate and belongs to no
+        # boundary, so nothing could ever have used it — the old plan spent a
+        # request on it and threw the result away. The paper's root README is
+        # skipped for the same reason, and because it describes the PAPER, not
+        # any one artifact.
+        self.login()
+        _, _, fetch = self.analyze()
+        read = [call.args[0][len(FOLDER) + 1:]
+                for call in fetch.call_args_list]
+        self.assertNotIn("requirements.txt", read)
+        self.assertNotIn("README.md", read)
+        for path in read:
+            self.assertIn("/", path, path)
 
     def test_directory_contents_are_never_logged(self, ):
         self.login()
@@ -1310,7 +1328,15 @@ AI_ITEMS = [
         "kind": "script",
         "name": "scripts/plot_vdos.py",
         "paths": ["scripts/plot_vdos.py"],
-        "context": "Plot the vibrational density of states.",
+        "inventory": {"file_count": 1,
+                      "extensions": [{"extension": ".py", "count": 1}],
+                      "sample_names": ["plot_vdos.py"]},
+        # Structured, boundary-confined evidence, which replaced the old
+        # free-text `context` field. See test_curation_evidence.py.
+        "sources": [
+            {"type": "docstring", "path": "scripts/plot_vdos.py",
+             "excerpt": "Plot the vibrational density of states."},
+        ],
     },
 ]
 
@@ -1430,7 +1456,7 @@ class TestDescribeCandidatesPayload(DescribeCandidatesBase):
 
     def sent_item(self, item):
         payload, body = self.sent_payload([item])
-        return payload["item"], body
+        return payload["artifact"], body
 
     def test_only_allowlisted_fields_travel(self):
         payload, _ = self.sent_payload([dict(
@@ -1441,7 +1467,10 @@ class TestDescribeCandidatesPayload(DescribeCandidatesBase):
             file_bytes="\x00\x01binary",
             api_key="secret",
         )])
-        self.assertEqual(set(curation.AI_ALLOWED_KEYS), set(payload["item"]))
+        # The payload is the evidence bundle: the paper as background, the
+        # artifact, and the artifact's own sources. Nothing else.
+        self.assertEqual({"paper_context", "artifact", "sources"},
+                         set(payload))
         serialized = json.dumps(payload)
         self.assertNotIn("curator@example.com", serialized)
         self.assertNotIn("someone", serialized)
@@ -1453,12 +1482,18 @@ class TestDescribeCandidatesPayload(DescribeCandidatesBase):
         payload, _ = self.sent_payload([dict(
             AI_ITEMS[0],
             paths=["scripts/ok.py", "/etc/shadow", "https://evil.com/x"])])
-        self.assertEqual(["scripts/ok.py"], payload["item"]["paths"])
+        self.assertEqual(["scripts/ok.py"], payload["artifact"]["paths"])
 
-    def test_context_is_bounded(self):
-        payload, _ = self.sent_payload([dict(AI_ITEMS[0], context="x" * 99999)])
-        self.assertEqual(curation.MAX_AI_CONTEXT_CHARS,
-                         len(payload["item"]["context"]))
+    def test_the_evidence_bundle_is_bounded(self):
+        payload, _ = self.sent_payload([dict(
+            AI_ITEMS[0],
+            sources=[{"type": "readme", "path": "a/README.md",
+                      "excerpt": "x" * 99999}] * 50)])
+        sources = payload["sources"]
+        self.assertLessEqual(len(sources), curation.MAX_AI_SOURCES)
+        self.assertLessEqual(
+            sum(len(source["excerpt"]) for source in sources),
+            curation.MAX_AI_EVIDENCE_CHARS)
 
     def test_more_than_one_item_is_refused_before_anything_happens(self):
         self.login()
@@ -1481,9 +1516,9 @@ class TestDescribeCandidatesPayload(DescribeCandidatesBase):
 
     def test_one_item_is_the_whole_contract(self):
         payload, _ = self.sent_payload([AI_ITEMS[0]])
-        self.assertIn("item", payload)
+        self.assertIn("artifact", payload)
         self.assertNotIn("items", payload)
-        self.assertEqual(payload["item"]["id"], AI_ITEMS[0]["id"])
+        self.assertEqual(payload["artifact"]["id"], AI_ITEMS[0]["id"])
 
     def test_unknown_kinds_are_refused(self):
         self.login()

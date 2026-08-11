@@ -142,7 +142,7 @@ class TestOutputBudget(unittest.TestCase):
 
     def test_the_prompt_no_longer_compares_candidates(self):
         prompt = curation.AI_SYSTEM_PROMPT
-        self.assertIn("You are given ONE item", prompt)
+        self.assertIn("describe ONE artifact", prompt)
         self.assertIn("EXACTLY ONE entry", prompt)
         self.assertNotIn("across items", prompt)
         self.assertNotIn("one entry per input item", prompt)
