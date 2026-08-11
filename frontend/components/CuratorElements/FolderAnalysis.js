@@ -325,6 +325,7 @@ const FolderAnalysis = ({ path, artifactType }) => {
     addMany,
     rccAnalysisCache,
     cacheRccAnalysis,
+    collectDraftState,
   } = useContext(CuratorContext) || {};
   const { setAlert } = useContext(AlertContext) || {};
   const typedGroup = artifactType ? GROUP_BY_TYPE[artifactType] : null;
@@ -584,25 +585,44 @@ const FolderAnalysis = ({ path, artifactType }) => {
 
   // Everything the AI action may see, built here so the allowlist is visible:
   // the SELECTED candidate's id/kind, its display name, its RELATIVE paths,
-  // and the text Qresp already extracted locally (docstrings, manifest lines,
-  // evidence). No unselected candidate, no file contents, no image bytes, no
-  // credentials, no profile or ownership data, nothing outside the folder.
+  // its file-kind inventory, and the STRUCTURED evidence the backend already
+  // extracted from inside that candidate's own boundary (`ai_sources`:
+  // README text, module docstrings, top-level symbol names, notebook markdown
+  // cells, pinned declarations). No unselected candidate, no raw file
+  // contents, no image bytes, no notebook code or output, no credentials, no
+  // profile or ownership data, nothing outside the candidate's boundary.
+  //
+  // What is deliberately NOT here any more: `draft.readme` and
+  // `draft.description`. This used to send the curator's own answer back as
+  // the input for the very field the model was being asked to fill, so a
+  // filled field produced a paraphrase of itself and an empty one produced
+  // nothing but the analyzer's structural sentences. The server drops the old
+  // `context` key outright, so an older client cannot reinstate the leak.
+  //
   // The AI request is built for ONE candidate. The Add checkboxes are a
   // different concept entirely -- they choose what goes to the Curator -- and
   // they no longer decide what gets described. A batch shared one output
   // budget between candidates and invited the model to compare them, which is
   // what produced partial answers and interchangeable descriptions.
-  const aiItem = (candidate) => {
-    const draft = drafts[candidate.id] || {};
+  const aiItem = (candidate) => ({
+    id: candidate.id,
+    kind: candidate.kind,
+    name: labelOf(candidate).primary,
+    paths: candidate.paths || [],
+    inventory: candidate.inventory || {},
+    sources: candidate.ai_sources || [],
+  });
+
+  // The paper's OWN title and abstract, as background for the field the work
+  // sits in. Read from the live draft state at click time, so an unsaved
+  // title counts. It is background only: the backend prompt forbids using it
+  // as evidence for what an individual artifact does.
+  const paperContext = () => {
+    const state = collectDraftState ? collectDraftState() : {};
+    const reference = (state && state.referenceInfo) || {};
     return {
-      id: candidate.id,
-      kind: candidate.kind,
-      name: labelOf(candidate).primary,
-      paths: candidate.paths || [],
-      context: [draft.readme, draft.description]
-        .concat(candidate.evidence || [])
-        .filter(Boolean)
-        .join(" "),
+      title: reference.title || "",
+      abstract: reference.abstract || "",
     };
   };
 
@@ -631,6 +651,9 @@ const FolderAnalysis = ({ path, artifactType }) => {
     try {
       const response = await axios.post("/api/curation/describe-candidates", {
         consent: true,
+        // Background context for the whole request, not evidence about the
+        // artifact. Bounded and redacted again on the server.
+        paper_context: paperContext(),
         // Exactly one. The server rejects anything else before it calls the
         // provider or spends a quota unit.
         items: [aiItem(candidate)],
@@ -2023,19 +2046,65 @@ const FolderAnalysis = ({ path, artifactType }) => {
             Qresp will send, for <strong>this one candidate</strong> and for
             nothing else:
           </Typography>
-          <Box component="ul" sx={{ pl: 3, mt: 0, mb: 2 }}>
+          <Box
+            component="ul"
+            sx={{ pl: 3, mt: 0, mb: 2 }}
+            data-testid="ai-consent-scope"
+          >
             <Typography component="li" variant="body2">
               their relative paths, file names and folder names
             </Typography>
             <Typography component="li" variant="body2">
-              short text Qresp has already read from this folder — README,
-              docstring and dependency-manifest excerpts
+              this paper&rsquo;s title and abstract, as background for the
+              research topic
+            </Typography>
+            <Typography component="li" variant="body2">
+              short text Qresp has already read from{" "}
+              <strong>inside this candidate&rsquo;s own folder</strong> —
+              README, module docstring, top-level function and class names,
+              notebook <em>markdown</em> cells, and pinned
+              package/version declarations
             </Typography>
           </Box>
+          {/* The exact bundle, itemised. A consent screen that describes a
+              category is weaker than one that shows the list, and the list is
+              already on the candidate — the server sends nothing else. */}
+          {aiConsentOpen ? (
+            <Box sx={{ mb: 2 }} data-testid="ai-consent-sources">
+              {(aiConsentOpen.ai_sources || []).length ? (
+                <Fragment>
+                  <Typography variant="body2" gutterBottom>
+                    For this candidate that is:
+                  </Typography>
+                  <Box component="ul" sx={{ pl: 3, mt: 0, mb: 0 }}>
+                    {(aiConsentOpen.ai_sources || []).map((source, index) => (
+                      <Typography
+                        component="li"
+                        variant="caption"
+                        key={`${source.type}-${source.path}-${index}`}
+                        sx={{ display: "block", wordBreak: "break-word" }}
+                      >
+                        <strong>{source.type}</strong>
+                        {source.path ? ` · ${source.path}` : ""}
+                      </Typography>
+                    ))}
+                  </Box>
+                </Fragment>
+              ) : (
+                <Alert severity="info" sx={{ py: 0.5 }}>
+                  Qresp found no readable text inside this candidate, so only
+                  its file names and the paper&rsquo;s background will be
+                  sent. Expect the answer to be “not enough evidence”.
+                </Alert>
+              )}
+            </Box>
+          ) : null}
           <Typography variant="body2" gutterBottom>
-            It will <strong>not</strong> send raw datasets, image bytes,
-            notebook contents, credentials, your account details, or anything
-            from outside this candidate.
+            It will <strong>not</strong> send raw dataset values, image bytes,
+            notebook code cells, notebook outputs, function bodies,
+            credentials, your account details, anything you have typed into
+            this candidate&rsquo;s own fields, or anything from outside this
+            candidate.
           </Typography>
           {aiConsentOpen ? (
             <Typography
