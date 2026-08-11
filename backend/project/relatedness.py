@@ -146,7 +146,75 @@ represent represents representing representative detrimental beneficial
 investigating examining exploring assessing addressing enabling
 difference differences parameter parameters criterion criteria
 formation variation variations selection selection combination
+contain contains container relative relatively individual individuals
+principal principle principles conventional conventionally extensive
+highlighting represented positioned containing
 """.split())
+
+# ------------------------------------------------------------- term provenance
+#
+# WHERE a term came from decides what it is allowed to prove. This is the
+# structural answer to a failure that no blocklist could fix: `chalcogenide`
+# and `conventional` are both plain lowercase words of eleven-ish letters, and
+# nothing about the STRING tells them apart. What tells them apart is that one
+# of them is in somebody's title.
+SOURCE_TITLE = "title"            # the paper's own title
+SOURCE_CURATED = "curated"        # tag, chart property, artifact keyword
+SOURCE_ABSTRACT = "abstract"      # the published abstract
+SOURCE_PROSE = "prose"            # chart captions, dataset/script/tool readmes
+SOURCE_SOFTWARE = "software"      # packageName / programName
+SOURCE_METHOD = "method"          # measurement
+SOURCE_ORGANIZATION = "organization"   # facilityName and the like
+
+# Sources in which a human DELIBERATELY states what the record is about. A
+# title is the most considered sentence a paper has, and a curated tag is
+# somebody typing the subject on purpose. Everything else is prose: useful for
+# similarity, never proof on its own that a word is subject vocabulary.
+DELIBERATE_TOPIC_SOURCES = frozenset((SOURCE_TITLE, SOURCE_CURATED))
+
+# Document furniture. `fig4`, `figure_2`, `table1`, `panel-a`, `Slide 3` are
+# about the SHAPE of a document, not its subject, and they used to qualify as
+# technical purely because they carry a digit or a hyphen.
+_STRUCTURAL_TOKEN_RE = re.compile(
+    r"^(?:fig|figs|figure|figures|tab|table|tables|panel|panels|page|pages"
+    r"|slide|slides|sec|section|sections|eq|eqn|eqns|equation|equations"
+    r"|ref|refs|chapter|appendix|supp|supplement|supplementary|note|notes"
+    r"|inset|insets|scheme|schemes|movie|video|sheet|col|row|item)"
+    r"[-_]?[0-9]*[a-z]?$")
+
+# Organisations. A shared employer is not a shared subject: two groups at the
+# same national laboratory study whatever they study. `facilityName` was being
+# read as a METHOD, so "argonne national lab" opened the strongest gate there
+# is -- "Same method or tool ... on a related topic".
+_ORGANIZATION_RE = re.compile(
+    r"\b(?:universit\w*|univ|institut\w*|laborator\w*|lab|labs|college"
+    r"|department|dept|school|faculty|academy|akademie|foundation|fondation"
+    r"|consortium|centre|center|hospital|clinic|museum|observatory"
+    r"|administration|agency|ministry|bureau|council|society|association"
+    r"|corporation|corp|company|inc|llc|ltd|gmbh|nv|sa|ag|plc"
+    r"|argonne|fermilab|brookhaven|oak ridge|los alamos|sandia|lawrence"
+    r"|berkeley lab|national lab\w*|national accelerator)\b", re.IGNORECASE)
+
+# General-purpose software: real tools, but ones whose presence says nothing
+# about a subject. Kept SHORT and non-domain on purpose -- the structural rule
+# is that software is never strong evidence (see `assess`); this list only
+# stops the most obviously meaningless names from being NAMED to a reader.
+GENERIC_SOFTWARE = frozenset("""
+microsoft powerpoint word excel office adobe acrobat illustrator photoshop
+matlab mathematica origin igor kaleidagraph gnuplot xmgrace excel2010
+python python2 python3 anaconda conda pip jupyter notebook ipython
+numpy scipy matplotlib pandas bash shell perl java javascript fortran
+git github gitlab docker singularity linux windows macos ubuntu centos
+vim emacs vscode texshop latex overleaf zotero mendeley endnote
+""".split())
+
+# Ordinary English endings. Stripping them and re-testing against the lists
+# above catches the participles and adverbs of ordinary verbs -- `highlighting`
+# -> `highlight`, `represented` -> `represent`, `positioned` -> `position` --
+# without anybody having to enumerate every inflection of every common word.
+# No technical term is lost: real subject vocabulary does not become ordinary
+# when you remove `-ing`.
+_ORDINARY_SUFFIXES = ("ingly", "edly", "ing", "ed", "ly")
 
 # Tokens shorter than this are noise ("of", "we", "eV" units, indices).
 MIN_TOKEN_LENGTH = 3
@@ -154,22 +222,20 @@ MIN_TOKEN_LENGTH = 3
 # term. Multi-word keyword phrases are exempt -- "spin coating" is specific
 # even though neither half is long.
 MIN_SPECIFIC_LENGTH = 4
-# A PLAIN lowercase word -- no digit, no hyphen, not an acronym, not a curated
-# keyword -- has to be at least this long before it is treated as technical.
+# There is deliberately NO "a long word is a technical word" rule any more.
 #
-# This is the rule that stops a small corpus from inventing vocabulary. Rarity
-# alone cannot make a word technical: `particular` in two records out of 32 is
-# arithmetically as rare as `chalcogenide`, and the difference between them is
-# not something document frequency can see. Length is a crude proxy for
-# "someone coined this for a subject", and it is deliberately crude -- it is
-# only ONE of the ways a term can qualify (see `is_intrinsically_technical`),
-# so a short real term still gets in as a tag, an acronym or a formula.
+# It used to be `LONG_TECHNICAL_LENGTH = 9`: a plain lowercase word of nine or
+# more letters was treated as subject vocabulary. On the real corpus that
+# promoted `represented`, `positioned`, `individual`, `principal`,
+# `conventional` and `highlighting` to "specific research terms" and printed
+# them to readers as the reason two papers were related.
 #
-# The cost is real and accepted: a short free-text term that is never tagged,
-# never capitalised and never hyphenated (`exciton`, `phonon`, `qubit`) is not
-# counted from prose alone. That loses recommendations rather than inventing
-# them, which is the direction this feature is required to fail in.
-LONG_TECHNICAL_LENGTH = 9
+# The rule could not be fixed by tuning the number, because the string itself
+# carries no signal: `chalcogenide` (12) and `conventional` (12) are the same
+# shape, and both are equally rare on a 65-record server. What separates them
+# is not the word, it is WHERE IT CAME FROM -- one of them is in somebody's
+# title. That is what `DELIBERATE_TOPIC_SOURCES` and `Profile.term_sources`
+# record, and what `pair_specific_terms` now requires.
 
 # ---------------------------------------------------------------- thresholds
 #
@@ -315,50 +381,97 @@ def normalize_phrase(value):
     return " ".join(tokens)
 
 
-def is_ordinary(term):
-    """Is this a word any paper on any subject could use?"""
-    return (not term or term in STOPWORDS or term in GENERIC_TERMS
+def _in_ordinary_lists(term):
+    return (term in STOPWORDS or term in GENERIC_TERMS
             or term in NON_TECHNICAL_TERMS)
 
 
-def is_intrinsically_technical(term):
-    """Could this term identify a SUBJECT, judged from the term alone?
+def is_ordinary(term):
+    """Is this a word any paper on any subject could use?
 
-    Deliberately independent of the corpus. Document frequency answers "is
-    this rare here", which on a small server is mostly noise; this answers "is
-    this the kind of word somebody coined for a topic", which is the question
-    that actually decides whether sharing it means anything.
+    The lists are checked against the word AND against its stem, so an
+    inflection nobody thought to list (`highlighting`, `represented`,
+    `positioned`, `relatively`) is caught by the entry that is already there
+    (`highlight`, `represent`, `position`, `relative`). Growing the lists one
+    participle at a time is how they got long and still had holes.
+    """
+    if not term:
+        return True
+    if " " in term:
+        return all(_in_ordinary_lists(part) for part in term.split())
+    if _in_ordinary_lists(term):
+        return True
+    for suffix in _ORDINARY_SUFFIXES:
+        if len(term) > len(suffix) + 2 and term.endswith(suffix):
+            stem = term[: -len(suffix)]
+            for candidate in (stem, stem + "e", stem.rstrip("aeiou")):
+                if len(candidate) > 2 and _in_ordinary_lists(candidate):
+                    return True
+    return False
 
-    Qualifying shapes, none of them domain-specific:
 
-      * a multi-word phrase with at least one non-ordinary part -- a curated
-        tag like "spin coating" is a deliberate statement about the record;
-      * a digit inside the token (`g0w0`, `c60`, `bivo4`);
-      * an internal hyphen (`dielectric-dependent`, `bethe-salpeter`);
-      * failing all of those, a plain word of at least
-        LONG_TECHNICAL_LENGTH characters.
+def is_structural(term):
+    """Document furniture: fig4, figure_2, table1, panel-a, slide 3.
 
-    Acronyms and formulas that survive none of these once lowercased (`dft`,
-    `gw`, `nacl`) are recognised from their SURFACE form instead, per profile
-    -- see `Profile.add_text`.
+    A digit or a hyphen is what makes `g0w0` and `bethe-salpeter` technical,
+    and it is exactly what made these qualify too. They are ruled out by NAME
+    rather than by shape, so the shape rule stays available to real terms.
     """
     if not term:
         return False
-    if " " in term:
-        parts = term.split()
-        return any(not is_ordinary(part) for part in parts)
-    if is_ordinary(term):
+    for part in term.split():
+        if _STRUCTURAL_TOKEN_RE.match(part):
+            return True
+    return False
+
+
+def is_organizational(value):
+    """A university, laboratory, institute, agency or company name.
+
+    Never a subject. Two groups at the same national laboratory study whatever
+    they study, so a shared employer must not reach the gate, the score, or a
+    reason sentence.
+    """
+    return bool(_ORGANIZATION_RE.search(str(value or "")))
+
+
+def is_generic_software(term):
+    """Software whose presence says nothing about a subject."""
+    if not term:
         return False
-    # A page range, a year span or a figure number is not a research term.
-    # `1-2` survives tokenization because hyphens are kept for the sake of
-    # `dielectric-dependent`, so numbers-and-punctuation are ruled out here.
+    parts = term.split()
+    return bool(parts) and all(part in GENERIC_SOFTWARE for part in parts)
+
+
+def has_technical_shape(term):
+    """Could this term identify a SUBJECT judged from the string alone?
+
+    The shapes a person coins vocabulary in, none of them domain-specific: a
+    multi-word phrase with a non-ordinary part, a digit inside the token
+    (`g0w0`, `c60`, `bivo4`), or an internal hyphen (`bethe-salpeter`).
+
+    A plain lowercase word has NO shape that proves anything, which is why
+    there is no length rule here any more. Such a word can still be subject
+    vocabulary -- it just has to be sourced from a title or a curated tag
+    instead of asserted from its spelling.
+    """
+    if not term or is_ordinary(term) or is_structural(term):
+        return False
+    if " " in term:
+        return any(not is_ordinary(part) for part in term.split())
     if not any(character.isalpha() for character in term):
         return False
-    if any(character.isdigit() for character in term):
-        return True
-    if "-" in term:
-        return True
-    return len(term) >= LONG_TECHNICAL_LENGTH
+    return any(character.isdigit() for character in term) or "-" in term
+
+
+def is_intrinsically_technical(term):
+    """Backwards-compatible name for the SHAPE test.
+
+    Kept because callers and tests use it. It no longer answers the whole
+    question: a term also qualifies by PROVENANCE (see `pair_specific_terms`),
+    which is the half that a string cannot express.
+    """
+    return has_technical_shape(term)
 
 
 def surface_technical_terms(value):
@@ -412,7 +525,8 @@ class Profile(object):
     __slots__ = ("key", "title", "doi", "year", "authors", "url", "source",
                  "text_counts", "keyword_terms", "method_terms",
                  "field_terms", "author_keys", "author_names", "title_key",
-                 "surface_terms", "title_terms")
+                 "surface_terms", "title_terms", "term_sources",
+                 "software_terms", "organization_terms")
 
     def __init__(self, key, title="", doi="", year=None, authors=(), url="",
                  source="internal"):
@@ -427,6 +541,16 @@ class Profile(object):
         self.keyword_terms = set()
         self.method_terms = set()
         self.field_terms = set()
+        # term -> the set of SOURCE_* it was seen in. This is the record of
+        # where a word came from, and it is what decides whether the word is
+        # allowed to be called a research term at all.
+        self.term_sources = {}
+        # Tool/package names. Bounded to MEDIUM evidence for ever: running the
+        # same program is a lab habit, not a shared subject.
+        self.software_terms = set()
+        # Universities, laboratories, agencies. Recorded ONLY so they can be
+        # excluded -- nothing reads this for scoring.
+        self.organization_terms = set()
         # Tokens the author wrote as an acronym, a formula or a mixed-case
         # name. Kept apart from text_counts because case is destroyed by
         # normalization, and it is the only evidence that a SHORT token is
@@ -446,32 +570,84 @@ class Profile(object):
         self.author_keys = set(self.author_names)
         self.title_key = normalize_title_key(self.title)
 
-    def add_text(self, value, weight=1, is_title=False):
+    def _note(self, term, source):
+        if term:
+            self.term_sources.setdefault(term, set()).add(source)
+
+    def add_text(self, value, weight=1, is_title=False,
+                 source=SOURCE_ABSTRACT):
         # Ordinary words are dropped HERE rather than only at the specificity
         # check, so they cannot inflate text similarity either. Two abstracts
         # that share nothing but "study", "data", "analysis", "particular" and
         # "discussed" must measure as unrelated, not as a strong match.
+        #
+        # Structural tokens (`fig4`, `table1`) go the same way, and for the
+        # same reason: they are furniture, and two papers both having a
+        # Figure 4 is not a relationship.
+        if is_organizational(value):
+            # An organisation line contributes NOTHING -- not a term, not a
+            # similarity token. Tokenizing it would leak "wisconsin" and
+            # "argonne" into the text bag, where they would be rare and
+            # therefore heavily weighted.
+            for token in tokenize(value):
+                self.organization_terms.add(token)
+            return
+        if is_title:
+            source = SOURCE_TITLE
         self.surface_terms |= surface_technical_terms(value)
         for token in tokenize(value):
-            if is_ordinary(token):
+            if is_ordinary(token) or is_structural(token):
                 continue
             self.text_counts[token] += weight
+            self._note(token, source)
             if is_title:
                 self.title_terms.add(token)
 
     def add_keyword(self, value):
+        """A curated tag, chart property or artifact keyword: somebody typing
+        the subject on purpose."""
         phrase = normalize_phrase(value)
-        if not phrase:
+        if not phrase or is_structural(phrase) or is_organizational(value):
             return
         self.keyword_terms.add(phrase)
-        self.add_text(value)
+        self._note(phrase, SOURCE_CURATED)
+        self.add_text(value, source=SOURCE_CURATED)
+
+    def add_software(self, value):
+        """A package or program name. Never strong evidence."""
+        phrase = normalize_phrase(value)
+        if not phrase or is_organizational(value):
+            return
+        self.software_terms.add(phrase)
+        self.method_terms.add(phrase)
+        self._note(phrase, SOURCE_SOFTWARE)
+        self.add_text(value, source=SOURCE_SOFTWARE)
 
     def add_method(self, value):
+        """A measurement or technique. Never strong evidence either -- see the
+        methods branch of `assess`."""
         phrase = normalize_phrase(value)
-        if not phrase:
+        if not phrase or is_structural(phrase) or is_organizational(value):
             return
         self.method_terms.add(phrase)
-        self.add_text(value)
+        self._note(phrase, SOURCE_METHOD)
+        self.add_text(value, source=SOURCE_METHOD)
+
+    def add_organization(self, value):
+        """A facility, university or laboratory name. Recorded and then
+        ignored: it is read only so that it is visibly NOT scored."""
+        for token in tokenize(value):
+            self.organization_terms.add(token)
+
+    def sources_of(self, term):
+        return self.term_sources.get(term, frozenset())
+
+    @property
+    def deliberate_terms(self):
+        """Terms this record puts forward as its subject ON PURPOSE -- in its
+        title, or in a curated tag/property/keyword."""
+        return {term for term, sources in self.term_sources.items()
+                if sources & DELIBERATE_TOPIC_SOURCES}
 
     def add_field(self, value):
         phrase = normalize_phrase(value)
@@ -489,21 +665,29 @@ class Profile(object):
     def technical_terms(self):
         """The terms of this record that could identify a SUBJECT.
 
-        A term qualifies by its own shape (`is_intrinsically_technical`), or
-        because the author wrote it as an acronym or formula, or because a
-        curator chose it as a tag, chart property, artifact keyword or tool
-        name. Curated single words still have to clear MIN_SPECIFIC_LENGTH
-        and not be ordinary -- a "python" tag is a fact about the toolchain,
-        not a statement that two records study the same thing.
+        Two ways in, and neither is "this word is long":
+
+          * SHAPE -- a formula, a hyphenated coinage, or a token the author
+            wrote as an acronym/mixed-case name (`DFT`, `BiVO4`);
+          * PROVENANCE -- the record's own title, or a curated tag, chart
+            property or artifact keyword.
+
+        A word that appears only in abstract or readme PROSE is deliberately
+        absent. It still counts toward text similarity; it is simply not
+        allowed to be named to a reader as a specific research term, because
+        nothing distinguishes it from `conventional`.
         """
-        terms = {t for t in self.all_terms if is_intrinsically_technical(t)}
-        terms |= {t for t in self.surface_terms if not is_ordinary(t)}
-        for curated in self.keyword_terms | self.method_terms:
-            if is_ordinary(curated):
+        terms = {t for t in self.all_terms if has_technical_shape(t)}
+        terms |= {t for t in self.surface_terms
+                  if not is_ordinary(t) and not is_structural(t)}
+        for term in self.deliberate_terms:
+            if is_ordinary(term) or is_structural(term):
                 continue
-            if " " in curated or len(curated) >= MIN_SPECIFIC_LENGTH:
-                terms.add(curated)
-        return terms
+            if term in self.organization_terms:
+                continue
+            if " " in term or len(term) >= MIN_SPECIFIC_LENGTH:
+                terms.add(term)
+        return {t for t in terms if t not in self.organization_terms}
 
 
 def _people(entries):
@@ -565,23 +749,30 @@ def build_internal_profile(record):
 
     for chart in record.get("charts") or []:
         chart = chart or {}
-        profile.add_text(chart.get("caption"))
+        profile.add_text(chart.get("caption"), source=SOURCE_PROSE)
         for prop in chart.get("properties") or []:
             profile.add_keyword(prop)
 
     for artifacts in (record.get("datasets"), record.get("scripts")):
         for artifact in artifacts or []:
             artifact = artifact or {}
-            profile.add_text(artifact.get("readme"))
+            profile.add_text(artifact.get("readme"), source=SOURCE_PROSE)
             for keyword in artifact.get("keywords") or []:
                 profile.add_keyword(keyword)
 
     for tool in record.get("tools") or []:
         tool = tool or {}
-        for field in ("packageName", "programName", "facilityname",
-                      "facilityName", "measurement"):
-            profile.add_method(tool.get(field))
-        profile.add_text(tool.get("readme"))
+        # Package/program names are SOFTWARE: capped at medium evidence.
+        for field in ("packageName", "programName"):
+            profile.add_software(tool.get(field))
+        # A measurement is a genuine technique, still capped at medium.
+        profile.add_method(tool.get("measurement"))
+        # A facility name is an ORGANISATION. It is read only to be excluded:
+        # "Argonne National Lab" used to arrive as a method term and open the
+        # strongest gate there is.
+        for field in ("facilityname", "facilityName"):
+            profile.add_organization(tool.get(field))
+        profile.add_text(tool.get("readme"), source=SOURCE_PROSE)
 
     return profile
 
@@ -589,7 +780,7 @@ def build_internal_profile(record):
 # Bumped only when the ALLOWLIST below changes, so a deployment that starts
 # reading a new field invalidates every cached answer that was computed
 # without it.
-FINGERPRINT_VERSION = "1"
+FINGERPRINT_VERSION = "2"
 
 
 def _artifact_fingerprint(artifacts, keys):
@@ -710,28 +901,63 @@ class CorpusStats(object):
                       SPECIFIC_DOCUMENT_FREQUENCY_RATIO * self.document_count)
         return self.document_frequency.get(term, 0) <= ceiling
 
-    def is_specific(self, term):
-        """A term precise enough to justify a recommendation on its own merit.
+    def pair_specific_terms(self, left, right):
+        """The shared terms that may be NAMED as research terms for this pair.
 
-        TWO independent conditions, and both are required:
+        Specificity is decided per PAIR, not per record, because the deciding
+        fact is provenance and provenance is asymmetric: a word can be in one
+        paper's title and the other's abstract. That is the "clear technical
+        concept confirmed between a title and an abstract" case, and judging
+        each record alone would throw it away.
 
-          * the term must look like subject vocabulary at all
-            (`is_intrinsically_technical`), and
-          * it must still be rare on this corpus (`is_rare_enough`).
+        A shared term qualifies when it is
+          * not ordinary, not document furniture, not an organisation name;
+          * still rare on this corpus; and
+          * either technically SHAPED, or stated deliberately (title/curated)
+            by at least one of the two records.
 
-        The first half is what was missing. Rarity used to be the only test,
-        so on a 65-record server any ordinary word appearing in fewer than ten
-        abstracts was promoted to a "specific research term" and shown to
-        readers as the reason two papers were related.
+        The last clause is the whole fix. `conventional` and `chalcogenide`
+        are the same shape and the same rarity; only one of them is ever in
+        somebody's title.
         """
-        if not is_intrinsically_technical(term):
+        shared = (left.all_terms & right.all_terms)
+        qualified = set()
+        for term in shared:
+            if is_ordinary(term) or is_structural(term):
+                continue
+            if term in left.organization_terms or term in right.organization_terms:
+                continue
+            # Sharing PowerPoint, Python or Git is a fact about two laptops.
+            # Excluded here rather than only at naming time, so it cannot pad
+            # the count that STRONG_SHARED_TERM_COUNT measures either.
+            if is_generic_software(term):
+                continue
+            if not self.is_rare_enough(term):
+                continue
+            if has_technical_shape(term):
+                qualified.add(term)
+            elif term in left.deliberate_terms or term in right.deliberate_terms:
+                qualified.add(term)
+        return qualified
+
+    def is_specific(self, term):
+        """A term precise enough to justify a recommendation on its own merit,
+        judged from the STRING and the corpus only.
+
+        Kept for callers that have no pair in hand. It is now the conservative
+        half of the test: shape plus rarity. Provenance -- the half a string
+        cannot express -- is applied by `pair_specific_terms`.
+        """
+        if not has_technical_shape(term):
             return False
         return self.is_rare_enough(term)
 
     def specific_terms(self, profile):
         """The subject vocabulary of one record, as this corpus sees it."""
         return {t for t in profile.technical_terms
-                if not is_ordinary(t) and self.is_rare_enough(t)}
+                if not is_ordinary(t) and not is_structural(t)
+                and t not in profile.organization_terms
+                and self.is_rare_enough(t)}
 
     def similarity(self, left, right):
         """IDF-weighted cosine over the two text bags. 0.0 when either side
@@ -848,9 +1074,12 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
     """
     evidence = []
 
-    current_specific = stats.specific_terms(current)
-    candidate_specific = stats.specific_terms(candidate)
-    shared_specific = independent_terms(current_specific & candidate_specific)
+    # Specificity is decided for the PAIR, so a term stated deliberately by
+    # either side counts for both. See `CorpusStats.pair_specific_terms`.
+    shared_specific = independent_terms(
+        stats.pair_specific_terms(current, candidate))
+    current_specific = shared_specific
+    candidate_specific = shared_specific
     shared_weight = sum(stats.idf(t) for t in shared_specific)
     similarity = stats.similarity(current, candidate)
     # Counted, never gated on. See the note above the gate.
@@ -859,8 +1088,19 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
     # text, so a tag can never smuggle in an ordinary word that prose could
     # not. Short curated terms still qualify -- a tag is a deliberate
     # statement, which is why `Profile.technical_terms` admits them.
-    shared_methods = {t for t in current.method_terms & candidate.method_terms
-                      if t in current_specific and t in candidate_specific}
+    # Tool overlap has its OWN admission test, not the topic one. A package
+    # name is usually a plain word (`rarepackage`, `pycce`), so requiring it
+    # to look like subject vocabulary would silence tool evidence entirely --
+    # and tool evidence is still worth a medium once a topic corroborates it.
+    # What it must NOT be: an organisation, document furniture, generic
+    # tooling, or a word so common on this corpus that everybody shares it.
+    shared_methods = {
+        t for t in current.method_terms & candidate.method_terms
+        if not is_ordinary(t) and not is_structural(t)
+        and not is_generic_software(t)
+        and t not in current.organization_terms
+        and t not in candidate.organization_terms
+        and stats.is_rare_enough(t)}
     shared_keywords = {t for t in current.keyword_terms & candidate.keyword_terms
                        if t in current_specific and t in candidate_specific}
     shared_fields = current.field_terms & candidate.field_terms
@@ -870,11 +1110,22 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
     shared_titles = independent_terms(
         {t for t in shared_specific
          if t in current.title_terms and t in candidate.title_terms})
+    # Shared terms that BOTH records state on purpose (title or curated tag).
+    # This is what a STRONG term verdict requires: an overlap found only in
+    # two abstracts is prose agreement, and prose agreement is a medium.
+    shared_deliberate = independent_terms(
+        {t for t in shared_specific
+         if t in current.deliberate_terms and t in candidate.deliberate_terms})
+    # Software both records name. Capped at MEDIUM for ever, and generic
+    # tooling is not even named -- sharing PowerPoint or Python is a fact
+    # about a laptop.
+    shared_software = {t for t in current.software_terms & candidate.software_terms
+                       if t in shared_methods}
     # "The same topic", used to corroborate a shared tool. A shared tool with
     # no topic overlap is a lab habit, not a relationship -- so the tool names
     # themselves are excluded from what counts as the topic, or every shared
     # tool would corroborate itself.
-    topic_terms = shared_specific - shared_methods
+    topic_terms = shared_specific - shared_methods - shared_software
     topic_overlap = bool(topic_terms) or similarity >= MODERATE_TEXT_SIMILARITY
 
     # -- strong ------------------------------------------------------------
@@ -883,8 +1134,14 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
             FAMILY_CITATION, STRONG,
             "Directly cited by this paper"))
 
+    # STRONG by terms now requires a DELIBERATE anchor: at least one of the
+    # shared terms has to be in both records' titles or curated tags. Three
+    # words that co-occur in two abstracts are a coincidence between
+    # neighbouring fields; three words two authors both chose to put in their
+    # titles are a subject.
     if (len(shared_specific) >= STRONG_SHARED_TERM_COUNT
-            and shared_weight >= STRONG_SHARED_TERM_WEIGHT):
+            and shared_weight >= STRONG_SHARED_TERM_WEIGHT
+            and shared_deliberate):
         evidence.append(Evidence(
             FAMILY_TERMS, STRONG,
             "Shares %d specific research terms: %s"
@@ -895,11 +1152,15 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
             FAMILY_TEXT, STRONG,
             "High title and abstract similarity (%.2f)" % similarity))
 
-    if shared_methods and topic_overlap:
-        evidence.append(Evidence(
-            FAMILY_METHODS, STRONG,
-            "Same method or tool (%s) on a related topic"
-            % _term_list(shared_methods, stats)))
+    # NOTE: there is deliberately NO strong method evidence any more.
+    #
+    # "Same method or tool (...) on a related topic" was the strongest gate
+    # there is, and `facilityName` reached it: "argonne national lab" and
+    # "university wisconsin-madison" were being read as methods and printed to
+    # readers as the reason two papers were related. Facilities are now
+    # excluded entirely (`add_organization`) and software is capped at medium
+    # (below), so running the same program can corroborate a subject overlap
+    # but can never establish one.
 
     if len(shared_titles) >= STRONG_SHARED_TITLE_COUNT:
         evidence.append(Evidence(
@@ -929,19 +1190,24 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
     # never appears in a reason -- what a reader is shown has to be the
     # technical overlap that actually decided the verdict.
 
-    if shared_fields and similarity >= MODERATE_TEXT_SIMILARITY:
-        evidence.append(Evidence(
-            FAMILY_TEXT, MEDIUM,
-            "Same research area (%s) with significant text similarity (%.2f)"
-            % (_term_list(shared_fields, stats), similarity)))
+    # NOTE: a shared COLLECTION is deliberately not evidence.
+    #
+    # "Same research area (MICCOM)" is a statement that two records live in
+    # the same programme, which is true of large parts of the corpus. Paired
+    # with any one other weak signal it was opening the gate. It is now added
+    # AFTER the verdict, as explanation for a candidate that already passed on
+    # its own subject matter -- see `supporting_note`.
 
-    if shared_methods and not topic_overlap:
-        # A rare shared tool with nothing else: one medium, never enough by
-        # itself.
+    if shared_methods or shared_software:
+        # A shared technique or program, and never more than a medium: it
+        # needs an independent topic anchor from another family before the
+        # gate opens, which is exactly what "two mediums from two families"
+        # already means.
+        named = shared_methods | shared_software
         evidence.append(Evidence(
             FAMILY_METHODS, MEDIUM,
-            "Shared specific tool or facility (%s)"
-            % _term_list(shared_methods, stats)))
+            "Shared specific tool or technique (%s)"
+            % _term_list(named, stats)))
 
     # One observation per family: the same overlap must not be counted twice.
     strongest = {}
@@ -990,8 +1256,13 @@ def rank(current, candidates, stats, citation_dois=frozenset(),
         if not assessment.passes:
             continue
         scored.append((candidate, assessment))
+    # Sorted on SUBJECT only. The shared-author count used to break ties here,
+    # which meant a supervisor or a common PI could lift an unrelated paper
+    # into the three slots a reader actually sees -- the gate was topic-only,
+    # but the ranking was not, so authorship still decided what got shown.
+    # Ties now fall to the newer paper and then to the title, both of which
+    # are properties of the work.
     scored.sort(key=lambda pair: (-pair[1].score,
-                                  -pair[1].author_overlap,
                                   -(pair[0].year or 0),
                                   pair[0].title.lower()))
     return scored[:limit]

@@ -233,7 +233,7 @@ _DETAIL_REASONS = {
 #   1  original gate: five results, a shared author counted as evidence,
 #      any rare word counted as a "specific research term"
 #   2  topic-only gate, technical-term vocabulary, three results
-ALGORITHM_VERSION = "2"
+ALGORITHM_VERSION = "3"
 
 # ------------------------------------------------------------------- caching
 #
