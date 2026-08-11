@@ -66,7 +66,9 @@ curator chooses one candidate (nothing is selected by default)
   → CONSENT DIALOG: names that candidate and the exact scope; the checkbox is
     unchecked, and is asked again for every request — never remembered
   → POST /api/curation/describe-candidates   (exactly one item)
-      → allowlisted names/paths/local text → Gemini
+      → sources filtered to the types THIS record kind can carry
+      → no usable source left?  → 200 no_suggestion, NO Gemini call, NO quota
+      → otherwise: allowlisted names/paths/local text → Gemini
   → proposals shown on that candidate, labelled "AI suggestion", NOT applied
   → curator accepts a single field, or ignores it
   → "Add selected <type> to Curator" remains a separate, final action
@@ -573,6 +575,42 @@ the budget and leave every later candidate's README unfetched.
 The endpoint requires exactly one item per request; zero-item and batched
 requests are rejected before Gemini or quota consumption.
 
+### No evidence, no request
+
+**The server decides abstention, not the prompt.** The system prompt asks for
+an empty description when `sources` is empty, but a prompt is a request. After
+authentication, CSRF, consent and the one-candidate rule — all of which still
+apply — the endpoint checks whether the candidate has any usable source of a
+type its own kind can carry. If it has none it returns, **without reading the
+Gemini configuration, without touching the daily quota, and without calling
+the provider**:
+
+```json
+{"suggestions": {}, "no_suggestion": ["chart-0"]}
+```
+
+HTTP 200, the same response contract as a partial answer, so no new field
+appears in the API. The browser already handles `no_suggestion`; it
+distinguishes the two reasons from the candidate's own `ai_sources` and says
+so:
+
+> No reliable candidate-specific evidence was found, so nothing was sent to
+> the AI service.
+
+This answers identically on a server with **no API key configured**, because
+whether a candidate can be described is a property of the folder, not of the
+provider. (A candidate that *does* have evidence still gets the usual 503
+there.)
+
+The per-kind table above is enforced here too, not only when the analysis
+builds a bundle. The browser round-trips `ai_sources`, so a tampered client
+could hang a `docstring` on a Chart — and a Chart caption written from a
+docstring is precisely the unfounded caption this feature is arranged to
+refuse. Sources of a type the kind cannot carry are dropped before the
+payload is built, and if that leaves nothing, the candidate takes the
+abstention path above. `swagger.yml`'s enum is a first gate that knows the
+seven type names; it cannot express which kind may hold which.
+
 The response is schema-constrained (`{"items":[{"id","description",
 "keywords"}]}`), re-clipped server-side, and ids that were never sent are
 discarded.
@@ -587,8 +625,11 @@ discarded.
 The AI action adds **no new configuration**: it reuses `QRESP_GEMINI_ENABLED`,
 `QRESP_GEMINI_API_KEY`, the model/timeout/quota variables and the shared
 per-user daily limit. With Gemini
-unconfigured the folder analysis still succeeds in full; only the AI action
-reports `503 AI descriptions are not configured on this server.`
+unconfigured the folder analysis still succeeds in full; the AI action
+reports `503 AI descriptions are not configured on this server.` — except
+for a candidate with no evidence of its own, which takes the deterministic
+abstention path and answers `200 {"suggestions": {}, "no_suggestion": [id]}`
+whether or not a key is configured.
 
 ### Recommended values for a server that runs folder analysis
 
