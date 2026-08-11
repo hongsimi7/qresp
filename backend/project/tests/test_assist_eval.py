@@ -22,6 +22,7 @@ from unittest import mock
 
 from project import assist
 from project import curation
+from project import evidence as ev
 from project.tools import assist_core as core
 from project.tools import assist_eval
 
@@ -736,23 +737,70 @@ class TestArtifactPayload(unittest.TestCase):
 
     def test_the_human_answer_is_stripped_from_the_evidence(self):
         record = benchmark_record()
-        candidate = dict(record["rcc_candidates"][1],
-                         context="README: Raw diffraction patterns and more.")
+        candidate = dict(record["rcc_candidates"][1], sources=[
+            {"type": "readme", "path": "datasets/x/README.md",
+             "excerpt": "README: Raw diffraction patterns and more."}])
         artifact, _ = core.match_candidate(candidate, record)
-        payload = core.build_artifact_payload(candidate, artifact)
+        payload = core.build_artifact_payload(candidate, artifact,
+                                              record=record)
         self.assertNotIn("raw diffraction patterns",
-                         payload["context"].lower())
+                         json.dumps(payload).lower())
+        # ...and the leak gate agrees, on the FINAL payload.
+        self.assertEqual([], core.payload_leaks_the_answer(payload, artifact))
+
+    def test_the_leak_gate_catches_an_answer_that_survives(self):
+        record = benchmark_record()
+        artifact, _ = core.match_candidate(record["rcc_candidates"][1],
+                                           record)
+        leaking = {"paper_context": {},
+                   "artifact": {"name": "x"},
+                   "sources": [{"type": "readme", "path": "a/README.md",
+                                "excerpt": artifact["human_description"]}]}
+        self.assertTrue(core.payload_leaks_the_answer(leaking, artifact))
 
     def test_the_payload_uses_the_products_own_sanitizer(self):
         payload, _ = self.payload_for(1)
-        self.assertEqual(sorted(curation.AI_ALLOWED_KEYS), sorted(payload))
+        self.assertEqual(["artifact", "paper_context", "sources"],
+                         sorted(payload))
+        self.assertEqual(sorted(curation.AI_ALLOWED_KEYS),
+                         sorted(set(payload["artifact"])
+                                | {"inventory", "sources"}))
 
     def test_wants_keywords_follows_the_record_type(self):
         for index, kind, expected in ((0, "chart", True), (1, "dataset", True),
                                       (2, "script", True), (3, "tool", False)):
             payload, _ = self.payload_for(index)
-            self.assertEqual(kind, payload["kind"])
-            self.assertEqual(expected, payload["wants_keywords"], kind)
+            self.assertEqual(kind, payload["artifact"]["kind"])
+            self.assertEqual(expected,
+                             payload["artifact"]["wants_keywords"], kind)
+
+    def test_the_filenames_only_baseline_carries_no_file_text(self):
+        record = benchmark_record()
+        candidate = dict(
+            record["rcc_candidates"][1],
+            structural_evidence="One dataset: the folder datasets/x.",
+            sources=[{"type": "readme", "path": "datasets/x/README.md",
+                      "excerpt": "Neutron powder diffraction patterns."}])
+        artifact, _ = core.match_candidate(candidate, record)
+        payload = core.build_artifact_payload(
+            candidate, artifact, mode=core.EVIDENCE_FILENAMES_ONLY,
+            record=record)
+        blob = json.dumps(payload)
+        self.assertNotIn("Neutron powder diffraction", blob)
+        # ...and no paper background either: that arrived with the change.
+        self.assertEqual({}, payload["paper_context"])
+
+    def test_the_enhanced_mode_carries_the_sources_and_the_background(self):
+        record = benchmark_record()
+        candidate = dict(
+            record["rcc_candidates"][1],
+            sources=[{"type": "readme", "path": "datasets/x/README.md",
+                      "excerpt": "Neutron powder diffraction patterns."}])
+        artifact, _ = core.match_candidate(candidate, record)
+        payload = core.build_artifact_payload(
+            candidate, artifact, mode=core.EVIDENCE_ENHANCED, record=record)
+        self.assertIn("Neutron powder", payload["sources"][0]["excerpt"])
+        self.assertTrue(payload["paper_context"].get("title"))
 
     def test_no_url_absolute_path_image_or_account_data_is_sent(self):
         for index in range(4):
@@ -767,6 +815,123 @@ class TestArtifactPayload(unittest.TestCase):
 
 
 # ------------------------------------------------------------------ metrics
+
+class TestReferenceCorpus(unittest.TestCase):
+    """The silver standard is the real corpus, minus Qresp's own QA records."""
+
+    def test_qa_and_test_records_are_excluded_with_a_reason(self):
+        for title in ("test record", "QA - do not use", "Demo paper",
+                      "asdf", "Sample submission", "A paper (placeholder)"):
+            self.assertTrue(core.qa_record_reason({"title": title}), title)
+
+    def test_a_real_paper_is_kept(self):
+        for title in ("Testing the limits of DFT for water",
+                      "A sample-preparation protocol for perovskites",
+                      "Demonstrating quantum advantage in spin chains"):
+            self.assertEqual("", core.qa_record_reason({"title": title}),
+                             title)
+
+    def test_a_qa_collection_excludes_the_record(self):
+        self.assertTrue(core.qa_record_reason(
+            {"title": "Real looking title", "collections": ["QA"]}))
+
+    def test_an_untitled_record_is_excluded(self):
+        self.assertTrue(core.qa_record_reason({"title": "   "}))
+
+    def test_the_split_reports_both_sides(self):
+        kept, excluded = core.split_reference_corpus([
+            {"record_id": "a", "title": "Real physics paper"},
+            {"record_id": "b", "title": "test 2"},
+        ])
+        self.assertEqual(["a"], [r["record_id"] for r in kept])
+        self.assertEqual(1, len(excluded))
+        self.assertIn("QA/test", excluded[0][1])
+
+    def test_the_vocabulary_still_holds_out_the_target_record(self):
+        # Leave-one-record-out, so a tag only this record uses cannot be
+        # handed back to the model as the answer.
+        records = [
+            {"record_id": "a", "reference_tags": ["unique to a", "shared"]},
+            {"record_id": "b", "reference_tags": ["shared"]},
+        ]
+        display, known = core.build_vocabulary(records,
+                                               exclude_record_id="a")
+        self.assertNotIn("unique to a", known)
+        self.assertIn("shared", known)
+
+
+class TestArtifactMetrics(unittest.TestCase):
+
+    def bundle(self, sources, name="run.py", kind="script"):
+        return {"paper_context": {"title": "Water from first principles",
+                                  "abstract": "We compute the VDOS."},
+                "artifact": {"kind": kind, "name": name, "inventory": {}},
+                "sources": sources}
+
+    def test_groundedness_rewards_a_description_taken_from_the_evidence(self):
+        payload = self.bundle([
+            {"type": "docstring", "path": "s/run.py",
+             "excerpt": "Computes the vibrational density of states."}])
+        grounded = core.groundedness(
+            "Computes the vibrational density of states.", payload)
+        self.assertGreaterEqual(grounded, 0.9)
+
+    def test_the_paper_abstract_does_not_ground_an_artifact_claim(self):
+        # The whole point: a description lifted from the abstract must NOT
+        # score as grounded, because the abstract is background, not evidence.
+        payload = self.bundle([])
+        self.assertEqual(0.0, core.groundedness(
+            "Computes the vibrational density of states of water.", payload))
+
+    def test_usefulness_rejects_a_restatement_of_the_name(self):
+        payload = self.bundle([], name="plot_vdos.py")
+        self.assertFalse(core.usefulness(
+            "A python script file in the scripts folder.", payload))
+        self.assertTrue(core.usefulness(
+            "Computes vibrational spectra from molecular dynamics "
+            "trajectories.", payload))
+
+    def test_abstention_is_correct_when_there_is_no_prose(self):
+        bare = self.bundle([{"type": "python_symbols", "path": "s/run.py",
+                             "names": ["main"]}])
+        self.assertEqual(core.ABSTAIN_CORRECT,
+                         core.abstention_verdict(bare, {"description": ""}))
+        self.assertEqual(core.ABSTAIN_MISSED,
+                         core.abstention_verdict(bare,
+                                                 {"description": "Plots."}))
+
+    def test_abstention_is_wrong_when_a_readme_was_supplied(self):
+        described = self.bundle([{"type": "readme", "path": "s/README.md",
+                                  "excerpt": "Plots the band structure."}])
+        self.assertEqual(core.ANSWER_MISSING,
+                         core.abstention_verdict(described,
+                                                 {"description": ""}))
+        self.assertEqual(core.ANSWER_CORRECT,
+                         core.abstention_verdict(described,
+                                                 {"description": "Plots."}))
+
+    def test_symbols_alone_are_structure_not_description(self):
+        self.assertFalse(core.has_describing_evidence(self.bundle([
+            {"type": "python_symbols", "path": "a.py", "names": ["f"]}])))
+
+    def test_the_generic_ratio_is_measured_before_the_server_filter(self):
+        self.assertEqual(0.5, core.generic_keyword_ratio(
+            ["data", "scripts", "photoemission", "perovskite"]))
+        self.assertIsNone(core.generic_keyword_ratio([]))
+
+    def test_concept_overlap_folds_acronyms_and_plurals(self):
+        overlap = core.concept_overlap(
+            ["DFT", "perovskites"], ["density functional theory",
+                                     "perovskite"])
+        self.assertEqual(2, overlap["hits"])
+        self.assertEqual(1.0, overlap["precision"])
+        self.assertEqual(1.0, overlap["recall"])
+
+    def test_concept_overlap_reports_a_clean_miss(self):
+        overlap = core.concept_overlap(["graphene"], ["perovskite"])
+        self.assertEqual(0, overlap["hits"])
+        self.assertEqual(0.0, overlap["precision"])
+
 
 class TestKeywordMetrics(unittest.TestCase):
     def test_exact_match_scoring(self):
@@ -1151,16 +1316,21 @@ class TestCollectRccAgainstTheRealAnalyzer(CliTestCase):
         names = [c["name"] for c in records[0]["rcc_candidates"]]
         self.assertTrue(any(names), "a candidate kept no display name")
 
-    def test_evidence_becomes_bounded_context(self):
+    def test_structured_sources_survive_the_collect_round_trip(self):
         payload = self.collect_one(self.STANDARD, self.STANDARD_DIRS)
         raw = [c for group in payload["candidates"].values() for c in group]
-        self.assertTrue(any(c.get("evidence") for c in raw),
-                        "fixture produced no evidence to carry")
+        self.assertTrue(any("ai_sources" in c for c in raw),
+                        "the analyzer produced no structured evidence")
         records = assist_eval._load_records(self.dir)
-        contexts = [c["context"] for c in records[0]["rcc_candidates"]]
-        self.assertTrue(any(contexts), "evidence never reached context")
-        for context in contexts:
-            self.assertLessEqual(len(context), curation.MAX_AI_CONTEXT_CHARS)
+        candidates = records[0]["rcc_candidates"]
+        self.assertTrue(candidates)
+        for candidate in candidates:
+            self.assertIsInstance(candidate["sources"], list)
+            self.assertIsInstance(candidate["inventory"], dict)
+            for source in candidate["sources"]:
+                self.assertIn(source["type"], curation.AI_SOURCE_TYPES)
+                self.assertLessEqual(len(source.get("excerpt") or ""),
+                                     ev.MAX_EXCERPT_CHARS)
 
     def test_the_artifact_benchmark_now_has_units(self):
         self.collect_one(self.STANDARD, self.STANDARD_DIRS)
@@ -1193,7 +1363,7 @@ class TestCollectRccAgainstTheRealAnalyzer(CliTestCase):
             payload = core.build_artifact_payload(candidate, artifact)
             if payload is None:
                 continue
-            self.assertEqual(sorted(curation.AI_ALLOWED_KEYS),
+            self.assertEqual(["artifact", "paper_context", "sources"],
                              sorted(payload))
             self.assertEqual([], core.payload_is_safe(payload))
 
@@ -1328,7 +1498,10 @@ class TestAuditAndSample(CliTestCase):
         report = json.loads(self.read("audit.json"))
         self.assertEqual(6, report["records"])
         self.assertEqual(12, report["keyword_units"])      # 6 records x 2
-        self.assertEqual(24, report["artifact_units"])     # 6 x 4 candidates
+        # 6 records x 4 candidates x 2 evidence modes. Each candidate is
+        # asked twice -- filenames-only and enhanced -- so the comparison is
+        # paired on the same candidate rather than on two samples.
+        self.assertEqual(48, report["artifact_units"])
         self.assertIn("keyword_context_gaps", report)
 
     def test_the_sample_is_deterministic_for_a_seed(self):
@@ -1353,8 +1526,9 @@ class TestAuditAndSample(CliTestCase):
         self.run_cli(["smoke-sample", "--output-dir", self.dir])
         sample = json.loads(self.read("smoke-sample.json"))
         self.assertEqual(10, len(sample["keyword_units"]))   # 5 records x 2
-        self.assertEqual(10, len(sample["artifact_units"]))
-        self.assertEqual(20, sample["planned_provider_calls"])
+        # 10 candidates, each in both evidence modes.
+        self.assertEqual(20, len(sample["artifact_units"]))
+        self.assertEqual(30, sample["planned_provider_calls"])
 
     def test_artifact_strata_spread_across_kinds(self):
         self.write_records()
@@ -1571,7 +1745,7 @@ class TestFailedUnitsAreRetried(CliTestCase):
         """4 success, 2 MAX_TOKENS, 4 rate-limited -> 4 cached, 6 to call."""
         self.prepare()
         fingerprints = self.all_fingerprints()
-        self.assertEqual(20, len(fingerprints))
+        self.assertEqual(30, len(fingerprints))
         subset = fingerprints[:10]
         rows = []
         for fingerprint in subset[:4]:
@@ -1749,11 +1923,12 @@ class TestSummarize(CliTestCase):
             "unit": {"id": "u1", "record_id": record["record_id"],
                      "kind": "tool", "has_evidence": True},
             "artifact": artifact,
-            "payload": {"item": core.build_artifact_payload(candidate,
-                                                            artifact)},
+            "payload": core.build_artifact_payload(candidate, artifact,
+                                                   record=record),
         }
+        entry["unit"]["evidence_mode"] = core.EVIDENCE_ENHANCED
         cached = {"ok": True, "answer_text": json.dumps({"items": [{
-            "id": entry["payload"]["item"]["id"],
+            "id": entry["payload"]["artifact"]["id"],
             "description": "A lattice simulation library",
             "keywords": ["lattice"], "confidence": "low",
             "reason": "the manifest line"}]})}

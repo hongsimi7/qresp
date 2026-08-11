@@ -444,6 +444,18 @@ def _load_records(output_dir):
         if candidates is not None:
             record["rcc_candidates"] = candidates
         record.setdefault("rcc_candidates", [])
+
+    # The silver standard is the real published corpus. Qresp's own QA and
+    # test records carry placeholder titles, tags and artifact descriptions;
+    # scoring against those measures nothing, and leaving them in the
+    # leave-one-out vocabulary teaches the model Qresp's test fixtures.
+    records, excluded = core.split_reference_corpus(records)
+    for record, reason in excluded:
+        print("  reference corpus: excluded %s (%s)"
+              % (record.get("record_id"), reason))
+    if excluded:
+        print("  reference corpus: %d QA/test record(s) excluded, %d kept"
+              % (len(excluded), len(records)))
     return records
 
 
@@ -485,18 +497,26 @@ def _artifact_units(records):
                     "reason": reason,
                 })
                 continue
-            has_evidence = bool(str(candidate.get("context") or "").strip())
-            units.append({
-                "benchmark": BENCH_ARTIFACTS,
-                "id": "%s::%s" % (record["record_id"], candidate.get("id")),
-                "sort_key": "%s::%s" % (record["record_id"],
-                                        candidate.get("id")),
-                "record_id": record["record_id"],
-                "candidate_id": candidate.get("id"),
-                "kind": candidate.get("kind"),
-                "has_evidence": has_evidence,
-                "has_human_description": bool(artifact["human_description"]),
-            })
+            # One unit per candidate PER EVIDENCE MODE: the same candidate is
+            # asked twice, once with the old filenames-only input and once
+            # with the shipped bundle, so the comparison is paired rather
+            # than between two different samples of candidates.
+            for mode in core.EVIDENCE_MODES:
+                units.append({
+                    "benchmark": BENCH_ARTIFACTS,
+                    "id": "%s::%s::%s" % (record["record_id"],
+                                          candidate.get("id"), mode),
+                    "sort_key": "%s::%s::%s" % (record["record_id"],
+                                                candidate.get("id"), mode),
+                    "record_id": record["record_id"],
+                    "candidate_id": candidate.get("id"),
+                    "kind": candidate.get("kind"),
+                    "evidence_mode": mode,
+                    "source_count": len(candidate.get("sources") or []),
+                    "has_evidence": bool(candidate.get("sources")),
+                    "has_human_description": bool(
+                        artifact["human_description"]),
+                })
     return units, excluded
 
 
@@ -607,11 +627,26 @@ def smoke_sample(args):
     # Artifact: stratify on (kind, does it have real evidence), because
     # "described a chart with no evidence" and "described a script with a
     # docstring" are different questions.
-    artifact_sample = core.stratified_sample(
-        artifact_units, args.artifact_candidates,
+    #
+    # The sample is drawn over CANDIDATES, then both evidence modes of each
+    # chosen candidate are included. Sampling the modes independently would
+    # compare two different sets of candidates and call the difference an
+    # effect of the evidence.
+    chosen_candidates = core.stratified_sample(
+        [u for u in artifact_units
+         if u["evidence_mode"] == core.EVIDENCE_ENHANCED],
+        args.artifact_candidates,
         lambda u: "%s/%s" % (u["kind"],
                              "evidence" if u["has_evidence"] else "names"),
         seed=args.seed)
+    # The stratum label belongs to the candidate, so both of its modes carry
+    # the same one -- the sample stays reportable per stratum.
+    strata = {(u["record_id"], u["candidate_id"]): u.get("stratum")
+              for u in chosen_candidates}
+    artifact_sample = [
+        dict(u, stratum=strata[(u["record_id"], u["candidate_id"])])
+        for u in artifact_units
+        if (u["record_id"], u["candidate_id"]) in strata]
 
     sample = {
         "evaluation_type": PROVISIONAL,
@@ -725,21 +760,36 @@ def _plan(records, sample, cache, cfg):
         artifact, reason = core.match_candidate(candidate, record)
         if artifact is None:
             continue
-        payload_item = core.build_artifact_payload(candidate, artifact)
-        if payload_item is None:
+        mode = unit.get("evidence_mode") or core.EVIDENCE_ENHANCED
+        payload = core.build_artifact_payload(candidate, artifact, mode=mode,
+                                              record=record)
+        if payload is None:
             continue
-        payload = {"item": payload_item}
+        # The gate on the whole unit. A payload that still contains the
+        # curator's own caption/readme/keywords measures copying, so it is
+        # dropped rather than scored -- loudly, in the run summary.
+        leaked = core.payload_leaks_the_answer(payload, artifact)
         planned.append({
             "benchmark": BENCH_ARTIFACTS,
             "unit": unit,
             "artifact": artifact,
             "payload": payload,
+            "leaked": leaked,
             "system_prompt": curation.AI_SYSTEM_PROMPT,
             "schema": curation.AI_RESPONSE_SCHEMA,
             "max_output_tokens": curation.AI_OUTPUT_TOKENS,
             "fingerprint": core.fingerprint(
                 cfg["MODEL"], curation.AI_SYSTEM_PROMPT, payload),
         })
+
+    # A leaking unit is never called: it would spend a provider request on a
+    # question whose answer was in the question.
+    dropped = [entry for entry in planned if entry.get("leaked")]
+    for entry in dropped:
+        print("  LEAK: %s dropped -- the target record's own text survived "
+              "into the payload (%s)"
+              % (entry["unit"]["id"], "; ".join(entry["leaked"])[:120]))
+    planned = [entry for entry in planned if not entry.get("leaked")]
 
     for entry in planned:
         entry["cached"] = entry["fingerprint"] in cache
@@ -872,7 +922,7 @@ def _score_artifact(entry, cached, records):
     if cached and cached.get("ok"):
         try:
             parsed = curation._parse_ai_items(cached["answer_text"])
-            suggestion = parsed.get(entry["payload"]["item"]["id"], {})
+            suggestion = parsed.get(entry["payload"]["artifact"]["id"], {})
         except Exception as e:
             parse_error = type(e).__name__
     kind = entry["unit"]["kind"]
@@ -884,12 +934,33 @@ def _score_artifact(entry, cached, records):
         suggestion = dict(suggestion, keywords=[])
 
     description = suggestion.get("description") or ""
-    evidence = entry["payload"]["item"].get("context") or ""
+    payload = entry["payload"]
+    evidence = core.evidence_text_of(payload)
     abstained = bool(cached and cached.get("ok") and not description.strip())
     return {
         "unit_id": entry["unit"]["id"],
         "record_id": entry["unit"]["record_id"],
         "kind": kind,
+        "evidence_mode": entry["unit"].get("evidence_mode", ""),
+        "source_count": len(payload.get("sources") or []),
+        # --- the metrics this comparison exists for ---------------------
+        "groundedness": core.groundedness(description, payload),
+        "useful": core.usefulness(description, payload),
+        "abstention": core.abstention_verdict(payload, suggestion),
+        "generic_keyword_ratio": core.generic_keyword_ratio(raw_keywords),
+        "concept_overlap": core.concept_overlap(
+            suggestion.get("keywords") or [], artifact["human_keywords"]),
+        # Recall split on the one caveat that would otherwise inflate it: a
+        # reference keyword the paper's own title or abstract already spells
+        # out is recoverable by reading the background, not by reading the
+        # artifact's evidence.
+        "background_recoverable_keywords":
+            core.background_recoverable_keywords(payload, artifact),
+        "concept_overlap_evidence_only": core.concept_overlap(
+            suggestion.get("keywords") or [],
+            [term for term in artifact["human_keywords"]
+             if term not in core.background_recoverable_keywords(
+                 payload, artifact)]),
         "status": ("completed" if (description or suggestion.get("keywords"))
                    else ("abstained" if abstained else
                          ("parse_error" if parse_error else
@@ -962,9 +1033,11 @@ def summarize(args):
                  "expert_rating": "", "expert_note": ""}
                 for row in keyword_rows])
     _write_tsv(os.path.join(out, "artifact-review.tsv"),
-               ("unit_id", "record_id", "kind", "status", "has_evidence",
-                "abstained", "ai_description", "human_description",
-                "ai_keywords", "human_keywords", "description_similarity",
+               ("unit_id", "record_id", "kind", "evidence_mode", "status",
+                "source_count", "has_evidence", "abstained", "abstention",
+                "groundedness", "useful", "ai_description",
+                "human_description", "ai_keywords", "human_keywords",
+                "description_similarity", "generic_keyword_ratio",
                 "forbidden_fields", "type_contract_violations",
                 "expert_rating", "expert_note"),
                [{**row,
@@ -1054,8 +1127,62 @@ def _keyword_summary(rows, records):
     }
 
 
+def _mode_metrics(rows):
+    """The comparable numbers for one (kind, evidence mode) cell."""
+    completed = [r for r in rows if r["status"] == "completed"]
+    verdicts = {}
+    for row in rows:
+        verdicts[row["abstention"]] = verdicts.get(row["abstention"], 0) + 1
+    decided = sum(verdicts.get(key, 0) for key in
+                  (core.ABSTAIN_CORRECT, core.ABSTAIN_MISSED,
+                   core.ANSWER_CORRECT, core.ANSWER_MISSING))
+    right = verdicts.get(core.ABSTAIN_CORRECT, 0) + verdicts.get(
+        core.ANSWER_CORRECT, 0)
+    overlaps = [r["concept_overlap"] for r in completed]
+    evidence_only = [r["concept_overlap_evidence_only"] for r in completed]
+    return {
+        "units": len(rows),
+        "completed": len(completed),
+        "keyword_concept_recall_evidence_only": _mean(
+            [o["recall"] for o in evidence_only]),
+        "reference_keywords_in_paper_background": sum(
+            len(r["background_recoverable_keywords"]) for r in rows),
+        "mean_groundedness": _mean([r["groundedness"] for r in completed]),
+        "useful_rate": round(
+            sum(1 for r in completed if r["useful"]) / float(len(completed)),
+            4) if completed else 0.0,
+        "mean_generic_keyword_ratio": _mean(
+            [r["generic_keyword_ratio"] for r in completed]),
+        "keyword_concept_precision": _mean(
+            [o["precision"] for o in overlaps]),
+        "keyword_concept_recall": _mean([o["recall"] for o in overlaps]),
+        "abstention": dict(sorted(verdicts.items())),
+        "abstention_correctness": round(right / float(decided), 4)
+        if decided else 0.0,
+        "mean_description_similarity": _mean(
+            [r["description_similarity"] for r in completed]),
+        "forbidden_field_generations": sum(
+            1 for r in rows if r["forbidden_fields"]),
+    }
+
+
 def _artifact_summary(rows):
     completed = [r for r in rows if r["status"] == "completed"]
+
+    # The comparison table: one row per record type per evidence mode, so
+    # "did the enhanced bundle help Scripts but hurt Charts?" is answerable
+    # rather than averaged away.
+    by_kind_and_mode = {}
+    for kind in sorted({r["kind"] for r in rows}):
+        by_kind_and_mode[kind] = {
+            mode: _mode_metrics([r for r in rows if r["kind"] == kind
+                                 and r["evidence_mode"] == mode])
+            for mode in core.EVIDENCE_MODES
+        }
+    by_mode = {mode: _mode_metrics([r for r in rows
+                                    if r["evidence_mode"] == mode])
+               for mode in core.EVIDENCE_MODES}
+
     by_kind = {}
     for row in rows:
         bucket = by_kind.setdefault(row["kind"], {
@@ -1095,6 +1222,16 @@ def _artifact_summary(rows):
         "abstention_rate": round(
             sum(1 for r in rows if r["abstained"]) / float(len(rows)), 4)
         if rows else 0.0,
+        "comparison_note":
+            "filenames_only reproduces the AI action's input BEFORE the "
+            "evidence change (name, relative paths, and the analyzer's own "
+            "structural sentences). enhanced is the shipped bundle "
+            "(boundary-confined README/docstring/symbol/notebook-markdown "
+            "sources plus the paper's title and abstract as background). The "
+            "same candidates are asked in both modes, so the difference is "
+            "paired.",
+        "by_evidence_mode": by_mode,
+        "by_kind_and_evidence_mode": by_kind_and_mode,
         "by_kind": dict(sorted(by_kind.items())),
         "mean_description_similarity": _mean(
             [r["description_similarity"] for r in completed]),

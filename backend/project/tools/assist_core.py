@@ -189,6 +189,68 @@ def to_benchmark_record(search_row, details=None):
     }
 
 
+# ------------------------------------------------------ the reference corpus
+#
+# The silver standard is the PUBLISHED corpus minus Qresp's own QA and test
+# records. Those exist to exercise the software: their titles, tags and
+# artifact descriptions are placeholders, and leaving them in both pollutes
+# the vocabulary the model is anchored on and scores real suggestions against
+# text nobody meant as curation.
+
+# A leading QA word alone is not enough: "Testing the limits of DFT for
+# water" and "A sample-preparation protocol" are real papers. The word has to
+# be used as a LABEL -- standalone, followed by punctuation, or followed by
+# one of the nouns a placeholder title actually uses.
+_QA_WORDS = (r"qa|test|testing|demo|sample|example|dummy|draft|staging|"
+             r"sandbox|delete\s*me|temp|tmp")
+_QA_NOUNS = (r"record|records|paper|papers|entry|entries|upload|uploads|"
+             r"submission|submissions|doc|document|item|project|run|data")
+
+QA_TITLE_PATTERNS = (
+    # "test", "QA - do not use", "test #3", "Demo paper", "Sample submission"
+    re.compile(r"^\s*(?:%s)\s*(?:[:\-–—_#|/]|\d|$|\s+(?:%s)\b)"
+               % (_QA_WORDS, _QA_NOUNS), re.IGNORECASE),
+    re.compile(r"\b(do\s*not\s*use|ignore\s*this|placeholder|lorem\s*ipsum)\b",
+               re.IGNORECASE),
+    re.compile(r"^\s*(asdf|qwerty|foo|bar|baz|xxx+|aaa+|123+)\s*$",
+               re.IGNORECASE),
+)
+
+QA_COLLECTIONS = frozenset(("test", "tests", "qa", "demo", "sample",
+                            "sandbox", "staging", "example"))
+
+
+def qa_record_reason(record):
+    """Why this record is QA/test rather than curation, or "" if it is real.
+
+    Deliberately conservative and deliberately EXPLAINED: an over-eager rule
+    silently shrinks the benchmark, so every exclusion is reported with the
+    reason that triggered it and can be audited.
+    """
+    title = str((record or {}).get("title") or "").strip()
+    if not title:
+        return "record has no title"
+    for pattern in QA_TITLE_PATTERNS:
+        if pattern.search(title):
+            return "title looks like a QA/test record: %r" % title[:60]
+    for collection in (record or {}).get("collections") or []:
+        if str(collection or "").strip().lower() in QA_COLLECTIONS:
+            return "filed under the %r collection" % str(collection)[:40]
+    return ""
+
+
+def split_reference_corpus(records):
+    """(real records, [(record, reason)]) for the silver standard."""
+    kept, excluded = [], []
+    for record in records or []:
+        reason = qa_record_reason(record)
+        if reason:
+            excluded.append((record, reason))
+        else:
+            kept.append(record)
+    return kept, excluded
+
+
 # -------------------------------------------------- leave-one-out vocabulary
 
 def build_vocabulary(records, exclude_record_id=None):
@@ -674,27 +736,33 @@ def normalize_rcc_candidate(entry, bucket):
 
     * the display name is `label` (the analyzer stopped inferring a `name`
       from the file list); and
-    * there is no `context` -- there is an `evidence` list, which the product
-      frontend joins into the context it sends. The same is done here.
+    * the evidence is `ai_sources` -- the structured, boundary-confined
+      bundle the analyzer builds -- plus the `inventory` summary. There used
+      to be a free-text `context`, joined from the `evidence` sentences by
+      the frontend; it is kept here ONLY so the filenames-only baseline can
+      reproduce the old behaviour for comparison.
 
     Everything else is dropped: file counts, confidence, proposals,
     field_evidence, image options. `curation._sanitize_ai_items` applies the
     real allowlist and clipping when the payload is actually built.
     """
     name = entry.get("label") or entry.get("name") or ""
-    context = entry.get("context")
-    if not context:
-        context = " ".join(
-            str(item).strip() for item in (entry.get("evidence") or [])
-            if str(item or "").strip())
     paths = [str(path) for path in (entry.get("paths") or [])
              if str(path or "").strip()]
+    sources = [source for source in (entry.get("ai_sources") or [])
+               if isinstance(source, dict)]
     return {
         "id": str(entry.get("id") or ""),
         "kind": BUCKET_TO_KIND[bucket],
         "name": _text(name, curation.MAX_AI_NAME_CHARS),
         "paths": paths,
-        "context": _text(context, curation.MAX_AI_CONTEXT_CHARS),
+        "inventory": entry.get("inventory") or {},
+        "sources": sources,
+        # The pre-change baseline input: the analyzer's structural sentences,
+        # which is all the AI action used to get besides names and paths.
+        "structural_evidence": _text(" ".join(
+            str(item).strip() for item in (entry.get("evidence") or [])
+            if str(item or "").strip()), 4000),
     }
 
 
@@ -836,33 +904,185 @@ def match_candidate(candidate, record):
     return None, UNMATCHED_NOT_FOUND
 
 
-def build_artifact_payload(candidate, artifact):
+# The two things being compared.
+#
+# `filenames_only` reproduces what the AI action received BEFORE this change:
+# the candidate's name, its relative paths, and the analyzer's own structural
+# sentences ("One dataset: the folder data/SE-RSH and everything in it").
+# `enhanced` is the shipped bundle: the same identity plus the boundary-
+# confined README/docstring/symbol/notebook-markdown sources and the paper's
+# title and abstract as background.
+EVIDENCE_FILENAMES_ONLY = "filenames_only"
+EVIDENCE_ENHANCED = "enhanced"
+EVIDENCE_MODES = (EVIDENCE_FILENAMES_ONLY, EVIDENCE_ENHANCED)
+
+
+def _redact_answer(text, secrets):
+    """Remove the human answer from a string it must never contain."""
+    cleaned = str(text or "")
+    for secret in secrets:
+        needle = _text(secret)
+        if len(needle) >= 4:
+            cleaned = re.sub(re.escape(needle), " ", cleaned,
+                             flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def target_answer_terms(artifact):
+    """Everything about the TARGET record that must be scrubbed from the
+    artifact's own evidence: its curated description/caption/readme and its
+    curated keywords."""
+    return [artifact.get("human_description")] + list(
+        artifact.get("human_keywords") or [])
+
+
+def scored_answer_terms(artifact):
+    """The curated TEXT the description is scored against.
+
+    Narrower than `target_answer_terms` on purpose. A curated keyword is a
+    single common phrase -- "band structure", "liquid water" -- and a paper
+    about band structures says "band structure" in its title. Treating that
+    as a leak would delete the paper's real title from the payload and
+    benchmark a product that does not exist. So keywords are scrubbed from
+    the ARTIFACT's evidence (see `strip_answer_from_sources`) but their
+    presence in the paper's own background is REPORTED instead, by
+    `background_recoverable_keywords`, and keyword recall is split on it.
+    """
+    return [artifact.get("human_description")]
+
+
+def strip_answer_from_sources(sources, secrets):
+    """The evidence bundle with the human answer scrubbed out of it.
+
+    A curator's README often IS the description they later typed into the
+    record. Feeding that back and then scoring the answer against it would
+    measure copying, not description quality -- so the reference text is
+    removed from the evidence before the model ever sees it, and a source
+    that was ONLY the answer disappears entirely.
+    """
+    cleaned = []
+    for source in sources or []:
+        if not isinstance(source, dict):
+            continue
+        if source.get("names") is not None:
+            cleaned.append(source)
+            continue
+        excerpt = _redact_answer(source.get("excerpt"), secrets)
+        if excerpt:
+            cleaned.append(dict(source, excerpt=excerpt))
+    return cleaned
+
+
+def build_artifact_payload(candidate, artifact, mode=EVIDENCE_ENHANCED,
+                           record=None):
     """The product's own request shape for exactly one candidate, with the
     human answer removed.
 
     `curation._sanitize_ai_items` does the allowlisting, the clipping and the
     absolute-path/URL rejection, so this cannot drift from what the endpoint
-    sends. The target description and keywords are stripped from `context`
-    first -- an evaluation that let the model read the answer out of its own
-    evidence would measure nothing.
+    sends -- and `curation._sanitize_paper_context` does the same for the
+    background. The target record's caption/readme/description/keywords are
+    stripped from the evidence FIRST: an evaluation that let the model read
+    the answer out of its own input would measure nothing.
+
+    Returns the full bundle the endpoint would hand the provider, so the two
+    modes are compared on exactly the shape that ships.
     """
-    context = _text(candidate.get("context"), curation.MAX_AI_CONTEXT_CHARS)
-    for secret in [artifact.get("human_description")] + list(
-            artifact.get("human_keywords") or []):
-        text = _text(secret)
-        if len(text) >= 4:
-            context = re.sub(re.escape(text), " ", context,
-                             flags=re.IGNORECASE)
-    context = re.sub(r"\s+", " ", context).strip()
+    secrets = target_answer_terms(artifact)
+
+    structure_notes = ""
+    if mode == EVIDENCE_FILENAMES_ONLY:
+        # The pre-change input: the analyzer's structural sentences and
+        # nothing read out of a file. They travel as `structure_notes` on the
+        # artifact rather than as a `sources` entry, because they are NOT
+        # prose a human wrote about this artifact -- "One dataset: the folder
+        # data/vdos and everything in it" describes the file layout. Filing
+        # them as a source would let a description copied from them score as
+        # grounded, which is precisely the illusion this benchmark exists to
+        # dispel.
+        structure_notes = _redact_answer(
+            candidate.get("structural_evidence"), secrets)
+        sources = []
+        paper_context = {}
+    else:
+        sources = strip_answer_from_sources(candidate.get("sources"), secrets)
+        paper_context = {
+            "title": (record or {}).get("title") or "",
+            # The paper's OWN abstract is not the artifact's answer, so it is
+            # not scrubbed -- but a curator who pasted the artifact
+            # description into the abstract would leak it, so the same
+            # scrubbing is applied for safety.
+            "abstract": _redact_answer((record or {}).get("abstract"),
+                                       secrets),
+        }
 
     items = curation._sanitize_ai_items([{
         "id": str(candidate.get("id") or ""),
         "kind": candidate.get("kind"),
         "name": candidate.get("name"),
         "paths": candidate.get("paths") or [],
-        "context": context,
+        "inventory": candidate.get("inventory") or {},
+        "sources": sources,
     }])
-    return items[0] if items else None
+    if not items:
+        return None
+    item = items[0]
+    artifact_block = {
+        "kind": item["kind"],
+        "name": item["name"],
+        "id": item["id"],
+        "paths": item["paths"],
+        "inventory": item["inventory"],
+        "wants_keywords": item["wants_keywords"],
+    }
+    if structure_notes:
+        # Baseline mode only. The shipped endpoint has no such field.
+        artifact_block["structure_notes"] = _text(structure_notes, 4000)
+    return {
+        "paper_context": curation._sanitize_paper_context(paper_context),
+        "artifact": artifact_block,
+        "sources": item["sources"],
+    }
+
+
+def payload_leaks_the_answer(payload, artifact):
+    """Whether the target record's own curated DESCRIPTION survived into the
+    input.
+
+    The single check that decides whether a unit's description score means
+    anything. Run on the FINAL payload, after every clipping and sanitizing
+    step, so a phrase that slipped through a regex is still caught.
+    """
+    blob = json.dumps(payload or {}, ensure_ascii=False).lower()
+    leaked = []
+    for secret in scored_answer_terms(artifact):
+        needle = _text(secret).lower()
+        # Short strings collide with ordinary words; the answer key is judged
+        # on substantial phrases only.
+        if len(needle) >= 12 and needle in blob:
+            leaked.append(needle[:60])
+    return leaked
+
+
+def background_recoverable_keywords(payload, artifact):
+    """Reference keywords that the paper's OWN title or abstract already
+    contains.
+
+    Not a defect -- the product really does send the title and abstract, and
+    a curator's keyword really is often the paper's subject. It is a
+    MEASUREMENT CAVEAT: recovering "band structure" for a paper titled "Band
+    structure of ..." demonstrates reading, not inference. Keyword recall is
+    reported separately for these and for the rest, so the evidence-driven
+    half of the score is visible on its own.
+    """
+    background = " ".join([
+        (payload or {}).get("paper_context", {}).get("title") or "",
+        (payload or {}).get("paper_context", {}).get("abstract") or "",
+    ]).lower()
+    if not background.strip():
+        return []
+    return [term for term in (artifact.get("human_keywords") or [])
+            if _text(term).lower() and _text(term).lower() in background]
 
 
 def payload_is_safe(payload):
@@ -934,6 +1154,153 @@ def unsupported_claim_terms(description, evidence):
     supported = token_set(evidence)
     return sorted(described - supported - token_set(" ".join(
         GENERIC_KEYWORDS)))
+
+
+def evidence_text_of(payload):
+    """Every excerpt and symbol name in a bundle, as one string.
+
+    This is the ONLY thing a grounded description may draw on: the paper's
+    title and abstract are deliberately excluded, because "the abstract said
+    so" is exactly the reasoning the prompt forbids for an artifact.
+    """
+    parts = []
+    for source in (payload or {}).get("sources") or []:
+        parts.append(source.get("excerpt") or "")
+        parts.extend(source.get("names") or [])
+    artifact = (payload or {}).get("artifact") or {}
+    parts.append(artifact.get("name") or "")
+    # Baseline mode's structural sentences: input the model could copy from,
+    # so groundedness must count them -- but see `has_describing_evidence`,
+    # which deliberately does not treat them as description.
+    parts.append(artifact.get("structure_notes") or "")
+    parts.extend((artifact.get("inventory") or {}).get("sample_names") or [])
+    return " ".join(part for part in parts if part)
+
+
+def has_describing_evidence(payload):
+    """Whether the bundle contains PROSE a human wrote about this artifact.
+
+    Symbol names and a file inventory are structure, not description: a
+    caption or a readme cannot be grounded in them, so a candidate carrying
+    only those is one where abstention is the correct answer.
+    """
+    for source in (payload or {}).get("sources") or []:
+        if source.get("type") in ("readme", "docstring", "comment_header",
+                                  "notebook_markdown", "manifest"):
+            if str(source.get("excerpt") or "").strip():
+                return True
+    return False
+
+
+def groundedness(description, payload):
+    """Share of a description's content words that the EVIDENCE supports.
+
+    A resemblance measure, not a verdict -- legitimate paraphrase scores
+    below 1.0. It is meaningful as a COMPARISON between the two evidence
+    modes on the same candidate: a description built from a file name and the
+    paper's abstract grounds near zero, because neither is in the evidence.
+    """
+    described = token_set(description)
+    if not described:
+        return None
+    supported = token_set(evidence_text_of(payload))
+    described -= token_set(" ".join(GENERIC_KEYWORDS))
+    if not described:
+        return None
+    return round(len(described & supported) / float(len(described)), 4)
+
+
+# A description that only restates the record type and the file layout tells
+# a curator nothing they could not see on the card.
+USEFULNESS_MIN_WORDS = 5
+
+
+def usefulness(description, payload):
+    """Whether a description says anything beyond the candidate's own name.
+
+    Not a quality score -- a cheap floor. "Python script in the scripts
+    folder" clears no bar worth clearing, and it is what filenames-only
+    evidence tends to produce.
+    """
+    words = [word for word in re.split(r"\W+", str(description or "")) if word]
+    if len(words) < USEFULNESS_MIN_WORDS:
+        return False
+    artifact = (payload or {}).get("artifact") or {}
+    trivial = token_set(artifact.get("name")) | token_set(
+        artifact.get("kind")) | token_set(" ".join(GENERIC_KEYWORDS))
+    return bool(token_set(description) - trivial)
+
+
+ABSTAIN_CORRECT = "correct_abstention"
+ABSTAIN_MISSED = "missed_abstention"
+ANSWER_CORRECT = "correct_answer"
+ANSWER_MISSING = "unnecessary_abstention"
+
+
+def abstention_verdict(payload, suggestion):
+    """Did the model stay quiet exactly when it should have?
+
+    Four outcomes, and the two that matter are:
+
+    * `missed_abstention` -- it described an artifact whose bundle held no
+      human prose. That is the invented caption this change exists to stop.
+    * `unnecessary_abstention` -- it stayed quiet with a README in hand,
+      which wastes the curator's request.
+    """
+    described = bool(str((suggestion or {}).get("description") or "").strip())
+    if has_describing_evidence(payload):
+        return ANSWER_CORRECT if described else ANSWER_MISSING
+    return ABSTAIN_MISSED if described else ABSTAIN_CORRECT
+
+
+def generic_keyword_ratio(keywords):
+    """Share of suggested keywords that describe the folder, not the science.
+
+    The server already drops the stopword list before a keyword reaches the
+    curator, so this is measured on the RAW answer -- it says how often the
+    model reaches for a generic term, which the filtered output hides.
+    """
+    terms = [str(term or "").strip() for term in keywords or []]
+    terms = [term for term in terms if term]
+    if not terms:
+        return None
+    generic = sum(1 for term in terms
+                  if normalize_keyword(term) in GENERIC_KEYWORDS)
+    return round(generic / float(len(terms)), 4)
+
+
+def concept_overlap(suggested, reference):
+    """Precision/recall over CONCEPTS, not strings.
+
+    `concept_key` already folds singular/plural and spacing, and acronyms are
+    matched against expansions, so "DFT" and "density functional theory"
+    count as one hit instead of a miss. Still a LOWER BOUND: two different
+    defensible keywords for the same idea are counted as a miss.
+    """
+    def keys(values):
+        found = set()
+        for value in values or []:
+            key = concept_key(value)
+            if key:
+                found.add(key)
+            acronym = acronym_of(value)
+            if acronym:
+                found.add(concept_key(acronym))
+        return found
+
+    proposed, expected = keys(suggested), keys(reference)
+    if not proposed and not expected:
+        return {"precision": None, "recall": None, "hits": 0,
+                "suggested": 0, "reference": 0}
+    hits = len(proposed & expected)
+    return {
+        "precision": round(hits / float(len(proposed)), 4) if proposed
+        else None,
+        "recall": round(hits / float(len(expected)), 4) if expected else None,
+        "hits": hits,
+        "suggested": len(proposed),
+        "reference": len(expected),
+    }
 
 
 def type_contract_violations(kind, suggestion):
