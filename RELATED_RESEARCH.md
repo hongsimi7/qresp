@@ -631,6 +631,37 @@ with a 400, and the Explorer, which reads the same list from
 > switch federation off — silently restored the shipped list. An operator
 > disabling a feature got it enabled.
 
+### The Explorer's default server
+
+`/explorer` opens on results rather than on a node picker, so the deployment
+has to name which server that is. `/api/federation/servers` publishes it as
+`default_server`, alongside the list it has always returned — an **additive**
+field, so a client that only reads `servers` is unaffected.
+
+| `QRESP_DEFAULT_EXPLORER_SERVER` | `default_server` |
+| --- | --- |
+| absent | the **first origin in the published (sorted) list** |
+| an origin in the allowlist | that origin, canonicalized |
+| an origin **not** in the allowlist | ignored, with a log line; falls back to the first listed origin |
+| not https, or unparseable | ignored the same way |
+| (any value, with an empty allowlist) | `""` — this deployment federates with nobody |
+
+The value goes through the same `parse_origin` as every other origin, so a
+trailing slash, a mixed-case host and an explicit `:443` all resolve to the
+spelling the allowlist actually holds. It is then checked for MEMBERSHIP:
+naming a server here can **pick among the federated ones and can never add
+one**. That matters because the Explorer no longer asks the visitor which
+node to search — a default outside the allowlist would send every first-time
+visitor into a 400 naming a server they never chose.
+
+`""` is a real answer, not a failure: the Explorer shows an in-page
+"no node available" state with a Retry, rather than redirecting into a search
+that cannot succeed.
+
+Choosing servers by hand is still reachable at **`/explorer?choose=1`**, and
+`/search?servers=a,b` is unchanged — federation is not reduced to one node,
+it just stops being a toll gate on the way to the records.
+
 ### Choosing the TTLs
 
 The feature exists so that a follow-up study published years later shows up on
