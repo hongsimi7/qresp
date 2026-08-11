@@ -31,11 +31,13 @@ import AlertContext from "../../Context/Alert/alertContext";
 import { buildFileUrl } from "../../Utils/fileServerUrl";
 import {
   aiTargets,
+  evidenceChipFor,
   fieldsFor,
   helpFor,
   isRequired,
   labelFor,
   missingRequired,
+  suggestionApplied,
   toDraft,
   toRecord,
 } from "../../Utils/artifactFields";
@@ -779,6 +781,24 @@ const FolderAnalysis = ({ path, artifactType }) => {
     const descriptionField = targets.description;
     const keywordField = targets.keywords;
 
+    // DERIVED, never remembered. A stored "applied" flag would keep claiming
+    // a suggestion was applied after the curator edited or cleared the field
+    // it went into; asking the draft cannot drift from it.
+    const keywordText = keywords.join(", ");
+    const descriptionApplied =
+      Boolean(descriptionField) &&
+      suggestionApplied(candidate.kind, descriptionField, draft, description);
+    const keywordsApplied =
+      Boolean(keywordField) &&
+      suggestionApplied(candidate.kind, keywordField, draft, keywordText);
+    // The panel's own headline state: everything this suggestion offered is
+    // in the fields it belongs in.
+    const offered = [
+      description ? descriptionApplied : null,
+      keywords.length && keywordField ? keywordsApplied : null,
+    ].filter((value) => value !== null);
+    const fullyApplied = offered.length > 0 && offered.every(Boolean);
+
     return (
       <Box
         sx={{ ...CARD_EXPANSION_SX, mt: 1 }}
@@ -804,8 +824,12 @@ const FolderAnalysis = ({ path, artifactType }) => {
             label={`AI suggestion: ${suggestion.confidence || "low"}`}
             data-testid={`ai-confidence-${candidate.id}`}
           />
-          <Typography variant="caption" color="text.secondary">
-            not applied
+          <Typography
+            variant="caption"
+            color={fullyApplied ? "success.main" : "text.secondary"}
+            data-testid={`ai-applied-${candidate.id}`}
+          >
+            {fullyApplied ? "applied" : "not applied"}
           </Typography>
         </Box>
         {suggestion.reason ? (
@@ -841,19 +865,25 @@ const FolderAnalysis = ({ path, artifactType }) => {
             <Typography variant="body2" sx={{ mt: 0.5 }}>
               {description}
             </Typography>
-            {/* Per-field acceptance. Disabled while the curator's own text is
-                in the field: an AI suggestion never overwrites something a
-                person wrote, not even on a click meant for something else. */}
+            {/* Per-field acceptance. Disabled while OTHER text is in the
+                field: an AI suggestion never overwrites something a person
+                wrote, not even on a click meant for something else. Once this
+                suggestion IS the field's value the button says so rather than
+                claiming the curator's text is being protected from it -- the
+                text it would be protecting is its own. */}
             <Button
               size="small"
-              disabled={Boolean(draft[descriptionField])}
+              disabled={Boolean(draft[descriptionField]) || descriptionApplied}
               onClick={() =>
                 setField(candidate.id, descriptionField, description)
               }
+              data-testid={`ai-use-description-${candidate.id}`}
             >
-              {`Use as ${labelFor(candidate.kind, descriptionField)}`}
+              {descriptionApplied
+                ? `Applied to ${labelFor(candidate.kind, descriptionField)}`
+                : `Use as ${labelFor(candidate.kind, descriptionField)}`}
             </Button>
-            {draft[descriptionField] ? (
+            {draft[descriptionField] && !descriptionApplied ? (
               <Typography variant="caption" color="text.secondary">
                 your text is kept — clear the field to use this instead
               </Typography>
@@ -875,12 +905,15 @@ const FolderAnalysis = ({ path, artifactType }) => {
             {keywordField ? (
               <Button
                 size="small"
-                disabled={Boolean(draft[keywordField])}
+                disabled={Boolean(draft[keywordField]) || keywordsApplied}
                 onClick={() =>
-                  setField(candidate.id, keywordField, keywords.join(", "))
+                  setField(candidate.id, keywordField, keywordText)
                 }
+                data-testid={`ai-use-keywords-${candidate.id}`}
               >
-                {`Use as ${labelFor(candidate.kind, keywordField)}`}
+                {keywordsApplied
+                  ? `Applied to ${labelFor(candidate.kind, keywordField)}`
+                  : `Use as ${labelFor(candidate.kind, keywordField)}`}
               </Button>
             ) : null}
           </Box>
@@ -1090,6 +1123,10 @@ const FolderAnalysis = ({ path, artifactType }) => {
 
   const renderCandidate = (candidate) => {
     const draft = drafts[candidate.id] || {};
+    // What the deterministic analysis proposed, in the draft's own shape, so
+    // "is this still the analysed value?" is one comparison rather than a
+    // per-field special case. Cheap: a handful of string conversions.
+    const original = toDraft(candidate.kind, candidate.proposal);
     const needs = missingRequired(candidate.kind, draft);
     const { primary, secondary, full } = labelOf(candidate);
     const isSelected = Boolean(selected[candidate.id]);
@@ -1289,20 +1326,18 @@ const FolderAnalysis = ({ path, artifactType }) => {
           >
             {fieldsFor(candidate.kind).map(({ key: field, required }) => {
               const blank = !String(draft[field] || "").trim();
-              // Per-field standing, from the deterministic analysis. The
-              // backend marks a field it could not determine "needs_input"
-              // whether or not the field is required, so an OPTIONAL field
-              // never carries that chip: an empty Input / Supporting Files or
-              // Reproduction Notebook is a complete Chart, not an unfinished
-              // one. (Keywords is NOT one of those on a chart -- it is
-              // required there, and required-and-blank is said once, by the
-              // field's own marker.)
-              // Standing is only meaningful for a field that HAS a value.
-              // An empty field says "needs input" by being empty and marked
-              // required; a chip repeating it three ways is noise.
-              const evidence = blank
-                ? null
-                : (candidate.field_evidence || {})[field];
+              // The chip is derived from the CURRENT value, the value the
+              // analysis proposed, and the standing the analysis recorded --
+              // never from the standing alone. `field_evidence` describes the
+              // proposal, so it is only true while the proposal is still what
+              // the field holds. See `evidenceChipFor` for the whole rule; the
+              // bug it fixes is a "Needs input" chip surviving under a caption
+              // the AI had just filled.
+              const evidence = evidenceChipFor(candidate.kind, field, {
+                draft,
+                original,
+                fieldEvidence: candidate.field_evidence,
+              });
               return (
                 // ONE field group per field: input, helper text, evidence
                 // chip, in that order and with the same spacing everywhere,

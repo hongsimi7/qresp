@@ -156,6 +156,82 @@ export const toRecord = (kind, draft = {}) => {
 export const missingRequired = (kind, draft = {}) =>
   requiredKeys(kind).filter((key) => !String(draft[key] || "").trim());
 
+// ---------------------------------------------------------------------------
+// What a field currently IS.
+//
+// Three separate facts get asked about the same field, and conflating any two
+// of them produces a card that contradicts itself:
+//
+//   1. what the deterministic analysis PROPOSED   (candidate.proposal)
+//   2. what the field CONTAINS right now          (the draft)
+//   3. how strong the analysis' evidence WAS      (candidate.field_evidence)
+//
+// (3) is a statement about (1), frozen at analysis time. It is only ever true
+// of the value it described. Rendering it against (2) is what left a "Needs
+// input" chip under a caption the AI had just filled -- the analyser marked
+// the field `needs_input` because it was EMPTY THEN, and nothing re-read it --
+// while the card header, which counts (2), correctly said the field was no
+// longer missing. The same staleness would have let a "High" chip, earned by
+// a file path the analyser detected, vouch for a path a curator typed over it.
+//
+// These three helpers are the only place the facts are combined.
+
+export const BLANK = "blank";
+export const UNCHANGED = "unchanged";
+export const CHANGED = "changed";
+
+const isListField = (kind, key) => {
+  const field = fieldsOf(kind).find((entry) => entry.key === key);
+  return Boolean(field && field.list);
+};
+
+// A list field is edited as comma-separated text, so "a, b" and "a,b" are the
+// same value. Comparing the raw strings would call a re-spacing an edit and
+// silently drop the field's evidence.
+const comparable = (kind, key, value) =>
+  isListField(kind, key)
+    ? asList(value).join(",")
+    : String(value == null ? "" : value).trim();
+
+export const valueState = (kind, key, draft = {}, original = {}) => {
+  const current = comparable(kind, key, draft[key]);
+  if (!current) return BLANK;
+  return current === comparable(kind, key, original[key])
+    ? UNCHANGED
+    : CHANGED;
+};
+
+// The chip to render under one field, or null for none.
+//
+//   blank      -> nothing   the asterisk, the helper text and the card
+//                           header's missing count are the three required
+//                           indicators; a chip repeating it is a fourth, and
+//                           flagging optional fields this way was a bug once
+//                           already (see the header of this file)
+//   unchanged  -> the analysis' own high/medium standing
+//   changed    -> nothing   nothing verified this value
+//
+// `needs_input` is therefore unreachable: it can never survive to a filled
+// field because a filled field is never BLANK, and it is not rendered on a
+// blank one either. That is the fix, expressed as a rule about what the
+// standing MEANS rather than as a special case for one field.
+export const evidenceChipFor = (kind, key, context = {}) => {
+  const { draft = {}, original = {}, fieldEvidence = {} } = context;
+  const state = valueState(kind, key, draft, original);
+  if (state !== UNCHANGED) return null;
+  const standing = fieldEvidence[key];
+  return standing === "high" || standing === "medium" ? standing : null;
+};
+
+// Whether an AI proposal is the value now in the field. Derived, never
+// remembered: a suggestion the curator applied and then edited is no longer
+// applied, and a stored "applied" flag would keep insisting that it is.
+export const suggestionApplied = (kind, key, draft = {}, suggested) => {
+  const proposed = comparable(kind, key, suggested);
+  if (!proposed) return false;
+  return comparable(kind, key, draft[key]) === proposed;
+};
+
 // Fields an existing record may carry that no current surface edits. They are
 // copied through on save so nothing a curator stored years ago is dropped —
 // and never read as, or converted into, anything else.
