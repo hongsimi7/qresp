@@ -590,9 +590,16 @@ paths:
         any request is made to it."
       responses:
         200:
-          description: "`{servers: [{qresp_server_url, isActive,
-            qresp_maintainer_emails}]}`, in the shape the federated registry
-            has always used"
+          description: >-
+            `servers` is a list of {qresp_server_url, isActive,
+            qresp_maintainer_emails}, in the shape the federated registry has
+            always used. `default_server` is an ADDITIVE field naming the
+            origin the Explorer opens on when the visitor has not chosen one:
+            always one of `servers`, or "" when this deployment federates with
+            nobody. It is set by QRESP_DEFAULT_EXPLORER_SERVER and is refused
+            (falling back to the first listed server) when that names an
+            origin outside the allowlist -- naming a server here can pick
+            among the federated ones, never add one.
   /paper/{id}/related:
     get:
       operationId: "project.related.related_research"

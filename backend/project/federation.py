@@ -429,6 +429,46 @@ def allowed_origins(refresh=False):
     return _allowlist["origins"]
 
 
+DEFAULT_SERVER_ENV = "QRESP_DEFAULT_EXPLORER_SERVER"
+
+
+def default_server(origins=None):
+    """The origin the Explorer searches when nobody has chosen one.
+
+    The Explorer opens on results now instead of on a node picker, so "which
+    server" stopped being something a visitor types and became something this
+    deployment has to answer. It is answered HERE, beside the allowlist,
+    because a default the allowlist would refuse is worse than no default: it
+    sends every first-time visitor into a 400 that names a server they never
+    picked.
+
+    `QRESP_DEFAULT_EXPLORER_SERVER` names it. The value is canonicalized by
+    the same `parse_origin` every other origin goes through -- so a trailing
+    slash, a mixed-case host or an explicit :443 all resolve to the spelling
+    the allowlist actually holds -- and it is then CHECKED for membership.
+    Anything that fails either step is ignored, never obeyed: naming a server
+    here can pick among the federated ones, and can never add one.
+
+    Without the variable, the first origin in the published order. That is
+    deterministic (the list is sorted) and visibly the first row, rather than
+    an unrelated pick a reader would have to go looking for.
+
+    An empty federation yields "" -- "nothing is configured", which the
+    Explorer must be able to tell apart from "the server is down".
+    """
+    allowed = sorted(allowed_origins() if origins is None else origins)
+    configured = parse_origin((os.environ.get(DEFAULT_SERVER_ENV) or "").strip())
+    if configured and configured in allowed:
+        return configured
+    if configured:
+        # Say so once: a deployment that names a server it does not federate
+        # with has a configuration bug, and silently searching a different one
+        # is how that stays unnoticed.
+        print("%s names a server this deployment does not federate with; "
+              "using the first federated server instead" % DEFAULT_SERVER_ENV)
+    return allowed[0] if allowed else ""
+
+
 def federation_servers():
     """
     The Qresp servers this deployment federates with
@@ -446,10 +486,18 @@ def federation_servers():
     nothing here decides anything on its own -- every origin still has to
     survive the HTTPS, literal-address and DNS checks at request time.
     """
-    return {"servers": [{"qresp_server_url": origin,
-                         "isActive": "Yes",
-                         "qresp_maintainer_emails": []}
-                        for origin in sorted(allowed_origins())]}, 200
+    origins = sorted(allowed_origins())
+    return {
+        "servers": [{"qresp_server_url": origin,
+                     "isActive": "Yes",
+                     "qresp_maintainer_emails": []}
+                    for origin in origins],
+        # ADDITIVE. An older Explorer reads `servers` and never sees this;
+        # the current one opens straight onto this server's results instead
+        # of asking the visitor to pick a node. Always one of `servers`, or
+        # "" when this deployment federates with nobody.
+        "default_server": default_server(origins),
+    }, 200
 
 
 LOCAL = "local"
