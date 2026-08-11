@@ -53,8 +53,38 @@ const search = ({ initialdata, error, selectedservers }) => {
 
   const [data, setData] = useState(initialdata);
 
+  // The outcome of the LAST Advanced Search, which is a different thing from
+  // the SSR `error` above and must never overwrite it: `error` describes how
+  // this page loaded, `runtime` describes a search the curator ran afterwards.
+  // null means no Advanced Search has run since the page loaded.
+  const [runtime, setRuntime] = useState(null);
+
   const clearSearch = (e) => {
     setData(initialdata);
+    setRuntime(null);
+  };
+
+  // A new search invalidates whatever the previous one reported.
+  const onSearchStart = () => setRuntime(null);
+
+  const onSearchResult = ({ papers, failedServers, totalFailure, retry }) => {
+    // Only the nodes that answered are committed, and only when at least one
+    // did. Calling setData({}) on a total failure would replace results that
+    // are still perfectly valid with an empty table -- the page would say
+    // "0 Records Available" about records it simply failed to refresh.
+    if (!totalFailure) setData({ papers });
+    if (!failedServers.length) {
+      setRuntime(null);
+      return;
+    }
+    setRuntime({
+      failed: failedServers,
+      total: totalFailure,
+      // Whether anything was on screen to keep. Decided HERE because the page
+      // is what holds the results.
+      keptPrevious: totalFailure && Object.keys(data.papers || {}).length > 0,
+      retry,
+    });
   };
 
   const { papers, authors, collections, publications } =
@@ -150,6 +180,13 @@ const search = ({ initialdata, error, selectedservers }) => {
   // filter, and saying "0 Records Available" here would be a different,
   // wrong claim.
   const unavailable = Boolean(error && error.total);
+  // The same claim, reached at runtime: an Advanced Search where no node
+  // answered AND there was nothing on screen to keep. The count is withheld
+  // for the same reason -- nothing came back because the nodes are down, not
+  // because they hold no matches. (With previous results kept, the count is
+  // still true of what is on screen and stays.)
+  const countIsUnknown =
+    Boolean(runtime && runtime.total && !runtime.keptPrevious);
 
   return (
     <Fragment>
@@ -190,6 +227,36 @@ const search = ({ initialdata, error, selectedservers }) => {
             </Box>
           ) : null}
 
+          {/* The last Advanced Search, if it had trouble. Separate from the
+              two notices above because it describes a DIFFERENT event: those
+              are about how the page loaded, this is about a search the
+              curator ran on top of it. Both can be true at once. */}
+          {runtime ? (
+            <Box sx={{ mb: 2 }} data-testid="advanced-search-failure">
+              <Alert
+                severity={runtime.total ? "error" : "warning"}
+                action={
+                  <RegularStyledButton onClick={runtime.retry}>
+                    Retry
+                  </RegularStyledButton>
+                }
+                // A node URL is long and a phone is narrow; without this the
+                // alert pushes the whole page sideways.
+                sx={{ overflowWrap: "anywhere" }}
+              >
+                {runtime.total
+                  ? runtime.keptPrevious
+                    ? "The search could not be refreshed. The previous " +
+                      "results are still shown. These Qresp nodes could not " +
+                      "be searched: "
+                    : "These Qresp nodes could not be searched: "
+                  : "Some Qresp nodes could not be searched, so their " +
+                    "matching records are missing from these results: "}
+                {runtime.failed.join(", ")}
+              </Alert>
+            </Box>
+          ) : null}
+
           {unavailable ? (
             <Box sx={{ my: 4 }} data-testid="search-unavailable">
               <Alert
@@ -220,7 +287,7 @@ const search = ({ initialdata, error, selectedservers }) => {
                     <CircularProgress size={22} />
                     <Typography variant="h6">Searching…</Typography>
                   </Box>
-                ) : (
+                ) : countIsUnknown ? null : (
                   <Typography variant="h4" data-testid="record-count">
                     <Box sx={{ fontWeight: "bold" }}>
                       {`${rows.length}  Records Available`}
@@ -234,8 +301,9 @@ const search = ({ initialdata, error, selectedservers }) => {
                   authors={authors}
                   publications={publications}
                   tags={Array.from(taglist)}
-                  setData={setData}
                   clearSearch={clearSearch}
+                  onSearchStart={onSearchStart}
+                  onSearchResult={onSearchResult}
                 />
               </Box>
               <Divider />

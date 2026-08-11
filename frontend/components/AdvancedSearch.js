@@ -1,4 +1,4 @@
-import { Fragment, useState, useContext } from "react";
+import { Fragment, useEffect, useRef, useState, useContext } from "react";
 import PropTypes from "prop-types";
 
 import {
@@ -13,7 +13,6 @@ import { Search, ExpandMore, Clear } from "@mui/icons-material";
 import Autocomplete from "@mui/material/Autocomplete";
 
 import LoadingContext from "../Context/Loading/loadingContext";
-import AlertContext from "../Context/Alert/alertContext";
 import ServerContext from "../Context/Servers/serverContext";
 
 import { useRouter } from "next/router";
@@ -80,13 +79,19 @@ const ChipSearchField = ({
   );
 };
 
+// This component runs the search; it does NOT decide what the page says
+// about the outcome. It used to do both, and the second half was a global
+// `setAlert()` -- an un-dismissable dialog over results the other nodes had
+// served perfectly well. The results live in `pages/search.js`, so the status
+// that describes them lives there too, and arrives through `onSearchResult`.
 const AdvancedSearch = ({
   authors,
   publications,
   tags,
   collections,
-  setData,
   clearSearch,
+  onSearchStart,
+  onSearchResult,
 }) => {
   const [show, setShow] = useState(false);
 
@@ -112,50 +117,79 @@ const AdvancedSearch = ({
   };
 
   const { showLoader, hideLoader } = useContext(LoadingContext);
-  const { setAlert } = useContext(AlertContext);
   const { selected } = useContext(ServerContext);
 
-  const onSubmit = async (e) => {
-    e.preventDefault();
+  // A submit in flight must not be started again, and must not report into a
+  // page that has since unmounted.
+  const running = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => () => {
+    mounted.current = false;
+  }, []);
+
+  // The request each node is asked, built exactly as before -- same parameter
+  // names, same order, same joining. Retry re-runs THIS, so a retry is the
+  // same question to the same servers rather than whatever is in the form by
+  // the time the button is pressed.
+  const buildQuery = (criteria) =>
+    Object.entries(criteria)
+      .map(([key, value]) =>
+        Array.isArray(value) ? `${key}=${value.join(",")}` : `${key}=${value}`
+      )
+      .join("&");
+
+  const runSearch = async (criteria, servers) => {
+    if (running.current) return;
+    running.current = true;
+    if (onSearchStart) onSearchStart();
     showLoader();
-    const data = { papers: {} };
-    const error = { is: false, msg: "" };
-    const query = [];
 
-    for (let [key, value] of Object.entries(search)) {
-      if (Array.isArray(value)) {
-        query.push(`${key}=${value.join(",")}`);
-      } else {
-        query.push(`${key}=${value}`);
+    const query = buildQuery(criteria);
+    // Staged per server. Nothing reaches the page until every node has been
+    // asked, so a late failure cannot arrive after a partial commit.
+    const papers = {};
+    const failedServers = [];
+
+    try {
+      for (let i = 0; i < servers.length; i++) {
+        const server = servers[i];
+        try {
+          const response = await axios
+            .get(`${server}/api/search?${query}`)
+            .then((res) => res.data);
+          papers[server] = response;
+        } catch (e) {
+          // The thrown error can carry a host, a URL or a stack. It goes to
+          // the console; the page is told only WHICH server failed.
+          console.error(e);
+          failedServers.push(server);
+        }
       }
+    } finally {
+      // Every path, including an unexpected throw: a loader that outlives its
+      // request covers the page forever.
+      hideLoader();
+      running.current = false;
     }
 
-    for (let i = 0; i < selected.length; i++) {
-      const server = selected[i];
-      try {
-        var response = await axios
-          .get(`${server}/api/search?${query.join("&")}`)
-          .then((res) => res.data);
-        data.papers[server] = response;
-      } catch (e) {
-        console.error(e);
-        error.is = true;
-        error.msg += (i == 0 ? "" : ", ") + server;
-      }
+    if (!mounted.current) return;
+    if (onSearchResult) {
+      onSearchResult({
+        papers,
+        failedServers,
+        // No node answered. The page decides what to do about it -- it is the
+        // one that knows whether there were results on screen already.
+        totalFailure: Object.keys(papers).length === 0,
+        retry: () => runSearch(criteria, servers),
+      });
     }
-    if (Object.keys(data.papers).length == selected.length && !error.is) {
-      setData(data);
-    } else if (Object.keys(data.papers).length > 0) {
-      setData(data);
-    }
-    if (error.is) {
-      setAlert(
-        "Error encountered while searching !",
-        "Could not search in the following servers: " + error.msg,
-        null
-      );
-    }
-    hideLoader();
+  };
+
+  const onSubmit = (e) => {
+    e.preventDefault();
+    // A snapshot: the criteria and servers this run is about, so a retry
+    // cannot silently become a different search.
+    runSearch({ ...search }, [...(selected || [])]);
   };
 
   const onClear = () => {
@@ -282,12 +316,14 @@ const AdvancedSearch = ({
 };
 
 AdvancedSearch.propTypes = {
-  setData: PropTypes.func.isRequired,
   authors: PropTypes.array.isRequired,
   publications: PropTypes.array.isRequired,
   tags: PropTypes.array.isRequired,
   collections: PropTypes.array.isRequired,
   clearSearch: PropTypes.func.isRequired,
+  // The page owns the results and the status; this reports into them.
+  onSearchStart: PropTypes.func,
+  onSearchResult: PropTypes.func,
 };
 
 export default AdvancedSearch;
