@@ -666,9 +666,20 @@ const FolderAnalysis = ({ path, artifactType }) => {
         setAiSuggestions((current) => ({ ...current, [id]: mine }));
         setAiNotice((current) => ({ ...current, [id]: "" }));
       } else {
+        // The id came back in `no_suggestion`. Two different things land
+        // here and the curator needs to tell them apart: the server refused
+        // to ask at all because this candidate has no evidence of its own,
+        // or it asked and got nothing usable back. Which one it was is
+        // already knowable from the candidate — no new API field is needed,
+        // and inventing one would let the two drift apart.
         setAiNotice((current) => ({
           ...current,
-          [id]: "No reliable suggestion was returned for this item.",
+          [id]: (candidate.ai_sources || []).length
+            ? "No reliable suggestion was returned for this item."
+            : "No reliable candidate-specific evidence was found, so " +
+              "nothing was sent to the AI service. Add a README, a module " +
+              "docstring, or notebook markdown inside this item's own " +
+              "folder, then rebuild the proposals.",
         }));
       }
     } catch (err) {
