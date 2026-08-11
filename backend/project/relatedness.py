@@ -282,13 +282,17 @@ STRONG_SHARED_TITLE_COUNT = 2
 # the sort, never padded to reach this number.
 MAX_RESULTS = 3
 
-# IDF-weighted cosine over title+abstract (+ artifact descriptions). At/above
-# HIGH the two abstracts are describing the same system or the same
-# measurement; MODERATE is "plausibly adjacent", which is why moderate
-# similarity is only ever MEDIUM and only when a shared research area
-# corroborates it.
+# IDF-weighted cosine over title+abstract (+ artifact descriptions). At or
+# above this, the two abstracts are describing the same system or the same
+# measurement, and that is strong evidence on its own.
+#
+# There is no second, lower bar any more. A `MODERATE_TEXT_SIMILARITY` of 0.16
+# used to mean "plausibly adjacent", and existed to corroborate two things
+# that are no longer evidence: a shared research area, and a shared tool on a
+# related topic. Both were removed when the gate was tightened, and the
+# constant went with them rather than sitting unused for a later change to
+# reach for.
 HIGH_TEXT_SIMILARITY = 0.34
-MODERATE_TEXT_SIMILARITY = 0.16
 
 # Evidence strengths.
 STRONG = "strong"
@@ -300,11 +304,10 @@ FAMILY_CITATION = "citation"
 FAMILY_TERMS = "terms"
 FAMILY_TEXT = "text"
 FAMILY_METHODS = "methods"
-# Kept as a name so an assessment can still be described, and so a test can
-# assert its absence -- but NO evidence is ever created with it, so the gate
-# cannot see it. A shared author orders candidates that already passed; it
-# never passes one. See the note in `assess`.
-FAMILY_AUTHORS = "authors"
+# There is deliberately no author family. Authors are display metadata: they
+# take no part in the gate, the score, the evidence, the order or the
+# tie-break, so there is no family for them to belong to. See the note in
+# `assess` for the history.
 
 # Display order when trimming to the three reasons the UI shows.
 FAMILY_PRIORITY = (FAMILY_CITATION, FAMILY_TERMS, FAMILY_METHODS,
@@ -693,11 +696,24 @@ def build_internal_profile(record):
     """Profile of a stored Qresp record, from its published scientific
     metadata only.
 
-    `record` is a plain dict (``Paper.to_mongo().to_dict()`` shaped). Read:
-    title, abstract, paper tags, collections (as broad FIELDS, never as
-    specific terms), author names, chart captions/properties, dataset and
-    script keywords and readme descriptions, and tool package/facility/
-    measurement names.
+    `record` is a plain dict (``Paper.to_mongo().to_dict()`` shaped). Read,
+    and this list is exhaustive:
+
+      * `reference.title` and `reference.publishedAbstract`;
+      * `tags`;
+      * `charts[].caption` and `charts[].properties`;
+      * `datasets[].readme` / `keywords` and `scripts[].readme` / `keywords`;
+      * `tools[].packageName` / `programName` (software), `measurement`
+        (technique) and `facilityName` (recorded ONLY so that organisations
+        can be excluded -- it never becomes a term).
+
+    `reference.authors` is copied onto the Profile WITHOUT being scored, for
+    the single purpose of rendering the names beside a recommendation
+    (`related._result`). Nothing reads them afterwards.
+
+    `collections` is NOT read. A collection is the programme a record belongs
+    to, which large parts of a corpus share; it decided nothing once the
+    quality gate was tightened, so it is no longer looked at.
 
     Never read: info.serverPath / fileServerPath / folderAbsolutePath /
     downloadPath / notebookPath (RCC URLs and file paths), any file listing or

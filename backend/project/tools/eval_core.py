@@ -382,10 +382,9 @@ def rejection_reason(assessment):
     if not assessment.evidence:
         return (
             "no evidence at all: %d shared specific terms (strong needs %d), "
-            "text similarity %.3f (moderate bar %.2f), no shared author, "
-            "no shared tool"
+            "text similarity %.3f (high bar %.2f), no shared tool"
             % (len(assessment.shared_terms), R.STRONG_SHARED_TERM_COUNT,
-               assessment.similarity, R.MODERATE_TEXT_SIMILARITY))
+               assessment.similarity, R.HIGH_TEXT_SIMILARITY))
     if len(medium_families) == 1:
         return (
             "only one independent medium signal (%s); the gate needs one "

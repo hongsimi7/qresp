@@ -329,19 +329,34 @@ class TestQualityGate(unittest.TestCase):
     def test_authors_are_not_a_family_the_gate_can_see(self):
         # The rule this replaced: a shared author used to be a MEDIUM, and one
         # PI on half a corpus therefore supplied half of every gate decision.
-        current = record("a", "Alpha rareword resonance",
-                         "Rareword resonance in alpha lattices.",
-                         tags=["rareword resonance"],
-                         authors=["Robin Sharedname"])
-        candidate = record("b", "Coastal borogove migration",
-                           "Seasonal migration of coastal borogoves.",
-                           tags=["ornithology"],
-                           authors=["Robin Sharedname"])
-        outcome = self.assess(current, candidate,
-                              filler(20) + [current, candidate])
-        self.assertFalse(outcome.passes)
-        self.assertNotIn(R.FAMILY_AUTHORS,
-                         {e.family for e in outcome.evidence})
+        #
+        # Asserted on the OUTCOME, not on a constant. There used to be a
+        # `FAMILY_AUTHORS` name kept alive purely so this line could refer to
+        # it, which meant the test passed by checking that an unused string
+        # was absent -- and left a family constant sitting there for a future
+        # change to reach for. The literal is what a reader would see.
+        def outcome_for(current_authors, candidate_authors):
+            current = record("a", "Alpha rareword resonance",
+                             "Rareword resonance in alpha lattices.",
+                             tags=["rareword resonance"],
+                             authors=current_authors)
+            candidate = record("b", "Coastal borogove migration",
+                               "Seasonal migration of coastal borogoves.",
+                               tags=["ornithology"],
+                               authors=candidate_authors)
+            return self.assess(current, candidate,
+                               filler(20) + [current, candidate])
+
+        shared = outcome_for(["Robin Sharedname"], ["Robin Sharedname"])
+        self.assertFalse(shared.passes)
+        self.assertNotIn("authors", {e.family for e in shared.evidence})
+
+        # ...and sharing the author changed nothing at all: same verdict, same
+        # score, same reasons as two strangers writing the same two papers.
+        strangers = outcome_for(["Robin Sharedname"], ["Nobody Atall"])
+        self.assertEqual(shared.passes, strangers.passes)
+        self.assertEqual(shared.score, strangers.score)
+        self.assertEqual(shared.reasons(3), strangers.reasons(3))
 
     def test_two_mediums_from_the_same_family_are_one_observation(self):
         # A shared keyword AND the same keyword's words overlapping in text is
