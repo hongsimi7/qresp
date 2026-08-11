@@ -109,6 +109,16 @@ def only(candidates, label):
     return matches[0]
 
 
+# A Tool cannot carry a docstring or symbol names, so the default Script
+# fixture below would (correctly) be filtered to nothing and abstain. Tool
+# tests that are about something else supply evidence a Tool really has.
+TOOL_SOURCES = [
+    {"type": "readme", "path": "tools/west/README.md",
+     "excerpt": "WEST was used for the GW calculations."},
+    {"type": "declarations", "path": "", "names": ["WEST 5.0.0"]},
+]
+
+
 def excerpts(candidate):
     return " ".join(source.get("excerpt", "")
                     for source in candidate["ai_sources"])
@@ -682,7 +692,8 @@ class TestDescribeEndpoint(unittest.TestCase):
              "confidence": "medium", "reason": "readme tools/west/README.md"}]})
         response, _provider = self.describe(
             {"consent": True,
-             "items": [self.item(id="tool-0", kind="tool", name="WEST")]},
+             "items": [self.item(id="tool-0", kind="tool", name="WEST",
+                                 sources=TOOL_SOURCES)]},
             answer=answer)
         suggestion = response.json()["suggestions"]["tool-0"]
         self.assertEqual(suggestion["keywords"], [])
@@ -691,7 +702,8 @@ class TestDescribeEndpoint(unittest.TestCase):
     def test_a_tool_is_never_even_asked_for_keywords(self):
         _response, provider = self.describe(
             {"consent": True,
-             "items": [self.item(id="tool-0", kind="tool", name="WEST")]},
+             "items": [self.item(id="tool-0", kind="tool", name="WEST",
+                                 sources=TOOL_SOURCES)]},
             answer=json.dumps({"items": [{"id": "tool-0"}]}))
         self.assertFalse(
             provider.call_args[0][1]["artifact"]["wants_keywords"])
@@ -718,6 +730,423 @@ class TestDescribeEndpoint(unittest.TestCase):
         before = Paper.objects.count()
         self.describe({"consent": True, "items": [self.item()]})
         self.assertEqual(Paper.objects.count(), before)
+
+
+class TestDeterministicAbstention(unittest.TestCase):
+    """No candidate-specific evidence means no provider call and no quota.
+
+    The prompt already told the model to return an empty description when
+    `sources` is empty. That is a REQUEST, not a guarantee: the server called
+    Gemini anyway, spent a quota unit anyway, and passed back whatever came
+    out -- including a caption invented from an image file name and the
+    paper's abstract, which is exactly what the prompt forbids.
+
+    Abstention is now decided by the server, before the provider and before
+    the quota, so it cannot be talked out of.
+    """
+
+    def setUp(self):
+        self.client = connexionapp.test_client()
+        os.environ["QRESP_ENABLE_DEV_LOGIN"] = "1"
+        os.environ["QRESP_GEMINI_ENABLED"] = "1"
+        os.environ["QRESP_GEMINI_API_KEY"] = "test-key"
+        mongoengine.disconnect_all()
+        mongoengine.connect("mongoenginetest",
+                            mongo_client_class=mongomock.MongoClient)
+
+    def tearDown(self):
+        for key in ("QRESP_ENABLE_DEV_LOGIN", "QRESP_GEMINI_ENABLED",
+                    "QRESP_GEMINI_API_KEY"):
+            os.environ.pop(key, None)
+        mongoengine.disconnect_all()
+
+    def login(self):
+        response = self.client.post("/api/auth/dev-login",
+                                    json={"email": "curator@example.com"})
+        assert response.status_code == 200, response.text
+        csrf = self.client.get("/api/auth/me").json()["csrf_token"]
+        return {"X-CSRF-Token": csrf}
+
+    def post(self, body, headers=None):
+        """One request with BOTH the provider and the quota counter watched.
+
+        Watching the quota directly matters: asserting only that no provider
+        call happened would still pass if the server had already charged the
+        curator for a request it then declined to make.
+        """
+        if headers is None:
+            headers = self.login()
+        answer = json.dumps({"items": [
+            {"id": "x-0", "description": "Invented from the file name.",
+             "keywords": ["water"], "confidence": "low", "reason": "name"}]})
+        with mock.patch.object(curation, "call_gemini",
+                               return_value=(answer, None)) as provider, \
+                mock.patch.object(curation, "_consume_daily_quota",
+                                  return_value=True) as quota:
+            response = self.client.post("/api/curation/describe-candidates",
+                                        json=body, headers=headers)
+        return response, provider, quota
+
+    def candidate(self, kind, sources, item_id=None):
+        return {
+            "id": item_id or ("%s-0" % kind),
+            "kind": kind,
+            "name": "something",
+            "paths": ["%ss/thing/file.bin" % kind],
+            "inventory": {"file_count": 1, "extensions": [],
+                          "sample_names": ["file.bin"]},
+            "sources": sources,
+        }
+
+    def assertAbstained(self, response, provider, quota, item_id):
+        """The whole contract, in one place."""
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        # The EXISTING response contract, unchanged: no new field.
+        self.assertEqual(body["suggestions"], {})
+        self.assertEqual(body["no_suggestion"], [item_id])
+        self.assertEqual(sorted(body), ["no_suggestion", "suggestions"])
+        provider.assert_not_called()
+        quota.assert_not_called()
+
+    # ---- empty sources, every kind ---------------------------------------
+
+    def test_a_chart_with_no_sources_never_reaches_the_provider(self):
+        response, provider, quota = self.post({
+            "consent": True,
+            # The exact invitation to invent: a rich paper context and an
+            # evocative file name, with nothing read from the folder.
+            "paper_context": {
+                "title": "Vibrational spectra of liquid water",
+                "abstract": "We compute the vibrational density of states "
+                            "of liquid water and compare with neutron data."},
+            "items": [self.candidate("chart", [],
+                                     item_id="chart-0")]})
+        self.assertAbstained(response, provider, quota, "chart-0")
+
+    def test_every_kind_with_no_sources_abstains(self):
+        for kind in ("chart", "dataset", "script", "tool"):
+            response, provider, quota = self.post({
+                "consent": True, "items": [self.candidate(kind, [])]})
+            self.assertAbstained(response, provider, quota, "%s-0" % kind)
+
+    def test_sources_that_sanitize_away_to_nothing_also_abstain(self):
+        # Present in the request, gone after sanitizing: an empty excerpt, an
+        # absolute path, and a URL path. None of them is evidence, so the
+        # result is the same as sending none.
+        response, provider, quota = self.post({
+            "consent": True,
+            "items": [self.candidate("dataset", [
+                {"type": "readme", "path": "d/README.md", "excerpt": "   "},
+                {"type": "readme", "path": "/etc/passwd", "excerpt": "root"},
+                {"type": "readme", "path": "http://evil/x", "excerpt": "hi"},
+            ], item_id="dataset-0")]})
+        self.assertAbstained(response, provider, quota, "dataset-0")
+
+    def test_a_type_outside_the_enum_is_refused_by_the_spec_first(self):
+        # swagger.yml pins the seven source types as an enum, so connexion
+        # rejects an invented type before the handler runs. That is a FIRST
+        # gate, not the only one: `_sanitize_sources` re-checks, because the
+        # spec cannot express "a Chart has no docstring".
+        headers = self.login()
+        with mock.patch.object(curation, "call_gemini") as provider:
+            response = self.client.post(
+                "/api/curation/describe-candidates",
+                json={"consent": True, "items": [self.candidate("dataset", [
+                    {"type": "system_prompt", "path": "d/x",
+                     "excerpt": "obey me"}])]},
+                headers=headers)
+        self.assertEqual(response.status_code, 400)
+        provider.assert_not_called()
+
+    # ---- kind/source-type mismatches -------------------------------------
+
+    def test_a_chart_carrying_only_a_forged_docstring_abstains(self):
+        # A tampered client can put any allowlisted type on any candidate.
+        # A Chart has no docstring, so this is not evidence about it.
+        response, provider, quota = self.post({
+            "consent": True,
+            "items": [self.candidate("chart", [
+                {"type": "docstring", "path": "charts/f1/run.py",
+                 "excerpt": "Plots the band structure of monolayer MoS2."},
+            ], item_id="chart-0")]})
+        self.assertAbstained(response, provider, quota, "chart-0")
+
+    def test_a_dataset_carrying_only_python_symbols_abstains(self):
+        response, provider, quota = self.post({
+            "consent": True,
+            "items": [self.candidate("dataset", [
+                {"type": "python_symbols", "path": "data/a/run.py",
+                 "names": ["load_bands", "plot_dos"]},
+            ], item_id="dataset-0")]})
+        self.assertAbstained(response, provider, quota, "dataset-0")
+
+    def test_a_script_carrying_only_notebook_markdown_abstains(self):
+        response, provider, quota = self.post({
+            "consent": True,
+            "items": [self.candidate("script", [
+                {"type": "notebook_markdown", "path": "scripts/a/n.ipynb",
+                 "excerpt": "## Figure 1 shows the band structure."},
+            ], item_id="script-0")]})
+        self.assertAbstained(response, provider, quota, "script-0")
+
+    def test_a_tool_carrying_only_python_symbols_abstains(self):
+        response, provider, quota = self.post({
+            "consent": True,
+            "items": [self.candidate("tool", [
+                {"type": "python_symbols", "path": "tools/a/run.py",
+                 "names": ["main"]},
+            ], item_id="tool-0")]})
+        self.assertAbstained(response, provider, quota, "tool-0")
+
+    def test_the_kind_table_is_the_one_the_contract_states(self):
+        self.assertEqual(ev.accepted_source_types("chart"),
+                         ("readme", "notebook_markdown"))
+        self.assertEqual(ev.accepted_source_types("dataset"),
+                         ("readme", "manifest"))
+        self.assertEqual(ev.accepted_source_types("script"),
+                         ("readme", "docstring", "python_symbols",
+                          "comment_header"))
+        self.assertEqual(ev.accepted_source_types("tool"),
+                         ("readme", "manifest", "comment_header",
+                          "declarations"))
+
+    def test_the_global_allowlist_is_derived_from_the_kind_table(self):
+        # One source of truth. A type that no kind accepts could never be
+        # sent, and a kind that accepted an unlisted type would be invisible
+        # to the global check.
+        union = set()
+        for kind in ("chart", "dataset", "script", "tool"):
+            union.update(ev.accepted_source_types(kind))
+        self.assertEqual(set(curation.AI_SOURCE_TYPES), union)
+
+    # ---- the valid cases still work exactly as before ---------------------
+
+    def test_a_chart_with_a_real_readme_is_described_normally(self):
+        response, provider, quota = self.post({
+            "consent": True,
+            "items": [self.candidate("chart", [
+                {"type": "readme", "path": "charts/f1/README.md",
+                 "excerpt": "Figure 1 compares the computed VDOS with INS."},
+            ], item_id="x-0")]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(provider.call_count, 1)
+        self.assertEqual(quota.call_count, 1)
+        payload = provider.call_args[0][1]
+        self.assertEqual([s["type"] for s in payload["sources"]], ["readme"])
+
+    def test_a_script_keeps_both_its_docstring_and_its_symbols(self):
+        response, provider, quota = self.post({
+            "consent": True,
+            "items": [self.candidate("script", [
+                {"type": "docstring", "path": "scripts/a/run.py",
+                 "excerpt": "Unfold and interpolate supercell bands."},
+                {"type": "python_symbols", "path": "scripts/a/run.py",
+                 "names": ["unfold", "interpolate"]},
+            ], item_id="x-0")]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(provider.call_count, 1)
+        self.assertEqual(quota.call_count, 1)
+        payload = provider.call_args[0][1]
+        self.assertEqual([s["type"] for s in payload["sources"]],
+                         ["docstring", "python_symbols"])
+        blob = json.dumps(payload)
+        self.assertNotIn("_private", blob)
+        self.assertNotIn("sk-", blob)
+
+    def test_a_mixed_bundle_drops_only_the_sources_that_do_not_belong(self):
+        response, provider, quota = self.post({
+            "consent": True,
+            "items": [self.candidate("dataset", [
+                {"type": "docstring", "path": "data/a/x.py",
+                 "excerpt": "SHOULD NOT TRAVEL"},
+                {"type": "readme", "path": "data/a/README.md",
+                 "excerpt": "Band energies on a 24x24x1 mesh."},
+                {"type": "notebook_markdown", "path": "data/a/n.ipynb",
+                 "excerpt": "ALSO SHOULD NOT TRAVEL"},
+                {"type": "manifest", "path": "data/a/qresp.ini",
+                 "excerpt": "mesh = 24x24x1"},
+            ], item_id="x-0")]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(provider.call_count, 1)
+        self.assertEqual(quota.call_count, 1)
+        payload = provider.call_args[0][1]
+        self.assertEqual([s["type"] for s in payload["sources"]],
+                         ["readme", "manifest"])
+        blob = json.dumps(payload)
+        self.assertNotIn("SHOULD NOT TRAVEL", blob)
+
+    # ---- the gates that must NOT be bypassed by the abstain path ----------
+
+    def test_an_anonymous_request_is_still_401_with_no_sources(self):
+        self.client.get("/api/auth/logout")
+        response = self.client.post(
+            "/api/curation/describe-candidates",
+            json={"consent": True, "items": [self.candidate("chart", [])]})
+        self.assertIn(response.status_code, (401, 403))
+
+    def test_a_missing_csrf_token_is_still_refused_with_no_sources(self):
+        self.login()
+        response = self.client.post(
+            "/api/curation/describe-candidates",
+            json={"consent": True, "items": [self.candidate("chart", [])]})
+        self.assertEqual(response.status_code, 403)
+
+    def test_missing_consent_is_still_400_with_no_sources(self):
+        response, provider, quota = self.post(
+            {"items": [self.candidate("chart", [])]})
+        self.assertEqual(response.status_code, 400)
+        provider.assert_not_called()
+        quota.assert_not_called()
+
+    def test_two_candidates_are_still_400_even_with_no_sources(self):
+        response, provider, quota = self.post({
+            "consent": True,
+            "items": [self.candidate("chart", [], item_id="chart-0"),
+                      self.candidate("chart", [], item_id="chart-1")]})
+        self.assertEqual(response.status_code, 400)
+        provider.assert_not_called()
+        quota.assert_not_called()
+
+    def test_an_unreadable_candidate_is_still_400(self):
+        response, provider, quota = self.post({
+            "consent": True, "items": [{"id": "", "kind": "chart"}]})
+        self.assertEqual(response.status_code, 400)
+        provider.assert_not_called()
+
+    # ---- an unconfigured provider ----------------------------------------
+
+    def test_no_evidence_abstains_even_when_gemini_is_not_configured(self):
+        # The abstention is a property of the EVIDENCE, not of the provider.
+        # A server with no key must give the curator the same clear answer as
+        # one with a key, rather than a misleading 503.
+        os.environ.pop("QRESP_GEMINI_ENABLED", None)
+        os.environ.pop("QRESP_GEMINI_API_KEY", None)
+        response, provider, quota = self.post({
+            "consent": True,
+            "items": [self.candidate("chart", [], item_id="chart-0")]})
+        self.assertAbstained(response, provider, quota, "chart-0")
+
+    def test_real_evidence_still_reports_an_unconfigured_provider(self):
+        os.environ.pop("QRESP_GEMINI_ENABLED", None)
+        os.environ.pop("QRESP_GEMINI_API_KEY", None)
+        response, provider, quota = self.post({
+            "consent": True,
+            "items": [self.candidate("script", [
+                {"type": "docstring", "path": "s/a.py", "excerpt": "Runs."},
+            ])]})
+        self.assertEqual(response.status_code, 503)
+        provider.assert_not_called()
+        quota.assert_not_called()
+
+    # ---- nothing is stored on the abstain path ----------------------------
+
+    def test_the_abstain_path_writes_nothing(self):
+        from project.models import AssistUsage, Paper
+        before = Paper.objects.count()
+        self.post({"consent": True,
+                   "items": [self.candidate("chart", [])]})
+        self.assertEqual(Paper.objects.count(), before)
+        self.assertEqual(sum(u.count for u in AssistUsage.objects()), 0)
+
+    def test_the_abstain_path_does_not_log_evidence_or_names(self):
+        with mock.patch("builtins.print") as printed:
+            self.post({"consent": True,
+                       "items": [self.candidate("chart", [
+                           {"type": "docstring", "path": "charts/f/x.py",
+                            "excerpt": "SECRETIVE TEXT"}], item_id="c-0")]})
+        logged = " ".join(str(call.args[0]) for call in printed.call_args_list
+                          if call.args)
+        self.assertNotIn("SECRETIVE TEXT", logged)
+
+
+class TestSwaggerStaysParseable(unittest.TestCase):
+    """swagger.yml must load, and it must agree with the code.
+
+    A description containing an unquoted `{"a": 1}` opens a YAML flow mapping
+    and breaks the whole spec. When that happens every test module fails to
+    IMPORT, which reads as a catastrophe rather than as a typo in one string
+    -- so the parse is asserted directly, where the message says what is
+    actually wrong.
+    """
+
+    def spec(self):
+        import io
+        import os
+        import yaml
+        path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                            "swagger.yml")
+        with io.open(path, encoding="utf-8") as handle:
+            return yaml.safe_load(handle)
+
+    def test_the_spec_parses(self):
+        self.assertIn("paths", self.spec())
+
+    def test_the_source_type_enum_matches_the_code(self):
+        sources = (self.spec()["paths"]["/curation/describe-candidates"]
+                   ["post"]["parameters"][0]["schema"]["properties"]["items"]
+                   ["items"]["properties"]["sources"])
+        self.assertEqual(set(sources["items"]["properties"]["type"]["enum"]),
+                         set(curation.AI_SOURCE_TYPES))
+
+
+class TestSanitizeSourcesPerKind(unittest.TestCase):
+    """The filter itself, without the HTTP layer."""
+
+    def test_the_kind_decides_what_survives(self):
+        bundle = [
+            {"type": "readme", "path": "a/README.md", "excerpt": "r"},
+            {"type": "docstring", "path": "a/x.py", "excerpt": "d"},
+            {"type": "python_symbols", "path": "a/x.py", "names": ["f"]},
+            {"type": "notebook_markdown", "path": "a/n.ipynb", "excerpt": "n"},
+            {"type": "manifest", "path": "a/qresp.ini", "excerpt": "m"},
+            {"type": "comment_header", "path": "a/run.sh", "excerpt": "c"},
+            {"type": "declarations", "path": "", "names": ["west 5.0.0"]},
+        ]
+        for kind, expected in (
+                ("chart", ["readme", "notebook_markdown"]),
+                ("dataset", ["readme", "manifest"]),
+                ("script", ["readme", "docstring", "python_symbols",
+                            "comment_header"]),
+                ("tool", ["readme", "manifest", "comment_header",
+                          "declarations"]),
+        ):
+            kept = curation._sanitize_sources(bundle, kind)
+            self.assertEqual([s["type"] for s in kept], expected, kind)
+
+    def test_an_unknown_kind_keeps_nothing(self):
+        # Defence in depth: `_sanitize_ai_items` already rejects a kind
+        # outside the four, so this can only be reached by a future caller.
+        self.assertEqual(curation._sanitize_sources(
+            [{"type": "readme", "path": "a/README.md", "excerpt": "r"}],
+            "experiment"), [])
+
+    def test_the_existing_bounds_still_apply_after_the_kind_filter(self):
+        bundle = [{"type": "readme", "path": "a/README.md",
+                   "excerpt": "q" * 99999}] * 40
+        kept = curation._sanitize_sources(bundle, "dataset")
+        self.assertLessEqual(len(kept), curation.MAX_AI_SOURCES)
+        self.assertLessEqual(
+            sum(len(s["excerpt"]) for s in kept),
+            curation.MAX_AI_EVIDENCE_CHARS)
+
+    def test_redaction_still_runs_after_the_kind_filter(self):
+        kept = curation._sanitize_sources(
+            [{"type": "readme", "path": "a/README.md",
+              "excerpt": "token=ghp_abcdefghijklmnopqrst"}], "dataset")
+        self.assertNotIn("ghp_abcdefghij", kept[0]["excerpt"])
+
+    def test_the_analyzer_never_produces_a_source_its_kind_would_reject(self):
+        # The server filter and the analyzer must agree, or the analyzer's own
+        # output would be silently discarded on the way back in.
+        result = analyze()
+        for group, kind in (("charts", "chart"), ("datasets", "dataset"),
+                            ("scripts", "script"), ("tools", "tool")):
+            for candidate in result[group]:
+                kept = curation._sanitize_sources(candidate["ai_sources"],
+                                                  kind)
+                self.assertEqual(len(kept), len(candidate["ai_sources"]),
+                                 "%s %s" % (kind, candidate["label"]))
 
 
 class TestEvidenceCoverage(unittest.TestCase):

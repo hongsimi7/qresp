@@ -1818,6 +1818,66 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     expect(JSON.stringify(body)).not.toContain("10.1021/secret");
   });
 
+  it("explains an evidence-based abstention distinctly from an empty answer", async () => {
+    // The server refuses to ask about a candidate with no evidence of its
+    // own and returns it in `no_suggestion`. chart-0 is exactly that case:
+    // an image with no README and no notebook.
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(user, /charts \(1\)/i, /select figure1\.png/i);
+    await consentAndSend(user, {
+      suggestions: {},
+      no_suggestion: ["chart-0"],
+    });
+
+    const notice = await screen.findByTestId("ai-notice-chart-0");
+    expect(notice).toHaveTextContent(
+      /no reliable candidate-specific evidence was found/i
+    );
+    expect(notice).toHaveTextContent(/nothing was sent to the AI service/i);
+    // No suggestion is parked, so nothing can be accepted into a field.
+    expect(screen.queryByTestId("ai-confidence-chart-0")).toBeNull();
+  });
+
+  it("still says 'no suggestion returned' when evidence WAS sent", async () => {
+    // script-0 has a docstring, so the request really was made and the
+    // provider simply had nothing usable. The two messages must not blur.
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(user, /scripts \(1\)/i, /select plot_vdos\.py/i);
+    await consentAndSend(user, {
+      suggestions: {},
+      no_suggestion: ["script-0"],
+    });
+
+    const notice = await screen.findByTestId("ai-notice-script-0");
+    expect(notice).toHaveTextContent(/no reliable suggestion was returned/i);
+    expect(notice).not.toHaveTextContent(/nothing was sent/i);
+  });
+
+  it("an abstention leaves the curator's own draft value alone", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await openAnalysis(user);
+    await user.click(await screen.findByRole("tab", { name: /charts \(1\)/i }));
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Proposal" })
+    );
+    const caption = await screen.findByLabelText(/^figure caption ?\*?$/i);
+    await user.clear(caption);
+    await user.type(caption, "MINE");
+
+    await user.click(screen.getByTestId("enhance-chart-0"));
+    await screen.findByRole("heading", { name: /send .* to gemini\?/i });
+    await consentAndSend(user, { suggestions: {}, no_suggestion: ["chart-0"] });
+    await screen.findByTestId("ai-notice-chart-0");
+
+    expect(screen.getByLabelText(/^figure caption ?\*?$/i)).toHaveValue("MINE");
+    expect(addMany).not.toHaveBeenCalled();
+  }, 20000);
+
   it("the consent dialog lists the exact sources that will be sent", async () => {
     const user = userEvent.setup();
     renderWith();

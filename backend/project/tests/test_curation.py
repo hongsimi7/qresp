@@ -1565,8 +1565,14 @@ class TestDescribeCandidatesResponse(DescribeCandidatesBase):
         self.login()
         response, _ = self.describe(
             {"consent": True,
+             # A Tool's own evidence: it cannot carry the Script fixture's
+             # docstring, and a bundle filtered to nothing would (correctly)
+             # abstain before the provider is reached.
              "items": [dict(AI_ITEMS[0], id="tool-0", kind="tool",
-                            name="numpy 1.26.4")]},
+                            name="numpy 1.26.4",
+                            sources=[{"type": "manifest",
+                                      "path": "tools/numpy/requirements.txt",
+                                      "excerpt": "numpy==1.26.4"}])]},
             reply=MockResponse(gemini_reply([
                 {"id": "tool-0", "description": "Array library.",
                  "keywords": ["arrays", "numerics"]}])))
