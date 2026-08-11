@@ -630,11 +630,21 @@ def _get_json(url, not_found_statuses=(404,)):
 
 # ----------------------------------------------------------- field allowlists
 #
-# EXACTLY the fields `relatedness.build_internal_profile` reads, and therefore
-# exactly the fields `relatedness.metadata_fingerprint` hashes. Keeping the
-# three lists identical is what makes a federated record score the same way a
-# local one does; adding a field to the profile without adding it here would
-# silently make remote results weaker than local ones.
+# EXACTLY the ARTIFACT fields `relatedness.build_internal_profile` reads, and
+# therefore exactly the artifact fields `relatedness.metadata_fingerprint`
+# hashes. Keeping the lists identical is what makes a federated record score
+# the same way a local one does; adding a field to the profile without adding
+# it here would silently make remote results weaker than local ones.
+#
+# The correspondence is exact for artifacts and deliberately NOT exact at the
+# top level, in both directions:
+#
+#   * `collections` and the reference `authors` are copied out of a peer's
+#     answer because a reader is shown them, and are read by neither the
+#     profile nor the fingerprint -- they decide nothing;
+#   * `facilityName` is hashed by the fingerprint but never becomes a term:
+#     it decides which terms are excluded as organisational, so editing it
+#     can change an answer.
 CHART_FIELDS = ("caption", "properties")
 DATASET_FIELDS = ("readme", "keywords")
 SCRIPT_FIELDS = ("readme", "keywords")

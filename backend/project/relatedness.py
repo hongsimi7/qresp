@@ -23,10 +23,19 @@ A candidate is shown only if it has
 
 "Independent" means different signal families (terms / text / methods /
 citation): two mediums derived from the same overlap are one observation, not
-two. Every one of those families is about SUBJECT MATTER -- a shared author is
-not evidence and cannot open the gate; it only orders candidates that have
-already passed. At most MAX_RESULTS (3) are shown, and the list is never
-padded to reach it.
+two. Every one of those families is about SUBJECT MATTER. At most
+MAX_RESULTS (3) are shown, and the list is never padded to reach it.
+
+Deliberately NOT read at all
+----------------------------
+AUTHORS and COLLECTIONS. They are metadata a record carries and a reader is
+shown; they take no part in the gate, the score, the reasons, the order or
+the tie-break, and `build_internal_profile` does not read `collections` at
+all. Removing every author from both records, or replacing them with
+strangers, cannot change which candidates come back or the order they come in
+-- `tests/test_relatedness_neutrality.py` asserts exactly that. Authors
+survive on the Profile for ONE purpose: `related._result` renders them beside
+the recommendation.
 
 Deliberately NOT evidence, alone or together
 --------------------------------------------
@@ -498,19 +507,6 @@ def normalize_title_key(value):
     return " ".join(sorted(set(tokenize(value))))
 
 
-def author_key(name):
-    """'Alex P. Gaiduk' / 'A. Gaiduk' -> 'a gaiduk'. First initial plus family
-    name is the strictest key that still survives how differently the two
-    metadata sources write the same person."""
-    cleaned = normalize_text(name)
-    parts = [p for p in cleaned.split() if p]
-    if not parts:
-        return ""
-    if len(parts) == 1:
-        return parts[0]
-    return "%s %s" % (parts[0][0], parts[-1])
-
-
 # ------------------------------------------------------------------ profiles
 
 class Profile(object):
@@ -523,8 +519,7 @@ class Profile(object):
     """
 
     __slots__ = ("key", "title", "doi", "year", "authors", "url", "source",
-                 "text_counts", "keyword_terms", "method_terms",
-                 "field_terms", "author_keys", "author_names", "title_key",
+                 "text_counts", "keyword_terms", "method_terms", "title_key",
                  "surface_terms", "title_terms", "term_sources",
                  "software_terms", "organization_terms")
 
@@ -540,7 +535,6 @@ class Profile(object):
         self.text_counts = Counter()
         self.keyword_terms = set()
         self.method_terms = set()
-        self.field_terms = set()
         # term -> the set of SOURCE_* it was seen in. This is the record of
         # where a word came from, and it is what decides whether the word is
         # allowed to be called a research term at all.
@@ -560,14 +554,6 @@ class Profile(object):
         # sentence in a record, so an overlap there is worth more than the
         # same overlap buried in an abstract.
         self.title_terms = set()
-        # key -> the name as this side spells it, so a reason can name the
-        # person rather than the matching key.
-        self.author_names = {}
-        for name in self.authors:
-            key = author_key(name)
-            if key:
-                self.author_names.setdefault(key, name)
-        self.author_keys = set(self.author_names)
         self.title_key = normalize_title_key(self.title)
 
     def _note(self, term, source):
@@ -648,11 +634,6 @@ class Profile(object):
         title, or in a curated tag/property/keyword."""
         return {term for term, sources in self.term_sources.items()
                 if sources & DELIBERATE_TOPIC_SOURCES}
-
-    def add_field(self, value):
-        phrase = normalize_phrase(value)
-        if phrase:
-            self.field_terms.add(phrase)
 
     @property
     def all_terms(self):
@@ -744,8 +725,10 @@ def build_internal_profile(record):
 
     for tag in record.get("tags") or []:
         profile.add_keyword(tag)
-    for collection in record.get("collections") or []:
-        profile.add_field(collection)
+    # `collections` is deliberately NOT read. A collection is the programme a
+    # record belongs to, which large parts of a corpus share; it decided
+    # nothing after the quality rework, and reading it only invited a future
+    # change to make it decide something.
 
     for chart in record.get("charts") or []:
         chart = chart or {}
@@ -777,10 +760,11 @@ def build_internal_profile(record):
     return profile
 
 
-# Bumped only when the ALLOWLIST below changes, so a deployment that starts
-# reading a new field invalidates every cached answer that was computed
-# without it.
-FINGERPRINT_VERSION = "2"
+# Bumped whenever the ALLOWLIST below changes -- in either direction. A
+# deployment that starts reading a new field must invalidate answers computed
+# without it, and one that stops reading a field must not go on comparing new
+# digests against old ones that can never match.
+FINGERPRINT_VERSION = "3"
 
 
 def _artifact_fingerprint(artifacts, keys):
@@ -809,8 +793,20 @@ def metadata_fingerprint(record):
     the question is "did the curator change this record", not "did the change
     survive tokenization".
 
-    Deliberately NOT included -- and therefore unable to invalidate a cache
-    entry or to appear in one: owner_email, editor_emails, edit_history,
+    AUTHORS and COLLECTIONS are deliberately absent, and their absence is the
+    point. Neither reaches the gate, the score, the reasons or the order --
+    `build_internal_profile` does not even read `collections` -- so hashing
+    them threw away a cached provider answer, and paid for a fresh Semantic
+    Scholar request, every time somebody corrected the spelling of a name or
+    filed a record under a second programme. A cache key must track what can
+    change the answer, and nothing else.
+
+    A FACILITY name is still hashed even though it never becomes a term: it
+    decides which terms are excluded as organisational, so editing one can
+    change an answer.
+
+    Also deliberately NOT included -- and therefore unable to invalidate a
+    cache entry or to appear in one: owner_email, editor_emails, edit_history,
     info.insertedBy (curator name/email/affiliation), any RCC URL or file
     path (serverPath, fileServerPath, folderAbsolutePath, downloadPath,
     notebookPath), any `files` list or file content, drafts, sessions, CSRF
@@ -823,12 +819,7 @@ def metadata_fingerprint(record):
         _text(reference, "DOI"),
         _text(reference, "title"),
         _text(reference, "publishedAbstract"),
-        [[_text(person, "firstName"), _text(person, "middleName"),
-          _text(person, "lastName")]
-         for person in (reference.get("authors") or [])
-         if isinstance(person, dict)],
         [str(tag) for tag in (record.get("tags") or [])],
-        [str(item) for item in (record.get("collections") or [])],
         _artifact_fingerprint(record.get("charts"),
                               ("caption", "properties")),
         _artifact_fingerprint(record.get("datasets"), ("readme", "keywords")),
@@ -861,8 +852,8 @@ def build_external_profile(paper):
     )
     profile.add_text(profile.title, weight=2, is_title=True)
     profile.add_text(paper.get("abstract"))
-    for field in paper.get("fields") or []:
-        profile.add_field(field)
+    # The provider's broad `fields` are read no further than this: they are
+    # the external equivalent of a collection, and equally undecisive.
     return profile
 
 
@@ -1004,14 +995,10 @@ class Assessment(object):
     """Verdict for one candidate."""
 
     __slots__ = ("passes", "score", "evidence", "similarity",
-                 "shared_terms", "shared_weight", "author_overlap")
+                 "shared_terms", "shared_weight")
 
     def __init__(self, passes, score, evidence, similarity, shared_terms,
-                 shared_weight=0.0, author_overlap=0):
-        # How many authors the two records share. Recorded for ORDERING only:
-        # it is not evidence, it cannot pass a candidate, and it is never
-        # rendered into a reason.
-        self.author_overlap = author_overlap
+                 shared_weight=0.0):
         self.passes = passes
         self.score = score
         self.evidence = evidence
@@ -1082,8 +1069,6 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
     candidate_specific = shared_specific
     shared_weight = sum(stats.idf(t) for t in shared_specific)
     similarity = stats.similarity(current, candidate)
-    # Counted, never gated on. See the note above the gate.
-    shared_authors = current.author_keys & candidate.author_keys
     # Curated overlap is filtered through the SAME specific-term test as free
     # text, so a tag can never smuggle in an ordinary word that prose could
     # not. Short curated terms still qualify -- a tag is a deliberate
@@ -1103,7 +1088,6 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
         and stats.is_rare_enough(t)}
     shared_keywords = {t for t in current.keyword_terms & candidate.keyword_terms
                        if t in current_specific and t in candidate_specific}
-    shared_fields = current.field_terms & candidate.field_terms
     # Concepts both records put in their TITLE. A title is the most deliberate
     # sentence a record has, so an overlap there is a much stronger statement
     # than the same overlap buried in an abstract.
@@ -1121,12 +1105,6 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
     # about a laptop.
     shared_software = {t for t in current.software_terms & candidate.software_terms
                        if t in shared_methods}
-    # "The same topic", used to corroborate a shared tool. A shared tool with
-    # no topic overlap is a lab habit, not a relationship -- so the tool names
-    # themselves are excluded from what counts as the topic, or every shared
-    # tool would corroborate itself.
-    topic_terms = shared_specific - shared_methods - shared_software
-    topic_overlap = bool(topic_terms) or similarity >= MODERATE_TEXT_SIMILARITY
 
     # -- strong ------------------------------------------------------------
     if candidate.doi and candidate.doi in citation_dois:
@@ -1180,23 +1158,21 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
             "Shares %d specific research terms: %s"
             % (len(shared_specific), _term_list(shared_specific, stats))))
 
-    # NOTE: there is deliberately NO author evidence.
+    # NOTE: there is deliberately NO author evidence, and no author
+    # arithmetic of any kind.
     #
     # A shared author says who did the work, not what it was about. On a real
-    # server one PI co-authors half the corpus, so "shared author" fires
+    # server one PI co-authors half the corpus, so "shared author" fired
     # almost everywhere and, paired with any second weak signal, pushed
-    # unrelated subjects through the gate. It is now counted (below) purely to
-    # order candidates that have ALREADY passed on their own topic, and it
-    # never appears in a reason -- what a reader is shown has to be the
-    # technical overlap that actually decided the verdict.
+    # unrelated subjects through the gate. It was then kept as a tie-break,
+    # which was the same problem one step later: the gate was topic-only but
+    # the ORDER was not, so a common supervisor still decided which three a
+    # reader saw. Nothing in this module reads an author now.
 
-    # NOTE: a shared COLLECTION is deliberately not evidence.
-    #
-    # "Same research area (MICCOM)" is a statement that two records live in
-    # the same programme, which is true of large parts of the corpus. Paired
-    # with any one other weak signal it was opening the gate. It is now added
-    # AFTER the verdict, as explanation for a candidate that already passed on
-    # its own subject matter -- see `supporting_note`.
+    # NOTE: a shared COLLECTION is deliberately not evidence, and is not even
+    # read. "Same research area (MICCOM)" says two records live in the same
+    # programme, which is true of large parts of a corpus; paired with any one
+    # other weak signal it was opening the gate.
 
     if shared_methods or shared_software:
         # A shared technique or program, and never more than a medium: it
@@ -1230,8 +1206,7 @@ def assess(current, candidate, stats, citation_dois=frozenset()):
     score += min(shared_weight, 10.0) / 10.0
 
     return Assessment(passes, round(score, 6), evidence, similarity,
-                      sorted(shared_specific), shared_weight,
-                      author_overlap=len(shared_authors))
+                      sorted(shared_specific), shared_weight)
 
 
 def rank(current, candidates, stats, citation_dois=frozenset(),
@@ -1244,9 +1219,9 @@ def rank(current, candidates, stats, citation_dois=frozenset(),
     one -- is what a reader gets when nothing else clears the bar. Nothing
     here relaxes the gate to reach `limit`.
 
-    The shared-author count is a TIE-BREAKER and nothing more: it is consulted
-    only after the topical score, between candidates the gate already passed
-    on their own subject matter.
+    Ties are broken by the newer paper and then by the title. Both are
+    properties of the WORK: no author, no collection and no provider ranking
+    is consulted here, or anywhere else in this module.
     """
     scored = []
     for candidate in candidates:
@@ -1256,12 +1231,12 @@ def rank(current, candidates, stats, citation_dois=frozenset(),
         if not assessment.passes:
             continue
         scored.append((candidate, assessment))
-    # Sorted on SUBJECT only. The shared-author count used to break ties here,
+    # Sorted on SUBJECT only. A shared-author count used to break ties here,
     # which meant a supervisor or a common PI could lift an unrelated paper
     # into the three slots a reader actually sees -- the gate was topic-only,
     # but the ranking was not, so authorship still decided what got shown.
-    # Ties now fall to the newer paper and then to the title, both of which
-    # are properties of the work.
+    # Ties fall to the newer paper and then to the title, both properties of
+    # the work.
     scored.sort(key=lambda pair: (-pair[1].score,
                                   -(pair[0].year or 0),
                                   pair[0].title.lower()))
