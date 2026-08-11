@@ -580,5 +580,112 @@ class TestOnlyPublishedMetadataIsCopied(FederationTestCase):
         self.assertEqual(["a"], record["tags"])
 
 
+class TestDefaultExplorerServer(FederationTestCase):
+    """Which server the Explorer searches when the curator has not chosen.
+
+    The Explorer used to open on a node picker, so "which server" was always
+    an answer the user had typed. Now the page goes straight to results, which
+    means the SERVER has to name a default -- and it has to be a default the
+    same server will actually let anyone contact. A default outside the
+    allowlist would send every visitor into a 400 on their first click.
+    """
+
+    ENV = federation.DEFAULT_SERVER_ENV
+
+    def setUp(self):
+        super(TestDefaultExplorerServer, self).setUp()
+        self._previous = os.environ.pop(self.ENV, None)
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        os.environ.pop(self.ENV, None)
+        if self._previous is not None:
+            os.environ[self.ENV] = self._previous
+
+    def test_the_default_is_published_alongside_the_list(self):
+        with self.allowing():
+            body, status = federation.federation_servers()
+        self.assertEqual(200, status)
+        # Additive: the existing key is untouched, so an older Explorer that
+        # only reads `servers` keeps working.
+        self.assertIn("servers", body)
+        self.assertIn("default_server", body)
+        self.assertIn(body["default_server"],
+                      [entry["qresp_server_url"] for entry in body["servers"]])
+
+    def test_without_the_env_it_is_the_first_listed_server(self):
+        # Deterministic, and the SAME order the list is published in, so the
+        # default is always visibly the first row rather than an unrelated
+        # pick.
+        with self.allowing():
+            body, _status = federation.federation_servers()
+        self.assertEqual(body["servers"][0]["qresp_server_url"],
+                         body["default_server"])
+
+    def test_the_env_chooses_the_default(self):
+        os.environ[self.ENV] = OTHER_PEER
+        with self.allowing():
+            body, _status = federation.federation_servers()
+        self.assertEqual(OTHER_PEER, body["default_server"])
+
+    def test_the_env_is_normalized_like_any_other_origin(self):
+        # A trailing slash, a mixed-case host and a default port are the same
+        # origin; the published default has to be the canonical spelling or
+        # the Explorer will send a string the allowlist does not match.
+        os.environ[self.ENV] = "HTTPS://Second.Example.ORG:443/"
+        with self.allowing():
+            body, _status = federation.federation_servers()
+        self.assertEqual(OTHER_PEER, body["default_server"])
+
+    def test_a_default_outside_the_allowlist_is_refused(self):
+        # The whole point. Naming an unfederated server here must not make it
+        # reachable, and must not strand the Explorer either.
+        os.environ[self.ENV] = "https://not-federated.example.com"
+        with self.allowing():
+            body, _status = federation.federation_servers()
+        self.assertEqual(body["servers"][0]["qresp_server_url"],
+                         body["default_server"])
+        self.assertNotIn("not-federated", json.dumps(body))
+
+    def test_a_plaintext_default_is_refused(self):
+        os.environ[self.ENV] = "http://peer.example.org"
+        with self.allowing():
+            body, _status = federation.federation_servers()
+        self.assertNotEqual("http://peer.example.org", body["default_server"])
+
+    def test_a_malformed_default_is_refused(self):
+        for value in ("not a url", "javascript:alert(1)", "://x", "   "):
+            os.environ[self.ENV] = value
+            with self.allowing():
+                body, _status = federation.federation_servers()
+            self.assertEqual(body["servers"][0]["qresp_server_url"],
+                             body["default_server"], value)
+
+    def test_no_federated_servers_means_no_default(self):
+        # Federation switched off is an answer, not a failure. The Explorer
+        # has to be able to tell "nothing configured" from "server down", and
+        # an empty string is not a server it should try to search.
+        with mock.patch.object(federation, "_registry_servers",
+                               return_value=[]), \
+                mock.patch.object(federation, "_shipped_servers",
+                                  return_value=[]):
+            body, status = federation.federation_servers()
+        self.assertEqual(200, status)
+        self.assertEqual([], body["servers"])
+        self.assertEqual("", body["default_server"])
+
+    def test_the_default_never_widens_the_allowlist(self):
+        os.environ[self.ENV] = "https://not-federated.example.com"
+        with self.allowing():
+            federation.federation_servers()
+            self.assertNotIn("https://not-federated.example.com",
+                             federation.allowed_origins())
+
+    def test_the_helper_agrees_with_the_endpoint(self):
+        os.environ[self.ENV] = OTHER_PEER
+        with self.allowing():
+            self.assertEqual(OTHER_PEER, federation.default_server())
+
+
 if __name__ == "__main__":
     unittest.main()

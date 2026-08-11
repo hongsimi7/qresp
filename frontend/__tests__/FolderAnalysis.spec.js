@@ -2568,6 +2568,216 @@ describe("AI proposals land only where the record can hold them", () => {
     expect(records[0]).not.toHaveProperty("URLs");
   });
 });
+
+// The reported staleness, in the shape it was reported: a Chart whose caption
+// and keywords the analyser could not determine, filled by AI, still wearing
+// the analysis-time "Needs input" chips underneath -- while the card header,
+// which reads the draft, correctly said they were no longer missing.
+describe("a card never contradicts itself about what a field holds", () => {
+  // The real analyzer's output for a chart folder: the image was detected,
+  // everything a human has to supply is `needs_input`.
+  const CHART_EVIDENCE = {
+    imageFile: "high",
+    files: "needs_input",
+    notebookFile: "needs_input",
+    number: "needs_input",
+    caption: "needs_input",
+    properties: "needs_input",
+  };
+
+  const withEvidence = {
+    ...analysis,
+    candidates: {
+      ...analysis.candidates,
+      charts: [
+        { ...analysis.candidates.charts[0], field_evidence: CHART_EVIDENCE },
+      ],
+    },
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: withEvidence });
+  });
+
+  const input = (pattern) =>
+    screen.getByLabelText(pattern, { selector: "input" });
+
+  const caption = () => input(/^figure caption ?\*?$/i);
+  const keywords = () => input(/^keywords ?\*?$/i);
+
+  const suggestForChart = async (user, suggestion) => {
+    await openAnalysis(user);
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+    await user.click(screen.getByTestId("enhance-chart-0"));
+    await screen.findByRole("heading", { name: /send .* to gemini\?/i });
+    axios.post.mockResolvedValue({
+      data: { suggestions: { "chart-0": suggestion } },
+    });
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /i agree to send this evidence to gemini for this request/i,
+      })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /send and get suggestions/i })
+    );
+    return screen.findByTestId("ai-confidence-chart-0");
+  };
+
+  const SUGGESTION = {
+    description: "Measured and computed VDOS of liquid water.",
+    keywords: ["vibrational spectra", "liquid water"],
+    confidence: "medium",
+    reason: "notebook markdown",
+  };
+
+  it("drops the stale Needs input chip once AI fills the field", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await suggestForChart(user, SUGGESTION);
+
+    // Before: three required fields are empty, and the header says so.
+    expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
+      /3 required fields missing/i
+    );
+
+    await user.click(screen.getByTestId("ai-use-description-chart-0"));
+    await user.click(screen.getByTestId("ai-use-keywords-chart-0"));
+
+    // The header already got this right; the chips are what lied.
+    expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
+      /1 required field missing/i
+    );
+    expect(caption()).toHaveValue(SUGGESTION.description);
+    expect(screen.queryByTestId("field-evidence-chart-0-caption")).toBeNull();
+    expect(
+      screen.queryByTestId("field-evidence-chart-0-properties")
+    ).toBeNull();
+    // ...and nowhere on the card does "Needs input" survive.
+    expect(screen.queryByText(/needs input/i)).toBeNull();
+  }, 30000);
+
+  it("marks the suggestion applied once its values are in the fields", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await suggestForChart(user, SUGGESTION);
+
+    expect(screen.getByTestId("ai-applied-chart-0")).toHaveTextContent(
+      "not applied"
+    );
+
+    await user.click(screen.getByTestId("ai-use-description-chart-0"));
+    // One of two applied is not "applied".
+    expect(screen.getByTestId("ai-applied-chart-0")).toHaveTextContent(
+      "not applied"
+    );
+
+    await user.click(screen.getByTestId("ai-use-keywords-chart-0"));
+    expect(screen.getByTestId("ai-applied-chart-0")).toHaveTextContent(
+      "applied"
+    );
+    expect(screen.getByTestId("ai-use-description-chart-0")).toBeDisabled();
+  }, 30000);
+
+  it("un-marks applied when the curator edits the value afterwards", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await suggestForChart(user, SUGGESTION);
+
+    await user.click(screen.getByTestId("ai-use-description-chart-0"));
+    await user.click(screen.getByTestId("ai-use-keywords-chart-0"));
+    expect(screen.getByTestId("ai-applied-chart-0")).toHaveTextContent(
+      "applied"
+    );
+
+    await user.type(caption(), " EDITED");
+    expect(screen.getByTestId("ai-applied-chart-0")).toHaveTextContent(
+      "not applied"
+    );
+  }, 30000);
+
+  it("restores the missing count when an applied value is cleared", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await suggestForChart(user, SUGGESTION);
+
+    await user.click(screen.getByTestId("ai-use-description-chart-0"));
+    expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
+      /2 required fields missing/i
+    );
+
+    await user.clear(caption());
+    expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
+      /3 required fields missing/i
+    );
+    expect(screen.getByTestId("ai-applied-chart-0")).toHaveTextContent(
+      "not applied"
+    );
+    // The Use button comes back, because the field is free again.
+    expect(screen.getByTestId("ai-use-description-chart-0")).toBeEnabled();
+  }, 30000);
+
+  it("keeps High evidence only while the value is the analysed one", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+
+    expect(
+      await screen.findByTestId("field-evidence-chart-0-imageFile")
+    ).toHaveTextContent("High evidence");
+
+    // "High" meant "Qresp detected THIS file". Typing over it makes the chip
+    // vouch for something nothing verified.
+    await user.clear(input(/^figure image ?\*?$/i));
+    await user.type(input(/^figure image ?\*?$/i), "typed/by/hand.png");
+    expect(screen.queryByTestId("field-evidence-chart-0-imageFile")).toBeNull();
+  }, 30000);
+
+  it("applying a suggestion saves, publishes and adds nothing", async () => {
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await suggestForChart(user, SUGGESTION);
+
+    await user.click(screen.getByTestId("ai-use-description-chart-0"));
+    await user.click(screen.getByTestId("ai-use-keywords-chart-0"));
+
+    expect(addMany).not.toHaveBeenCalled();
+    expect(axios.put).not.toHaveBeenCalled();
+    // The only posts are the analysis and the one describe request.
+    expect(axios.post).toHaveBeenCalledTimes(2);
+  }, 30000);
+
+  it("does not leak applied state onto a re-analysed candidate", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await suggestForChart(user, SUGGESTION);
+    await user.click(screen.getByTestId("ai-use-description-chart-0"));
+    expect(screen.getByTestId("ai-applied-chart-0")).toHaveTextContent(
+      "applied"
+    );
+
+    // Close and reopen: a fresh analysis, the same candidate id, no memory of
+    // the previous one's suggestion or of what was applied to it.
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    axios.post.mockResolvedValue({ data: withEvidence });
+    // MUI keeps aria-hidden on the app root until the dialog has finished
+    // leaving, so the trigger is found by retrying rather than immediately.
+    await user.click(
+      await screen.findByRole("button", { name: /analyze rcc folder/i })
+    );
+    await screen.findByRole("tab", { name: /charts \(1\)/i });
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+
+    expect(screen.queryByTestId("ai-applied-chart-0")).toBeNull();
+    expect(screen.queryByTestId("ai-panel-chart-0")).toBeNull();
+    expect(caption()).toHaveValue("");
+    expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
+      /3 required fields missing/i
+    );
+  }, 30000);
+});
 // A Chart stores exactly ONE image, so the unit a curator decides about is the
 // image FILE, not the folder. Every image found is listed under the folder it
 // really sits in, each with one role, and the boundary panel is the only place
