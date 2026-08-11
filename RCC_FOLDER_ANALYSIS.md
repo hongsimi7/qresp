@@ -409,6 +409,17 @@ sent back has no room for them. When the evidence is too thin the model is
 instructed to return an empty description, and the candidate keeps its
 `needs_input` flag rather than receiving a guess.
 
+A description is capped at **40 words** and a candidate gets **at most 3
+keywords**, both enforced server-side rather than only requested in the
+prompt. The prompt says not to pad: one keyword, or none, beats a third the
+sources do not support.
+
+**Abstention is a correct answer.** A Chart whose folder holds only an image
+carries no sources at all, because there is no extractor that reads image
+bytes — the model is expected to decline a caption rather than build one from
+the file name and the paper's abstract, and the consent dialog warns the
+curator to expect exactly that before they spend the request.
+
 ## Folder organization guide
 
 A **How to organize an RCC folder** button sits beside the File Server
@@ -502,19 +513,65 @@ not inherited here.**
 ### What can leave the server (AI action only)
 
 Sent for the one candidate whose AI action was clicked, after an explicit
-consent checkbox that is unchecked every time the dialog opens:
+consent checkbox that is unchecked every time the dialog opens. The consent
+dialog itemises the actual source list for that candidate — not a category
+description — so the curator sees the payload before agreeing to it.
 
-- `id`, `kind`, display `name`
-- relative `paths` (absolute paths and anything with a scheme are dropped)
-- `context`: text Qresp already extracted locally — docstrings/leading
-  comments, manifest lines, README text, and the candidate's own evidence
-  strings — clipped to 4000 characters
+```json
+{
+  "paper_context": {"title": "...", "abstract": "..."},
+  "artifact": {"kind": "script", "name": "run.py", "id": "script-0",
+               "paths": ["scripts/a/run.py"],
+               "inventory": {"file_count": 3, "extensions": [...],
+                             "sample_names": [...]},
+               "wants_keywords": true},
+  "sources": [
+    {"type": "readme", "path": "scripts/a/README.md", "excerpt": "..."},
+    {"type": "docstring", "path": "scripts/a/run.py", "excerpt": "..."},
+    {"type": "python_symbols", "path": "scripts/a/run.py",
+     "names": ["load_data", "plot_band_structure"]}
+  ]
+}
+```
 
-Never sent: binary datasets, raw `.xyz`/`.h5`/`.csv` contents, image bytes,
-credentials/`.env`/keys, user profile, email or ownership data, and anything
-outside the selected folder. The endpoint requires exactly one item per
-request; zero-item and batched requests are rejected before Gemini or quota
-consumption.
+`sources` is **boundary-confined**: every entry is read from a file inside
+that one candidate's own folder, so a sibling dataset's README can never
+describe this one. What each record type may carry:
+
+| Kind | Source types |
+| --- | --- |
+| Chart | `readme` inside the chart folder, `notebook_markdown` from the reproduction notebook |
+| Dataset | `readme` inside the dataset folder, `manifest` |
+| Script | `readme`, `docstring` (module docstring, via `ast`), `python_symbols` (top-level `def`/`class` NAMES), `comment_header` (leading comment for non-Python) |
+| Tool | `readme`, `manifest`, `declarations` (pinned package/version, `module load`) |
+
+`paper_context` is **background only**. The system prompt states an explicit
+evidence hierarchy and forbids claiming what a script computes, what a
+dataset contains, or what a chart shows on the strength of the title or the
+abstract; when the sources do not say, the model is told an empty description
+is the correct answer.
+
+Never sent: binary datasets, raw `.xyz`/`.h5`/`.csv` values, image bytes,
+notebook **code cells, outputs and attachments**, function bodies and string
+literals, credentials/`.env`/keys, user profile, email or ownership data, and
+anything outside the candidate's boundary. Credential-shaped values are
+redacted (`api_key=[redacted]`) before the bundle is built and again on the
+way out, because the bundle round-trips through the browser.
+
+**Also never sent: anything the curator typed into that candidate.** The
+request used to carry a free-text `context` built from the draft's own
+`readme` and `description`, which handed the model its own answer to the
+field it was being asked to fill. The key is gone from the server allowlist,
+so an older client cannot reinstate it.
+
+Budgets, all enforced server-side and tested: 1 200 characters per source,
+3 000 per candidate, 8 sources per candidate, 12 symbol names, 8 notebook
+markdown cells. The evidence READ plan is spent round robin across candidates
+(at most 4 files each, 60 per analysis), so one large folder cannot consume
+the budget and leave every later candidate's README unfetched.
+
+The endpoint requires exactly one item per request; zero-item and batched
+requests are rejected before Gemini or quota consumption.
 
 The response is schema-constrained (`{"items":[{"id","description",
 "keywords"}]}`), re-clipped server-side, and ids that were never sent are

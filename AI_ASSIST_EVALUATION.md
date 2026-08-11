@@ -55,10 +55,36 @@ mongoengine model declares `readme`/`facilityname`, but `Tools` is a
 (`description`/`facilityName`, per `schema.json`) is what is stored and what
 `/api/paper/{id}` returns.
 
-**Charts are the case to watch.** The description AI receives no image bytes
-and no paper text. A confident caption for a figure it cannot see is a
-failure, not a success; **abstaining is the correct behaviour**, and the
-summary measures the abstention rate rather than penalising it.
+**Charts are the case to watch.** The description AI receives no image bytes.
+A confident caption for a figure it cannot see is a failure, not a success;
+**abstaining is the correct behaviour**, and the summary measures abstention
+CORRECTNESS rather than penalising abstention itself.
+
+#### The two evidence modes
+
+Every sampled candidate is asked **twice**, so the comparison is paired on
+the same candidate rather than on two different samples:
+
+| Mode | What the model receives |
+| --- | --- |
+| `filenames_only` | The pre-change input: display name, relative paths, and the analyzer's own structural sentences ("One dataset: the folder `data/vdos` and everything in it"). No file text, no paper background. |
+| `enhanced` | The shipped bundle: the same identity plus boundary-confined `readme`/`docstring`/`python_symbols`/`notebook_markdown`/`manifest` sources, and the paper's title and abstract as background. |
+
+The structural sentences travel as `artifact.structure_notes`, **not** as a
+`sources` entry, precisely so a description copied out of them does not score
+as grounded. They describe the file layout; they are not prose about the
+science.
+
+#### What is reported, per record type per mode
+
+| Metric | Meaning |
+| --- | --- |
+| `mean_groundedness` | Share of the description's content words that the EVIDENCE supports. The paper's title and abstract are deliberately excluded from the denominator, so a description lifted from the abstract grounds near zero — which is the point. |
+| `useful_rate` | Share of descriptions that say anything beyond the candidate's own name and record type. A cheap floor, not a quality score. |
+| `keyword_concept_precision` / `_recall` | Overlap with the curator's keywords over CONCEPTS (acronym/plural folded), not strings. A lower bound. |
+| `keyword_concept_recall_evidence_only` | The same recall with reference keywords that the paper's own title/abstract already spell out removed. See the caveat below. |
+| `mean_generic_keyword_ratio` | Share of RAW suggested keywords that are folder words (`data`, `scripts`, `figure`). Measured before the server's stopword filter, so it shows how often the model reaches for one. |
+| `abstention_correctness` | Did it stay quiet exactly when the bundle held no human prose? `missed_abstention` (described an artifact with nothing to describe from) is the failure this change targets; `unnecessary_abstention` (stayed quiet with a README in hand) is the opposite waste. |
 
 ---
 
@@ -100,12 +126,33 @@ The record being scored must not be able to see its own answer.
 3. **The paper's own title and abstract are NOT treated as leakage.** A tag
    readable from the abstract is exactly what the keyword AI is for; excluding
    such records would leave only papers whose tags are unguessable.
-4. **The RCC target text is stripped from the evidence.** The human
-   description and keywords are removed from `context` before the payload is
-   built.
-5. **Checked again before any call.** `run` refuses, with a non-zero exit,
-   if any planned payload still carries a label it should not — before a
-   single provider request is made.
+4. **The RCC target text is stripped from the evidence.** The target
+   record's curated description/caption/readme AND its curated keywords are
+   removed from every `sources` excerpt before the payload is built. A source
+   that was only the answer disappears entirely. This is stricter than it
+   looks: scrubbing "liquid water" out of a water dataset's README makes
+   keyword recall a genuine inference test rather than a copying test.
+5. **QA and test records are excluded from the reference corpus.** Qresp's
+   own placeholder records carry placeholder titles, tags and artifact
+   descriptions; scoring against those measures nothing, and leaving them in
+   the leave-one-out vocabulary teaches the model Qresp's test fixtures.
+   Every exclusion is printed with the rule that fired it, because an
+   over-eager rule silently shrinks the benchmark.
+6. **The paper's title is a REPORTED caveat, not a scrub.** Adding
+   `paper_context` introduced a real channel: a paper titled "Band structure
+   of monolayer transition metal dichalcogenides" contains two of its own
+   artifacts' reference keywords verbatim. Deleting the title would benchmark
+   a product that does not exist, so instead every reference keyword that
+   already appears in the title or abstract is counted
+   (`reference_keywords_in_paper_background`) and keyword recall is reported
+   a second time with those removed
+   (`keyword_concept_recall_evidence_only`). Recovering "band structure" for
+   that paper demonstrates reading, not inference, and the split says so.
+7. **Checked again before any call, on the FINAL payload.**
+   `payload_leaks_the_answer` runs after every clipping and sanitizing step;
+   a unit whose payload still contains the curated description is DROPPED and
+   never called, with the reason printed. It would spend a provider request
+   on a question whose answer was in the question.
 
 ---
 
@@ -361,7 +408,9 @@ The analyzer's candidates do not use the field names the AI request does:
 | AI request field | Read from |
 | --- | --- |
 | `name` | `label` (the analyzer stopped inferring a name from the file list), then legacy `name` |
-| `context` | explicit legacy `context`, otherwise the `evidence` array joined in order — the same thing the product frontend does |
+| `sources` | `ai_sources` — the analyzer's structured, boundary-confined evidence bundle |
+| `inventory` | `inventory` — file kinds and counts, never the file list |
+| `structural_evidence` | the `evidence` array joined in order. Used ONLY to reconstruct the `filenames_only` baseline; it is not part of the shipped request. |
 | `id`, `kind`, `paths` | as-is |
 
 Everything else the analyzer produces — `confidence`, `proposal`,
