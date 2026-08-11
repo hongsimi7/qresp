@@ -776,7 +776,6 @@ class TestEditedMetadataInvalidatesTheCache(RelatedTestCase):
             "abstract": {"set__reference__publishedAbstract": "New abstract."},
             "doi": {"set__reference__DOI": "10.1000/changed"},
             "tags": {"set__tags": ["rareword resonance", "added-tag"]},
-            "collections": {"set__collections": ["MICCOM", "another"]},
         }
         for label, update in edits.items():
             with self.subTest(field=label):
@@ -785,6 +784,27 @@ class TestEditedMetadataInvalidatesTheCache(RelatedTestCase):
                 Paper.objects(id=self.subject_id).update(**update)
                 _, stub = self.fetch()
                 self.assertTrue(stub.calls, label)
+
+    def test_metadata_that_scores_nothing_does_not_refetch(self):
+        """The other half of the contract, and the reason it is worth
+        stating: a provider request costs a quota unit and a round trip.
+        Authors and collections take no part in scoring, so re-asking
+        Semantic Scholar because somebody corrected the spelling of a name
+        buys a fresh copy of an answer that could not have changed."""
+        for label, update in (
+                ("collections", {"set__collections": ["MICCOM", "another"]}),
+                ("authors", {"set__reference__authors": [
+                    {"firstName": "Wholly", "middleName": "",
+                     "lastName": "Different"}]}),
+        ):
+            with self.subTest(field=label):
+                RelatedResearchCache.drop_collection()
+                self.fetch()
+                before = self.entry().fingerprint
+                Paper.objects(id=self.subject_id).update(**update)
+                _, stub = self.fetch()
+                self.assertEqual([], stub.calls, label)
+                self.assertEqual(before, self.entry().fingerprint, label)
 
     def test_editing_artifacts_and_tools_forces_a_refetch(self):
         for label, update in (

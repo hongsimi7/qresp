@@ -75,11 +75,12 @@ class TestNormalization(unittest.TestCase):
         self.assertEqual(R.normalize_title_key("Alpha beta gamma"),
                          R.normalize_title_key("Gamma, the beta and alpha"))
 
-    def test_author_key_survives_initials_and_middle_names(self):
-        self.assertEqual(R.author_key("Alexandra P. Widgetson"),
-                         R.author_key("A. Widgetson"))
-        self.assertNotEqual(R.author_key("Alexandra Widgetson"),
-                            R.author_key("Boris Widgetson"))
+    def test_author_matching_no_longer_exists(self):
+        # Author matching was removed with the shared-author count: nothing
+        # in the module compares two people any more. What replaced this
+        # assertion is the contract itself -- see
+        # `test_relatedness_neutrality.TestAuthorsDecideNothing`.
+        self.assertFalse(hasattr(R, "author_key"))
 
 
 class TestProfileScope(unittest.TestCase):
@@ -142,12 +143,7 @@ class TestMetadataFingerprint(unittest.TestCase):
             "title": lambda r: r["reference"].__setitem__("title", "Other"),
             "abstract": lambda r: r["reference"].__setitem__(
                 "publishedAbstract", "Something else entirely."),
-            "authors": lambda r: r["reference"]["authors"].append(
-                {"firstName": "New", "middleName": "", "lastName": "Person"}),
-            "author spelling": lambda r: r["reference"]["authors"][0].__setitem__(
-                "lastName", "Renamed"),
             "tags": lambda r: r["tags"].append("added"),
-            "collections": lambda r: r["collections"].append("another-field"),
             "chart properties": lambda r: r["charts"][0]["properties"].append(
                 "pressure"),
             "chart caption": lambda r: r["charts"][0].__setitem__(
@@ -168,6 +164,23 @@ class TestMetadataFingerprint(unittest.TestCase):
         for label, mutate in cases.items():
             with self.subTest(field=label):
                 self.assert_changes(mutate, label)
+
+    def test_metadata_a_recommendation_ignores_does_not_invalidate_a_cache(self):
+        """Authors and collections decide nothing, so hashing them only threw
+        away provider answers that could not have changed. The full contract
+        is in `test_relatedness_neutrality.TestFingerprintTracksOnlyWhatDecides`."""
+        before = R.metadata_fingerprint(self.base())
+        for mutate in (
+                lambda r: r["reference"]["authors"].append(
+                    {"firstName": "New", "middleName": "",
+                     "lastName": "Person"}),
+                lambda r: r["reference"]["authors"][0].__setitem__(
+                    "lastName", "Renamed"),
+                lambda r: r["collections"].append("another-field"),
+        ):
+            changed = self.base()
+            mutate(changed)
+            self.assertEqual(before, R.metadata_fingerprint(changed))
 
     def test_private_and_operational_fields_can_never_invalidate_a_cache(self):
         """If one of these changed the fingerprint it would also be a signal
