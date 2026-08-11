@@ -232,6 +232,32 @@ export const suggestionApplied = (kind, key, draft = {}, suggested) => {
   return comparable(kind, key, draft[key]) === proposed;
 };
 
+// How much of ONE suggestion is in the fields it belongs in.
+//
+// A suggestion may offer a description, keywords, or both, and "applied" is a
+// claim about all of it. An all-or-nothing flag made the panel contradict its
+// own buttons: use the keywords and the button says "Applied to Keywords"
+// while the header two lines above still says "not applied".
+//
+// `offers` is [{key, value}] -- what this suggestion actually proposed, per
+// target field. An entry with no key (a Tool has no keyword field) or an empty
+// value was never an offer and cannot hold the state back.
+export const NOT_APPLIED = "not_applied";
+export const PARTIALLY_APPLIED = "partially_applied";
+export const APPLIED = "applied";
+
+export const suggestionState = (kind, draft = {}, offers = []) => {
+  const offered = (offers || []).filter(
+    (offer) => offer && offer.key && comparable(kind, offer.key, offer.value)
+  );
+  if (!offered.length) return NOT_APPLIED;
+  const used = offered.filter((offer) =>
+    suggestionApplied(kind, offer.key, draft, offer.value)
+  );
+  if (!used.length) return NOT_APPLIED;
+  return used.length === offered.length ? APPLIED : PARTIALLY_APPLIED;
+};
+
 // Fields an existing record may carry that no current surface edits. They are
 // copied through on save so nothing a curator stored years ago is dropped —
 // and never read as, or converted into, anything else.

@@ -2606,6 +2606,13 @@ describe("a card never contradicts itself about what a field holds", () => {
   const caption = () => input(/^figure caption ?\*?$/i);
   const keywords = () => input(/^keywords ?\*?$/i);
 
+  // EXACT: "applied" is a substring of "partially applied", so a loose
+  // matcher would let the two states pass for each other.
+  const expectState = (label) =>
+    expect(screen.getByTestId("ai-applied-chart-0").textContent.trim()).toBe(
+      label
+    );
+
   const suggestForChart = async (user, suggestion) => {
     await openAnalysis(user);
     await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
@@ -2663,20 +2670,15 @@ describe("a card never contradicts itself about what a field holds", () => {
     renderWith();
     await suggestForChart(user, SUGGESTION);
 
-    expect(screen.getByTestId("ai-applied-chart-0")).toHaveTextContent(
-      "not applied"
-    );
+    expectState("not applied");
 
     await user.click(screen.getByTestId("ai-use-description-chart-0"));
-    // One of two applied is not "applied".
-    expect(screen.getByTestId("ai-applied-chart-0")).toHaveTextContent(
-      "not applied"
-    );
+    // One of two used: neither applied nor un-applied. Saying "not applied"
+    // here contradicted the keywords button already reading "Applied to ...".
+    expectState("partially applied");
 
     await user.click(screen.getByTestId("ai-use-keywords-chart-0"));
-    expect(screen.getByTestId("ai-applied-chart-0")).toHaveTextContent(
-      "applied"
-    );
+    expectState("applied");
     expect(screen.getByTestId("ai-use-description-chart-0")).toBeDisabled();
   }, 30000);
 
@@ -2687,14 +2689,15 @@ describe("a card never contradicts itself about what a field holds", () => {
 
     await user.click(screen.getByTestId("ai-use-description-chart-0"));
     await user.click(screen.getByTestId("ai-use-keywords-chart-0"));
-    expect(screen.getByTestId("ai-applied-chart-0")).toHaveTextContent(
-      "applied"
-    );
+    expectState("applied");
 
+    // Editing ONE of two applied values leaves the other still applied.
     await user.type(caption(), " EDITED");
-    expect(screen.getByTestId("ai-applied-chart-0")).toHaveTextContent(
-      "not applied"
-    );
+    expectState("partially applied");
+
+    // Editing the last one too leaves nothing applied.
+    await user.type(keywords(), " EDITED");
+    expectState("not applied");
   }, 30000);
 
   it("restores the missing count when an applied value is cleared", async () => {
@@ -2711,11 +2714,78 @@ describe("a card never contradicts itself about what a field holds", () => {
     expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
       /3 required fields missing/i
     );
-    expect(screen.getByTestId("ai-applied-chart-0")).toHaveTextContent(
-      "not applied"
-    );
+    expectState("not applied");
     // The Use button comes back, because the field is free again.
     expect(screen.getByTestId("ai-use-description-chart-0")).toBeEnabled();
+  }, 30000);
+
+  it("is applied as soon as a description-only suggestion is used", async () => {
+    // Nothing else was offered, so one click is the whole of it. Waiting for
+    // a second field that does not exist would strand the panel.
+    const user = userEvent.setup();
+    renderWith();
+    await suggestForChart(user, {
+      description: "Measured and computed VDOS of liquid water.",
+      keywords: [],
+      confidence: "medium",
+    });
+
+    expectState("not applied");
+    expect(screen.queryByTestId("ai-use-keywords-chart-0")).toBeNull();
+
+    await user.click(screen.getByTestId("ai-use-description-chart-0"));
+    expectState("applied");
+  }, 30000);
+
+  it("goes back to partially applied when one applied value is cleared", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await suggestForChart(user, SUGGESTION);
+
+    await user.click(screen.getByTestId("ai-use-description-chart-0"));
+    await user.click(screen.getByTestId("ai-use-keywords-chart-0"));
+    expectState("applied");
+
+    await user.clear(keywords());
+    expectState("partially applied");
+    // ...and the stale-chip fix is not disturbed by any of this: caption
+    // still holds the AI's text, so it carries no chip.
+    expect(screen.queryByTestId("field-evidence-chart-0-caption")).toBeNull();
+    expect(screen.queryByText(/needs input/i)).toBeNull();
+  }, 30000);
+
+  it("does not overwrite the curator's own text on any state", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+    await user.type(caption(), "MY OWN CAPTION");
+
+    await user.click(screen.getByTestId("enhance-chart-0"));
+    await screen.findByRole("heading", { name: /send .* to gemini\?/i });
+    axios.post.mockResolvedValue({
+      data: { suggestions: { "chart-0": SUGGESTION } },
+    });
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /i agree to send this evidence to gemini for this request/i,
+      })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /send and get suggestions/i })
+    );
+    await screen.findByTestId("ai-confidence-chart-0");
+
+    // The curator's text is in the field, so the button is disabled and the
+    // suggestion is not applied -- and the text is untouched.
+    expect(screen.getByTestId("ai-use-description-chart-0")).toBeDisabled();
+    expect(caption()).toHaveValue("MY OWN CAPTION");
+    expectState("not applied");
+
+    // Using the keywords, which the curator did NOT fill, is still allowed.
+    await user.click(screen.getByTestId("ai-use-keywords-chart-0"));
+    expectState("partially applied");
+    expect(caption()).toHaveValue("MY OWN CAPTION");
   }, 30000);
 
   it("keeps High evidence only while the value is the analysed one", async () => {

@@ -31,6 +31,9 @@ import AlertContext from "../../Context/Alert/alertContext";
 import { buildFileUrl } from "../../Utils/fileServerUrl";
 import {
   aiTargets,
+  APPLIED,
+  NOT_APPLIED,
+  PARTIALLY_APPLIED,
   evidenceChipFor,
   fieldsFor,
   helpFor,
@@ -38,6 +41,7 @@ import {
   labelFor,
   missingRequired,
   suggestionApplied,
+  suggestionState,
   toDraft,
   toRecord,
 } from "../../Utils/artifactFields";
@@ -791,13 +795,20 @@ const FolderAnalysis = ({ path, artifactType }) => {
     const keywordsApplied =
       Boolean(keywordField) &&
       suggestionApplied(candidate.kind, keywordField, draft, keywordText);
-    // The panel's own headline state: everything this suggestion offered is
-    // in the fields it belongs in.
-    const offered = [
-      description ? descriptionApplied : null,
-      keywords.length && keywordField ? keywordsApplied : null,
-    ].filter((value) => value !== null);
-    const fullyApplied = offered.length > 0 && offered.every(Boolean);
+    // The panel's own headline state, over EVERYTHING this suggestion
+    // offered. It has three values, not two: a suggestion offering a caption
+    // and keywords, with only the keywords used, is neither applied nor
+    // un-applied -- and calling it "not applied" contradicted the button two
+    // lines below already reading "Applied to Keywords".
+    const state = suggestionState(candidate.kind, draft, [
+      { key: descriptionField, value: description },
+      { key: keywordField, value: keywordText },
+    ]);
+    const stateLabel = {
+      [APPLIED]: "applied",
+      [PARTIALLY_APPLIED]: "partially applied",
+      [NOT_APPLIED]: "not applied",
+    }[state];
 
     return (
       <Box
@@ -824,12 +835,20 @@ const FolderAnalysis = ({ path, artifactType }) => {
             label={`AI suggestion: ${suggestion.confidence || "low"}`}
             data-testid={`ai-confidence-${candidate.id}`}
           />
+          {/* The state is spelled out. Colour alone would leave the three
+              apart only for people who can compare two greys and a green. */}
           <Typography
             variant="caption"
-            color={fullyApplied ? "success.main" : "text.secondary"}
+            color={
+              state === APPLIED
+                ? "success.main"
+                : state === PARTIALLY_APPLIED
+                ? "warning.main"
+                : "text.secondary"
+            }
             data-testid={`ai-applied-${candidate.id}`}
           >
-            {fullyApplied ? "applied" : "not applied"}
+            {stateLabel}
           </Typography>
         </Box>
         {suggestion.reason ? (

@@ -17,11 +17,15 @@
  * These helpers are the single place the three are combined.
  */
 import {
+  APPLIED,
   BLANK,
   CHANGED,
+  NOT_APPLIED,
+  PARTIALLY_APPLIED,
   UNCHANGED,
   evidenceChipFor,
   suggestionApplied,
+  suggestionState,
   valueState,
 } from "../Utils/artifactFields";
 
@@ -163,5 +167,99 @@ describe("suggestionApplied", () => {
     expect(
       suggestionApplied("chart", "properties", { properties: "a" }, "a,b")
     ).toBe(false);
+  });
+});
+
+describe("suggestionState", () => {
+  // One suggestion can offer a description, keywords, or both. "applied" is a
+  // statement about ALL of what it offered, so a panel that only knows
+  // all-or-nothing contradicts its own buttons the moment one is used.
+  const CAPTION = { key: "caption", value: "A caption" };
+  const KEYWORDS = { key: "properties", value: "dft, water" };
+
+  it("is not_applied when nothing has been used yet", () => {
+    expect(
+      suggestionState("chart", { caption: "", properties: "" },
+                      [CAPTION, KEYWORDS])
+    ).toBe(NOT_APPLIED);
+  });
+
+  it("is partially_applied when some of what it offered is in place", () => {
+    expect(
+      suggestionState("chart", { caption: "A caption", properties: "" },
+                      [CAPTION, KEYWORDS])
+    ).toBe(PARTIALLY_APPLIED);
+    expect(
+      suggestionState("chart", { caption: "", properties: "dft, water" },
+                      [CAPTION, KEYWORDS])
+    ).toBe(PARTIALLY_APPLIED);
+  });
+
+  it("is applied when everything it offered is in place", () => {
+    expect(
+      suggestionState(
+        "chart",
+        { caption: "A caption", properties: "dft, water" },
+        [CAPTION, KEYWORDS]
+      )
+    ).toBe(APPLIED);
+  });
+
+  it("is applied as soon as the ONLY thing it offered is used", () => {
+    // A description-only suggestion is fully applied after one click. Asking
+    // for a second one that was never offered would strand it.
+    expect(
+      suggestionState("chart", { caption: "A caption" }, [CAPTION])
+    ).toBe(APPLIED);
+  });
+
+  it("ignores offers the suggestion did not actually make", () => {
+    // Empty keywords are not an offer, so they cannot hold the panel back.
+    expect(
+      suggestionState("chart", { caption: "A caption", properties: "" },
+                      [CAPTION, { key: "properties", value: "" }])
+    ).toBe(APPLIED);
+  });
+
+  it("is not_applied when the suggestion offered nothing at all", () => {
+    expect(suggestionState("chart", { caption: "x" }, [])).toBe(NOT_APPLIED);
+    expect(
+      suggestionState("chart", { caption: "x" },
+                      [{ key: "caption", value: "" }])
+    ).toBe(NOT_APPLIED);
+  });
+
+  it("falls back as the curator edits an applied value", () => {
+    const both = { caption: "A caption", properties: "dft, water" };
+    expect(suggestionState("chart", both, [CAPTION, KEYWORDS])).toBe(APPLIED);
+
+    const edited = { ...both, caption: "A caption, reworded" };
+    expect(suggestionState("chart", edited, [CAPTION, KEYWORDS]))
+      .toBe(PARTIALLY_APPLIED);
+
+    const bothEdited = { caption: "mine", properties: "mine" };
+    expect(suggestionState("chart", bothEdited, [CAPTION, KEYWORDS]))
+      .toBe(NOT_APPLIED);
+  });
+
+  it("falls back when an applied value is cleared", () => {
+    expect(
+      suggestionState("chart", { caption: "A caption", properties: "" },
+                      [CAPTION, KEYWORDS])
+    ).toBe(PARTIALLY_APPLIED);
+    expect(
+      suggestionState("chart", { caption: "", properties: "" },
+                      [CAPTION, KEYWORDS])
+    ).toBe(NOT_APPLIED);
+  });
+
+  it("tolerates a field with no target on this record kind", () => {
+    // A Tool has no keyword field, so the server never sends keywords for
+    // one and there is no `key` to compare against.
+    expect(
+      suggestionState("tool", { description: "A DFT code" },
+                      [{ key: "description", value: "A DFT code" },
+                       { key: undefined, value: "ignored" }])
+    ).toBe(APPLIED);
   });
 });
