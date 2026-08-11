@@ -23,6 +23,20 @@ import AlertContext from "../Context/Alert/alertContext";
 import ServerContext from "../Context/Servers/serverContext";
 import { resolveServerSideApiBase } from "../Utils/serverSideApi";
 
+// The four endpoints a Qresp node is asked for are NOT equal, and treating
+// them as one list is what let a missing authors list be reported as missing
+// records.
+//
+//   search        -> data.papers[server] -> the results table
+//   collections   |
+//   authors       |-> AdvancedSearch dropdown options, nothing else
+//   publications  |
+//
+// Losing the first means this node contributed no records. Losing any of the
+// others means the records are all there and one filter is short of options.
+const CORE_ENDPOINT = "search";
+const AUXILIARY_ENDPOINTS = ["collections", "authors", "publications"];
+
 const search = ({ initialdata, error, selectedservers }) => {
   const { setAlert, unsetAlert } = useContext(AlertContext);
   const { setSelected } = useContext(ServerContext);
@@ -127,8 +141,14 @@ const search = ({ initialdata, error, selectedservers }) => {
   }, [router]);
 
   const failed = (error && error.failed) || [];
-  // EVERY node failed. There is nothing to show and nothing to filter, and
-  // saying "0 Records Available" here would be a different, wrong claim.
+  // Servers whose RECORDS arrived and whose filter metadata is short. A
+  // different sentence entirely from `failed`, and the reason the two are
+  // separate props: they used to share one, so a node that had served its
+  // records perfectly was announced as one whose records were missing.
+  const filterFailures = Object.entries((error && error.filters) || {});
+  // EVERY node's records failed. There is nothing to show and nothing to
+  // filter, and saying "0 Records Available" here would be a different,
+  // wrong claim.
   const unavailable = Boolean(error && error.total);
 
   return (
@@ -148,6 +168,24 @@ const search = ({ initialdata, error, selectedservers }) => {
               <Alert severity="warning">
                 Some Qresp nodes could not be reached, so their records are
                 missing from these results: {failed.join(", ")}.
+              </Alert>
+            </Box>
+          ) : null}
+
+          {/* Records ARE here; some of the dropdowns above the table just
+              have fewer options than they should. Announcing that as missing
+              records contradicted the rows the reader can see. */}
+          {!unavailable && filterFailures.length > 0 ? (
+            <Box sx={{ mb: 2 }} data-testid="search-filter-failure">
+              <Alert severity="info">
+                Records were loaded, but some search filters are unavailable
+                from:{" "}
+                {filterFailures
+                  .map(([server, endpoints]) =>
+                    `${server} (${(endpoints || []).join(", ")})`
+                  )
+                  .join("; ")}
+                .
               </Alert>
             </Box>
           ) : null}
@@ -218,7 +256,13 @@ export async function getServerSideProps(ctx) {
   // because other callers and tests read them, but "some nodes are down" and
   // "nothing loaded" are different situations and the page must not show the
   // same thing for both.
-  const error = { is: false, msg: "", failed: [], total: false };
+  // Two DIFFERENT failures, kept apart because they mean different things to
+  // a reader:
+  //   `failed`  - servers whose RECORDS are missing (the core endpoint died)
+  //   `filters` - {server: [endpoint]} whose records are fine and whose
+  //               search-filter metadata is incomplete
+  // `is`/`msg` stay for older readers; the page renders from the two above.
+  const error = { is: false, msg: "", failed: [], filters: {}, total: false };
   const data = {
     papers: {},
     authors: [],
@@ -235,47 +279,63 @@ export async function getServerSideProps(ctx) {
     };
   }
 
-  const urls = [
-    { endpoint: "search", value: "papers" },
-    { endpoint: "collections", value: "collections" },
-    { endpoint: "authors", value: "authors" },
-    { endpoint: "publications", value: "publications" },
-  ];
   const servers = query.servers.split(",");
 
   for (let i = 0; i < servers.length; i++) {
     const server = servers[i];
     const fetchBase = resolveServerSideApiBase(ctx, server);
-    for (let j = 0; j < urls.length; j++) {
-      const url = urls[j];
-      try {
-        if (!fetchBase) {
-          throw new Error("No server-side API base available");
-        }
-        var response = await axios
-          .get(`${fetchBase}/api/${url.endpoint}`)
-          .then((res) => res.data);
+    const get = async (endpoint) => {
+      if (!fetchBase) throw new Error("No server-side API base available");
+      const response = await axios.get(`${fetchBase}/api/${endpoint}`);
+      return response.data;
+    };
 
-        if (url.endpoint === "search") {
-          data[url.value][server] = response;
-        } else {
-          data[url.value].push(...response);
-        }
+    // THE CORE ENDPOINT, on its own and first. Its answer is staged in a
+    // local until it has actually arrived: committing per-endpoint is how a
+    // later failure used to leave records on the page under a banner saying
+    // they were missing.
+    let records;
+    try {
+      records = await get(CORE_ENDPOINT);
+    } catch (e) {
+      console.error(e);
+      error.is = true;
+      if (!error.failed.includes(server)) error.failed.push(server);
+      // No records means no reason to ask this server for filter metadata
+      // describing them.
+      continue;
+    }
+    data.papers[server] = records;
+
+    // AUXILIARY ENDPOINTS. Each is asked independently: one of them being
+    // down says nothing about the other two, and the old `break` threw away
+    // filters that had nothing wrong with them. A failure here does NOT make
+    // this server a failed record source -- its records are on the page.
+    for (let j = 0; j < AUXILIARY_ENDPOINTS.length; j++) {
+      const endpoint = AUXILIARY_ENDPOINTS[j];
+      try {
+        const values = await get(endpoint);
+        data[endpoint].push(...values);
       } catch (e) {
         console.error(e);
         error.is = true;
-        if (!error.failed.includes(server)) error.failed.push(server);
-        break;
+        error.filters[server] = (error.filters[server] || []).concat(endpoint);
       }
     }
   }
 
-  if (error.is) {
+  // Total failure is measured on the CORE endpoint, never on a count of
+  // "servers with something wrong". `failed.length >= servers.length` made a
+  // single server with one broken filter endpoint look like an outage while
+  // its records sat in `data`.
+  error.total = Object.keys(data.papers).length === 0;
+  if (error.failed.length) {
     error.msg =
       "Could not fetch data from these servers: " + error.failed.join(", ");
-    // Every node asked for was unreachable: there is nothing partial about
-    // it, and the page shows an unavailable state rather than an empty table.
-    error.total = error.failed.length >= servers.length;
+  } else if (error.is) {
+    error.msg =
+      "Some search filters were unavailable from: " +
+      Object.keys(error.filters).join(", ");
   }
 
   return {

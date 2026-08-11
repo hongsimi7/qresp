@@ -198,3 +198,78 @@ describe("search page states", () => {
       .toBe(true);
   });
 });
+
+// A node whose records loaded but whose authors list 404'd is not a node
+// whose records are missing. Saying so was the reported contradiction:
+// records visibly on the page, under a banner claiming they were absent.
+describe("search page: record-source vs filter failures", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    routerEvents.handlers = {};
+  });
+
+  const withError = (overrides, papers) =>
+    renderSearch({
+      initialdata: dataWith(papers || { [ALPHA]: [PAPER("a", "From alpha")] }),
+      error: { is: true, msg: "", failed: [], filters: {}, total: false,
+               ...overrides },
+    });
+
+  it("says filters are incomplete, NOT that records are missing", () => {
+    withError({ filters: { [ALPHA]: ["authors", "collections"] } });
+
+    // The records are on the page...
+    expect(screen.getByText("From alpha")).toBeInTheDocument();
+    expect(screen.getByTestId("record-count")).toHaveTextContent(
+      "1 Records Available"
+    );
+    // ...so the notice names the filters, and the failed endpoints.
+    const notice = screen.getByTestId("search-filter-failure");
+    expect(notice).toHaveTextContent(/search filters are unavailable/i);
+    expect(notice).toHaveTextContent(ALPHA);
+    expect(notice).toHaveTextContent(/authors/);
+    expect(notice).toHaveTextContent(/collections/);
+    // The wrong sentence must not appear anywhere.
+    expect(screen.queryByText(/records are missing/i)).toBeNull();
+    expect(screen.queryByTestId("search-partial-failure")).toBeNull();
+    expect(screen.queryByTestId("search-unavailable")).toBeNull();
+    expect(setAlert).not.toHaveBeenCalled();
+  });
+
+  it("still says records are missing when a node's records really are", () => {
+    withError({ failed: [BETA] });
+    const notice = screen.getByTestId("search-partial-failure");
+    expect(notice).toHaveTextContent(/records are missing/i);
+    expect(notice).toHaveTextContent(BETA);
+    expect(screen.queryByTestId("search-filter-failure")).toBeNull();
+  });
+
+  it("shows both notices when the two failures happen together", () => {
+    withError({ failed: [BETA], filters: { [ALPHA]: ["authors"] } });
+    expect(screen.getByTestId("search-partial-failure")).toHaveTextContent(
+      BETA
+    );
+    expect(screen.getByTestId("search-filter-failure")).toHaveTextContent(
+      ALPHA
+    );
+    expect(screen.getByText("From alpha")).toBeInTheDocument();
+    expect(screen.queryByTestId("search-unavailable")).toBeNull();
+  });
+
+  it("does not mention filters at all when nothing failed", () => {
+    renderSearch({
+      initialdata: dataWith({ [ALPHA]: [PAPER("a", "From alpha")] }),
+    });
+    expect(screen.queryByTestId("search-filter-failure")).toBeNull();
+    expect(screen.queryByTestId("search-partial-failure")).toBeNull();
+  });
+
+  it("shows only the unavailable panel when every node's records failed", () => {
+    withError({ failed: [ALPHA], filters: { [ALPHA]: ["authors"] },
+                total: true }, {});
+    expect(screen.getByTestId("search-unavailable")).toBeInTheDocument();
+    // A filter notice beside "nothing loaded" would be noise.
+    expect(screen.queryByTestId("search-filter-failure")).toBeNull();
+    expect(screen.queryByTestId("record-count")).toBeNull();
+  });
+});
