@@ -212,6 +212,55 @@ class TestAllowlist(FederationTestCase):
         ours = {entry["qresp_server_url"]
                 for entry in federation._shipped_servers()}
         self.assertEqual(theirs, ours)
+        # ...and so do the LABELS. The Explorer tags every record with the
+        # node it came from, and the two containers reading different names
+        # for the same node is exactly the drift this test exists to catch.
+        their_names = set(re.findall(r'qresp_server_name:\s*"([^"]+)"', text))
+        our_names = {entry.get("qresp_server_name")
+                     for entry in federation._shipped_servers()
+                     if entry.get("qresp_server_name")}
+        self.assertEqual(their_names, our_names)
+
+    def test_every_shipped_server_has_a_name_to_tag_records_with(self):
+        # A record shows where it came from. Without a name the tag falls back
+        # to the host, which is true but not what a reader recognises.
+        for entry in federation._shipped_servers():
+            self.assertTrue((entry.get("qresp_server_name") or "").strip(),
+                            entry.get("qresp_server_url"))
+
+    def test_the_published_list_carries_the_name_of_each_server(self):
+        with self.allowing():
+            body, status = federation.federation_servers()
+        self.assertEqual(200, status)
+        self.assertTrue(body["servers"])
+        names = {entry["qresp_server_url"]: entry["qresp_server_name"]
+                 for entry in body["servers"]}
+        shipped = {entry["qresp_server_url"]: entry["qresp_server_name"]
+                   for entry in federation._shipped_servers()}
+        for origin, name in shipped.items():
+            self.assertEqual(name, names.get(origin), origin)
+
+    def test_a_server_with_no_published_name_gets_an_empty_one(self):
+        # Empty, never invented: the Explorer falls back to the host itself
+        # rather than guessing a label from the URL.
+        with mock.patch.object(federation, "_shipped_servers",
+                               return_value=[{"qresp_server_url": PEER}]):
+            with self.allowing():
+                body, _status = federation.federation_servers()
+        published = {entry["qresp_server_url"]: entry["qresp_server_name"]
+                     for entry in body["servers"]}
+        self.assertEqual("", published.get(PEER))
+
+    def test_a_server_name_is_bounded(self):
+        # The registry is not this server's to control, so a name from it
+        # cannot push an essay into every record card in the Explorer.
+        with mock.patch.object(
+                federation, "_shipped_servers",
+                return_value=[{"qresp_server_url": PEER,
+                               "qresp_server_name": "N" * 500}]):
+            names = federation._server_names()
+        self.assertEqual(federation.MAX_SERVER_NAME_CHARS,
+                         len(names[PEER]))
 
     def test_registry_entries_go_through_the_same_url_rules(self):
         entries = [{"qresp_server_url": "http://plain.example.org"},

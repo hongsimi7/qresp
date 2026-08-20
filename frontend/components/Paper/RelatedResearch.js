@@ -3,19 +3,35 @@ import PropTypes from "prop-types";
 
 import axios from "axios";
 import Link from "next/link";
-import { Box, Chip, Divider, LinearProgress, Typography } from "@mui/material";
+import {
+  Box,
+  Chip,
+  Divider,
+  LinearProgress,
+  Pagination,
+  Typography,
+} from "@mui/material";
 
 import Drawer from "../drawer";
 import { SmallStyledButton } from "../button";
+import RecommendationFeedback from "./RecommendationFeedback";
 
 // Related Research, computed by the backend at view time (never pinned into
 // the record) from GET /api/paper/{id}/related.
 //
 // Two independent lists: Qresp records the SOURCE server holds, and external
 // papers proposed by Semantic Scholar. Both are already filtered by the
-// backend's quality gate and capped at five, so this component renders exactly
+// backend's quality gate and capped there, so this component renders exactly
 // what it is given and never pads a short list. Every result carries the
 // grounded reasons the backend computed; nothing here invents text.
+//
+// The two lists have DIFFERENT caps and only one of them is paginated.
+// Related Qresp Records is at most three records from one server's corpus and
+// is rendered whole. Related External Papers is up to 25 papers drawn from the
+// whole literature, so it is laid out five to a page over at most five pages.
+// The backend returns and caches all 0–25 in ONE response, so turning a page
+// slices an array this component already holds: changing pages issues no
+// request of any kind, and in particular no Semantic Scholar request.
 //
 // The source server is whichever one the detail page is showing: this page can
 // be opened on a federated record (`/paperdetails/{id}?server=...`), whose id
@@ -53,6 +69,14 @@ const UNAVAILABLE_MESSAGE =
   "suggestions, not a statement about this record.";
 const MAX_REASONS = 3;
 const HEADING = "Suggested Related Papers";
+
+// Related External Papers only. These mirror EXTERNAL_RESULTS_PER_PAGE /
+// EXTERNAL_MAX_PAGES / EXTERNAL_MAX_RESULTS in backend/project/related.py:
+// the backend decides how many results exist, and these decide how the ones
+// it sent are laid out. Neither number applies to Related Qresp Records.
+const EXTERNAL_PAGE_SIZE = 5;
+const EXTERNAL_MAX_PAGES = 5;
+const EXTERNAL_MAX_RESULTS = EXTERNAL_PAGE_SIZE * EXTERNAL_MAX_PAGES;
 
 // Shown on every render, in every state. These suggestions come from
 // deterministic metadata similarity, not from a person having checked them,
@@ -274,6 +298,15 @@ const RelatedResearch = ({ paperId, server }) => {
   // Bumped by the retry button. It is the only dependency that changes on a
   // retry, so it is what re-runs the effect.
   const [attempt, setAttempt] = useState(0);
+  // Which page of Related External Papers is on screen. 1-based, and purely a
+  // view over `external.results` — it is never sent anywhere.
+  const [externalPage, setExternalPage] = useState(1);
+  // The DEEPEST external page the reader reached. Sent with a rating so
+  // "1 star" from somebody who read one page can be told apart from "1 star"
+  // from somebody who worked through all five. A single number, never a
+  // trail: which pages were opened, in what order, at what time is not
+  // recorded and is not sent.
+  const [externalPagesSeen, setExternalPagesSeen] = useState(1);
 
   useEffect(() => {
     if (!paperId) {
@@ -289,6 +322,16 @@ const RelatedResearch = ({ paperId, server }) => {
     setLoading(true);
     setFailed(false);
     setData(null);
+    // Whatever comes back is a different external list, so page 4 of the
+    // previous one is meaningless against it — and, if the new list is
+    // shorter, would render as an empty section under a heading that promises
+    // results. Reset HERE rather than in an effect of its own: `data` is only
+    // ever replaced from inside this effect (a new record, a new server, or
+    // the retry button bumping `attempt`), so this covers every way the list
+    // can change, and it batches into the same commit instead of adding a
+    // second render on every answer.
+    setExternalPage(1);
+    setExternalPagesSeen(1);
     axios
       .get(`/api/paper/${encodeURIComponent(paperId)}/related`, {
         // Which Qresp server holds this record. Omitted when the page is not
@@ -374,6 +417,27 @@ const RelatedResearch = ({ paperId, server }) => {
   const externalResults = external.results || [];
   const notice = externalNotice(external);
   const staleDate = external.stale ? formatDate(external.updated_at) : null;
+  // The external slice, derived from the array the backend already sent.
+  //
+  // `EXTERNAL_MAX_RESULTS` is applied here as well as in the backend, so a
+  // server that has not been redeployed — or one that ever returns more than
+  // it promises — cannot produce a sixth page. `currentPage` is clamped for
+  // the same reason: a page index left over from a longer list must show the
+  // last real page rather than nothing.
+  const externalTotal = Math.min(externalResults.length, EXTERNAL_MAX_RESULTS);
+  const externalPageCount = Math.min(
+    Math.ceil(externalTotal / EXTERNAL_PAGE_SIZE),
+    EXTERNAL_MAX_PAGES
+  );
+  const currentExternalPage = Math.min(
+    Math.max(externalPage, 1),
+    Math.max(externalPageCount, 1)
+  );
+  const externalStart = (currentExternalPage - 1) * EXTERNAL_PAGE_SIZE;
+  const visibleExternal = externalResults.slice(
+    externalStart,
+    Math.min(externalStart + EXTERNAL_PAGE_SIZE, externalTotal)
+  );
   // Internal-only deployment: the external half is not merely empty, it is
   // not part of this server. Render the internal list alone.
   const showExternal = external.status !== "disabled";
@@ -405,13 +469,66 @@ const RelatedResearch = ({ paperId, server }) => {
                   : "Showing the last successful external results; refreshing them just failed."}
               </Note>
             ) : null}
-            {externalResults.length ? (
+            {externalTotal ? (
               <Fragment>
-                <ResultList results={externalResults} server={server} />
+                <ResultList results={visibleExternal} server={server} />
+                {externalPageCount > 1 ? (
+                  <Box
+                    sx={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 1,
+                      mt: 1,
+                    }}
+                  >
+                    {/* Announced, not merely drawn: a keyboard or screen
+                        reader user changing pages is told what they are now
+                        looking at, without having to count list items. */}
+                    <Typography
+                      variant="body2"
+                      color="secondary"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      {`Showing ${externalStart + 1}-${
+                        externalStart + visibleExternal.length
+                      } of ${externalTotal} related external papers`}
+                    </Typography>
+                    <Pagination
+                      count={externalPageCount}
+                      page={currentExternalPage}
+                      onChange={(_event, value) => {
+                        setExternalPage(value);
+                        setExternalPagesSeen((seen) =>
+                          Math.max(seen, Math.min(value, externalPageCount))
+                        );
+                      }}
+                      size="small"
+                      color="primary"
+                      aria-label="Related external papers pages"
+                    />
+                  </Box>
+                ) : null}
                 <Typography variant="caption" color="secondary" component="div">
                   Candidates proposed by Semantic Scholar; shown only when
                   Qresp found evidence they are related.
                 </Typography>
+                {/* Only under a list that HAS results, and only with the
+                    signed context the backend issues alongside them. "Were
+                    these helpful?" under an empty section asks about nothing,
+                    and a rating the server cannot verify against a real list
+                    is one it will refuse anyway. How many results there were
+                    comes from that token, not from this component. */}
+                <RecommendationFeedback
+                  paperId={paperId}
+                  server={server}
+                  source="external"
+                  context={external.feedback_context}
+                  page={currentExternalPage}
+                  pagesViewed={externalPagesSeen}
+                />
               </Fragment>
             ) : (
               <Note

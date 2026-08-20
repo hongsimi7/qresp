@@ -16,8 +16,15 @@ A visitor reading a record's detail page gets, at the bottom of the page, two
 independent lists:
 
 - **Related Qresp Records** — other active, published records on this server.
+  At most **3**, rendered as one list.
 - **Related External Papers** — papers proposed by Semantic Scholar that then
-  passed Qresp's own quality gate.
+  passed Qresp's own quality gate. At most **25**, drawn from up to **150**
+  candidates and shown **five per page over at most five pages**.
+
+The two caps are independent on purpose: the internal list is a handful of
+records from one server's own corpus, while the external one is drawn from the
+whole literature. Neither is ever padded — a short list, including an empty
+one, is what the gate produced.
 
 Both are computed **at view time**, never pinned into the record. Nothing is
 written to the `Paper` document at curation, publish, or read time.
@@ -89,8 +96,8 @@ the same `?server=` the Explorer already puts on a detail-page URL. See
     "reason": "ok",                        // WHY -- see the table below
     "pipeline": {                          // where the candidates went
       "resolved": true, "provider_status": "found",
-      "raw_candidates": 20, "after_dedupe": 19,
-      "after_gate": 1, "shown": 1
+      "raw_candidates": 150, "after_dedupe": 147,
+      "after_gate": 31, "shown": 25        // shown is capped at 25, not 3
     },
     "provider": "Semantic Scholar",
     "count": 1,
@@ -126,8 +133,13 @@ is not a server this deployment federates with. There is deliberately **no
 fallback to the local database**: answering with whichever local record
 happens to share the id would be a wrong answer presented as a right one.
 
-Each list is capped at **3** and is **never padded**. Both may be empty; that
-is a correct answer, not a failure.
+`internal` is capped at **3**, `external` at **25**, and neither is **ever
+padded**. Both may be empty; that is a correct answer, not a failure.
+
+**All 0–25 external results come back in this one response**, and the cache
+entry holds all of them. Pagination is therefore a client-side slice of an
+array the browser already has: selecting page 4 issues no request to this
+endpoint and, in particular, no request to Semantic Scholar.
 
 ### Internal statuses
 
@@ -176,10 +188,13 @@ Counts only: no title, no abstract, no provider body, no credential.
 
 | field | meaning |
 | --- | --- |
-| `raw_candidates` | what the provider proposed |
+| `raw_candidates` | what the provider proposed, at most **150** |
 | `after_dedupe` | …minus this paper itself and repeats |
 | `after_gate` | …minus everything the quality gate rejected, **before the cap** |
-| `shown` | …after the cap: always `0 <= shown <= 3` and `shown <= after_gate` |
+| `shown` | …after the cap: always `0 <= shown <= 25` and `shown <= after_gate` |
+
+`pipeline` describes the **external** list only. Related Qresp Records is not
+built from provider candidates and has no pipeline.
 
 `reason` and `pipeline` are **stored with the answer**, so a cache hit explains
 itself exactly as the live computation did. An entry written before the field
@@ -257,7 +272,7 @@ vocabulary and label the results with the wrong server, so a corpus that
 cannot be read is an `unavailable` section — never a silent substitution.
 
 Everything downstream — profiles, IDF, the evidence families, the quality
-gate, the three-result cap, the external provider — is the **same code** on the
+gate, both result caps, the external provider — is the **same code** on the
 same shapes. The only difference is where the two record sets came from.
 
 ### What is copied out of a peer's answer
@@ -372,7 +387,7 @@ fields are not loaded into the `Profile` object at all, which is enforced by
    `unresolved` — recommendations built from somebody else's paper are worse
    than none.
 3. **Recommendations.** `GET /recommendations/v1/papers/forpaper/<paperId>`
-   with `limit=20` and
+   with `limit=150` (`EXTERNAL_CANDIDATE_LIMIT`) and
    `fields=title,abstract,year,authors.name,externalIds,fieldsOfStudy` — the
    minimum the quality gate needs (text for similarity and shared terms,
    authors for the shared-author signal, year for display/ordering,
@@ -398,6 +413,52 @@ fields are not loaded into the `Profile` object at all, which is enforced by
 > quantum-embedding record. The lesson is about method, not the provider: two
 > DOIs are an anecdote, and the reason the evaluation CLI below exists is so
 > claims like this are made from a sample instead.
+
+### Measured over the whole public corpus at 150 candidates
+
+Read-only sweep of **every** record a public Qresp instance publishes, on
+2026-08-13. The count was **verified at run time** from `/api/search` (65
+records, all with a DOI, none held back by triage) rather than assumed.
+
+| | |
+| --- | --- |
+| Provider requests | **316** of a planned 325 upper bound |
+| HTTP 429 / retries | **0 / 0**, at 0.5 requests/second, keyless |
+| Provider failures | one HTTP 500 (logged, degraded that one call only) |
+| Records resolved at the provider | 63 / 65 (97 %) — 2 `unresolved` |
+| Records the provider had candidates for | 50 / 65 (77 %) |
+| Records with at least one **displayed** result | 34 / 65 (52 %) |
+
+Funnel for `recommendations_default`, summed over 65 records:
+
+| Stage | Candidates |
+| --- | --- |
+| `raw_candidates` (150 requested per record) | 7,500 |
+| `after_dedupe` | 7,481 |
+| `after_gate` | 420 (5.6 % pass rate) |
+| `displayed` (cap 25) | 307 |
+
+Displayed results by page: **113 / 69 / 55 / 40 / 30** across pages 1–5. That
+distribution is the honest picture of what the widening bought: page 1 is full
+for most records that have anything at all, and the deeper pages thin out
+rather than being padded.
+
+> **None of this is an accuracy figure.** Every number above is a count.
+> Whether the 307 displayed papers are *related* is a question only a domain
+> expert can answer, and it is answered by rating `external-review.tsv` and
+> running `summarize`. Until then the correct statement is "coverage measured,
+> accuracy unmeasured".
+
+`summarize` over this artifact reports exactly that: `visible_candidates: 307`
+(unique, from the raw results — not the 480 review rows an earlier version
+counted), every precision `null` with `available: false`, and
+`false_negatives_sampled.available: false` over a sampled denominator of 227
+of the 7,061 rejected candidates.
+
+Its `external-review.tsv` predates the rejected sample, so the blind sheet
+alone cannot expose a false negative; the 227 rejected candidates reachable
+for this artifact come from `human-review.tsv`'s near-misses. A re-collect
+writes both into one blind sheet.
 
 > **Two things the live API taught us that no stub could.**
 >
@@ -426,7 +487,20 @@ preserved so the de-duplication is deterministic.
 
 The provider's ranking is **discarded**. Every surviving candidate is scored by
 the same gate the internal list uses, against the same Qresp corpus statistics,
-and only the ones that clear it are shown — at most five.
+and only the ones that clear it are shown — at most **25**.
+
+The provider's *position* in its own answer is kept on the normalized
+candidate as `provider_rank`, for offline diagnostics only. It is not read by
+`build_external_profile`, does not reach the response or the cache, and is
+never evidence: being ranked first by somebody else is not a reason Qresp can
+name to a reader. The provider's proprietary score is not requested at all.
+
+> **Why 150 candidates and not 20.** A larger pool buys **coverage, not
+> accuracy.** The gate is unchanged, so every one of the extra 130 candidates
+> still has to produce nameable evidence; the only difference is that there
+> are more of them to try. It is one request per cache miss either way. If
+> fewer than 25 pass, fewer than 25 are returned — the rule is never relaxed
+> to fill a page.
 
 ### Exactly what leaves this server
 
@@ -453,10 +527,11 @@ A candidate is shown only when it has
 - **at least one STRONG** piece of evidence, **or**
 - **at least two MEDIUM** pieces from **independent families**.
 
-The cut to three happens LAST: gate, then sort, then cut. `pipeline.after_gate`
-reports how many cleared the gate and `pipeline.shown` how many survived the
-cap, so `after_gate >= shown` and the difference is visible rather than hidden
-by counting the truncated list.
+The cut happens LAST: gate, then sort, then cut — to **3** for the internal
+list and to **25** for the external one. `pipeline.after_gate` reports how many
+cleared the gate and `pipeline.shown` how many survived the cap, so
+`after_gate >= shown` and the difference is visible rather than hidden by
+counting the truncated list.
 
 Families: `citation`, `terms`, `methods`, `text`. Only the strongest evidence
 per family is kept, so two views of one overlap count once.
@@ -893,6 +968,100 @@ rather than replayed.
 
 ---
 
+## Reader feedback — "Were these recommendations helpful?"
+
+Every other measurement of this feature is either arithmetic the gate did to
+itself or a domain expert rating a spreadsheet offline. This is the one signal
+that comes from the person the recommendations are for: a 1–5 rating under the
+external list, with optional reason codes for a 1 or a 2 and an optional short
+comment.
+
+| | |
+| --- | --- |
+| `POST /api/paper/{id}/related/feedback` | store or update **my** rating |
+| `GET /api/paper/{id}/related/feedback` | read back **my** rating |
+| `GET /api/related/feedback/summary` | counts, **administrators only** |
+| Model | `RecommendationFeedback` (`recommendation_feedback`) |
+| UI | `frontend/components/Paper/RecommendationFeedback.js` |
+
+### Signed in only
+
+**Rating requires an account, and this is a reversal of how it first shipped.**
+
+> **The defect.** Anonymous rating was keyed by a per-session token. A reader
+> could mint a new identity by clearing a cookie, so "one opinion per reader"
+> was not true and one person with a browser could move the average as far as
+> they liked. There is no way to key an anonymous reader durably without
+> collecting something — an address, a fingerprint — that this feature has no
+> business collecting.
+
+Readers without an account see **"Sign in to rate these recommendations"**
+linking to the project's own `/login`, and nothing is sent. Their opinion is
+not collected, which measures fewer people and measures them honestly. Rows
+written during the anonymous period carry no `respondent_kind` and are left
+out of every figure rather than deleted.
+
+The respondent is an **HMAC of the durable account identifier**
+(`account_id`, falling back to the normalized email) under the deployment's
+Flask secret. It cannot be reversed to an account, no endpoint returns it, and
+its only job is to make a second submission an UPDATE. **With no secret
+configured, nothing is stored at all** — a hardcoded fallback key is a
+published key, and a signature under it would prove nothing while still
+looking like it did.
+
+### The feedback context — what the rating is *about*
+
+A rating only means something if the server knows what "these recommendations"
+were. It used to take the client's word for the record id, the result count
+and the page. All of it was a request body, so all of it was assertable —
+including a record that does not exist and a list that was empty.
+
+`GET /api/paper/{id}/related` now mints a short-lived signed token
+(`external.feedback_context`, `backend/project/feedback_context.py`) **after**
+it has resolved a public, active record and computed a **non-empty** external
+list. `POST` stores nothing without one.
+
+| Bound into the signature | Deliberately absent |
+| --- | --- |
+| normalized cache key (record **+** source server) | recommended titles and DOIs |
+| `source=external` | gate scores and `Why related` reasons |
+| the real result count | any user id, account or email |
+| the real page count | any session or request metadata |
+| issued/expiry times, version, purpose | |
+
+Verification is a **local signature check** — no provider request, no peer
+request, no cache read. The POST refuses a token that is missing, malformed,
+unsigned, expired (**410**, reload for a fresh one), for another
+record/server/list, or that describes no results.
+
+`results_shown` is stored **from the token**, and is not a request field at
+all. `page_at_submit` and `pages_viewed` are clamped to the page count the
+token attests, and `pages_viewed` is never below `page_at_submit`.
+
+The token is stamped on the way **out**, after every cache: the federated
+response is cached for 5 minutes fresh plus an hour stale, and the external
+answer for a week, so a token baked into either would outlive its expiry. It
+carries nothing about the reader, so stamping a shared body does not
+personalise it.
+
+### What is stored, and what is not
+
+**Stored:** the rating, the reason codes, the comment, which record and which
+list, and the counts the token attests.
+
+**Never stored, and never read on this path:** the IP address, the
+`User-Agent`, any other request header, the reader's email or account id in
+readable form, the recommendation scores or reasons, the recommended papers'
+titles and DOIs. There is no analytics SDK on this path and no third party is
+contacted.
+
+`GET .../related/feedback` returns **one person's answer — theirs**. The admin
+summary returns **counts only**: no comment text, no respondent key, no record
+id, no individual response. `average_rating` is `null` when nobody has
+answered, never `0` — which is not a rating a reader can give.
+
+---
+
 ## Domain-quality evaluation CLI
 
 `backend/project/tools/related_eval.py` — a **read-only, development/QA
@@ -961,25 +1130,111 @@ carrying their flags into the output.
 | Pool | What it is |
 | --- | --- |
 | `internal` | Related Qresp Records, via the production ranking |
-| `recommendations_default` | Recommendations with no `from` — exactly what production asks for |
-| `recommendations_all_cs` | Recommendations with `from=all-cs` |
-| `title_resolution` | The paper resolved by title instead of DOI, then recommendations |
+| `recommendations_default` | Recommendations with no `from` — **exactly what production asks for**, and the only pool a product decision may rest on |
+| `recommendations_all_cs` | Recommendations with `from=all-cs` — diagnostic only |
+| `title_resolution` | The paper resolved by title instead of DOI — diagnostic only |
 
-Every candidate is kept, accepted or not, with its `rank`, `gate_score`, score
-components, decision, `rejection_code`, prose `rejection_reason`, and whether
-production would have shown it (`in_top5`).
+Every candidate is kept, accepted or not, with its `rank`, `provider_rank`,
+`gate_score`, score components, decision, `rejection_code`, prose
+`rejection_reason`, and — the part that makes it a measurement of the
+*product* — where production would put it:
+
+| Field | Meaning |
+| --- | --- |
+| `visible` | would a reader see this at all? |
+| `display_rank` | its 1-based slot in the rendered list (1–25 external, 1–3 internal), or `null` |
+| `display_page` | which page of five it lands on (external), or `null` |
+| `provider_rank` | its position in the **provider's** answer. Diagnostic only: not the provider's score, not read by the gate, never a reason |
+| `in_top5` | the historical name for `visible`; kept so older artifacts still read |
+
+"The gate accepted it" and "a reader sees it" are different facts, and with a
+25-slot list drawn from 150 candidates they diverge a lot. Recording only the
+first cannot answer the question the feature is judged on.
+
+### Before it spends anything
+
+`collect` prints the request plan first, live run or not:
+
+```text
+PLANNED EXTERNAL REQUESTS (upper bound)
+  records                      65
+  ...with a DOI                65
+  resolution calls             130
+  recommendation calls         195  (3 pools x 65 records)
+  TOTAL                        325
+  rate limit                   0.50 requests/second
+  minimum wall time            10.8 minutes
+  retries after HTTP 429       up to 2, honouring Retry-After
+  candidates requested per call 150
+  external display cap          25 (5 per page x 5 pages)
+```
+
+An upper bound, not a guess: a record whose lookup fails skips the pools
+behind it, so the real total can only be lower. The corpus size is **read from
+`/api/search` at run time** and printed — never assumed from a number written
+down when the plan was made.
 
 ### Outputs
 
 | File | Contents |
 | --- | --- |
-| `raw-results.jsonl` | one line per record: the record, every candidate from every pool with scores and verdicts, and the provider outcome per pool |
-| `human-review.tsv` | `record_id, record_title, source, candidate_title, reasons, gate_score, gate_decision, human_rating, human_note` — the shown candidates plus the best near-misses, with **`human_rating` blank** |
-| `summary.json` | sample size, flagged vs not-sampled records, per-pool coverage and gate pass rate, zero-candidate ratio, rejection-code frequency, provider request counts |
+| `raw-results.jsonl` | one line per record: the record, every candidate from every pool with scores, verdicts, display rank/page, and the provider outcome and pipeline counts per pool |
+| `human-review.tsv` | `pair_id, record_id, record_title, source, candidate_title, reasons, gate_score, gate_decision, human_rating, human_note` — the shown candidates plus the best near-misses, with **`human_rating` blank** |
+| `external-review.tsv` | the **blind** sheet for Related External Papers (see below), **`human_rating` blank** |
+| `summary.json` | sample size, flagged vs not-sampled records, per-pool coverage and gate pass rate, the `external_production` block, the review-export report, provider request counts |
 | `metrics.json` | written by `summarize` |
 
 `human_rating` accepts only `related`, `partial` or `unrelated` (blank means
 unrated). Anything else stops the scoring with the offending line numbers.
+
+`summary.json` carries **`external_production`** — the production pool alone,
+apart from the diagnostic ones: provider resolution ratio, records with
+candidates, records with a displayed result, and the funnel
+`raw_candidates → after_dedupe → after_gate → displayed`, plus
+`displayed_by_page`. Every one of those is a **count**. None of them is a
+quality claim: how many papers were displayed says nothing about whether they
+are related.
+
+### The blind external review sheet
+
+`external-review.tsv` is what a domain expert actually fills in for this
+feature. It holds three groups, and **a reviewer cannot tell them apart**:
+
+| Group | How many | Flag |
+| --- | --- | --- |
+| every **visible page-1** result | all of them | — |
+| a stratified sample of visible **pages 2–5** | `--external-review-sample`, default 60 | round-robin over the pages, preferring a record not yet sampled |
+| a stratified sample of candidates the gate **REJECTED** | `--external-rejected-sample`, default 60 | round-robin over score-band tertiles, preferring a record not yet sampled |
+
+No RNG anywhere, so a re-run is comparable to the run before it.
+
+> **Why the rejected sample exists.** Every visible candidate passed the gate.
+> A sheet built only from visible candidates can therefore surface false
+> *positives* and **structurally never a single false negative** — and the
+> resulting `0` is indistinguishable in the JSON from a measured `0`. The
+> false negative is the failure the gate cannot see in itself, so the only way
+> to find one is to put rejected candidates in front of a person too.
+
+| Column | |
+| --- | --- |
+| `pair_id, record_id, record_title, source, candidate_title, candidate_year, candidate_doi` | the two papers' own bibliography |
+| `human_rating` | `related` / `partial` / `unrelated` — **a person's column, always blank when written** |
+| `human_note` | free text |
+
+**What is missing from it is the point.** No gate score, no accept/reject
+verdict, no "Why related" sentence, no display rank, no page number. A
+reviewer told "the system scored this 11.4 and shows it first" mostly agrees
+with the system, and the question is whether the system is right. All of it
+stays in `raw-results.jsonl`, and `summarize` joins the ratings back by
+`pair_id`, so nothing is lost by leaving it out of the sheet.
+
+Blindness is not only about columns: rows are ordered by the opaque `pair_id`,
+because appending the rejected sample after the visible one would tell a
+reviewer **by position alone** which rows the system had already discarded.
+
+It is a **protected file**: `ai-label` refuses to start if an output name would
+collide with it, and verifies its timestamp afterwards. **No AI may fill a
+human rating, and an AI label is never ground truth.**
 
 ### Summarize
 
@@ -987,36 +1242,95 @@ unrated). Anything else stops the scoring with the offending line numbers.
 python -m project.tools.related_eval summarize --output-dir ../related-eval-out
 ```
 
-Reports precision@5 (strict, `related` only) and lenient (`related` +
-`partial`) over the candidates production would actually show, false positives
-(accepted but rated unrelated), false negatives (rejected but rated related or
-partial), record coverage, and a per-pool breakdown. **Unrated rows are
-excluded from every metric and counted separately**, so a half-finished review
-cannot masquerade as a verdict.
+Reads whichever review sheets are present — `human-review.tsv`,
+`external-review.tsv`, or both — and writes `metrics.json`.
+
+#### What the denominator is, and is not
+
+**The universe is `raw-results.jsonl`, never the review file.** Precision is
+measured over the **unique visible candidates** the raw results say production
+displayed. A review file is a *work list*: it can name a candidate twice, or
+not at all, and neither fact changes what the product showed.
+
+> **The bug this replaced.** Every visible page-1 result appears in *both*
+> sheets. The metrics counted review **rows**, so the 65-record artifact
+> reported **480 "visible rows"** for a list that displayed **307** papers —
+> and both halves of every fraction moved according to how many sheets a
+> reviewer happened to be handed. It now reports 307, with
+> `duplicate_rows_collapsed: 173`.
+
+Ratings are collapsed **per candidate** before anything is counted:
+
+| Two rows for one candidate | Result |
+| --- | --- |
+| blank + rated | the rating — a blank is an absence, not a vote |
+| the same rating twice | counted once |
+| **two different ratings** | **`summarize` stops (exit 3)** and prints the offending candidates |
+
+Guessing which of two contradictory ratings a person meant would produce a
+number nobody can reproduce, so the tool refuses rather than choosing.
+
+#### `metrics.external_display`
+
+| Metric | |
+| --- | --- |
+| `visible_candidates` | unique visible candidates in the production pool — the denominator |
+| `visible_candidates_rated` / `_unrated` / `rating_coverage` | how much of it a person has actually done |
+| `all_visible`, `page_1`, `pages_2_to_5`, `per_page.{1..5}` | strict (`related`) and lenient (`related` + `partial`) precision, each with its own `available`, `candidates`, `rated` |
+| `false_positives` | a **visible** paper an expert rated unrelated. Accepted-but-below-the-cap candidates are excluded: nobody saw them |
+| `false_negatives_sampled` | rejected candidates rated `related`/`partial`, with `sampled_candidates` (the denominator), `rated`, `rating_coverage` and `rejected_candidates_in_pool` |
+| `records_with_an_accepted_external_result` | the share of source papers with at least one |
+| `review_rows` / `duplicate_rows_collapsed` / `rows_unmatched` | the join, so row counts and candidate counts can never be confused |
+
+#### Unmeasured is `null`, never `0`
+
+**Unrated candidates are excluded from every metric and counted separately**, so
+a half-finished review cannot masquerade as a verdict. When nothing relevant
+has been rated:
+
+- `precision_strict` / `precision_lenient` are **`null`**, and `available` is
+  `false`;
+- `false_negatives_sampled.count` is **`null`**, with `available: false`;
+- the CLI prints `n/a` and says in words that there is no precision figure.
+
+"Nobody has rated this" and "everything rated here was unrelated" are opposite
+findings. A JSON consumer that sees `0.0` for both will read an *unmeasured*
+feature as a *0 %-accurate* one, which is why these fields are nullable and
+why every one of them carries an explicit `available` flag beside it.
+
+`false_negatives_sampled` is a **sample**, and the field names say so. Divide
+by `sampled_candidates`, never by `rejected_candidates_in_pool`; a sampled
+count is not a corpus-wide false-negative rate.
 
 ---
 
 ## Tests
 
 ```text
-backend/project/tests/test_relatedness.py        30 tests — the pure gate + fingerprint
-backend/project/tests/test_related_research.py   89 tests — endpoint/provider/cache/switches
-                                                            + federated records
-backend/project/tests/test_federation.py         56 tests — allowlist, refusals, SSRF, DNS,
-                                                            transport bounds, what is copied
+backend/project/tests/test_relatedness.py         32 tests — the pure gate + fingerprint
+backend/project/tests/test_related_research.py    95 tests — endpoint/provider/cache/switches,
+                                                             federated records, limit=150,
+                                                             the 25-result external cap
+backend/project/tests/test_federation.py          56 tests — allowlist, refusals, SSRF, DNS,
+                                                             transport bounds, what is copied
 backend/project/tests/test_relatedness_quality.py 13 tests — the product rule: technical
-                                                            overlap, and nothing else
-backend/project/tests/test_related_cache.py      23 tests — call counts, TTL, single flight,
-                                                            SWR, why the list is empty,
-                                                            zero Gemini
-backend/project/tests/test_related_eval.py       56 tests — the evaluation CLI
-backend/project/tests/test_ai_review.py          99 tests — AI provisional labelling + smoke sample
-frontend/__tests__/RelatedResearch.spec.js       46 tests — the section, its four states,
-                                                            the existence contract, 0-3 results
-frontend/__tests__/ExplorerServers.spec.js        4 tests — one federation list, from the
-                                                            backend that enforces it
-frontend/__tests__/PaperDetailsRelated.spec.js    4 tests — page composition
-backend/project/tests/test_nginx_config.py       +1 test — the rate-limit zone
+                                                             overlap, and nothing else
+backend/project/tests/test_related_cache.py       25 tests — call counts, TTL, single flight,
+                                                             SWR, why the list is empty,
+                                                             zero Gemini, the version bump
+backend/project/tests/test_related_hardening.py   26 tests — the four pre-deployment contracts
+                                                             + the pipeline counts
+backend/project/tests/test_related_eval.py        79 tests — the evaluation CLI, display
+                                                             rank/page, the blind export,
+                                                             per-page precision
+backend/project/tests/test_ai_review.py           99 tests — AI provisional labelling + smoke sample
+frontend/__tests__/RelatedResearch.spec.js        59 tests — the section, its four states, the
+                                                             existence contract, 0-3 internal
+                                                             and 0-25 paginated external results
+frontend/__tests__/ExplorerServers.spec.js         4 tests — one federation list, from the
+                                                             backend that enforces it
+frontend/__tests__/PaperDetailsRelated.spec.js     4 tests — page composition
+backend/project/tests/test_nginx_config.py        +1 test — the rate-limit zone
 ```
 
 No DOI, paper title, material, method or facility name is hardcoded in
@@ -1042,10 +1356,33 @@ arithmetic warrants. If a model ever reranks at serve time, that is the moment
 the wording changes, and not before. A frontend test asserts the section
 contains no such claim.
 
-The existing policies are unchanged by any of this: at most five per list,
-candidates below the quality gate stay hidden, an empty list is an acceptable
-answer, and every candidate comes from a real Qresp record or a real provider
-result. Nothing generates a title, a DOI or a paper.
+The existing policies are unchanged by any of this: at most 3 internal and 25
+external, candidates below the quality gate stay hidden, an empty list is an
+acceptable answer, and every candidate comes from a real Qresp record or a real
+provider result. Nothing generates a title, a DOI or a paper.
+
+**No numeric "relation score" is displayed.** The reader gets the grounded
+`Why related` sentences and nothing that looks like a percentage, a star
+rating or a confidence — there is no such number to show, and inventing one
+would dress arithmetic up as a verdict.
+
+### Pagination of the external list
+
+Related External Papers is laid out **five per page, at most five pages**;
+Related Qresp Records is not paginated at all. The control renders only when
+there is more than one page, and it is accompanied by a live-announced range
+("Showing 6-10 of 23 related external papers") so a keyboard or screen-reader
+user is told what changed rather than having to count list items.
+
+The page resets to 1 whenever the record id, the source server, or the fetched
+answer changes: page 4 of the previous record's list is meaningless against a
+new one, and against a shorter list would render an empty section under a
+heading that promises results.
+
+The slice comes from `external.results`, which the backend returned in full.
+**Changing pages performs no fetch**, so the provider is never contacted by
+someone browsing pages — asserted by a frontend test that counts `axios.get`
+calls across a page change.
 
 ### The section exists, or it is explicitly off
 
@@ -1527,8 +1864,10 @@ docker compose up -d --force-recreate --no-deps backend
 - **Gate permissiveness is the open question, not provider coverage.**
   Measured over 18 real records from a public Qresp instance (see the
   evaluation CLI below), the gate **accepts 71 % of all candidate pairs** —
-  74 % internally, 58–75 % across the external pools. Only the top five are
-  ever shown, so the user-visible damage is bounded, but "accepted" currently
+  74 % internally, 58–75 % across the external pools. Only the top 3 internal
+  and top 25 external are ever shown, so the user-visible damage is bounded --
+  though widening the external list from 3 to 25 widens that bound, which is
+  precisely why the 65-record evaluation below exists. "Accepted" currently
   means very little. Whether that is correct is exactly what the human
   labelling pass has to decide; **no threshold has been changed on the
   strength of unlabelled data.**

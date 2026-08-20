@@ -22,6 +22,7 @@ import axios from "axios";
 import AlertContext from "../Context/Alert/alertContext";
 import ServerContext from "../Context/Servers/serverContext";
 import { resolveServerSideApiBase } from "../Utils/serverSideApi";
+import { mergeRecordsByServer } from "../Utils/recordSources";
 
 // The four endpoints a Qresp node is asked for are NOT equal, and treating
 // them as one list is what let a missing authors list be reported as missing
@@ -37,7 +38,12 @@ import { resolveServerSideApiBase } from "../Utils/serverSideApi";
 const CORE_ENDPOINT = "search";
 const AUXILIARY_ENDPOINTS = ["collections", "authors", "publications"];
 
-const search = ({ initialdata, error, selectedservers }) => {
+const search = ({
+  initialdata,
+  error,
+  selectedservers,
+  servernames = {},
+}) => {
   const { setAlert, unsetAlert } = useContext(AlertContext);
   const { setSelected } = useContext(ServerContext);
 
@@ -130,17 +136,14 @@ const search = ({ initialdata, error, selectedservers }) => {
     });
   }
 
-  const rows = Object.keys(papers)
-    .map((server) => {
-      return papers[server].map((paper) => {
-        paper["_Search__server"] = server;
-        return {
-          paper: paper,
-          year: paper["_Search__year"],
-        };
-      });
-    })
-    .flat();
+  // ONE list across every node that answered, with the same paper shown once.
+  //
+  // The Explorer now opens on the whole federation, so a paper published on
+  // both UChicago and Duke used to appear as two identical rows — searching,
+  // sorting and the record count all counted it twice. Merging by DOI is
+  // done here, before anything downstream sees the rows, so search, filter,
+  // sort and the empty state all operate on the same combined list.
+  const rows = mergeRecordsByServer(papers, servernames, selectedservers);
 
   useEffect(() => {
     setSelected(selectedservers);
@@ -343,11 +346,34 @@ export async function getServerSideProps(ctx) {
     error.total = true;
     error["msg"] = "No servers selected to be searched";
     return {
-      props: { initialdata: data, error: error, servers: null },
+      props: { initialdata: data, error: error, servers: null,
+               servernames: {} },
     };
   }
 
   const servers = query.servers.split(",");
+
+  // The node LABELS, from the one list that is authoritative about them. A
+  // failure here costs the friendly name and nothing else: `sourceLabel`
+  // falls back to the node's host, so a record is still tagged with where it
+  // came from and the results never depend on this request succeeding.
+  let servernames = {};
+  try {
+    const base = resolveServerSideApiBase(ctx, "");
+    const { data } = await axios.get(`${base || ""}/api/federation/servers`);
+    (data && Array.isArray(data.servers) ? data.servers : []).forEach(
+      (entry) => {
+        const origin = String((entry || {}).qresp_server_url || "").replace(
+          /\/+$/,
+          ""
+        );
+        const name = String((entry || {}).qresp_server_name || "").trim();
+        if (origin && name) servernames[origin] = name;
+      }
+    );
+  } catch (e) {
+    /* labels fall back to the host; results are unaffected */
+  }
 
   for (let i = 0; i < servers.length; i++) {
     const server = servers[i];
@@ -407,7 +433,12 @@ export async function getServerSideProps(ctx) {
   }
 
   return {
-    props: { initialdata: data, error: error, selectedservers: servers },
+    props: {
+      initialdata: data,
+      error: error,
+      selectedservers: servers,
+      servernames,
+    },
   };
 }
 

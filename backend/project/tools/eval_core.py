@@ -407,18 +407,42 @@ def rejection_reason(assessment):
 # The ONLY keys a candidate row may carry. Anything the provider volunteered
 # that is not in this list -- openAccessPdf, embeddings, citation counts,
 # author ids, homepages -- never reaches a file.
+#
+# `display_rank` / `display_page` / `visible` are what make the external
+# measurement mean anything: production shows at most 25 external results,
+# five to a page, so "the gate accepted it" and "a reader will ever see it"
+# are different facts and are recorded as different fields.
+#
+# `provider_rank` is the candidate's position in the PROVIDER's own answer.
+# Diagnostic only -- it is not the provider's score (which is never
+# requested), it is not read by the gate, and it never justifies a
+# recommendation.
 CANDIDATE_KEYS = (
-    "pair_id", "stable_key", "source", "rank", "title", "abstract", "year",
-    "doi", "provider_paper_id", "gate_score", "gate_components",
-    "gate_decision", "rejection_code", "rejection_reason", "reasons",
-    "in_top5",
+    "pair_id", "stable_key", "source", "rank", "provider_rank", "title",
+    "abstract", "year", "doi", "provider_paper_id", "gate_score",
+    "gate_components", "gate_decision", "rejection_code", "rejection_reason",
+    "reasons", "in_top5", "display_rank", "display_page", "visible",
 )
 
 RECORD_KEYS = (
     "record_id", "record_title", "record_abstract", "record_year",
     "record_doi", "status", "flags", "internal", "external",
-    "provider_outcomes",
+    "provider_outcomes", "external_pipeline",
 )
+
+# The production external list, as the reader meets it. Mirrors
+# related.EXTERNAL_RESULTS_PER_PAGE / EXTERNAL_MAX_PAGES / EXTERNAL_MAX_RESULTS
+# -- imported rather than restated wherever the caller has `related` in hand,
+# and defaulted here so this module stays pure.
+DEFAULT_PAGE_SIZE = 5
+DEFAULT_MAX_PAGES = 5
+
+
+def display_page_of(display_rank, page_size=DEFAULT_PAGE_SIZE):
+    """1-based page a 1-based display rank falls on. None stays None."""
+    if not display_rank or display_rank < 1:
+        return None
+    return ((display_rank - 1) // page_size) + 1
 
 # Abstracts are carried so a later judgement -- human or machine -- can read
 # what the paper actually says instead of guessing from a title. They are
@@ -436,6 +460,22 @@ TSV_COLUMNS = ("pair_id", "record_id", "record_title", "source",
 LEGACY_TSV_COLUMNS = ("record_id", "record_title", "source",
                       "candidate_title", "reasons", "gate_score",
                       "gate_decision", "human_rating", "human_note")
+
+# The BLIND export for judging what the external list actually shows.
+#
+# What is missing from it is the point: no gate score, no accept/reject
+# verdict, no "Why related" sentence, no display rank and no page number. A
+# reviewer told "the system scored this 11.4 and shows it first" mostly agrees
+# with the system, and the question here is whether the system is right. All
+# of that is kept in `raw-results.jsonl`, and `summarize` joins the ratings
+# back to it by `pair_id`, so nothing is lost by leaving it out of the sheet.
+EXTERNAL_REVIEW_COLUMNS = ("pair_id", "record_id", "record_title", "source",
+                           "candidate_title", "candidate_year",
+                           "candidate_doi", "human_rating", "human_note")
+
+# Every review layout this tool can read back. Order matters only for the
+# error message; a file is matched on its exact header.
+REVIEW_COLUMN_SETS = (TSV_COLUMNS, LEGACY_TSV_COLUMNS, EXTERNAL_REVIEW_COLUMNS)
 
 VALID_RATINGS = ("related", "partial", "unrelated")
 
@@ -473,8 +513,16 @@ def pair_identifier(record_id, source, stable_key):
 
 
 def candidate_row(source, rank, profile, assessment, in_top5,
-                  provider_paper_id=None, abstract="", record_id=""):
-    """One evaluated candidate, allowlisted."""
+                  provider_paper_id=None, abstract="", record_id="",
+                  display_rank=None, provider_rank=None,
+                  page_size=DEFAULT_PAGE_SIZE):
+    """One evaluated candidate, allowlisted.
+
+    `display_rank` is the candidate's 1-based position in the list production
+    would actually render, or None when production would not render it at
+    all. `visible` and `display_page` are derived from it, so "accepted by the
+    gate" can never be mistaken for "seen by a reader".
+    """
     stable_key = stable_candidate_key(
         source, profile.key if source == "internal" else None,
         provider_paper_id, profile.doi, profile.title)
@@ -483,6 +531,10 @@ def candidate_row(source, rank, profile, assessment, in_top5,
         "stable_key": stable_key,
         "source": source,
         "rank": rank,
+        "provider_rank": provider_rank,
+        "display_rank": display_rank,
+        "display_page": display_page_of(display_rank, page_size),
+        "visible": bool(display_rank),
         "title": profile.title,
         "abstract": clip_abstract(abstract),
         "year": profile.year,
@@ -554,6 +606,307 @@ def render_tsv(rows):
     return "\n".join("\t".join(row) for row in rows) + "\n"
 
 
+# ------------------------------------------ the external list a reader sees
+
+# How many pages 2-5 rows to put in front of a reviewer alongside the whole of
+# page 1. Page 1 is what almost everybody reads, so it is rated exhaustively;
+# the deeper pages are sampled, because rating every one of them would be five
+# times the work for the part of the list fewest people reach.
+DEFAULT_DEEP_SAMPLE = 60
+
+# ...and how many REJECTED candidates to mix in.
+#
+# Without these the sheet cannot answer the question it most needs to. Every
+# visible candidate passed the gate, so a review file containing only visible
+# candidates can produce false POSITIVES and never a single false negative --
+# not because there are none, but because none was ever put in front of a
+# person. A zero arrived at that way is indistinguishable in the JSON from a
+# zero that was measured, which is the worse of the two failures.
+DEFAULT_REJECTED_SAMPLE = 60
+
+
+def _stratify_by_page(pairs, limit):
+    """A deterministic spread of (record, candidate) across display pages.
+
+    Round-robin over the pages in order, and within a page prefer a record
+    that is not in the sample yet. No randomness: the same input always gives
+    the same sample, which is what makes one run comparable to the next.
+    """
+    buckets = {}
+    for record, candidate in pairs:
+        buckets.setdefault(candidate.get("display_page"), []).append(
+            (record, candidate))
+    for bucket in buckets.values():
+        bucket.sort(key=lambda pair: (pair[0].get("record_id") or "",
+                                      pair[1].get("display_rank") or 0))
+    order = sorted(k for k in buckets if k is not None)
+    selected, used = [], set()
+    while order and len(selected) < limit:
+        progressed = False
+        for page in list(order):
+            if len(selected) >= limit:
+                break
+            bucket = buckets[page]
+            if not bucket:
+                order.remove(page)
+                continue
+            pick = 0
+            for index, (record, _candidate) in enumerate(bucket):
+                if record.get("record_id") not in used:
+                    pick = index
+                    break
+            record, candidate = bucket.pop(pick)
+            used.add(record.get("record_id"))
+            selected.append((record, candidate))
+            progressed = True
+        if not progressed:
+            break
+    return selected, {
+        "available": len(pairs),
+        "selected": len(selected),
+        "distinct_records": len({r.get("record_id") for r, _ in selected}),
+        "by_page": _tally(selected,
+                          lambda pair: str(pair[1].get("display_page"))),
+    }
+
+
+def _stratify_rejected(pairs, limit):
+    """A deterministic spread of REJECTED (record, candidate) pairs.
+
+    Stratified by score band -- the near-misses are where a false negative is
+    most likely, and a sample drawn without bands would be almost all bottom
+    scores -- and, within a band, preferring a record not in the sample yet.
+    Bands are tertiles of the rejected scores in this pool, so they adapt to
+    the corpus instead of being hardcoded. No randomness anywhere.
+    """
+    scores = [float(candidate.get("gate_score") or 0.0)
+              for _record, candidate in pairs]
+    low_cut, high_cut = _score_cuts(scores)
+    buckets = {}
+    for record, candidate in pairs:
+        band = _band_of(float(candidate.get("gate_score") or 0.0),
+                        low_cut, high_cut)
+        buckets.setdefault(band, []).append((record, candidate))
+    for bucket in buckets.values():
+        bucket.sort(key=lambda pair: (pair[0].get("record_id") or "",
+                                      -float(pair[1].get("gate_score") or 0.0),
+                                      str(pair[1].get("pair_id") or "")))
+    order = [band for band in SCORE_BANDS if band in buckets]
+    selected, used = [], set()
+    while order and len(selected) < limit:
+        progressed = False
+        for band in list(order):
+            if len(selected) >= limit:
+                break
+            bucket = buckets[band]
+            if not bucket:
+                order.remove(band)
+                continue
+            pick = 0
+            for index, (record, _candidate) in enumerate(bucket):
+                if record.get("record_id") not in used:
+                    pick = index
+                    break
+            record, candidate = bucket.pop(pick)
+            used.add(record.get("record_id"))
+            selected.append((record, candidate))
+            progressed = True
+        if not progressed:
+            break
+    return selected, {
+        "available": len(pairs),
+        "selected": len(selected),
+        "distinct_records": len({r.get("record_id") for r, _ in selected}),
+        "by_score_band": _tally(
+            selected,
+            lambda pair: _band_of(float(pair[1].get("gate_score") or 0.0),
+                                  low_cut, high_cut)),
+        "by_rejection_code": _tally(
+            selected,
+            lambda pair: str(pair[1].get("rejection_code") or "unknown")),
+    }
+
+
+def _external_review_row(record, candidate):
+    """One blind row: the two papers' own bibliography and nothing else."""
+    return (
+        _tsv_cell(candidate.get("pair_id")),
+        _tsv_cell(record.get("record_id")),
+        _tsv_cell(record.get("record_title")),
+        _tsv_cell(candidate.get("source")),
+        _tsv_cell(candidate.get("title")),
+        _tsv_cell(candidate.get("year")),
+        _tsv_cell(candidate.get("doi")),
+        "",   # human_rating -- a person's column, blank here as always
+        "",   # human_note
+    )
+
+
+def external_review_rows(record_rows, source,
+                         deep_sample=DEFAULT_DEEP_SAMPLE,
+                         rejected_sample=DEFAULT_REJECTED_SAMPLE):
+    """The BLIND review sheet for Related External Papers.
+
+    Three groups, and a reviewer cannot tell them apart:
+
+      * every visible page-1 result;
+      * a deterministic stratified sample of visible pages 2-5;
+      * a deterministic stratified sample of candidates the gate REJECTED.
+
+    The third group is what makes a false negative findable at all. Every
+    visible candidate passed the gate, so a sheet built only from visible ones
+    can surface false positives and structurally never a false negative --
+    and the resulting zero looks exactly like a measured zero.
+
+    Only the two papers' own bibliography goes in the sheet: the gate's score,
+    its verdict, its reasons, the display rank and the page number are all
+    withheld, so a rating is a judgement about the papers and not agreement
+    with the system being measured. They stay in `raw-results.jsonl`, and
+    `summarize` joins the ratings back to them by `pair_id`.
+
+    Rows are ordered by `pair_id` -- an opaque hash -- for the same reason.
+    Appending the rejected sample after the visible one would have told a
+    reviewer, by position alone, which rows the system had already thrown
+    away.
+
+    Returns (rows, report).
+    """
+    visible, rejected = [], []
+    for record in record_rows:
+        for candidate in ((record.get("external") or {}).get(source) or []):
+            if candidate.get("visible"):
+                visible.append((record, candidate))
+            elif candidate.get("gate_decision") == "rejected":
+                rejected.append((record, candidate))
+    visible.sort(key=lambda pair: (pair[0].get("record_id") or "",
+                                   pair[1].get("display_rank") or 0))
+    page_one = [p for p in visible if p[1].get("display_page") == 1]
+    deeper = [p for p in visible if (p[1].get("display_page") or 0) > 1]
+    sampled, sample_report = _stratify_by_page(deeper, deep_sample)
+    rejected_rows, rejected_report = _stratify_rejected(rejected,
+                                                        rejected_sample)
+
+    chosen = page_one + sampled + rejected_rows
+    body = sorted((_external_review_row(record, candidate)
+                   for record, candidate in chosen),
+                  key=lambda row: (row[0], row[1], row[4]))
+    rows = [EXTERNAL_REVIEW_COLUMNS] + body
+    report = {
+        "source": source,
+        "visible_total": len(visible),
+        "page_1_rows": len(page_one),
+        "pages_2_to_5_rows": len(sampled),
+        "pages_2_to_5_available": len(deeper),
+        "rejected_rows": len(rejected_rows),
+        "rejected_available": len(rejected),
+        "rows": len(rows) - 1,
+        "records": len({r.get("record_id") for r, _ in chosen}),
+        "deep_sample": sample_report,
+        "rejected_sample": rejected_report,
+    }
+    return rows, report
+
+
+def candidate_index(record_rows):
+    """Every raw candidate, indexed so a review row can be joined back to it.
+
+    Two indexes, because two generations of review file exist: `pair_id` when
+    the file carries one, and (record_id, source, candidate_title) when it
+    does not. Both map to a LIST, so an ambiguous match can be reported as
+    ambiguous instead of resolved by taking the first hit.
+    """
+    by_pair, by_triple = {}, {}
+    for record in record_rows or []:
+        candidates = list(record.get("internal") or [])
+        for pool in (record.get("external") or {}).values():
+            candidates.extend(pool)
+        for candidate in candidates:
+            facts = candidate_facts(record, candidate)
+            if facts["pair_id"]:
+                by_pair.setdefault(facts["pair_id"], []).append(facts)
+            by_triple.setdefault(_triple(facts["record_id"], facts["source"],
+                                         facts["title"]), []).append(facts)
+    return {"by_pair": by_pair, "by_triple": by_triple}
+
+
+def candidate_facts(record, candidate):
+    """The subset of a raw candidate the metrics read.
+
+    One shape, built in one place, so the review-file join and the visible
+    universe cannot disagree about what a candidate is.
+    """
+    return {
+        "pair_id": (candidate.get("pair_id") or "").strip(),
+        "record_id": record.get("record_id"),
+        "source": candidate.get("source"),
+        "title": candidate.get("title"),
+        "gate_decision": candidate.get("gate_decision"),
+        "in_top5": bool(candidate.get("in_top5")),
+        # `visible` is the new field; an artifact collected before it existed
+        # falls back to `in_top5`, which meant the same thing under the old
+        # caps.
+        "visible": bool(candidate.get("visible", candidate.get("in_top5"))),
+        "display_rank": candidate.get("display_rank"),
+        "display_page": candidate.get("display_page"),
+        "gate_score": candidate.get("gate_score"),
+    }
+
+
+def _triple(record_id, source, title):
+    return (record_id, source, _tsv_cell(title).lower())
+
+
+def candidate_identity(facts):
+    """What makes two rows the SAME candidate.
+
+    `pair_id` when there is one -- it is already a pure function of the
+    record, the source and the candidate's most durable key. Otherwise the
+    record/source/title triple, which is what a review file written before
+    `pair_id` existed can offer.
+
+    This is the key everything is de-duplicated by. Without it the same
+    page-1 result appearing in both `human-review.tsv` and
+    `external-review.tsv` counted twice, and a precision figure moved
+    according to how many sheets a reviewer happened to be handed.
+    """
+    if facts.get("pair_id"):
+        return ("pair", facts["pair_id"])
+    return ("triple",) + _triple(facts.get("record_id"), facts.get("source"),
+                                 facts.get("title"))
+
+
+def production_candidates(record_rows, source):
+    """Every candidate of one pool, de-duplicated by identity.
+
+    THIS is the universe a precision figure is measured over -- the raw
+    results, not the review file. A review file is a work list: it can name a
+    candidate twice, or not at all, and neither fact says anything about what
+    the product displayed.
+    """
+    universe = {}
+    for record in record_rows or []:
+        for candidate in ((record.get("external") or {}).get(source) or []):
+            facts = candidate_facts(record, candidate)
+            universe.setdefault(candidate_identity(facts), facts)
+    return list(universe.values())
+
+
+def lookup_candidate(row, index):
+    """The ONE raw candidate a review row names, or None.
+
+    None covers both "matches nothing" and "matches several". Neither is
+    resolved by guessing: filing a rating against the wrong candidate would
+    corrupt the measurement with no visible symptom.
+    """
+    pair_id = (row.get("pair_id") or "").strip()
+    hits = index["by_pair"].get(pair_id) if pair_id else None
+    if not hits:
+        hits = index["by_triple"].get(
+            (row.get("record_id"), row.get("source"),
+             _tsv_cell(row.get("candidate_title")).lower())) or []
+    return hits[0] if len(hits) == 1 else None
+
+
 def parse_tsv(text):
     """Read a reviewed TSV back. Returns (rows, errors).
 
@@ -565,14 +918,14 @@ def parse_tsv(text):
     if not lines:
         return [], ["the review file is empty"]
     header = tuple(lines[0].split("\t"))
-    if header == TSV_COLUMNS:
-        columns, legacy = TSV_COLUMNS, False
-    elif header == LEGACY_TSV_COLUMNS:
-        columns, legacy = LEGACY_TSV_COLUMNS, True
-    else:
-        return [], ["unexpected header: expected %s (or the legacy %s), "
-                    "found %s" % (list(TSV_COLUMNS),
-                                  list(LEGACY_TSV_COLUMNS), list(header))]
+    columns = None
+    for candidate in REVIEW_COLUMN_SETS:
+        if header == candidate:
+            columns = candidate
+            break
+    if columns is None:
+        return [], ["unexpected header: expected one of %s, found %s"
+                    % ([list(c) for c in REVIEW_COLUMN_SETS], list(header))]
     rows, errors = [], []
     for number, line in enumerate(lines[1:], start=2):
         parts = line.split("\t")
@@ -581,8 +934,13 @@ def parse_tsv(text):
                           % (number, len(columns), len(parts)))
             continue
         row = dict(zip(columns, parts))
-        if legacy:
-            row["pair_id"] = ""
+        # Every layout is read back into the SAME shape, with the columns it
+        # does not carry left empty. A blind export has no `gate_decision`
+        # and a legacy file has no `pair_id`; neither may make the row a
+        # different kind of thing to everything downstream.
+        for name in ("pair_id", "reasons", "gate_score", "gate_decision",
+                     "candidate_year", "candidate_doi"):
+            row.setdefault(name, "")
         rating = (row["human_rating"] or "").strip().lower()
         if rating and rating not in VALID_RATINGS:
             errors.append("line %d: human_rating %r is not one of %s"
@@ -754,8 +1112,70 @@ def _tally(entries, key):
 
 # ------------------------------------------------------------------ metrics
 
+def external_production_summary(record_rows, source,
+                                page_size=DEFAULT_PAGE_SIZE,
+                                max_pages=DEFAULT_MAX_PAGES):
+    """Coverage and funnel for the pool production actually serves.
+
+    Reported apart from the diagnostic pools because only this one describes
+    the product. Everything here is a COUNT, and none of it is a quality
+    claim: how many candidates arrived and how many were displayed says
+    nothing about whether the displayed ones are related. That question needs
+    ratings, and `external_display_metrics` is where it is answered.
+    """
+    records = len(record_rows or [])
+    resolved = with_candidates = with_displayed = 0
+    raw = after_dedupe = after_gate = displayed = 0
+    outcomes = {}
+    display_pages = {}
+    for record in record_rows or []:
+        pipeline = (record.get("external_pipeline") or {}).get(source) or {}
+        raw += pipeline.get("raw_candidates", 0)
+        after_dedupe += pipeline.get("after_dedupe", 0)
+        after_gate += pipeline.get("after_gate", 0)
+        shown = pipeline.get("displayed", 0)
+        displayed += shown
+        if pipeline.get("resolved"):
+            resolved += 1
+        if pipeline.get("raw_candidates"):
+            with_candidates += 1
+        if shown:
+            with_displayed += 1
+        outcome = str((record.get("provider_outcomes") or {}).get(source)
+                      or "not_attempted")
+        outcomes[outcome] = outcomes.get(outcome, 0) + 1
+        for candidate in ((record.get("external") or {}).get(source) or []):
+            if candidate.get("visible"):
+                page = str(candidate.get("display_page"))
+                display_pages[page] = display_pages.get(page, 0) + 1
+    return {
+        "source": source,
+        "candidate_limit": None,   # filled in by the caller, which imports it
+        "display_cap": page_size * max_pages,
+        "page_size": page_size,
+        "max_pages": max_pages,
+        "records": records,
+        "records_resolved_at_provider": resolved,
+        "provider_resolution_ratio": _ratio(resolved, records),
+        "records_with_candidates": with_candidates,
+        "coverage": _ratio(with_candidates, records),
+        "records_with_a_displayed_result": with_displayed,
+        "display_coverage": _ratio(with_displayed, records),
+        "raw_candidates": raw,
+        "after_dedupe": after_dedupe,
+        "after_gate": after_gate,
+        "displayed": displayed,
+        "gate_pass_rate": _ratio(after_gate, after_dedupe),
+        "displayed_per_record": _ratio(displayed, records),
+        "displayed_by_page": dict(sorted(display_pages.items())),
+        "provider_outcomes": dict(sorted(outcomes.items())),
+    }
+
+
 def collection_summary(record_rows, skipped, sample_size, live,
-                       api_key_present):
+                       api_key_present, production_source=None,
+                       candidate_limit=None, page_size=DEFAULT_PAGE_SIZE,
+                       max_pages=DEFAULT_MAX_PAGES):
     """What was collected, before anybody has rated anything."""
     pools, rejection_counts = {}, {}
     accepted_total = candidates_total = 0
@@ -813,11 +1233,20 @@ def collection_summary(record_rows, skipped, sample_size, live,
         candidates_with_abstract += sum(
             1 for c in candidates if (c.get("abstract") or "").strip())
 
+    external_production = None
+    if production_source:
+        external_production = external_production_summary(
+            record_rows, production_source, page_size, max_pages)
+        external_production["candidate_limit"] = candidate_limit
+
     return {
         "sample_size": len(record_rows),
         "requested_sample_size": sample_size,
         "live": bool(live),
         "api_key_present": bool(api_key_present),
+        # The production external pool, apart from the diagnostic ones. A
+        # decision about the product rests on this block alone.
+        "external_production": external_production,
         "abstract_coverage": {
             "records_with_abstract": records_with_abstract,
             "records_total": len(record_rows),
@@ -857,6 +1286,248 @@ def _ratio(part, whole):
     return round(part / float(whole), 4) if whole else 0.0
 
 
+def bucket_from_ratings(ratings, available_total=None):
+    """Strict and lenient precision over a set of ratings.
+
+    `ratings` is a list of rating strings, one per CANDIDATE (not per review
+    row). Blanks are dropped: an unrated candidate is never a denominator, so
+    it cannot dilute a precision figure.
+
+    When nothing is rated the precisions are **None, not 0.0**, and
+    `available` is False. Those two are opposite findings -- "nobody has
+    looked at this" and "everything looked at was unrelated" -- and a JSON
+    consumer that cannot tell them apart will read an unmeasured feature as a
+    0 % accurate one. This is the whole reason the field is nullable.
+    """
+    rated = [value for value in ratings or [] if value]
+    related = rated.count("related")
+    partial = rated.count("partial")
+    unrelated = rated.count("unrelated")
+    total = len(rated)
+    available = total > 0
+    if available_total is None:
+        available_total = len(ratings or [])
+    return {
+        "available": available,
+        "candidates": available_total,
+        "rated": total,
+        "unrated": available_total - total,
+        "rating_coverage": (_ratio(total, available_total)
+                            if available_total else None),
+        "related": related,
+        "partial": partial,
+        "unrelated": unrelated,
+        "precision_strict": _ratio(related, total) if available else None,
+        "precision_lenient": (_ratio(related + partial, total)
+                              if available else None),
+    }
+
+
+def rating_bucket(subset):
+    """`bucket_from_ratings` for callers that hold review ROWS.
+
+    Used by `score_ratings`, which measures the review file itself. The
+    display metrics deliberately do not go through here: they measure
+    candidates, and a candidate can be named by more than one row.
+    """
+    return bucket_from_ratings([row.get("human_rating")
+                                for row in subset or []])
+
+
+def collect_ratings(rows, index):
+    """Review rows -> at most ONE rating per candidate.
+
+    A candidate can legitimately appear in more than one sheet: every visible
+    page-1 result is in both `human-review.tsv` and the blind
+    `external-review.tsv`. Concatenating the sheets therefore counted such a
+    candidate twice, which moved every precision figure according to how many
+    files a reviewer happened to be handed. Ratings are collapsed here, by
+    candidate identity, before anything is counted.
+
+    The rules, and the last one is the point:
+
+      * blank + rated      -> the rating; a blank is an absence, not a vote
+      * the same rating twice -> counted once
+      * two DIFFERENT ratings -> a CONFLICT, reported and never resolved
+
+    Guessing which of two contradictory ratings a person meant would produce
+    a number nobody can reproduce or defend, so the caller is expected to
+    stop.
+
+    Returns (ratings, report): `ratings` maps identity -> rating string
+    ("" for a candidate named only by blank rows).
+    """
+    ratings, conflicts = {}, {}
+    unmatched = duplicates = 0
+    seen = set()
+    for row in rows or []:
+        facts = lookup_candidate(row, index)
+        if facts is None:
+            # Matches nothing, or matches several. Reported, never guessed.
+            unmatched += 1
+            continue
+        identity = candidate_identity(facts)
+        if identity in seen:
+            duplicates += 1
+        seen.add(identity)
+        rating = (row.get("human_rating") or "").strip().lower()
+        held = ratings.get(identity)
+        if not rating:
+            ratings.setdefault(identity, "")
+        elif not held:
+            ratings[identity] = rating
+        elif held != rating:
+            conflict = conflicts.setdefault(identity, {
+                "record_id": facts.get("record_id"),
+                "source": facts.get("source"),
+                "candidate_title": facts.get("title"),
+                "pair_id": facts.get("pair_id"),
+                "ratings": set(),
+            })
+            conflict["ratings"].update((held, rating))
+    for conflict in conflicts.values():
+        conflict["ratings"] = sorted(conflict["ratings"])
+    return ratings, {
+        "rows": len(rows or []),
+        "rows_unmatched": unmatched,
+        "duplicate_rows_collapsed": duplicates,
+        "candidates_named": len(ratings),
+        "conflicts": sorted(conflicts.values(),
+                            key=lambda c: (c["record_id"] or "",
+                                           c["candidate_title"] or "")),
+    }
+
+
+def external_display_metrics(rows, records, source,
+                             max_pages=DEFAULT_MAX_PAGES,
+                             page_size=DEFAULT_PAGE_SIZE, index=None):
+    """How related the EXTERNAL list a reader actually sees turns out to be.
+
+    Separate from `score_ratings` on purpose. That function measures the
+    review FILE -- both sources, accepted and rejected alike. This one answers
+    the narrower product question: of the up-to-25 external papers Qresp
+    renders for the production pool, how many would a domain expert call
+    related, and does that change between page 1 and the deeper pages?
+
+    Two things decide whether the answer is trustworthy, and both were wrong
+    before:
+
+    **The universe comes from `records`, not from `rows`.** The denominator is
+    the unique visible candidates the raw results say production displayed. A
+    review file is a work list -- it can name a candidate twice, or not at all
+    -- and neither fact changes what the product showed. Counting rows made
+    the "visible" total larger than the number of papers that exist.
+
+    **Ratings are collapsed per candidate** (`collect_ratings`), so a
+    duplicate row moves neither a numerator nor a denominator.
+
+    Unrated candidates are excluded from every precision and reported as
+    coverage; with none rated the precisions are None and `available` is
+    False, never 0.0. A row that resolves to no single raw candidate is
+    reported as unmatched rather than guessed at.
+    """
+    index = index if index is not None else candidate_index(records)
+    ratings, join = collect_ratings(rows, index)
+
+    universe = production_candidates(records, source)
+    visible = [c for c in universe if c.get("visible")]
+    rejected = [c for c in universe if c.get("gate_decision") == "rejected"]
+
+    def rating_of(facts):
+        return ratings.get(candidate_identity(facts), "")
+
+    def on(pages):
+        return [rating_of(c) for c in visible
+                if c.get("display_page") in pages]
+
+    visible_ratings = [rating_of(c) for c in visible]
+    rated_visible = [value for value in visible_ratings if value]
+
+    per_page = {}
+    for page in range(1, max_pages + 1):
+        on_page = [c for c in visible if c.get("display_page") == page]
+        if on_page:
+            per_page[str(page)] = bucket_from_ratings(
+                [rating_of(c) for c in on_page], len(on_page))
+
+    # A false POSITIVE is a paper a reader was shown and an expert calls
+    # unrelated. Measured over the VISIBLE candidates only: an accepted
+    # candidate below the display cap is never seen, so calling it a product
+    # error would be counting a decision nobody acted on.
+    false_positives = {
+        "available": bool(rated_visible),
+        "count": (sum(1 for value in rated_visible if value == "unrelated")
+                  if rated_visible else None),
+        "rated": len(rated_visible),
+        "visible_candidates": len(visible),
+    }
+
+    # A false NEGATIVE lives BELOW the gate by definition, so it can only be
+    # found among candidates the gate REJECTED -- and only among the ones
+    # somebody was actually asked about. `sampled_candidates` is that
+    # denominator, and it is deliberately not `rejected_candidates_in_pool`:
+    # this is a sample, never a corpus-wide rate.
+    sampled_rejected = [c for c in rejected
+                        if candidate_identity(c) in ratings]
+    rejected_ratings = [rating_of(c) for c in sampled_rejected]
+    rated_rejected = [value for value in rejected_ratings if value]
+    false_negatives = {
+        "available": bool(rated_rejected),
+        "count": (sum(1 for value in rated_rejected
+                      if value in ("related", "partial"))
+                  if rated_rejected else None),
+        "strict_count": (sum(1 for value in rated_rejected
+                             if value == "related")
+                         if rated_rejected else None),
+        "sampled_candidates": len(sampled_rejected),
+        "rated": len(rated_rejected),
+        "rating_coverage": (_ratio(len(rated_rejected), len(sampled_rejected))
+                            if sampled_rejected else None),
+        "rejected_candidates_in_pool": len(rejected),
+        "note": "A SAMPLE of rejected candidates, not a corpus-wide false-"
+                "negative rate. Divide by `sampled_candidates`, never by "
+                "`rejected_candidates_in_pool`, and treat `available: false` "
+                "as unmeasured rather than as zero.",
+    }
+
+    records_with_visible = {c.get("record_id") for c in visible}
+    records_accepted = {c.get("record_id") for c in visible
+                        if rating_of(c) in ("related", "partial")}
+    return {
+        "source": source,
+        "display_cap": page_size * max_pages,
+        "page_size": page_size,
+        "max_pages": max_pages,
+        "review_rows": join["rows"],
+        "rows_unmatched": join["rows_unmatched"],
+        "duplicate_rows_collapsed": join["duplicate_rows_collapsed"],
+        # Named for what they are: unique CANDIDATES from the raw results,
+        # not rows in a spreadsheet.
+        "visible_candidates": len(visible),
+        "visible_candidates_rated": len(rated_visible),
+        "visible_candidates_unrated": len(visible) - len(rated_visible),
+        "rating_coverage": (_ratio(len(rated_visible), len(visible))
+                            if visible else None),
+        "all_visible": bucket_from_ratings(visible_ratings, len(visible)),
+        "page_1": bucket_from_ratings(
+            on({1}), sum(1 for c in visible if c.get("display_page") == 1)),
+        "pages_2_to_5": bucket_from_ratings(
+            on(set(range(2, max_pages + 1))),
+            sum(1 for c in visible
+                if (c.get("display_page") or 0) in range(2, max_pages + 1))),
+        "per_page": per_page,
+        "false_positives": false_positives,
+        "false_negatives_sampled": false_negatives,
+        "records_with_an_accepted_external_result": {
+            "available": bool(rated_visible),
+            "records": len(records_accepted) if rated_visible else None,
+            "records_with_a_visible_result": len(records_with_visible),
+            "ratio": (_ratio(len(records_accepted), len(records_with_visible))
+                      if rated_visible and records_with_visible else None),
+        },
+    }
+
+
 def score_ratings(rows, top5_keys=frozenset()):
     """Turn human ratings into the numbers that answer the question.
 
@@ -869,20 +1540,7 @@ def score_ratings(rows, top5_keys=frozenset()):
     """
     rated = [r for r in rows if r["human_rating"]]
     unrated = [r for r in rows if not r["human_rating"]]
-
-    def bucket(subset):
-        related = sum(1 for r in subset if r["human_rating"] == "related")
-        partial = sum(1 for r in subset if r["human_rating"] == "partial")
-        unrelated = sum(1 for r in subset if r["human_rating"] == "unrelated")
-        total = len(subset)
-        return {
-            "rated": total,
-            "related": related,
-            "partial": partial,
-            "unrelated": unrelated,
-            "precision_strict": _ratio(related, total),
-            "precision_lenient": _ratio(related + partial, total),
-        }
+    bucket = rating_bucket
 
     shown = [r for r in rated
              if (r["record_id"], r["source"], r["candidate_title"])
@@ -917,6 +1575,10 @@ def score_ratings(rows, top5_keys=frozenset()):
         "rows_rated": len(rated),
         "rows_unrated": len(unrated),
         "rows_unrated_excluded_from_metrics": len(unrated),
+        # None, not 0.0, when no shown row has been rated -- see
+        # `bucket_from_ratings`. `precision_at_5_available` says which it is
+        # without a consumer having to test for null.
+        "precision_at_5_available": bucket(shown)["available"],
         "precision_at_5": bucket(shown)["precision_strict"],
         "precision_at_5_lenient": bucket(shown)["precision_lenient"],
         "shown_rows_rated": len(shown),

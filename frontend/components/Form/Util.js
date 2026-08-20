@@ -1,10 +1,45 @@
-import { useContext } from "react";
+import { Fragment, useContext } from "react";
 import PropTypes from "prop-types";
 import { Grid, Typography, Box, InputLabel } from "@mui/material";
 import { RegularStyledButton } from "../button";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
 import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperContext";
+
+// Text that is read aloud but not drawn. The standard clip-rect recipe, so a
+// screen reader gets a word where a sighted reader gets a symbol.
+const visuallyHidden = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
+
+// The required marker, in ONE place.
+//
+// A red `*` on its own carries the meaning in two channels a reader may not
+// have: colour, and a symbol whose convention has to be known. Screen readers
+// commonly announce it as "star" or skip it entirely, and somebody who cannot
+// distinguish the red is looking at ordinary punctuation.
+//
+// So the asterisk is marked `aria-hidden` — it is decoration — and the word
+// "required" is added beside it for assistive technology. `RequiredFieldLegend`
+// explains the same symbol to everyone who can see it.
+const RequiredMark = () => (
+  <Fragment>
+    <Box component="span" aria-hidden="true" sx={{ color: "error.main" }}>
+      {" *"}
+    </Box>
+    <Box component="span" sx={visuallyHidden}>
+      {" (required)"}
+    </Box>
+  </Fragment>
+);
 
 const FormInputLabel = ({ label, required, forId }) => {
   return (
@@ -17,7 +52,7 @@ const FormInputLabel = ({ label, required, forId }) => {
       >
         <Box sx={{ fontWeight: "bold" }}>
           {label}
-          {required ? <span style={{ color: "red" }}> *</span> : null}
+          {required ? <RequiredMark /> : null}
         </Box>
       </Typography>
     </InputLabel>
@@ -29,6 +64,30 @@ FormInputLabel.propTypes = {
   required: PropTypes.bool,
   forId: PropTypes.string.isRequired,
 };
+
+// What the asterisk means, said once per form.
+//
+// Every curator form marks its required inputs with a coloured `*` and none
+// of them ever said what it stood for. The convention is widespread but not
+// universal, and it is invisible to a reader who cannot see the colour
+// difference; a legend costs one line and removes the guess.
+//
+// Placed at the TOP of a form, before the first field, so it is read before
+// the symbol it explains rather than after.
+const RequiredFieldLegend = () => (
+  <Typography
+    variant="body2"
+    color="secondary"
+    component="p"
+    data-testid="required-field-legend"
+    sx={{ mb: 1 }}
+  >
+    <Box component="span" aria-hidden="true" sx={{ color: "error.main" }}>
+      *
+    </Box>{" "}
+    Required field
+  </Typography>
+);
 
 const SubmitAndReset = ({ submitText, reset = false }) => {
   return (
@@ -112,4 +171,10 @@ EditAndRemove.propTypes = {
   rowdata: PropTypes.object.isRequired,
 };
 
-export { SubmitAndReset, FormInputLabel, EditAndRemove };
+export {
+  SubmitAndReset,
+  FormInputLabel,
+  RequiredFieldLegend,
+  RequiredMark,
+  EditAndRemove,
+};

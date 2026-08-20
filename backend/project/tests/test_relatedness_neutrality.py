@@ -237,10 +237,19 @@ class TestFingerprintTracksOnlyWhatDecides(unittest.TestCase):
         # -- harmless but silent. Moving the version says why.
         self.assertNotIn(R.FINGERPRINT_VERSION, ("1", "2"))
 
-    def test_the_gate_version_did_NOT_move(self):
-        # This cleanup changes no verdict, so cached RESULTS stay valid.
+    def test_the_gate_version_is_past_every_behaviour_it_no_longer_serves(self):
+        # This cleanup changed no verdict, so it did not move the version --
+        # which is why the assertion is not "the version is N". Later changes
+        # DID move it, and pinning a literal here would have made an honest
+        # bump look like a regression.
+        #
+        # What must stay true is that no version describing a product that no
+        # longer exists can be served as if it were the current one:
+        #   1, 2  the old gates
+        #   3     the last version whose external list held at most three
+        #         results chosen from a 20-candidate pool
         from project import related
-        self.assertEqual("3", related.ALGORITHM_VERSION)
+        self.assertNotIn(related.ALGORITHM_VERSION, ("1", "2", "3"))
 
 
 class TestTheQualityContractIsUnchanged(unittest.TestCase):

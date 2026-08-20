@@ -33,3 +33,14 @@ __pycache__
 *.crt
 *.key
 *.pem
+
+# Local implementation-planning notes (kept out of source control)
+RELATED_EXTERNAL_150_IMPLEMENTATION_AND_EVALUATION_PROMPT.md
+UX_CURATION_EXPLORER_IMPLEMENTATION_CHECKLIST.md
+
+# Generated live external-evaluation runs. `raw-results.jsonl` for the full
+# public corpus is ~57 MB, well past the 200 kB pre-commit ceiling, and the
+# whole directory is a reproducible artifact of one sweep. Deliberately narrow:
+# it matches only `related-eval-external-*`, so earlier hand-rated
+# `related-eval-*` folders stay visible to git exactly as they are.
+related-eval-external-*/

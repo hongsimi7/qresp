@@ -6,7 +6,7 @@ import { AddCircleOutlined, RemoveCircleOutlined } from "@mui/icons-material";
 
 import { RegularStyledButton } from "../button";
 import { TextInputField, RadioInputField } from "../Form/InputFields";
-import { SubmitAndReset, FormInputLabel } from "../Form/Util";
+import { SubmitAndReset, FormInputLabel, RequiredFieldLegend } from "../Form/Util";
 import { namesUtil, referenceUtil } from "../../Utils/utils";
 import { doiUtil, DOI_PATTERN } from "../../Utils/doi";
 import NameInput from "../Form//NameInput";
@@ -209,6 +209,9 @@ const ReferenceInfoForm = ({ editor }) => {
           blank for the curator to fill in. */}
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container direction="column" spacing={1}>
+          <Grid>
+            <RequiredFieldLegend />
+          </Grid>
           <Grid>
             <RadioInputField
               id="kind"

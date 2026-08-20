@@ -11,10 +11,7 @@ import { styled } from "@mui/material/styles";
 
 import { Menu } from "@mui/icons-material";
 
-import StyledButton, {
-  InternalStyledButton,
-  ExternalStyledButton,
-} from "./button";
+import StyledButton, { InternalStyledButton } from "./button";
 
 import AuthControls from "./AuthControls";
 
@@ -54,16 +51,12 @@ const Header = () => {
     <Fragment>
       <InternalStyledButton text="Explorer" url="/explorer" />
       <InternalStyledButton text="Curator" url="/curator" />
-      <ExternalStyledButton
-        text="Documentation"
-        url="https://qresp.org"
-        external={true}
-      />
-      <ExternalStyledButton
-        text="Contact"
-        url="mailto:datadev@lists.uchicago.edu?subject=Qresp"
-        external={true}
-      />
+      {/* Both are pages now, not jumps out of the app.
+          Documentation was an external link to qresp.org and Contact was a
+          bare `mailto:` — a navigation item that handed the page to a mail
+          client, and did nothing at all on a machine with none configured. */}
+      <InternalStyledButton text="Documentation" url="/documentation" />
+      <InternalStyledButton text="Contact" url="/contact" />
     </Fragment>
   );
 

@@ -335,6 +335,78 @@ class RelatedResearchCache(Document):
     }
 
 
+class RecommendationFeedback(Document):
+    """One reader's 1-5 rating of the Related Research list on one record.
+
+    Kept OUT of the Paper document for the same reason the recommendation
+    cache is: an opinion about a derived view is not part of the record, and a
+    read must never look like an edit.
+
+    WHAT IS AND IS NOT STORED
+    -------------------------
+    Stored: the rating, the optional reason codes and free-text comment, which
+    record and which list was being rated, and the minimum context an analysis
+    needs -- how many results were on screen, which page the reader was on
+    when they submitted, and how many pages they had looked at.
+
+    NEVER stored: the IP address, the user agent, any request header, the
+    recommendation scores or gate reasons the reader was shown, the titles or
+    DOIs of the recommended papers, or anything from a third-party analytics
+    SDK (there is none on this path).
+
+    `respondent` is a KEYED HASH of the durable ACCOUNT identifier, never an
+    address and never a session. It exists only so a person can change their
+    mind -- the same reader rating the same list twice updates one row instead
+    of voting twice -- and it is derived through `feedback.respondent_key`,
+    which is an HMAC under the deployment's secret. Nothing can read an
+    account or an email back out of it, and no endpoint ever returns it.
+
+    Rating requires an account. Keyed on anything a reader can reset, "one
+    opinion per reader" is not true, and there is no way to key an anonymous
+    reader durably without collecting something this feature has no business
+    collecting.
+    """
+    # Record + source server, namespaced exactly as RelatedResearchCache is
+    # (project.federation.cache_key), so the same 24-hex id on two Qresp
+    # servers can never pool its ratings.
+    paper_id = StringField(required=True, max_length=320)
+    # How the respondent was identified. Only 'account' is ever written now.
+    #
+    # Rating was briefly open to anonymous readers, keyed by a per-session
+    # token -- which a reader could reset at will, so those rows were never
+    # one-per-person. They are left in place rather than deleted, and the
+    # summary counts only `account` rows: a row with no value here is not
+    # part of any number, so the old defect cannot leak into the new figure
+    # and nothing has to be migrated.
+    respondent_kind = StringField(max_length=32)
+    # Which list was rated: 'external' (Semantic Scholar candidates that
+    # passed the gate) or 'internal' (Related Qresp Records). Ratings of two
+    # different lists are two different measurements and never averaged
+    # together.
+    source = StringField(required=True, max_length=32)
+    respondent = StringField(required=True, max_length=64)
+    rating = IntField(required=True, min_value=1, max_value=5)
+    # Offered only for a 1 or a 2, and optional even then.
+    reasons = ListField(StringField(max_length=64))
+    comment = StringField(max_length=1000, default="")
+    # Analysis context, counts only.
+    results_shown = IntField(min_value=0)
+    page_at_submit = IntField(min_value=1)
+    pages_viewed = IntField(min_value=0)
+    created_at = DateTimeField()
+    updated_at = DateTimeField()
+    meta = {
+        'collection': 'recommendation_feedback',
+        'indexes': [
+            # The upsert key. One opinion per reader per list per record: a
+            # reader who changes 2 to 4 has changed their mind, and counting
+            # both would let one person move the average twice.
+            {'fields': ['respondent', 'paper_id', 'source'], 'unique': True},
+            'paper_id',
+        ],
+    }
+
+
 class CuratorDraft(Document):
     """Account-owned curator draft saved explicitly from /curator.
 

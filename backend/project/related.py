@@ -13,6 +13,15 @@ It answers with two independent lists:
   returned by the provider is NOT a reason to show a paper; the provider's
   ranking is deliberately ignored.
 
+The two lists have SEPARATE caps, and deliberately so. Related Qresp Records
+shows at most `MAX_RESULTS` (3) records from this server's own corpus.
+Related External Papers asks the provider for `EXTERNAL_CANDIDATE_LIMIT`
+(150) candidates and shows at most `EXTERNAL_MAX_RESULTS` (25) of the ones
+that clear the gate, laid out five to a page over at most five pages. All
+0-25 come back in one response and are cached as one entry, so turning a page
+in the UI is a slice of data the browser already holds and costs no provider
+request.
+
 No language model is involved anywhere in this feature. Every ordering,
 threshold and "Why related" sentence comes from `project/relatedness.py`,
 which is pure and unit-tested.
@@ -41,7 +50,7 @@ the record and the corpus it is scored against are then read from that peer via
 `project/federation.py`, which is also what refuses every server that is not in
 the federated registry. The peer must be an allowlisted HTTPS origin; only
 allowlisted published metadata is copied out of its answer; nothing is written
-to this server's database. Scoring, the quality gate, the result cap and the
+to this server's database. Scoring, the quality gate, the result caps and the
 external provider are the same code in both modes -- the only difference is
 where the two record sets came from.
 
@@ -66,7 +75,7 @@ from urllib.parse import quote
 
 import requests
 
-from project import federation, relatedcache
+from project import federation, feedback_context, relatedcache
 from project.auth import can_edit_paper, get_current_user
 from project.federation import FOUND, NOT_FOUND, UNAVAILABLE
 from project.models import Paper, RelatedResearchCache, active_papers
@@ -113,7 +122,15 @@ RECOMMENDATION_FIELDS = "title,abstract,year,authors.name,externalIds,fieldsOfSt
 RESOLUTION_FIELDS = "paperId,title,externalIds"
 
 # Candidates asked of the provider, before Qresp's gate removes most of them.
-EXTERNAL_CANDIDATE_LIMIT = 20
+# EXTERNAL ONLY -- the internal list is computed from this server's own corpus
+# and never asks anybody for candidates.
+#
+# 150, not 20. A bigger pool buys COVERAGE, not accuracy: the gate is
+# unchanged, so every extra candidate still has to earn its place, and the
+# only difference is that there are more of them to earn it. It is one request
+# per cache miss either way, so the cost of asking for 150 instead of 20 is a
+# larger response body and nothing else.
+EXTERNAL_CANDIDATE_LIMIT = 150
 
 # The candidate pool is deliberately NOT overridden: the request carries no
 # `from` parameter, so the provider uses its default.
@@ -145,9 +162,37 @@ EXTERNAL_CANDIDATE_LIMIT = 20
 # sentence as for a rate limit. `all-cs` would still buy nothing but 20
 # irrelevant papers per record, so it stays off.
 RECOMMENDATION_POOL = None
-# Shown to the user, per list. Defined by the scoring module so the cap and
-# the gate cannot drift apart, and never padded to reach.
+# Shown to the user in the INTERNAL list. Defined by the scoring module so the
+# cap and the gate cannot drift apart, and never padded to reach.
+#
+# This is the Related Qresp Records cap and nothing else. It used to be the
+# external cap too, which is why the two are now spelled out separately: the
+# internal list is a handful of records from one server's own corpus, while
+# the external list is drawn from the whole literature, and there is no reason
+# the same number should govern both.
 MAX_RESULTS = relatedness_max_results
+
+# --------------------------------------------------- external display limits
+#
+# What a reader actually SEES under "Related External Papers", and how it is
+# laid out. These are the external half's own numbers; changing them cannot
+# touch Related Qresp Records.
+#
+# The gate is applied to every deduplicated candidate first and the cut is
+# made last (gate, sort, cut -- see `relatedness.rank`), so a record with
+# fewer than EXTERNAL_MAX_RESULTS passing candidates gets a SHORTER list. The
+# list is never padded to fill a page.
+EXTERNAL_RESULTS_PER_PAGE = 5
+EXTERNAL_MAX_PAGES = 5
+# Stated as the product, not as a bare 25, so the three numbers cannot drift:
+# the cap IS "five per page, five pages", and the UI derives its page count
+# from the same relationship.
+EXTERNAL_MAX_RESULTS = EXTERNAL_RESULTS_PER_PAGE * EXTERNAL_MAX_PAGES
+# The whole 0-25 comes back in ONE response and is cached as one entry, so
+# turning a page is a slice of data the browser already holds. Paging must
+# never cost a provider request. That the three numbers still agree with the
+# UI's is pinned by a test, not by an assert here: a mismatch is a bug worth
+# failing a test run over, not one worth refusing to boot over.
 
 # A title lookup must be an unambiguous match on the paper Qresp holds; below
 # this the external list is skipped entirely rather than risk recommending
@@ -233,7 +278,13 @@ _DETAIL_REASONS = {
 #   1  original gate: five results, a shared author counted as evidence,
 #      any rare word counted as a "specific research term"
 #   2  topic-only gate, technical-term vocabulary, three results
-ALGORITHM_VERSION = "3"
+#   3  term provenance: a plain word must come from a title or a curated tag
+#   4  external list widened to 150 candidates and up to 25 results, paginated
+#      five to a page. An entry written under 3 holds at most three external
+#      results chosen from a 20-candidate pool; serving it as if it were the
+#      new behaviour would show a reader a one-page list and call it the
+#      whole answer.
+ALGORITHM_VERSION = "4"
 
 # ------------------------------------------------------------------- caching
 #
@@ -448,10 +499,21 @@ def resolve_provider_paper(title, doi, cfg):
     return str(match["paperId"]), FOUND
 
 
-def _normalize_candidate(raw):
+def _normalize_candidate(raw, provider_rank=None):
     """Provider result -> the plain dict `build_external_profile` reads.
-    Everything else in the payload, including its position in the list, is
-    dropped here."""
+    Everything else in the payload is dropped here.
+
+    `provider_rank` is the candidate's 0-based position in the provider's own
+    answer. It is DIAGNOSTIC ONLY: `build_external_profile` does not read it,
+    `_result` does not copy it into the response or the cache, and nothing in
+    `relatedness.py` can see it. It is carried so an offline evaluation can
+    ask "where in the provider's list did the papers Qresp shows come from?"
+    without a second request.
+
+    It is deliberately not the provider's SCORE, which is proprietary and is
+    not requested at all, and it is never evidence: being ranked first by
+    somebody else is not a reason Qresp can name to a reader.
+    """
     if not isinstance(raw, dict):
         return None
     title = re.sub(r"\s+", " ", str(raw.get("title") or "")).strip()
@@ -474,6 +536,7 @@ def _normalize_candidate(raw):
         url = ""
     return {
         "key": paper_id or doi or title,
+        "provider_rank": provider_rank,
         "title": title,
         "abstract": str(raw.get("abstract") or ""),
         "year": year,
@@ -518,8 +581,11 @@ def fetch_external_candidates(paper_id, cfg, pool=None):
         print("Related research provider returned an unexpected shape")
         return None, Outcome(UNAVAILABLE, "unexpected_shape")
     candidates = []
-    for item in raw[:EXTERNAL_CANDIDATE_LIMIT]:
-        candidate = _normalize_candidate(item)
+    # No more than EXTERNAL_CANDIDATE_LIMIT are processed however many the
+    # provider volunteers: `limit` is a request, and the bound has to hold on
+    # what actually came back.
+    for position, item in enumerate(raw[:EXTERNAL_CANDIDATE_LIMIT]):
+        candidate = _normalize_candidate(item, provider_rank=position)
         if candidate:
             candidates.append(candidate)
     return candidates, Outcome(FOUND, "ok")
@@ -706,7 +772,8 @@ def internal_recommendations(current_record, corpus_records,
 
 
 def external_recommendations(current_record, candidates, stats,
-                             citation_dois=frozenset(), limit=MAX_RESULTS):
+                             citation_dois=frozenset(),
+                             limit=EXTERNAL_MAX_RESULTS):
     """Apply Qresp's own gate to the provider's candidates.
 
     The provider's ordering is discarded: candidates are re-ranked by the
@@ -773,10 +840,15 @@ def _pipeline(resolved=False, provider_status="", raw=0, after_dedupe=0,
 
       resolved         did the provider recognise THIS paper at all?
       provider_status  found / not_found / unavailable, from the provider
-      raw              candidates it proposed
+      raw              candidates it proposed (at most 150)
       after_dedupe     ...minus this paper itself and repeats
       after_gate       ...minus everything Qresp's quality gate rejected
-      shown            ...capped at MAX_RESULTS
+      shown            ...capped at EXTERNAL_MAX_RESULTS (25), so
+                       0 <= shown <= 25 and shown <= after_gate
+
+    `shown` is the external list's own count. It has nothing to say about
+    Related Qresp Records, which is not built from provider candidates and has
+    no pipeline.
     """
     return {"resolved": bool(resolved), "provider_status": provider_status,
             "raw_candidates": raw, "after_dedupe": after_dedupe,
@@ -846,12 +918,15 @@ def _external_for(paper_id, current_record, stats, cfg):
     # simply never fires, rather than being inferred from something weaker.
     #
     # EVERY candidate that clears the gate is counted, and only then is the
-    # list cut to MAX_RESULTS. Counting the cut list made `after_gate` and
-    # `shown` identical by construction, which hid the one thing the pair was
-    # there to show: how much the cap is discarding.
+    # list cut to EXTERNAL_MAX_RESULTS. Counting the cut list made
+    # `after_gate` and `shown` identical by construction, which hid the one
+    # thing the pair was there to show: how much the cap is discarding.
+    #
+    # The cut is the EXTERNAL cap, not the internal one. Nothing is added to
+    # reach it: 25 is a ceiling on what passed, never a target.
     passing = external_recommendations(current_record, candidates, stats,
                                        limit=None)
-    results = passing[:MAX_RESULTS]
+    results = passing[:EXTERNAL_MAX_RESULTS]
     pipeline = _pipeline(resolved=True, provider_status=FOUND, raw=raw_count,
                          after_dedupe=len(candidates),
                          after_gate=len(passing), shown=len(results))
@@ -983,7 +1058,7 @@ def related_research(id, server=None):
     naming this server, it means exactly what it always did: read from the
     local database. Naming an allowlisted federated peer, the record and the
     corpus are read from that peer instead, and everything downstream --
-    scoring, the quality gate, the three-result cap, the external provider --
+    scoring, the quality gate, the two result caps, the external provider --
     is the same code operating on the same shapes.
 
     Read-only in both modes: it never changes a Paper, a draft, an ownership
@@ -1016,17 +1091,17 @@ def related_research(id, server=None):
         # cache), and recomputing is what keeps the promises the product
         # already makes -- a deactivated record disappears on the next reload,
         # a newly published one appears on it.
-        return _compute(None, id)
+        return _stamp_feedback_context(_compute(None, id), None, id)
 
     key = _result_key(origin, id)
     cached, state = _result_cache.get(key)
     if state == "fresh":
-        return cached
+        return _stamp_feedback_context(cached, origin, id)
     if state == "stale":
         # STALE-WHILE-REVALIDATE. The reader gets the previous answer now and
         # never waits for a peer; ONE of the readers refreshes behind them.
         _start_stale_refresh(key, origin, id)
-        return cached
+        return _stamp_feedback_context(cached, origin, id)
 
     def already_done():
         value, inner_state = _result_cache.get(key)
@@ -1034,8 +1109,74 @@ def related_research(id, server=None):
 
     # SINGLE FLIGHT. Five readers opening the same federated record together
     # cost the peer one round of reads, not five.
-    return _result_flight.run(key, lambda: _refresh(key, origin, id),
-                              already_done)
+    return _stamp_feedback_context(
+        _result_flight.run(key, lambda: _refresh(key, origin, id),
+                           already_done),
+        origin, id)
+
+
+def _stamp_feedback_context(response, origin, paper_id):
+    """Attach the signed note that says what this reader was shown.
+
+    Minted HERE, on the way out, and deliberately NOT inside `_compute` or the
+    external section:
+
+    * the federated response is cached in-process for five minutes fresh plus
+      an hour stale, so a token baked into it would still be handed out long
+      after it expired;
+    * the external answer is cached in Mongo for a week, and a week-old token
+      is not a token.
+
+    Nothing about the reader goes into it, so stamping a cached body does not
+    personalise it -- the same body serves everyone, and only this one field
+    differs per response.
+
+    A record with no external results gets no token, which is what makes
+    "these recommendations were unhelpful" unsayable about an empty list.
+    Anything that goes wrong here costs the rating widget and nothing else:
+    the recommendations themselves are already computed and are still served.
+    """
+    try:
+        body, status = response
+    except (TypeError, ValueError):
+        return response
+    if status != 200 or not isinstance(body, dict):
+        return response
+    external = body.get("external")
+    if not isinstance(external, dict):
+        return response
+    if external.get("status") != STATUS_OK or not external.get("results"):
+        return response
+    try:
+        token = feedback_context.issue(
+            federation.cache_key(origin, paper_id), "external",
+            len(external["results"]),
+            _external_page_count(len(external["results"])))
+    except feedback_context.ConfigurationError as e:
+        # Fail CLOSED, and say so once. Without a secret there is no signature
+        # worth having, so no token is issued and no rating can be stored --
+        # rather than minting one under a hardcoded key that proves nothing.
+        print("Feedback context unavailable: %s" % e)
+        return response
+    except Exception as e:
+        print("Feedback context could not be issued: %s" % type(e).__name__)
+        return response
+    if token:
+        # A copy: the cached body must not acquire this request's token.
+        external = dict(external)
+        external["feedback_context"] = token
+        body = dict(body)
+        body["external"] = external
+        return body, status
+    return response
+
+
+def _external_page_count(shown):
+    """How many pages the UI will lay `shown` results out over."""
+    if shown <= 0:
+        return 0
+    pages = (shown + EXTERNAL_RESULTS_PER_PAGE - 1) // EXTERNAL_RESULTS_PER_PAGE
+    return min(pages, EXTERNAL_MAX_PAGES)
 
 
 def _result_key(origin, paper_id):

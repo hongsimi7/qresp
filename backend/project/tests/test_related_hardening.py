@@ -255,30 +255,48 @@ class TestStaleRefreshRunsOnce(CacheTestCase):
 
 class TestExternalPipelineCounts(CacheTestCase):
     def test_after_gate_can_exceed_what_is_shown(self):
-        # Four candidates clear the gate; three are shown. The old code
+        # Forty candidates clear the gate; twenty-five are shown. The old code
         # counted the truncated list, so these were always equal and the cap
         # was invisible.
-        from project.tests.test_related_research import recommendation
-        shapes = ("films", "crystals", "powders", "whiskers")
-        clones = [recommendation(
-            "Rareword resonance in gadgetite %s" % shape,
-            "Rareword resonance of gadgetite lattices measured with a "
-            "cryogenic spectrometer and a tunable oscillator.",
-            doi="10.2000/clone-%s" % shape) for shape in shapes]
-        section = self.external(provider=ProviderStub(recommendations=clones))
+        from project.tests.test_related_research import clones
+        section = self.external(
+            provider=ProviderStub(recommendations=clones(40)))
         pipeline = section["pipeline"]
-        self.assertEqual(4, pipeline["raw_candidates"])
-        self.assertEqual(4, pipeline["after_dedupe"])
-        self.assertEqual(4, pipeline["after_gate"])
-        self.assertEqual(related.MAX_RESULTS, pipeline["shown"])
+        self.assertEqual(40, pipeline["raw_candidates"])
+        self.assertEqual(40, pipeline["after_dedupe"])
+        self.assertEqual(40, pipeline["after_gate"])
+        self.assertEqual(related.EXTERNAL_MAX_RESULTS, pipeline["shown"])
         self.assertGreater(pipeline["after_gate"], pipeline["shown"])
-        self.assertEqual(related.MAX_RESULTS, len(section["results"]))
+        self.assertEqual(related.EXTERNAL_MAX_RESULTS, len(section["results"]))
+
+    def test_the_four_counts_are_distinguishable_at_every_stage(self):
+        # raw > after_dedupe > after_gate > shown, all four different, so no
+        # pair of them can be silently equal by construction.
+        from project.tests.test_related_research import (UNRELATED_EXTERNAL,
+                                                         clones)
+        passing = clones(30)
+        # Two exact repeats (same DOI) and two candidates the gate rejects.
+        payload = (passing + passing[:2]
+                   + [UNRELATED_EXTERNAL,
+                      dict(UNRELATED_EXTERNAL, paperId="other-unrelated",
+                           title="Another unrelated discipline entirely",
+                           externalIds={"DOI": "10.2000/external-c"})])
+        section = self.external(provider=ProviderStub(recommendations=payload))
+        pipeline = section["pipeline"]
+        self.assertEqual(34, pipeline["raw_candidates"])
+        self.assertEqual(32, pipeline["after_dedupe"])
+        self.assertEqual(30, pipeline["after_gate"])
+        self.assertEqual(25, pipeline["shown"])
+        self.assertEqual(25, len(section["results"]))
 
     def test_shown_is_never_more_than_the_cap_and_never_more_than_the_gate(self):
-        for provider in (ProviderStub(), ProviderStub(recommendations=[])):
+        from project.tests.test_related_research import clones
+        for provider in (ProviderStub(), ProviderStub(recommendations=[]),
+                         ProviderStub(recommendations=clones(40))):
             section = self.external(provider=provider)
             pipeline = section["pipeline"]
-            self.assertLessEqual(pipeline["shown"], related.MAX_RESULTS)
+            self.assertLessEqual(pipeline["shown"],
+                                 related.EXTERNAL_MAX_RESULTS)
             self.assertLessEqual(pipeline["shown"], pipeline["after_gate"])
             self.assertEqual(len(section["results"]), pipeline["shown"])
 

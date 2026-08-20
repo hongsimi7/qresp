@@ -254,7 +254,7 @@ describe("RelatedResearch", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("never renders more than five results per list", async () => {
+  it("renders exactly the results it was given, never re-expanding a list", async () => {
     const many = (source, count) =>
       Array.from({ length: count }, (_, i) =>
         source === "internal"
@@ -265,7 +265,7 @@ describe("RelatedResearch", () => {
               title: `External paper ${i}`,
             })
       );
-    // The backend caps at five; the component must not re-expand the list.
+    // The backend decides how many exist; the component never pads.
     renderSection(
       payload({
         internal: { status: "ok", count: 5, results: many("internal", 5) },
@@ -707,7 +707,8 @@ describe("RelatedResearch", () => {
     });
   });
 
-  // The cap is three, and a shorter list is shown as it is.
+  // A short list is shown as it is, in both sections, with no pagination and
+  // nothing padded. (The external cap is 25; these are all well under it.)
   describe.each([0, 1, 2, 3])("with %i results", (count) => {
     const results = (source) =>
       Array.from({ length: count }, (unused, index) =>
@@ -826,6 +827,299 @@ describe("RelatedResearch", () => {
     await waitFor(() => expect(axios.get).toHaveBeenCalledTimes(2));
     expect(axios.get).toHaveBeenNthCalledWith(2, "/api/paper/paper-b/related", {
       params: { server: "https://localhost:8443" },
+    });
+  });
+
+  // The external list is the only one that pages. The backend returns all
+  // 0-25 in ONE response, so a page change is a slice of data already held:
+  // it must never produce a request of any kind.
+  describe("external pagination", () => {
+    const externals = (count) =>
+      Array.from({ length: count }, (unused, index) =>
+        externalResult({
+          doi: `10.2000/paged-${index}`,
+          url: `https://doi.org/10.2000/paged-${index}`,
+          title: `External paper ${index + 1}`,
+        })
+      );
+
+    const paged = (count, overrides = {}) =>
+      payload({
+        internal: { status: "ok", count: 1, results: [internalResult()] },
+        external: {
+          status: "ok",
+          provider: "Semantic Scholar",
+          count,
+          results: externals(count),
+          stale: false,
+          updated_at: null,
+        },
+        ...overrides,
+      });
+
+    const externalTitles = async () => {
+      const section = await sectionFor(/related external papers/i);
+      return within(section)
+        .getAllByTestId("related-result")
+        .map((node) => node.querySelector("a, span").textContent);
+    };
+
+    const pager = () =>
+      screen.getByRole("navigation", {
+        name: /related external papers pages/i,
+      });
+
+    it("shows five external results per page", async () => {
+      renderSection(paged(23));
+      expect(await externalTitles()).toEqual([
+        "External paper 1",
+        "External paper 2",
+        "External paper 3",
+        "External paper 4",
+        "External paper 5",
+      ]);
+    });
+
+    it("offers one page per five results and no more than five pages", async () => {
+      renderSection(paged(23));
+      await sectionFor(/related external papers/i);
+      // 23 results => ceil(23 / 5) = 5 pages.
+      expect(
+        within(pager()).getByRole("button", { name: /go to page 5/i })
+      ).toBeInTheDocument();
+      expect(
+        within(pager()).queryByRole("button", { name: /go to page 6/i })
+      ).not.toBeInTheDocument();
+    });
+
+    it("never renders a sixth page even if the backend sends more than 25", async () => {
+      // A server that has not been redeployed, or one that ever returns more
+      // than it promises, must not produce a page the contract does not have.
+      renderSection(paged(60));
+      await sectionFor(/related external papers/i);
+      expect(
+        within(pager()).getByRole("button", { name: /go to page 5/i })
+      ).toBeInTheDocument();
+      expect(
+        within(pager()).queryByRole("button", { name: /go to page 6/i })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByText("Showing 1-5 of 25 related external papers")
+      ).toBeInTheDocument();
+    });
+
+    it("moves to the next five results and announces the range", async () => {
+      renderSection(paged(23));
+      await sectionFor(/related external papers/i);
+      expect(
+        screen.getByText("Showing 1-5 of 23 related external papers")
+      ).toBeInTheDocument();
+
+      await userEvent.click(
+        within(pager()).getByRole("button", { name: /go to page 2/i })
+      );
+
+      expect(await externalTitles()).toEqual([
+        "External paper 6",
+        "External paper 7",
+        "External paper 8",
+        "External paper 9",
+        "External paper 10",
+      ]);
+      // Found by its text, not as "the one status on the page": the feedback
+      // widget below the list has a status region of its own.
+      const range = screen.getByText(
+        "Showing 6-10 of 23 related external papers"
+      );
+      expect(range).toHaveAttribute("role", "status");
+      expect(range).toHaveAttribute("aria-live", "polite");
+    });
+
+    it("shows the short last page rather than five padded slots", async () => {
+      renderSection(paged(23));
+      await sectionFor(/related external papers/i);
+      await userEvent.click(
+        within(pager()).getByRole("button", { name: /go to page 5/i })
+      );
+      expect(await externalTitles()).toEqual([
+        "External paper 21",
+        "External paper 22",
+        "External paper 23",
+      ]);
+      expect(
+        screen.getByText("Showing 21-23 of 23 related external papers")
+      ).toBeInTheDocument();
+    });
+
+    it("issues no request at all when a page changes", async () => {
+      renderSection(paged(23));
+      await sectionFor(/related external papers/i);
+      expect(axios.get).toHaveBeenCalledTimes(1);
+
+      await userEvent.click(
+        within(pager()).getByRole("button", { name: /go to page 3/i })
+      );
+      await screen.findByText("Showing 11-15 of 23 related external papers");
+      await userEvent.click(
+        within(pager()).getByRole("button", { name: /go to page 1/i })
+      );
+      await screen.findByText("Showing 1-5 of 23 related external papers");
+
+      // The whole list was already in the one response. Paging must not
+      // re-ask this endpoint, and therefore cannot reach Semantic Scholar.
+      expect(axios.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("announces which page is current, and is operable by keyboard alone", async () => {
+      renderSection(paged(23));
+      await sectionFor(/related external papers/i);
+      expect(
+        within(pager()).getByRole("button", { name: /^page 1$/i })
+      ).toHaveAttribute("aria-current", "page");
+
+      // Tab to the pager and activate a page with the keyboard only.
+      const target = within(pager()).getByRole("button", {
+        name: /go to page 2/i,
+      });
+      target.focus();
+      expect(target).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+
+      await screen.findByText("Showing 6-10 of 23 related external papers");
+      expect(
+        within(pager()).getByRole("button", { name: /^page 2$/i })
+      ).toHaveAttribute("aria-current", "page");
+    });
+
+    it("renders no pagination when everything fits on one page", async () => {
+      renderSection(paged(5));
+      const section = await sectionFor(/related external papers/i);
+      expect(within(section).getAllByTestId("related-result")).toHaveLength(5);
+      expect(
+        screen.queryByRole("navigation", {
+          name: /related external papers pages/i,
+        })
+      ).not.toBeInTheDocument();
+      // No pager, and therefore no range announcement either: "Showing 1-5 of
+      // 5" is noise when there is nowhere else to go. (The feedback widget
+      // has its own status region, so this asks about the RANGE, not about
+      // whether any status exists.)
+      expect(
+        screen.queryByText(/related external papers$/i, { selector: "p" })
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText(/^Showing /)).not.toBeInTheDocument();
+    });
+
+    it("does not paginate Related Qresp Records", async () => {
+      renderSection(
+        payload({
+          internal: {
+            status: "ok",
+            count: 12,
+            results: Array.from({ length: 12 }, (unused, index) =>
+              internalResult({
+                id: `internal-${index}`,
+                title: `Internal record ${index}`,
+              })
+            ),
+          },
+          external: {
+            status: "ok",
+            provider: "Semantic Scholar",
+            count: 23,
+            results: externals(23),
+            stale: false,
+            updated_at: null,
+          },
+        })
+      );
+      const internal = await sectionFor(/related qresp records/i);
+      // Every internal result the backend sent is on screen, with no control
+      // to page through them. The external half pages; this one does not.
+      expect(within(internal).getAllByTestId("related-result")).toHaveLength(12);
+      expect(
+        within(internal).queryByRole("navigation")
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getAllByRole("navigation", {
+          name: /related external papers pages/i,
+        })
+      ).toHaveLength(1);
+    });
+
+    it("resets to page 1 when the paper changes", async () => {
+      axios.get.mockResolvedValue({ data: paged(23) });
+      const { rerender } = render(
+        <RelatedResearch paperId="paper-a" server="https://localhost:8443" />
+      );
+      await sectionFor(/related external papers/i);
+      await userEvent.click(
+        within(pager()).getByRole("button", { name: /go to page 4/i })
+      );
+      await screen.findByText("Showing 16-20 of 23 related external papers");
+
+      rerender(
+        <RelatedResearch paperId="paper-b" server="https://localhost:8443" />
+      );
+      await waitFor(() => expect(axios.get).toHaveBeenCalledTimes(2));
+      // Page 4 of the previous record's list says nothing about this one.
+      await screen.findByText("Showing 1-5 of 23 related external papers");
+    });
+
+    it("resets to page 1 when only the source server changes", async () => {
+      axios.get.mockResolvedValue({ data: paged(23) });
+      const { rerender } = render(
+        <RelatedResearch paperId="shared-id" server="https://first.example.org" />
+      );
+      await sectionFor(/related external papers/i);
+      await userEvent.click(
+        within(pager()).getByRole("button", { name: /go to page 3/i })
+      );
+      await screen.findByText("Showing 11-15 of 23 related external papers");
+
+      rerender(
+        <RelatedResearch paperId="shared-id" server="https://second.example.org" />
+      );
+      await waitFor(() => expect(axios.get).toHaveBeenCalledTimes(2));
+      await screen.findByText("Showing 1-5 of 23 related external papers");
+    });
+
+    it("does not strand the reader on a page the new list does not have", async () => {
+      // The failure this prevents: page 5 of a 23-result list, carried over
+      // to a 6-result one, renders an EMPTY section under a heading that
+      // promises results.
+      axios.get
+        .mockResolvedValueOnce({ data: paged(23) })
+        .mockResolvedValueOnce({ data: paged(6) });
+      const { rerender } = render(
+        <RelatedResearch paperId="paper-a" server="https://localhost:8443" />
+      );
+      await sectionFor(/related external papers/i);
+      await userEvent.click(
+        within(pager()).getByRole("button", { name: /go to page 5/i })
+      );
+      await screen.findByText("Showing 21-23 of 23 related external papers");
+
+      rerender(
+        <RelatedResearch paperId="paper-b" server="https://localhost:8443" />
+      );
+      await screen.findByText("Showing 1-5 of 6 related external papers");
+      expect(await externalTitles()).toEqual([
+        "External paper 1",
+        "External paper 2",
+        "External paper 3",
+        "External paper 4",
+        "External paper 5",
+      ]);
+    });
+
+    it("shows no invented relation score", async () => {
+      const { container } = renderSection(paged(23));
+      await sectionFor(/related external papers/i);
+      expect(screen.getAllByText(/why related/i).length).toBeGreaterThan(0);
+      expect(container.textContent).not.toMatch(/relation score/i);
+      expect(container.textContent).not.toMatch(/relevance score/i);
+      expect(container.textContent).not.toMatch(/\b\d{1,3}\s*% match\b/i);
     });
   });
 

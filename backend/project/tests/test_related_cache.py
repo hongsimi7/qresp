@@ -199,6 +199,32 @@ class TestAlgorithmVersionInvalidation(CacheTestCase):
             second = related._result_key(PEER, "abc")
         self.assertNotEqual(first, second)
 
+    def test_an_entry_written_under_the_three_result_behaviour_is_a_miss(self):
+        # The specific migration this bump is for. An entry stamped "3" holds
+        # at most three external results chosen from a 20-candidate pool.
+        # Serving it now would show a reader a one-page list and present it as
+        # the whole answer, which is the exact failure the version exists to
+        # prevent -- so the stored answer must be discarded, not topped up.
+        self.views(1, env=ENABLED)
+        RelatedResearchCache.objects.update(set__algorithm_version="3")
+        related.reset_caches()
+        _, provider = self.views(1, env=ENABLED)
+        self.assertTrue(provider.calls)
+        self.assertEqual(related.ALGORITHM_VERSION,
+                         RelatedResearchCache.objects.first().algorithm_version)
+        self.assertNotEqual("3", related.ALGORITHM_VERSION)
+
+    def test_the_bumped_key_still_namespaces_a_federated_record(self):
+        # A version bump must not flatten the server namespace: the same
+        # 24-hex id on two Qresp servers is two different papers, and one of
+        # them must never be served the other's recommendations.
+        local = related._result_key(None, "abc")
+        remote = related._result_key(PEER, "abc")
+        self.assertNotEqual(local, remote)
+        self.assertIn(related.ALGORITHM_VERSION, local)
+        self.assertIn(related.ALGORITHM_VERSION, remote)
+        self.assertIn(PEER, remote)
+
 
 class TestStaleWhileRevalidate(CacheTestCase):
     def test_a_stale_answer_is_served_and_refreshed_behind_the_reader(self):

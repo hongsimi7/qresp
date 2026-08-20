@@ -12,6 +12,8 @@ const TextInput = (props) => {
     register,
     registerOptions,
     type = "text",
+    required = false,
+    slotProps,
     ...rest
   } = props;
 
@@ -46,6 +48,26 @@ const TextInput = (props) => {
           : {})}
         fullWidth
         variant="outlined"
+        // `aria-required`, deliberately NOT MUI's own `required` prop.
+        //
+        // `required` would make MUI append a second asterisk to the field's
+        // own label, on top of the one `FormInputLabel` already draws above
+        // it — two markers for one rule. This states the fact to assistive
+        // technology and leaves the visual marker in the one place that owns
+        // it. Native `required` is also avoided so the browser's own bubble
+        // cannot pre-empt the form's validation messages.
+        //
+        // `slotProps.htmlInput`, not the old `inputProps`: MUI v9 reaches the
+        // native <input> through slots, and the legacy prop is silently
+        // ignored — which is exactly how an accessibility attribute goes
+        // missing without anything failing.
+        slotProps={{
+          ...(slotProps || {}),
+          htmlInput: {
+            ...((slotProps || {}).htmlInput || {}),
+            ...(required ? { "aria-required": "true" } : {}),
+          },
+        }}
         // The error stays while the field has focus. Save now sends the
         // curator straight to the first invalid field, and a message that
         // vanished on arrival — along with aria-invalid and the

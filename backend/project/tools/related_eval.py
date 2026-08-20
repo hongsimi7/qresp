@@ -22,10 +22,39 @@ WHAT IT WILL NOT DO
 * It never fills a human rating in. `human_rating` is written empty and only
   a person may change it; every metric excludes unrated rows and reports how
   many there were.
+* It writes only into the output directory it is given, and never touches an
+  earlier `related-eval-*` run, a human review sheet, the production cache,
+  or MongoDB.
 * It never emits curator identity, owner/editor fields, RCC URLs, file-server
   paths, file or image names, the API key, or any request header. The
   allowlist that guarantees this is `eval_core.to_canonical_record` and
   `eval_core.CANDIDATE_KEYS`.
+
+Related External Papers, as displayed
+-------------------------------------
+Production asks the provider for `related.EXTERNAL_CANDIDATE_LIMIT` (150)
+candidates and shows at most `related.EXTERNAL_MAX_RESULTS` (25) of the ones
+that clear the gate, five to a page over five pages. This tool models that
+exactly: every candidate carries `display_rank` (1-25), `display_page` (1-5)
+and `visible`, so "the gate accepted it" is never confused with "a reader
+sees it". `external-review.tsv` is the BLIND sheet -- every visible page-1
+result, a deterministic stratified sample of pages 2-5, and a deterministic
+stratified sample of candidates the gate REJECTED, with no gate score,
+verdict, reason, rank or page number in it and the rows ordered by an opaque
+`pair_id` so position leaks nothing either.
+
+The rejected sample is what makes a false negative findable. Every visible
+candidate passed the gate, so a sheet built only from visible ones can only
+ever report zero false negatives -- and that zero is indistinguishable from a
+measured one. `summarize` reports the sampled denominator alongside the
+count, and reports `available: false` rather than `0` when no rejected
+candidate has been rated.
+
+Precision is measured over the UNIQUE VISIBLE CANDIDATES in
+`raw-results.jsonl`, never over review rows: a candidate can appear in more
+than one sheet, and how many sheets somebody was handed must not move a
+number. Ratings are collapsed per candidate first, and two different ratings
+for one candidate stop the run instead of one being picked.
 
 The scoring is not reimplemented. Candidate fetching comes from
 `project.related`, profiles and the gate from `project.relatedness`.
@@ -50,6 +79,13 @@ POOL_ALL_CS = "recommendations_all_cs"
 POOL_TITLE = "title_resolution"
 EXTERNAL_POOLS = (POOL_DEFAULT, POOL_ALL_CS, POOL_TITLE)
 SOURCE_INTERNAL = "internal"
+
+# The blind sheet for Related External Papers: every visible page-1 result, a
+# stratified sample of pages 2-5, and a stratified sample of the candidates
+# the gate REJECTED -- the last of which is the only way a false negative can
+# be found at all. A person's ratings live here, so it is a PROTECTED file
+# that no automated pass may write.
+EXTERNAL_REVIEW_FILE = "external-review.tsv"
 
 DEFAULT_RATE_LIMIT = 1.0        # requests per second, provider-wide
 DEFAULT_MAX_RETRIES = 3
@@ -181,29 +217,48 @@ def _provider_paper_id(candidate):
     return candidate.get("key") or None
 
 
+def _display_ranks(current, profiles, stats, limit):
+    """profile key -> the 1-based slot production would render it in.
+
+    The production ranking itself, not a copy of it: `R.rank` gates, sorts and
+    cuts exactly as `related.py` does, so a candidate is "visible" here if and
+    only if a reader would see it.
+    """
+    ranked = R.rank(current, profiles, stats, frozenset(), limit)
+    return {profile.key: index
+            for index, (profile, _assessment) in enumerate(ranked, start=1)}
+
+
 def _evaluate_candidates(current_record, candidates, stats, source,
-                         record_id=""):
+                         record_id="", display_limit=None):
     """Score every candidate and mark which ones production would show.
 
     Every candidate is kept, accepted or not: the rejected ones are the
-    evidence for the false-negative question.
+    evidence for the false-negative question. `display_limit` is the cap for
+    THIS list -- `related.EXTERNAL_MAX_RESULTS` for an external pool -- so the
+    recorded display rank and page describe the list a reader actually meets.
     """
+    if display_limit is None:
+        display_limit = related.EXTERNAL_MAX_RESULTS
     profiles = [(candidate, R.build_external_profile(candidate))
                 for candidate in candidates]
     current = R.build_internal_profile(current_record)
-    shown = {profile.key for profile, _ in R.rank(
-        current, [profile for _, profile in profiles], stats,
-        frozenset(), related.MAX_RESULTS)}
+    display = _display_ranks(current, [p for _, p in profiles], stats,
+                             display_limit)
 
     rows = []
     for rank_index, (candidate, profile) in enumerate(profiles):
         assessment = R.assess(current, profile, stats)
+        display_rank = display.get(profile.key)
         rows.append(core.candidate_row(
             source, rank_index, profile, assessment,
-            in_top5=profile.key in shown,
+            in_top5=bool(display_rank),
             provider_paper_id=_provider_paper_id(candidate),
             abstract=candidate.get("abstract"),
-            record_id=record_id))
+            record_id=record_id,
+            display_rank=display_rank,
+            provider_rank=candidate.get("provider_rank"),
+            page_size=related.EXTERNAL_RESULTS_PER_PAGE))
     return rows
 
 
@@ -211,14 +266,18 @@ def _external_pools(current_record, normalized, stats, cfg, live,
                     record_id=""):
     """Collect each pool separately, preserving the raw (pre-gate) candidates.
 
-    Returns (pools, outcomes).
+    Returns (pools, outcomes, pipelines). `pipelines` mirrors the production
+    `external.pipeline` counts per pool -- raw, after de-duplication, after
+    the gate, and how many the display cap left -- so "the list is short" can
+    be attributed to a stage instead of guessed at.
     """
     pools = {pool: [] for pool in EXTERNAL_POOLS}
     outcomes = {}
+    pipelines = {pool: _empty_pipeline() for pool in EXTERNAL_POOLS}
     if not live:
         for pool in EXTERNAL_POOLS:
             outcomes[pool] = "skipped_no_live"
-        return pools, outcomes
+        return pools, outcomes, pipelines
 
     doi = R.normalize_doi(normalized.get("doi"))
     title = normalized.get("title") or ""
@@ -250,12 +309,29 @@ def _external_pools(current_record, normalized, stats, cfg, live,
         candidates, outcome = related.fetch_external_candidates(
             provider_id, cfg, pool=pool_param)
         outcomes[pool] = outcome
+        pipelines[pool]["resolved"] = True
         if outcome != related.FOUND or not candidates:
             continue
+        raw_count = len(candidates)
         candidates = related.dedupe_candidates(candidates, doi, title)
-        pools[pool] = _evaluate_candidates(current_record, candidates, stats,
-                                           pool, record_id=record_id)
-    return pools, outcomes
+        rows = _evaluate_candidates(current_record, candidates, stats,
+                                    pool, record_id=record_id,
+                                    display_limit=related.EXTERNAL_MAX_RESULTS)
+        pools[pool] = rows
+        pipelines[pool] = {
+            "resolved": True,
+            "raw_candidates": raw_count,
+            "after_dedupe": len(candidates),
+            "after_gate": sum(1 for row in rows
+                              if row["gate_decision"] == "accepted"),
+            "displayed": sum(1 for row in rows if row["visible"]),
+        }
+    return pools, outcomes, pipelines
+
+
+def _empty_pipeline():
+    return {"resolved": False, "raw_candidates": 0, "after_dedupe": 0,
+            "after_gate": 0, "displayed": 0}
 
 
 def _internal_rows(entry, corpus_entries, stats):
@@ -269,19 +345,23 @@ def _internal_rows(entry, corpus_entries, stats):
     others = [(other, R.build_internal_profile(other["record"]))
               for other in corpus_entries
               if other["normalized"]["id"] != entry["normalized"]["id"]]
-    shown = {profile.key for profile, _ in R.rank(
-        current, [profile for _, profile in others], stats, frozenset(),
-        related.MAX_RESULTS)}
+    # The INTERNAL cap, which the external widening did not touch, and no
+    # pagination: Related Qresp Records is rendered whole.
+    display = _display_ranks(current, [profile for _, profile in others],
+                             stats, related.MAX_RESULTS)
 
     rows = []
     for rank_index, (other, profile) in enumerate(others):
         assessment = R.assess(current, profile, stats)
+        display_rank = display.get(profile.key)
         row = core.candidate_row(
             SOURCE_INTERNAL, rank_index, profile, assessment,
-            in_top5=profile.key in shown,
+            in_top5=bool(display_rank),
             abstract=(other["record"].get("reference")
                       or {}).get("publishedAbstract"),
-            record_id=entry["normalized"]["id"])
+            record_id=entry["normalized"]["id"],
+            display_rank=display_rank,
+            page_size=related.MAX_RESULTS)
         row["provider_paper_id"] = None
         rows.append(row)
     rows.sort(key=lambda r: (-r["gate_score"], r["title"]))
@@ -301,7 +381,10 @@ def collect(args):
     except Exception as e:
         print("Could not read /api/search: %s" % type(e).__name__)
         return 2
-    print("  %d records visible" % len(search_records))
+    # The corpus count is VERIFIED, never assumed. A sweep is planned against
+    # what the instance publishes today, not against a number written down
+    # when the plan was made.
+    print("  %d records visible at /api/search" % len(search_records))
 
     if args.ids_file:
         wanted = _read_ids(args.ids_file)
@@ -358,6 +441,7 @@ def collect(args):
     client = (PolitesClient(session, rate_limit=args.rate_limit,
                             max_retries=args.max_retries)
               if args.live else OfflineClient())
+    _print_request_plan(chosen, args)
 
     record_rows = []
     original = related.requests
@@ -367,10 +451,11 @@ def collect(args):
             normalized = entry["normalized"]
             print("  [%d/%d] %s" % (index, len(chosen), normalized["id"]))
             internal = _internal_rows(entry, corpus_entries, stats)
-            pools, outcomes = _external_pools(
+            pools, outcomes, pipelines = _external_pools(
                 entry["record"], normalized, stats, cfg, args.live,
                 record_id=normalized["id"])
             record_rows.append({
+                "external_pipeline": pipelines,
                 "record_id": normalized["id"],
                 "record_title": normalized["title"],
                 "record_abstract": core.clip_abstract(normalized["abstract"]),
@@ -387,6 +472,44 @@ def collect(args):
 
     _write_outputs(args, record_rows, skipped, api_key_present, client)
     return 0
+
+
+def _print_request_plan(chosen, args):
+    """What this run will cost the provider, printed BEFORE it spends it.
+
+    An upper bound, not a guess: a record whose lookup fails skips the pools
+    behind it, so the real total can only be lower. Printed for a dry run too,
+    because the number that matters has to be knowable in advance.
+    """
+    with_doi = sum(1 for entry in chosen if entry["normalized"].get("doi"))
+    # Per record: a DOI resolution when there is a DOI, a title resolution
+    # always, then one recommendations call per pool that resolved.
+    resolutions = with_doi + len(chosen)
+    recommendations = len(chosen) * len(EXTERNAL_POOLS)
+    total = resolutions + recommendations
+    rate = args.rate_limit if args.rate_limit > 0 else 0
+    print("\nPLANNED EXTERNAL REQUESTS (upper bound)")
+    print("  records                      %d" % len(chosen))
+    print("  ...with a DOI                %d" % with_doi)
+    print("  resolution calls             %d" % resolutions)
+    print("  recommendation calls         %d  (%d pools x %d records)"
+          % (recommendations, len(EXTERNAL_POOLS), len(chosen)))
+    print("  TOTAL                        %d" % total)
+    print("  rate limit                   %.2f requests/second" % rate)
+    if rate:
+        print("  minimum wall time            %.1f minutes"
+              % (total / rate / 60.0))
+    print("  retries after HTTP 429       up to %d, honouring Retry-After"
+          % args.max_retries)
+    print("  candidates requested per call %d"
+          % related.EXTERNAL_CANDIDATE_LIMIT)
+    print("  external display cap          %d (%d per page x %d pages)"
+          % (related.EXTERNAL_MAX_RESULTS, related.EXTERNAL_RESULTS_PER_PAGE,
+             related.EXTERNAL_MAX_PAGES))
+    if not args.live:
+        print("  --live was NOT given: no request will be made.\n")
+    else:
+        print("")
 
 
 def _read_ids(path):
@@ -431,13 +554,30 @@ def _write_outputs(args, record_rows, skipped, api_key_present, client):
     with io.open(tsv_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(core.render_tsv(rows))
 
+    # The BLIND sheet for the question this run exists to answer: of the
+    # external papers a reader is actually shown, how many are related?
+    external_path = os.path.join(output_dir, EXTERNAL_REVIEW_FILE)
+    external_rows, external_report = core.external_review_rows(
+        record_rows, POOL_DEFAULT,
+        deep_sample=getattr(args, "external_review_sample",
+                            core.DEFAULT_DEEP_SAMPLE),
+        rejected_sample=getattr(args, "external_rejected_sample",
+                                core.DEFAULT_REJECTED_SAMPLE))
+    with io.open(external_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(core.render_tsv(external_rows))
+
     summary = core.collection_summary(
-        record_rows, skipped, args.sample_size, args.live, api_key_present)
+        record_rows, skipped, args.sample_size, args.live, api_key_present,
+        production_source=POOL_DEFAULT,
+        candidate_limit=related.EXTERNAL_CANDIDATE_LIMIT,
+        page_size=related.EXTERNAL_RESULTS_PER_PAGE,
+        max_pages=related.EXTERNAL_MAX_PAGES)
     summary["provider_requests"] = {
         "calls": client.calls,
         "retries": client.retries,
         "rate_limited": client.rate_limited,
     }
+    summary["external_review_export"] = external_report
     summary_path = os.path.join(output_dir, "summary.json")
     with io.open(summary_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(core.dumps(summary) + "\n")
@@ -445,9 +585,30 @@ def _write_outputs(args, record_rows, skipped, api_key_present, client):
     print("\nWrote:")
     print("  %s   (%d records)" % (raw_path, len(record_rows)))
     print("  %s   (%d rows to rate)" % (tsv_path, len(rows) - 1))
+    print("  %s   (%d rows: %d on page 1, %d sampled from pages 2-%d, "
+          "%d sampled from the %d the gate REJECTED)"
+          % (external_path, external_report["rows"],
+             external_report["page_1_rows"],
+             external_report["pages_2_to_5_rows"],
+             related.EXTERNAL_MAX_PAGES,
+             external_report["rejected_rows"],
+             external_report["rejected_available"]))
     print("  %s" % summary_path)
-    print("\nNext: fill in human_rating (related | partial | unrelated) in")
-    print("%s, then run:" % tsv_path)
+    production = summary.get("external_production") or {}
+    if production:
+        print("\nProduction external pool (%s):" % POOL_DEFAULT)
+        for key in ("records", "records_resolved_at_provider",
+                    "records_with_candidates",
+                    "records_with_a_displayed_result", "raw_candidates",
+                    "after_dedupe", "after_gate", "displayed"):
+            print("  %-32s %s" % (key, production.get(key)))
+        print("  %-32s %s" % ("displayed_by_page",
+                              production.get("displayed_by_page")))
+    print("\nThese are COVERAGE numbers. They say nothing about whether the")
+    print("displayed papers are related -- that needs human ratings.")
+    print("\nNext: a domain expert fills human_rating "
+          "(related | partial | unrelated) in")
+    print("%s, then run:" % external_path)
     print("  python -m project.tools.related_eval summarize --output-dir %s"
           % output_dir)
 
@@ -459,7 +620,8 @@ def _write_outputs(args, record_rows, skipped, api_key_present, client):
 # live there, and an automated pass must never be able to touch them.
 AI_OUTPUT_FILES = ("ai-review.tsv", "ai-review.jsonl", "ai-summary.json",
                    "expert-review.tsv")
-PROTECTED_FILES = ("human-review.tsv", "first-pass-human-review.tsv")
+PROTECTED_FILES = ("human-review.tsv", "first-pass-human-review.tsv",
+                   EXTERNAL_REVIEW_FILE)
 DEFAULT_AI_RATE_LIMIT = 0.5     # provider requests per second
 
 
@@ -1005,39 +1167,118 @@ def smoke_sample(args):
 
 # ---------------------------------------------------------------- summarizing
 
+def _load_records(raw_path):
+    records = []
+    if not os.path.isfile(raw_path):
+        return records
+    with io.open(raw_path, encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                records.append(json.loads(line))
+    return records
+
+
+def _read_review_files(output_dir):
+    """Every review sheet present, read into one list of rows.
+
+    Two sheets can exist side by side: the original `human-review.tsv`, which
+    shows the gate's own verdict, and the blind `external-review.tsv`, which
+    deliberately does not. Both are a person's ratings and both count.
+    Returns (rows, errors, files_read).
+    """
+    rows, errors, read = [], [], []
+    for name in ("human-review.tsv", EXTERNAL_REVIEW_FILE):
+        path = os.path.join(output_dir, name)
+        if not os.path.isfile(path):
+            continue
+        with io.open(path, encoding="utf-8") as handle:
+            parsed, problems = core.parse_tsv(handle.read())
+        if problems:
+            errors.extend("%s: %s" % (name, problem) for problem in problems)
+            continue
+        rows.extend(parsed)
+        read.append(name)
+    return rows, errors, read
+
+
 def summarize(args):
     output_dir = args.output_dir
-    tsv_path = os.path.join(output_dir, "human-review.tsv")
     raw_path = os.path.join(output_dir, "raw-results.jsonl")
-    if not os.path.isfile(tsv_path):
-        print("No review file at %s" % tsv_path)
-        return 2
 
-    with io.open(tsv_path, encoding="utf-8") as handle:
-        rows, errors = core.parse_tsv(handle.read())
+    rows, errors, files_read = _read_review_files(output_dir)
     if errors:
-        print("The review file could not be read:")
+        print("A review file could not be read:")
         for error in errors:
             print("  - %s" % error)
         return 2
+    if not files_read:
+        print("No review file in %s (expected human-review.tsv and/or %s)"
+              % (output_dir, EXTERNAL_REVIEW_FILE))
+        return 2
+    print("Read %s" % ", ".join(files_read))
+
+    records = _load_records(raw_path)
+    index = core.candidate_index(records)
+
+    # STOP before scoring if two sheets disagree about the same candidate.
+    # Picking one of two contradictory ratings would produce a number nobody
+    # can reproduce, and nothing downstream would ever show that it happened.
+    _ratings, join = core.collect_ratings(rows, index)
+    if join["conflicts"]:
+        print("STOPPING: the review files give the same candidate more than "
+              "one rating.")
+        for conflict in join["conflicts"][:20]:
+            print("  %s | %s | %s -> %s"
+                  % (conflict["record_id"], conflict["source"],
+                     (conflict["candidate_title"] or "")[:60],
+                     ", ".join(conflict["ratings"])))
+        if len(join["conflicts"]) > 20:
+            print("  ...and %d more" % (len(join["conflicts"]) - 20))
+        print("  Decide which rating is right and correct the sheets; this "
+              "tool will not choose for you.")
+        return 3
+    if join["duplicate_rows_collapsed"]:
+        print("  %d duplicate review row(s) collapsed to one rating each "
+              "(the same candidate is in more than one sheet)"
+              % join["duplicate_rows_collapsed"])
 
     top5_keys = set()
-    if os.path.isfile(raw_path):
-        with io.open(raw_path, encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                record = json.loads(line)
-                candidates = list(record.get("internal") or [])
-                for pool in (record.get("external") or {}).values():
-                    candidates.extend(pool)
-                for candidate in candidates:
-                    if candidate.get("in_top5"):
-                        top5_keys.add((record["record_id"],
-                                       candidate["source"],
-                                       candidate["title"]))
+    for record in records:
+        candidates = list(record.get("internal") or [])
+        for pool in (record.get("external") or {}).values():
+            candidates.extend(pool)
+        for candidate in candidates:
+            if candidate.get("visible", candidate.get("in_top5")):
+                top5_keys.add((record["record_id"], candidate["source"],
+                               candidate["title"]))
+
+    # The blind sheet carries no verdict of its own, by design. Fill it in
+    # from the raw results so a blind rating is scored exactly like any other
+    # -- and leave a row that resolves to no single candidate alone, so it
+    # falls out of the gate-error counts instead of being guessed at.
+    for row in rows:
+        if row.get("gate_decision"):
+            continue
+        facts = core.lookup_candidate(row, index)
+        if facts:
+            row["gate_decision"] = facts.get("gate_decision") or ""
 
     metrics = core.score_ratings(rows, top5_keys)
+    # `score_ratings` above measures the review FILE, so its row counts are
+    # row counts. This says how many of those rows were the same candidate
+    # twice, so the two families of number cannot be confused.
+    metrics["review_join"] = {
+        "rows": join["rows"],
+        "rows_unmatched": join["rows_unmatched"],
+        "duplicate_rows_collapsed": join["duplicate_rows_collapsed"],
+        "candidates_named": join["candidates_named"],
+    }
+    # The raw results, not the review rows, are the universe this is measured
+    # over -- see `external_display_metrics`.
+    metrics["external_display"] = core.external_display_metrics(
+        rows, records, POOL_DEFAULT,
+        max_pages=related.EXTERNAL_MAX_PAGES,
+        page_size=related.EXTERNAL_RESULTS_PER_PAGE, index=index)
     metrics_path = os.path.join(output_dir, "metrics.json")
     with io.open(metrics_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(core.dumps(metrics) + "\n")
@@ -1045,13 +1286,18 @@ def summarize(args):
     print("Rated %d of %d rows (%d still unrated, excluded from every metric)"
           % (metrics["rows_rated"], metrics["rows_total"],
              metrics["rows_unrated"]))
+    external = metrics["external_display"]
+    _print_external_display(external)
     if not metrics["rows_rated"]:
-        print("Nothing to measure yet.")
+        print("\nNothing to measure yet: no row has been rated, so there is "
+              "no accuracy figure to report.")
+        print("Wrote %s" % metrics_path)
         return 0
-    print("precision@5            %.3f  (related only)"
-          % metrics["precision_at_5"])
-    print("precision@5 lenient    %.3f  (related + partial)"
-          % metrics["precision_at_5_lenient"])
+    print("\nWHOLE REVIEW FILE (both sources, accepted and rejected)")
+    print("precision@shown        %s  (related only)"
+          % _fmt(metrics["precision_at_5"]))
+    print("precision@shown lenient %s  (related + partial)"
+          % _fmt(metrics["precision_at_5_lenient"]))
     print("false positives        %d  (gate accepted, human said unrelated)"
           % metrics["false_positives"])
     print("false negatives        %d  (gate rejected, human said related or "
@@ -1060,12 +1306,90 @@ def summarize(args):
           % metrics["record_coverage"]["ratio"])
     for pool in sorted(metrics["pools"]):
         stats = metrics["pools"][pool]
-        print("  %-26s rated=%d strict=%.3f lenient=%.3f fp=%d fn=%d"
-              % (pool, stats["rated"], stats["precision_strict"],
-                 stats["precision_lenient"], stats["false_positives"],
+        print("  %-26s rated=%d strict=%s lenient=%s fp=%d fn=%d"
+              % (pool, stats["rated"], _fmt(stats["precision_strict"]),
+                 _fmt(stats["precision_lenient"]), stats["false_positives"],
                  stats["false_negatives"]))
     print("\nWrote %s" % metrics_path)
     return 0
+
+
+def _fmt(value):
+    """A number, or `n/a` for one that was never measured.
+
+    Printing 0.000 for "nobody has rated this" is the console half of the bug
+    the nullable JSON fields fix: the two readings are opposite findings and
+    must not look the same.
+    """
+    return "n/a  " if value is None else "%.3f" % value
+
+
+def _print_external_display(external):
+    """The external list a reader actually sees, page by page."""
+    print("\nRELATED EXTERNAL PAPERS AS DISPLAYED (%s, cap %d = %d x %d)"
+          % (external["source"], external["display_cap"],
+             external["page_size"], external["max_pages"]))
+    # Unique candidates from raw-results.jsonl -- NOT rows in a review file,
+    # which can name the same candidate in two sheets.
+    print("  visible candidates       %d  (unique, from raw results)"
+          % external["visible_candidates"])
+    print("  ...rated                 %d  (coverage %s)"
+          % (external["visible_candidates_rated"],
+             _fmt(external["rating_coverage"])))
+    print("  ...unrated               %d  (excluded from every precision)"
+          % external["visible_candidates_unrated"])
+    print("  review rows read         %d" % external["review_rows"])
+    if external["duplicate_rows_collapsed"]:
+        print("  ...duplicates collapsed  %d  (same candidate in two sheets)"
+              % external["duplicate_rows_collapsed"])
+    if external["rows_unmatched"]:
+        print("  ! %d review row(s) matched no single raw candidate and were "
+              "not scored" % external["rows_unmatched"])
+    if not external["visible_candidates_rated"]:
+        print("  No visible external result has been rated yet, so there is "
+              "NO precision figure (the JSON reports null, not 0).")
+    else:
+        for label, key in (("all visible", "all_visible"),
+                           ("page 1", "page_1"),
+                           ("pages 2-%d" % external["max_pages"],
+                            "pages_2_to_5")):
+            bucket = external[key]
+            print("  %-14s rated=%-4d of %-4d strict=%s lenient=%s"
+                  % (label, bucket["rated"], bucket["candidates"],
+                     _fmt(bucket["precision_strict"]),
+                     _fmt(bucket["precision_lenient"])))
+        for page in sorted(external["per_page"], key=int):
+            bucket = external["per_page"][page]
+            print("    page %-9s rated=%-4d of %-4d strict=%s lenient=%s"
+                  % (page, bucket["rated"], bucket["candidates"],
+                     _fmt(bucket["precision_strict"]),
+                     _fmt(bucket["precision_lenient"])))
+
+    positives = external["false_positives"]
+    print("  false positives          %s  (of %d rated visible)"
+          % ("unmeasured" if not positives["available"]
+             else positives["count"], positives["rated"]))
+    negatives = external["false_negatives_sampled"]
+    if not negatives["available"]:
+        print("  false negatives          UNMEASURED -- %d rejected candidate"
+              "(s) were put in front of a reviewer and %d rated. This is NOT "
+              "zero." % (negatives["sampled_candidates"], negatives["rated"]))
+    else:
+        print("  false negatives          %d of %d rated rejected candidates "
+              "(sample of %d rejected in the pool -- NOT a corpus-wide rate)"
+              % (negatives["count"], negatives["rated"],
+                 negatives["rejected_candidates_in_pool"]))
+    accepted = external["records_with_an_accepted_external_result"]
+    if accepted["available"]:
+        print("  records with >=1 accepted external result  %d of %d "
+              "(%.1f%%)"
+              % (accepted["records"],
+                 accepted["records_with_a_visible_result"],
+                 100.0 * accepted["ratio"]))
+    else:
+        print("  records with >=1 accepted external result  unmeasured (of "
+              "%d with a visible result)"
+              % accepted["records_with_a_visible_result"])
 
 
 # ---------------------------------------------------------------------- CLI
@@ -1107,6 +1431,19 @@ def build_parser():
                                 help="rejected candidates per source to put "
                                      "in the review file (default 5). These "
                                      "are what reveal false negatives.")
+    collect_parser.add_argument(
+        "--external-review-sample", type=int, default=core.DEFAULT_DEEP_SAMPLE,
+        help="rows to draw from external display pages 2-5 for %s (default "
+             "%d). Page 1 is always exported in full."
+             % (EXTERNAL_REVIEW_FILE, core.DEFAULT_DEEP_SAMPLE))
+    collect_parser.add_argument(
+        "--external-rejected-sample", type=int,
+        default=core.DEFAULT_REJECTED_SAMPLE,
+        help="rows to draw from the external candidates the gate REJECTED "
+             "(default %d), stratified by score band and spread across "
+             "records. Without them a false negative cannot be found at all, "
+             "because every displayed candidate passed the gate."
+             % core.DEFAULT_REJECTED_SAMPLE)
     collect_parser.add_argument("--include-flagged", action="store_true",
                                 help="also sample records flagged as test or "
                                      "inconsistent")

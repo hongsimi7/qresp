@@ -11,7 +11,7 @@ import {
 import { namesUtil } from "../../Utils/utils";
 
 import { TextInputField } from "../Form/InputFields";
-import { SubmitAndReset, FormInputLabel } from "../Form/Util";
+import { SubmitAndReset, FormInputLabel, RequiredFieldLegend } from "../Form/Util";
 import NameInput from "../Form//NameInput";
 import Drawer from "../drawer";
 
@@ -120,6 +120,9 @@ const PaperInfoForm = ({ editor }) => {
     <Drawer heading="Qresp Curation Information" defaultOpen={true}>
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container direction="column" spacing={1}>
+          <Grid>
+            <RequiredFieldLegend />
+          </Grid>
           <Grid>
             <Grid
               container

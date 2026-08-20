@@ -8,7 +8,7 @@ import * as Yup from "yup";
 import { Grid, Box } from "@mui/material";
 
 import { SelectInputField } from "../Form/InputFields";
-import { SubmitAndReset } from "../Form/Util";
+import { SubmitAndReset, RequiredFieldLegend } from "../Form/Util";
 import Drawer from "../drawer";
 import { RegularStyledButton } from "../button";
 
@@ -49,6 +49,9 @@ const LicenseInfoForm = ({ editor }) => {
     <Drawer heading="Choose a License" defaultOpen={true}>
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container spacing={1} direction="column">
+          <Grid>
+            <RequiredFieldLegend />
+          </Grid>
           <Grid>
             <SelectInputField
               id="license"

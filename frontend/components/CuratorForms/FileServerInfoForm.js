@@ -17,7 +17,7 @@ import Drawer from "../drawer";
 import FolderGuide from "../CuratorElements/FolderGuide";
 import RadioInput from "../Form/RadioInput";
 import { SelectInputField, TextInputField } from "../Form/InputFields";
-import { SubmitAndReset } from "../Form/Util";
+import { SubmitAndReset, RequiredFieldLegend } from "../Form/Util";
 import { RegularStyledButton } from "../button";
 
 import { useForm } from "react-hook-form";
@@ -179,6 +179,9 @@ const FileServerInfoForm = ({ editor }) => {
     <Drawer heading="Where is the paper" defaultOpen={true}>
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid direction="column" container spacing={1}>
+          <Grid>
+            <RequiredFieldLegend />
+          </Grid>
           <Grid>
             <RadioInput
               name="connectionType"

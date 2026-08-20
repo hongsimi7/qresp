@@ -2,7 +2,7 @@ import { Fragment, useContext } from "react";
 import PropTypes from "prop-types";
 
 import Link from "next/link";
-import { Typography, Grid, Box, Paper } from "@mui/material";
+import { Chip, Typography, Grid, Box, Paper } from "@mui/material";
 import { styled } from "@mui/material/styles";
 
 import Tag from "../tag";
@@ -22,9 +22,23 @@ const Summary = ({ rowdata }) => {
     _Search__tags,
     _Search__title,
     _Search__server,
+    _Search__sources,
   } = rowdata;
 
   const { setQuery } = useContext(TableSearchContext);
+
+  // Which Qresp node publishes this record. The Explorer lists several nodes
+  // at once, so "where did this come from" is a question the card has to
+  // answer; a paper published on two nodes carries both tags rather than
+  // appearing twice.
+  //
+  // Older callers pass no `_Search__sources` (a single-node list, or a saved
+  // row), so the record's own server is the fallback and the tag is simply
+  // absent when there is nothing true to say.
+  const sources =
+    Array.isArray(_Search__sources) && _Search__sources.length
+      ? _Search__sources
+      : [];
 
   return (
     <Fragment>
@@ -69,6 +83,41 @@ const Summary = ({ rowdata }) => {
                 </Typography>
               </a>
             </Grid>
+            {sources.length ? (
+              <Grid size={12}>
+                {/* A LIST, so a screen reader hears "2 items" for a paper on
+                    two nodes. The label carries the word "Source" in its
+                    accessible name: colour and position alone would not tell
+                    a reader what "Duke" beside a title means, and the visible
+                    text is the label itself rather than a colour swatch. */}
+                <Box
+                  component="ul"
+                  aria-label="Repositories publishing this record"
+                  sx={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 0.5,
+                    listStyle: "none",
+                    m: 0,
+                    mb: 0.5,
+                    p: 0,
+                  }}
+                >
+                  {sources.map((source) => (
+                    <Box component="li" key={source.server}>
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        color="primary"
+                        label={source.label}
+                        aria-label={`Source repository: ${source.label}`}
+                        data-testid="record-source"
+                      />
+                    </Box>
+                  ))}
+                </Box>
+              </Grid>
+            ) : null}
             <Grid size={12}>
               {_Search__tags.map((tag) => (
                 <Tag

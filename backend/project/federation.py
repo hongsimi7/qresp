@@ -312,6 +312,35 @@ def _shipped_servers():
         return []
 
 
+def _server_names():
+    """origin -> the short human label that list gives it ("UChicago").
+
+    Read from the SAME entries the allowlist is built from, so a name is a
+    fact this deployment already holds rather than something inferred from a
+    hostname. The Explorer shows several nodes' records in one list, and a
+    reader has to be able to tell which node a record came from; deriving
+    "UChicago" from a URL containing `uchicago.edu` would be a guess that
+    breaks the moment a node is renamed or a second node shares a domain.
+
+    A server with no name simply has none here, and the caller falls back to
+    the origin itself -- never to an invented label.
+    """
+    names = {}
+    for entry in list(_shipped_servers()) + list(_registry_servers()):
+        if not isinstance(entry, dict):
+            continue
+        origin = parse_origin(entry.get("qresp_server_url"))
+        name = str(entry.get("qresp_server_name") or "").strip()
+        if origin and name and origin not in names:
+            names[origin] = name[:MAX_SERVER_NAME_CHARS]
+    return names
+
+
+# A label, not a description. Bounded so a registry this server does not
+# control cannot push an essay into every record card in the Explorer.
+MAX_SERVER_NAME_CHARS = 40
+
+
 def _registry_servers():
     """The federated registry, fetched WITH certificate verification.
 
@@ -487,8 +516,14 @@ def federation_servers():
     survive the HTTPS, literal-address and DNS checks at request time.
     """
     origins = sorted(allowed_origins())
+    names = _server_names()
     return {
+        # `qresp_server_name` is ADDITIVE, and empty for a server this
+        # deployment holds no name for. The Explorer labels each record with
+        # the node it came from, and that label has to be data: it is read
+        # from the federation list, never inferred from the hostname.
         "servers": [{"qresp_server_url": origin,
+                     "qresp_server_name": names.get(origin, ""),
                      "isActive": "Yes",
                      "qresp_maintainer_emails": []}
                     for origin in origins],

@@ -8,7 +8,7 @@ import * as Yup from "yup";
 import { Grid } from "@mui/material";
 
 import { TextInputField, NameInputField } from "../Form/InputFields";
-import { SubmitAndReset } from "../Form/Util";
+import { SubmitAndReset, RequiredFieldLegend } from "../Form/Util";
 import Drawer from "../drawer";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
@@ -52,6 +52,9 @@ const CuratorInfoForm = ({ editor }) => {
     <Drawer heading="Who is Curating the paper" defaultOpen={true}>
       <form onSubmit={handleSubmit(onSubmit)}>
         <Grid container direction="column" spacing={1}>
+          <Grid>
+            <RequiredFieldLegend />
+          </Grid>
           <Grid>
             <NameInputField
               ids={nameFields}

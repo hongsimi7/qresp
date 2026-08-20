@@ -17,6 +17,7 @@ import ExtraFieldInput, {
   extraFieldsSchema,
 } from "../Form/ExtraFieldInput";
 import { RegularStyledButton } from "../button";
+import { RequiredFieldLegend } from "../Form/Util";
 
 import { useForm } from "react-hook-form";
 import { useInvalidFieldFocus } from "../../Utils/invalidField";
@@ -167,6 +168,9 @@ const DatasetsInfoForm = () => {
             onSubmit={handleSubmit(onSubmit, focusFirstInvalid)}
           >
             <Grid container direction="column" spacing={1}>
+              <Grid>
+                <RequiredFieldLegend />
+              </Grid>
               <Grid>
                 <TextInputField
                   id="datasetFiles"

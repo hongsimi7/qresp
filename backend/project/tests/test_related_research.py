@@ -133,6 +133,33 @@ def recommendation(title, abstract, doi=None, year=2022, authors=("Someone Else"
     }
 
 
+# Distinct invented words, generated rather than listed. The external tests
+# need up to 150 candidates that are genuinely different WORKS, and a title
+# key drops digits -- so "variant 1" and "variant 2" are correctly ONE work,
+# not two, and numbering them would measure de-duplication instead of the cap.
+# Nothing here is domain vocabulary; that is the point (see relatedness.py).
+_SYLLABLES = ("ka", "lo", "mi", "ru", "ne", "ta", "vi", "zo", "pe", "du")
+_WORDS = ["".join((first, second, third))
+          for first in _SYLLABLES
+          for second in _SYLLABLES
+          for third in _SYLLABLES]
+
+
+def clones(count, prefix="clone"):
+    """`count` distinct external candidates that all clear the gate.
+
+    Same abstract as the subject record, distinct titles and DOIs: what is
+    under test is the CAP, so every candidate has to pass on its own merits
+    and none may collide with another.
+    """
+    return [recommendation(
+        "Rareword resonance in gadgetite %s" % _WORDS[index],
+        "Rareword resonance of gadgetite lattices measured with a "
+        "cryogenic spectrometer and a tunable oscillator.",
+        doi="10.2000/%s-%s" % (prefix, _WORDS[index]))
+        for index in range(count)]
+
+
 RELATED_EXTERNAL = recommendation(
     "Rareword resonance in gadgetite single crystals",
     "Rareword resonance of gadgetite lattices measured with a cryogenic "
@@ -438,14 +465,58 @@ class TestInternalRecommendations(RelatedTestCase):
 # ------------------------------------------------------------ external list
 
 class TestExternalProvider(RelatedTestCase):
-    def test_at_most_twenty_candidates_are_requested_from_the_fixed_endpoint(self):
+    def test_the_request_asks_the_fixed_endpoint_for_150_candidates(self):
         _, stub = self.fetch()
         call = stub.recommendation_call
         self.assertIsNotNone(call)
         self.assertTrue(call["url"].startswith("https://api.semanticscholar.org/"))
-        self.assertEqual(20, call["params"]["limit"])
+        self.assertEqual(150, call["params"]["limit"])
         self.assertEqual(related.EXTERNAL_CANDIDATE_LIMIT,
                          call["params"]["limit"])
+
+    def test_a_full_150_candidate_answer_is_normalized_and_deduplicated(self):
+        # The provider may answer with the whole pool. Every entry has to
+        # survive normalization, and the de-duplication has to still be the
+        # thing that decides how many distinct works are left -- here 150
+        # entries of which 50 are repeats by DOI and 25 are repeats by title.
+        distinct = clones(75, prefix="bulk")
+        repeats_by_doi = [dict(paper, paperId="dup-doi-%d" % index,
+                               title="Some other spelling number %s"
+                                     % _WORDS[index])
+                          for index, paper in enumerate(distinct[:50])]
+        repeats_by_title = [dict(paper, paperId="dup-title-%d" % index,
+                                 externalIds={})
+                            for index, paper in enumerate(distinct[:25])]
+        payload = distinct + repeats_by_doi + repeats_by_title
+        self.assertEqual(150, len(payload))
+        cfg = related.config()
+        with mock.patch.object(related, 'requests',
+                               ProviderStub(recommendations=payload)):
+            candidates, outcome = related.fetch_external_candidates(
+                "S2-SUBJECT", cfg)
+        self.assertEqual(related.FOUND, outcome)
+        self.assertEqual(150, len(candidates))
+        kept = related.dedupe_candidates(candidates, "10.1000/subject",
+                                         "Rareword resonance of gadgetite "
+                                         "lattices")
+        self.assertEqual(75, len(kept))
+        # The provider's own position is carried for diagnostics, in order,
+        # and is not the provider's score.
+        self.assertEqual(list(range(150)),
+                         [c["provider_rank"] for c in candidates])
+        for candidate in candidates:
+            self.assertNotIn("score", candidate)
+
+    def test_more_than_150_returned_entries_are_not_processed(self):
+        # `limit` is a request, not a promise. The bound has to hold on what
+        # actually came back.
+        payload = clones(400, prefix="over")
+        cfg = related.config()
+        with mock.patch.object(related, 'requests',
+                               ProviderStub(recommendations=payload)):
+            candidates, _ = related.fetch_external_candidates("S2-SUBJECT",
+                                                              cfg)
+        self.assertEqual(related.EXTERNAL_CANDIDATE_LIMIT, len(candidates))
 
     def test_the_candidate_pool_is_the_providers_default_and_not_settable(self):
         # Measured live: the alternative pool ("all-cs") answers with Computer
@@ -623,19 +694,169 @@ class TestExternalProvider(RelatedTestCase):
         self.assertEqual("https://doi.org/10.2000/external-a", item["url"])
         self.assertEqual("10.2000/external-a", item["doi"])
 
-    def test_at_most_three_external_results(self):
-        # Distinct words, not digits: the title key drops numbers, so
-        # "... sample 1" and "... sample 2" are correctly one work, not nine.
-        shapes = ("films", "crystals", "powders", "whiskers", "nanorods",
-                  "ribbons", "spheres", "platelets", "foams")
-        clones = [recommendation(
-            "Rareword resonance in gadgetite %s" % shape,
-            "Rareword resonance of gadgetite lattices measured with a "
-            "cryogenic spectrometer and a tunable oscillator.",
-            doi="10.2000/clone-%s" % shape) for shape in shapes]
-        response, _ = self.fetch(provider=ProviderStub(recommendations=clones))
-        self.assertEqual(related.MAX_RESULTS,
-                         len(response.json()["external"]["results"]))
+    def test_at_most_twentyfive_external_results(self):
+        response, _ = self.fetch(
+            provider=ProviderStub(recommendations=clones(40)))
+        results = response.json()["external"]["results"]
+        self.assertEqual(25, len(results))
+        self.assertEqual(related.EXTERNAL_MAX_RESULTS, len(results))
+        # ...and the cap is EXTERNAL. The internal one is untouched by it.
+        self.assertEqual(3, related.MAX_RESULTS)
+        self.assertGreater(related.EXTERNAL_MAX_RESULTS, related.MAX_RESULTS)
+
+    def test_the_external_cap_is_five_pages_of_five(self):
+        # Stated as the product so the three numbers cannot drift: the UI
+        # derives its page count from the same relationship.
+        self.assertEqual(5, related.EXTERNAL_RESULTS_PER_PAGE)
+        self.assertEqual(5, related.EXTERNAL_MAX_PAGES)
+        self.assertEqual(related.EXTERNAL_RESULTS_PER_PAGE
+                         * related.EXTERNAL_MAX_PAGES,
+                         related.EXTERNAL_MAX_RESULTS)
+
+    def test_fewer_passing_candidates_give_a_shorter_list_never_a_padded_one(self):
+        # Nine clear the gate out of a pool of nine plus one that cannot.
+        # Nine is what a reader gets: the list is not topped up to 25, and
+        # the unrelated candidate is not promoted to fill a page.
+        response, _ = self.fetch(provider=ProviderStub(
+            recommendations=clones(9) + [UNRELATED_EXTERNAL]))
+        results = response.json()["external"]["results"]
+        self.assertEqual(9, len(results))
+        self.assertNotIn("A study of data analysis in another discipline",
+                         [item["title"] for item in results])
+        for item in results:
+            self.assertTrue(item["reasons"])
+
+    def test_the_internal_list_keeps_its_own_cap_when_the_external_one_grows(self):
+        # The same request that returns 25 external results must still return
+        # at most three internal ones. The two caps are separate constants
+        # precisely so widening one cannot widen the other.
+        for index in range(9):
+            Paper(**paper_doc(
+                "sibling%d" % index,
+                "Rareword resonance of gadgetite %s" % _WORDS[500 + index],
+                "Rareword resonance in gadgetite lattices measured with a "
+                "cryogenic spectrometer and a tunable oscillator.",
+                tags=["rareword resonance", "gadgetite"],
+                authors=["Robin Sharedname"],
+                doi="10.1000/sibling%d" % index)).save()
+        response, _ = self.fetch(
+            provider=ProviderStub(recommendations=clones(40)))
+        body = response.json()
+        self.assertEqual(3, len(body["internal"]["results"]))
+        self.assertEqual(25, len(body["external"]["results"]))
+
+
+class TestTheFeedbackContextIsIssuedHere(RelatedTestCase):
+    """A rating has to be ABOUT something, and this endpoint is the only thing
+    that knows what. It mints a signed note -- after resolving a public,
+    active record and computing the list -- which the feedback endpoint will
+    not store a rating without.
+    """
+
+    def setUp(self):
+        super(TestTheFeedbackContextIsIssuedHere, self).setUp()
+        # The test configuration ships no signing secret, and the feature
+        # fails closed without one.
+        self.previous_secret = connexionapp.app.secret_key
+        connexionapp.app.secret_key = "test-only-feedback-signing-secret"
+
+    def tearDown(self):
+        connexionapp.app.secret_key = self.previous_secret
+        super(TestTheFeedbackContextIsIssuedHere, self).tearDown()
+
+    def external(self, response):
+        return response.json()["external"]
+
+    def test_a_list_with_results_gets_a_signed_context(self):
+        from project import feedback_context
+        response, _ = self.fetch()
+        external = self.external(response)
+        self.assertTrue(external["results"])
+        token = external["feedback_context"]
+        with connexionapp.app.test_request_context():
+            payload = feedback_context.verify(token, self.subject_id,
+                                              "external")
+        # It attests the REAL counts, which is what makes the client's
+        # numbers unnecessary.
+        self.assertEqual(len(external["results"]), payload["results"])
+        self.assertEqual(1, payload["pages"])
+
+    def test_the_page_count_matches_what_the_ui_will_render(self):
+        from project import feedback_context
+        response, _ = self.fetch(
+            provider=ProviderStub(recommendations=clones(40)))
+        external = self.external(response)
+        self.assertEqual(25, len(external["results"]))
+        with connexionapp.app.test_request_context():
+            payload = feedback_context.verify(external["feedback_context"],
+                                              self.subject_id, "external")
+        self.assertEqual(25, payload["results"])
+        self.assertEqual(related.EXTERNAL_MAX_PAGES, payload["pages"])
+
+    def test_an_empty_external_list_gets_no_context(self):
+        # Nothing to rate, so nothing to sign -- which is what makes
+        # "these recommendations were unhelpful" unsayable about an empty
+        # section.
+        response, _ = self.fetch(provider=ProviderStub(recommendations=[]))
+        external = self.external(response)
+        self.assertEqual([], external["results"])
+        self.assertIsNone(external.get("feedback_context"))
+
+    def test_a_list_where_the_gate_rejected_everything_gets_no_context(self):
+        response, _ = self.fetch(
+            provider=ProviderStub(recommendations=[UNRELATED_EXTERNAL]))
+        self.assertIsNone(self.external(response).get("feedback_context"))
+
+    def test_an_unavailable_provider_gets_no_context(self):
+        stub = ProviderStub(recommendation_mode="timeout")
+        response, _ = self.fetch(provider=stub)
+        self.assertIsNone(self.external(response).get("feedback_context"))
+
+    def test_a_record_that_does_not_exist_gets_no_context(self):
+        response, _ = self.fetch(paper_id="60316fb93f58fc9075286688")
+        self.assertEqual(404, response.status_code)
+        self.assertNotIn("feedback_context", response.text)
+
+    def test_a_deactivated_record_gets_no_context(self):
+        # 404 for a reader who may not see it, so there is no answer to sign.
+        response, _ = self.fetch(paper_id=str(self.papers["hidden"].id))
+        self.assertEqual(404, response.status_code)
+        self.assertNotIn("feedback_context", response.text)
+
+    def test_the_feature_being_off_gets_no_context(self):
+        response, _ = self.fetch(env=DISABLED)
+        self.assertIsNone(response.json()["external"].get("feedback_context"))
+
+    def test_the_token_carries_no_recommendation_detail(self):
+        import base64
+        response, _ = self.fetch()
+        body = self.external(response)["feedback_context"].split(".")[0]
+        payload = base64.urlsafe_b64decode(
+            body + "=" * (-len(body) % 4)).decode("utf-8").lower()
+        for leak in ("rareword", "gadgetite", "10.2000", "doi", "title",
+                     "score", "reason"):
+            self.assertNotIn(leak, payload, leak)
+
+    def test_a_server_without_a_secret_still_serves_the_recommendations(self):
+        # Fail closed on the TOKEN, never on the section: a deployment with no
+        # secret loses the rating widget and keeps its recommendations.
+        connexionapp.app.secret_key = ""
+        response, _ = self.fetch()
+        external = self.external(response)
+        self.assertEqual(200, response.status_code)
+        self.assertTrue(external["results"])
+        self.assertIsNone(external.get("feedback_context"))
+
+    def test_the_cached_answer_does_not_keep_one_readers_token(self):
+        # The token is minted on the way OUT, after every cache. Baked into a
+        # cached body it would be served long past its expiry.
+        first, _ = self.fetch()
+        second, stub = self.fetch()
+        self.assertEqual([], stub.calls)          # served from the cache
+        self.assertTrue(self.external(second)["feedback_context"])
+        stored = RelatedResearchCache.objects(
+            paper_id=self.subject_id).first()
+        self.assertNotIn("feedback_context", str(stored.to_mongo().to_dict()))
 
 
 class TestExternalDeduplication(RelatedTestCase):

@@ -7,10 +7,14 @@
  * "0 Records Available" -- which is indistinguishable from a server that
  * simply has no records.
  *
- * `/explorer` now redirects, server-side, to the default server's results.
- * The default comes from the BACKEND, which is the thing that enforces the
- * federation allowlist; no URL is hardcoded here, and picking servers by hand
- * is still reachable.
+ * `/explorer` now redirects, server-side, to the results of EVERY federated
+ * node at once, so a reader looking for a paper does not have to know which
+ * institution hosts it. The list comes from the BACKEND, which is the thing
+ * that enforces the federation allowlist; no URL is hardcoded here, and
+ * picking servers by hand is still reachable.
+ *
+ * `default_server` still decides the ORDER -- the deployment's own node leads
+ * -- but no longer decides who is in the list.
  */
 jest.mock("axios");
 import axios from "axios";
@@ -33,16 +37,30 @@ const ctx = (query = {}) => ({
 describe("explorer getServerSideProps", () => {
   afterEach(() => jest.resetAllMocks());
 
-  it("redirects straight to the backend's default server results", async () => {
+  it("redirects to every federated node at once", async () => {
     axios.get.mockResolvedValue({ data: FEDERATION });
     const result = await getServerSideProps(ctx());
 
+    // Both nodes, default first. Opening on one of them left half the
+    // federation invisible unless a reader found `?choose=1`.
     expect(result.redirect.destination).toBe(
-      `/search?servers=${encodeURIComponent(FEDERATION.default_server)}`
+      `/search?servers=${encodeURIComponent("https://alpha.example.org")},` +
+        `${encodeURIComponent("https://beta.example.org")}`
     );
     // A redirect, not a rewrite: back/forward and refresh all land on a real
-    // URL that says which server is being searched.
+    // URL that says which servers are being searched.
     expect(result.redirect.permanent).toBe(false);
+  });
+
+  it("puts the deployment's own node first", async () => {
+    axios.get.mockResolvedValue({
+      data: { ...FEDERATION, default_server: "https://beta.example.org" },
+    });
+    const result = await getServerSideProps(ctx());
+    const [first] = decodeURIComponent(
+      result.redirect.destination.split("servers=")[1]
+    ).split(",");
+    expect(first).toBe("https://beta.example.org");
   });
 
   it("asks the backend, and only the backend, which server that is", async () => {
@@ -59,6 +77,8 @@ describe("explorer getServerSideProps", () => {
     axios.get.mockResolvedValue({ data: FEDERATION });
     await getServerSideProps(ctx());
 
+    // Searching both nodes is what /search does, one node at a time, AFTER
+    // the redirect. This page still asks nobody but its own backend.
     const called = axios.get.mock.calls.map(([url]) => url).join(" ");
     expect(called).not.toMatch(/duke/i);
     expect(called).not.toMatch(/beta\.example\.org/);
@@ -72,7 +92,8 @@ describe("explorer getServerSideProps", () => {
     });
     const result = await getServerSideProps(ctx());
     expect(result.redirect.destination).toBe(
-      `/search?servers=${encodeURIComponent("https://alpha.example.org")}`
+      `/search?servers=${encodeURIComponent("https://alpha.example.org")},` +
+        `${encodeURIComponent("https://beta.example.org")}`
     );
   });
 
@@ -86,9 +107,12 @@ describe("explorer getServerSideProps", () => {
       },
     });
     const result = await getServerSideProps(ctx());
+    // Ignored for ordering, and it adds nothing to the list either.
     expect(result.redirect.destination).toBe(
-      `/search?servers=${encodeURIComponent("https://alpha.example.org")}`
+      `/search?servers=${encodeURIComponent("https://alpha.example.org")},` +
+        `${encodeURIComponent("https://beta.example.org")}`
     );
+    expect(result.redirect.destination).not.toMatch(/not-listed/);
   });
 
   it("shows an unavailable page, not a redirect, when federation is empty", async () => {

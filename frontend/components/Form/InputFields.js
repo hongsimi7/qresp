@@ -16,7 +16,11 @@ const TextInputField = (props) => {
           <Grid>{action}</Grid>
         </Grid>
         <Grid size={12}>
-          <TextInput id={id} {...rest} />
+          {/* `required` reaches the INPUT as well as the label: the visible
+              marker sits on the label, and the input itself carries
+              `aria-required` so the rule is announced when focus lands on
+              it. One rule, two channels, still one asterisk. */}
+          <TextInput id={id} required={required} {...rest} />
         </Grid>
       </Grid>
   );

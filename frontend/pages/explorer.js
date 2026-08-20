@@ -54,17 +54,32 @@ export async function getServerSideProps(ctx) {
     const listed = (data && Array.isArray(data.servers) ? data.servers : [])
       .map((entry) => (entry || {}).qresp_server_url)
       .filter(Boolean);
+    // EVERY federated node, not just the default one.
+    //
+    // The Explorer is "show me the records", and a reader looking for a paper
+    // does not know or care which institution hosts it. Opening on one node
+    // meant half the federation was invisible unless somebody found
+    // `?choose=1` -- so the front door now searches the whole list and each
+    // record carries a tag saying where it came from.
+    //
+    // A node being down does NOT cost the others: /search asks each node
+    // independently and renders a notice beside the results it did get. That
+    // behaviour already existed; this change is what makes it matter.
+    //
+    // `default_server` is still honoured for ORDER: it goes first, so the
+    // deployment's own node leads the list. It no longer decides who is in it.
     const published = (data || {}).default_server;
-    // The backend already refuses a default outside its allowlist. This does
-    // not take its word for it: a default that is not in the list we were
-    // just handed is not a server this page will send anyone to.
-    const target =
-      published && listed.includes(published) ? published : listed[0];
+    const ordered =
+      published && listed.includes(published)
+        ? [published, ...listed.filter((origin) => origin !== published)]
+        : listed;
 
-    if (target) {
+    if (ordered.length) {
       return {
         redirect: {
-          destination: `/search?servers=${encodeURIComponent(target)}`,
+          destination: `/search?servers=${ordered
+            .map(encodeURIComponent)
+            .join(",")}`,
           permanent: false,
         },
       };

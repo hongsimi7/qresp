@@ -609,12 +609,14 @@ paths:
         record (read-only; public active records only)"
       description: "Computes Related Qresp Records from the published
         scientific metadata of active records, and judges Semantic Scholar
-        recommendations with the same Qresp quality gate. Off unless
-        QRESP_RELATED_RESEARCH_ENABLED is set, in which case both lists come
-        back empty with status `disabled`. External results are cached
-        separately from the Paper document and never written into it; a
-        provider timeout, 404, 429 or malformed answer degrades the external
-        section only. Nothing here modifies a record."
+        recommendations with the same Qresp quality gate. Up to 150 candidates
+        are requested from the provider once per cache miss; the ones that
+        clear the gate are returned, at most 25 of them, all in this one
+        response. Off unless QRESP_RELATED_RESEARCH_ENABLED is set, in which
+        case both lists come back empty with status `disabled`. External
+        results are cached separately from the Paper document and never
+        written into it; a provider timeout, 404, 429 or malformed answer
+        degrades the external section only. Nothing here modifies a record."
       parameters:
         - in: path
           name: id
@@ -637,7 +639,15 @@ paths:
       responses:
         200:
           description: >-
-            Two independent lists, each capped at three and never padded.
+            Two independent lists with SEPARATE caps, neither ever padded.
+            `internal` holds at most 3 Qresp records. `external` holds at most
+            25 papers, selected by the same quality gate from up to 150
+            provider candidates; the UI shows them five to a page over at most
+            five pages, and paging is a slice of THIS response — it triggers
+            no further request to this endpoint and no further request to
+            Semantic Scholar. `external.pipeline` reports where the candidates
+            went (`raw_candidates`, `after_dedupe`, `after_gate`, `shown`),
+            with `0 <= shown <= 25` and `shown <= after_gate`.
             `internal[].id` links to the Qresp detail page and
             `internal[].server` names the Qresp server it lives on (empty for
             this one); `external[].url` prefers an HTTPS DOI link.
@@ -651,6 +661,199 @@ paths:
           description: The requested Qresp server is not one this server federates with
         404:
           description: No such record, or the record is not publicly available
+  /paper/{id}/related/feedback:
+    post:
+      operationId: "project.feedback.submit_feedback"
+      tags:
+        - "Paper details"
+      summary: "Records the signed-in reader's 1-5 rating of the Related
+        Research list for a record (authentication required; one rating per
+        account)"
+      description: "AUTHENTICATED ONLY. Ratings from readers without an
+        account are not collected: keyed on anything a reader can reset, one
+        opinion per reader is not true. Requires the signed
+        external.feedback_context that GET /paper/{id}/related issues after it
+        has resolved a public, active record and computed a NON-EMPTY external
+        list -- so a rating cannot be filed against a record that does not
+        exist, or a list that was empty. results_shown is taken from that
+        token, never from this body; page_at_submit and pages_viewed are
+        clamped to the page count the token attests, and pages_viewed is never
+        less than page_at_submit. Verification is a local signature check:
+        this endpoint makes no provider, peer or cache request. Stores the
+        rating, optional reason codes (offered only for a 1 or a 2), an
+        optional short comment, and those counts. The IP address, the
+        User-Agent, any other request header, the reader's email or account id
+        in readable form, the recommendation scores or Why-related reasons,
+        and the recommended papers' titles and DOIs are NOT stored, and no
+        third party is contacted. A second submission by the same account for
+        the same record and source UPDATES the first. The respondent is keyed
+        by an HMAC of the durable account identifier; that key is never
+        returned by any endpoint, and nothing is stored at all if the
+        deployment has no signing secret."
+      parameters:
+        - in: path
+          name: id
+          type: string
+          required: true
+          description: Paper Id
+        - in: query
+          name: server
+          type: string
+          required: false
+          description: >-
+            The Qresp server that holds the record, as on the detail page URL.
+            Ratings are namespaced by server exactly as the recommendation
+            cache is, so the same id on two servers never pools its ratings.
+            A server outside the federated registry is refused with 400.
+        - in: body
+          name: body
+          required: true
+          description: The rating and its context. Counts only; nothing here
+            identifies the reader.
+          schema:
+            type: object
+            required:
+              - rating
+              - feedback_context
+            properties:
+              rating:
+                type: integer
+                minimum: 1
+                maximum: 5
+                description: 1 = Very dissatisfied, 3 = Neutral, 5 = Very satisfied
+              feedback_context:
+                type: string
+                description: >-
+                  The signed external.feedback_context from this record's GET
+                  /paper/{id}/related response. Binds the record, the server,
+                  the list, the real result count, the real page count and an
+                  expiry. Carries no user identifier and no recommendation
+                  detail.
+              source:
+                type: string
+                enum: [external, internal]
+                default: external
+              reasons:
+                type: array
+                description: Optional, and only meaningful for a rating of 1
+                  or 2. Any other value is refused rather than stored.
+                items:
+                  type: string
+                  enum:
+                    - too_many_unrelated
+                    - not_my_research_area
+                    - already_knew_these
+                    - need_more_variety
+                    - other
+              comment:
+                type: string
+                maxLength: 1000
+              page_at_submit:
+                type: integer
+                minimum: 1
+                description: Clamped to the page count the token attests.
+              pages_viewed:
+                type: integer
+                minimum: 1
+                description: Clamped the same way, and never below
+                  page_at_submit.
+      responses:
+        200:
+          description: The rating was stored (or updated). Echoes back only
+            this reader's own rating, reasons and comment.
+        400:
+          description: Rating out of range, unknown source or reason code,
+            comment too long, a Qresp server this deployment does not federate
+            with, or a feedback context that is missing, malformed, unsigned,
+            for another record/server/list, or describes no results
+        401:
+          description: Authentication required
+        403:
+          description: CSRF token missing or invalid, or the account cannot be
+            identified
+        410:
+          description: The feedback context has expired; reload the
+            recommendations to obtain a fresh one
+        503:
+          description: The rating could not be stored, or this server has no
+            signing secret configured
+    get:
+      operationId: "project.feedback.my_feedback"
+      tags:
+        - "Paper details"
+      summary: "Reads back the signed-in reader's OWN rating for a record
+        (authentication required)"
+      description: "Exactly one person's answer -- theirs -- so the rating
+        widget can show what they chose last time. Returns no other reader's
+        rating, no respondent key, no aggregate and nothing about the
+        recommendations themselves. A null rating means this reader has not
+        rated this list, which is an answer rather than a 404."
+      parameters:
+        - in: path
+          name: id
+          type: string
+          required: true
+          description: Paper Id
+        - in: query
+          name: server
+          type: string
+          required: false
+          description: The Qresp server that holds the record
+        - in: query
+          name: source
+          type: string
+          required: false
+          enum: [external, internal]
+          default: external
+      responses:
+        200:
+          description: This reader's own rating, reasons and comment
+        400:
+          description: Unknown source, or a Qresp server this deployment does
+            not federate with
+        401:
+          description: Authentication required
+        403:
+          description: The account cannot be identified
+        503:
+          description: Feedback could not be read, or this server has no
+            signing secret configured
+  /related/feedback/summary:
+    get:
+      operationId: "project.feedback.feedback_summary"
+      tags:
+        - "Paper details"
+      summary: "Aggregate recommendation ratings (administrators only; counts
+        only, never comments or identifiers)"
+      description: "Response count, average rating, the 1-5 distribution, and
+        a tally of the reasons given with low ratings, over SIGNED-IN
+        respondents only. Deliberately returns no comment text, no respondent
+        key, no record id and no individual response: nothing here can be
+        joined back to a person. Rows written while anonymous rating was
+        allowed are excluded -- they were never one-per-reader, so averaging
+        them in would carry that defect into the new figure."
+      parameters:
+        - in: query
+          name: source
+          type: string
+          required: false
+          enum: [external, internal]
+          description: Restrict the counts to one of the two lists
+      responses:
+        200:
+          description: >-
+            `responses`, `average_rating` (null when nobody has answered --
+            never 0, which is not a rating a reader can give),
+            `rating_distribution`, `low_ratings`, `low_rating_reasons` and a
+            per-source breakdown
+        400:
+          description: Unknown source
+        401:
+          description: Authentication required
+        403:
+          description: Administrator access required
+        503:
+          description: Feedback could not be read
   /paper/{id}/permissions:
     get:
       operationId: "project.api.paper_permissions"

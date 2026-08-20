@@ -15,6 +15,7 @@ import ExtraFieldInput, {
   extraFieldsSchema,
 } from "../Form/ExtraFieldInput";
 import { RegularStyledButton } from "../button";
+import { RequiredFieldLegend } from "../Form/Util";
 import StyledTooltip from "../tooltip";
 
 import { useForm } from "react-hook-form";
@@ -325,6 +326,9 @@ const ToolsInfoForm = () => {
             onSubmit={handleSubmit(onSubmit, focusFirstInvalid)}
           >
             <Grid container direction="column" spacing={1}>
+              <Grid>
+                <RequiredFieldLegend />
+              </Grid>
               <Grid>
                 <RadioInputField
                   id="kind"
