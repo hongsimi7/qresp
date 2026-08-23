@@ -166,20 +166,23 @@ const ChartInfo = ({
                 if (note) note.style.display = "block";
               }}
             ></img>
-            {/* The URL is shown verbatim, never re-cased or hidden: the
-                reader needs to try it themselves.
-
-                One cause IS knowable from here, and it used to be misnamed.
-                An https page cannot load an http sub-resource -- the browser
-                refuses it before any request is made -- and that failure
-                reaches this handler looking exactly like a 404. Telling the
-                reader to trust a certificate then sends them somewhere the
-                problem is not: the fix is the saved file-server URL.
-
-                Everything else stays as it was. A missing file and an
-                untrusted certificate really are indistinguishable from
-                inside the page, so both are named rather than guessed
-                between, and the two escape hatches remain. */}
+            {/* One line, then the two ways out.
+                
+                WHY THIS IS SHORT. Almost every cause of a failed chart image
+                is on the RCC file server, not in Qresp: the file has moved,
+                the directory is not published, or -- observed in the field --
+                the server's TLS certificate has expired, which Chrome reports
+                as NET::ERR_CERT_DATE_INVALID and refuses before any bytes are
+                read. Qresp cannot tell those apart from inside the page, and
+                it must not try to work around any of them: no bypass proxy,
+                no relaxed verification, no credentials. So the message says
+                the one thing that is certainly true, and Open image is what
+                shows the reader the browser's own, specific reason.
+                
+                The single cause this code CAN establish is mixed content --
+                an http file server on an https page, refused before the
+                request -- because that one is fixed in Qresp, by saving an
+                https:// file-server path. */}
             <Typography
               variant="caption"
               color="error"
@@ -187,16 +190,10 @@ const ChartInfo = ({
               data-testid="chart-image-error"
               sx={{ display: "none", p: 1, overflowWrap: "anywhere" }}
             >
-              Remote image could not be loaded:{" "}
-              <Box component="span" sx={{ fontFamily: "monospace" }}>
-                {imageUrl}
-              </Box>{" "}
               {mixedContent
-                ? "— this page is served over HTTPS and the file server URL " +
-                  "is HTTP, so your browser blocked it. Save the file server " +
-                  "path with an https:// URL in “Where is the paper”."
-                : "— the file may be missing, or your browser may not trust " +
-                  "the RCC certificate."}{" "}
+                ? "Blocked: this page is HTTPS and the file server URL is " +
+                  "HTTP. Save an https:// file server path."
+                : "Image unavailable from the RCC file server."}{" "}
               <a href={imageUrl} rel="noopener noreferrer" target="_blank">
                 Open image
               </a>{" "}

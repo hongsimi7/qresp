@@ -170,7 +170,7 @@ describe("Chart image rendering", () => {
 
     // Simulate the browser failing to fetch the file.
     image.dispatchEvent(new Event("error", { bubbles: false }));
-    expect(note).toHaveTextContent(/could not be loaded/i);
+    expect(note).toHaveTextContent(/image unavailable from the rcc file server/i);
   });
 });
 
@@ -249,35 +249,41 @@ describe("image failures are told apart", () => {
       mockMixedContent = true;
       renderCharts([analyzedChart], "http://files.example.org/paper");
       const note = screen.getByTestId("chart-image-error");
-      expect(note).toHaveTextContent(/blocked it/i);
+      expect(note).toHaveTextContent(/blocked/i);
       expect(note).toHaveTextContent(/https:\/\//i);
-      expect(note).not.toHaveTextContent(/may not trust the rcc certificate/i);
-      // The URL is still verbatim, and both escape hatches remain.
-      expect(note).toHaveTextContent(
+      expect(note).not.toHaveTextContent(/image unavailable from the rcc/i);
+      // Both escape hatches remain, and Open image still points at the file.
+      const links = note.querySelectorAll("a");
+      expect(links).toHaveLength(2);
+      expect(links[0]).toHaveAttribute(
+        "href",
         "http://files.example.org/paper/figures/figure1.png"
       );
-      expect(note.querySelectorAll("a")).toHaveLength(2);
     });
 
     it("keeps the certificate wording for every other remote failure", () => {
       mockMixedContent = false;
       renderCharts([analyzedChart], ROOT);
       const note = screen.getByTestId("chart-image-error");
-      expect(note).toHaveTextContent(/may not trust the rcc certificate/i);
-      expect(note).not.toHaveTextContent(/blocked it/i);
+      expect(note).toHaveTextContent(/image unavailable from the rcc file server/i);
+      expect(note).not.toHaveTextContent(/blocked/i);
     });
   });
 
-  it("names both remote possibilities, with the URL and two actions", () => {
+  it("says one short line and offers the two actions", () => {
+    // Deliberately terse. Qresp cannot tell a moved file from an unpublished
+    // directory from an expired certificate (Chrome's
+    // NET::ERR_CERT_DATE_INVALID) from inside the page, and must not work
+    // around any of them -- so the note states what is certainly true and
+    // Open image is what shows the reader the browser's own reason.
     renderCharts([analyzedChart], ROOT);
     const note = screen.getByTestId("chart-image-error");
 
-    expect(note).toHaveTextContent(/remote image could not be loaded/i);
-    expect(note).toHaveTextContent(/may not trust the rcc certificate/i);
-    // Verbatim, never re-cased or hidden.
-    expect(note).toHaveTextContent(
-      `${ROOT}/${analyzedChart.imageFile}`.replace(/ /g, "%20")
-    );
+    expect(note).toHaveTextContent(/image unavailable from the rcc file server/i);
+    // The old paragraph is gone, including the guess it used to make.
+    expect(note).not.toHaveTextContent(/remote image could not be loaded/i);
+    expect(note).not.toHaveTextContent(/may not trust the rcc certificate/i);
+    expect(note.textContent.trim().length).toBeLessThan(120);
     // The note starts hidden and is revealed by the img onError handler, so
     // its links are read from the node rather than by page role.
     const links = Array.from(note.querySelectorAll("a")).map((anchor) => ({
