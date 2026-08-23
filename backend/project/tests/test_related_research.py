@@ -571,6 +571,81 @@ class TestCitationFallback(RelatedTestCase):
             RelatedResearchCache.drop_collection()
             related.reset_caches()
 
+    def test_an_empty_fallback_is_recorded_not_silently_dropped(self):
+        # The bug: a fallback that found nothing left no trace, so the
+        # response was identical to one from a build that never had a
+        # fallback. "We asked and there are no citing papers" and "we never
+        # asked" are different facts and a diagnosis depends on telling them
+        # apart.
+        provider = ProviderStub(recommendations=[], citations=[])
+        response, stub = self.fetch(provider=provider)
+        pipeline = response.json()["external"]["pipeline"]
+        self.assertIsNotNone(stub.citation_call)
+        fallback = pipeline["fallback"]
+        self.assertTrue(fallback["attempted"])
+        self.assertEqual(related.SOURCE_CITATIONS, fallback["source_kind"])
+        self.assertEqual("ok", fallback["status"])
+        self.assertEqual(0, fallback["raw_candidates"])
+        self.assertEqual(0, fallback["valid_candidates"])
+        self.assertEqual(0, fallback["shown"])
+        # The list itself is still the recommendations answer.
+        self.assertEqual(related.SOURCE_RECOMMENDATIONS,
+                         pipeline["source_kind"])
+
+    def test_a_failed_fallback_records_how_it_failed(self):
+        cases = {"timeout": "unavailable", "rate_limited": "unavailable",
+                 "server_error": "unavailable", "not_found": "not_found"}
+        for mode, expected in cases.items():
+            provider = ProviderStub(recommendations=[], citation_mode=mode)
+            response, _ = self.fetch(provider=provider)
+            external = response.json()["external"]
+            fallback = external["pipeline"]["fallback"]
+            self.assertTrue(fallback["attempted"], mode)
+            self.assertEqual(expected, fallback["status"], mode)
+            self.assertEqual(0, fallback["shown"], mode)
+            # ...and the recommendations ANSWER is untouched: a failed
+            # optional second request must not become a retryable failure.
+            self.assertEqual("ok", external["status"], mode)
+            self.assertEqual(related.REASON_PROVIDER_EMPTY,
+                             external["reason"], mode)
+            RelatedResearchCache.drop_collection()
+            related.reset_caches()
+
+    def test_a_successful_fallback_records_its_whole_funnel(self):
+        provider = ProviderStub(recommendations=[], citations=clones(30))
+        response, _ = self.fetch(provider=provider)
+        pipeline = response.json()["external"]["pipeline"]
+        fallback = pipeline["fallback"]
+        self.assertEqual("ok", fallback["status"])
+        self.assertEqual(30, fallback["raw_candidates"])
+        self.assertEqual(30, fallback["valid_candidates"])
+        self.assertEqual(30, fallback["after_dedupe"])
+        self.assertEqual(related.EXTERNAL_MAX_RESULTS, fallback["shown"])
+        # The top-level counts agree with it, because it IS the list.
+        self.assertEqual(related.SOURCE_CITATIONS, pipeline["source_kind"])
+        self.assertEqual(related.EXTERNAL_MAX_RESULTS, pipeline["shown"])
+
+    def test_unusable_citations_show_up_as_raw_without_valid(self):
+        # Requirement 7's diagnostic: the provider sent entries and NONE
+        # carried a usable title. raw > 0 with valid == 0 is what says so --
+        # a single count could not.
+        provider = ProviderStub(recommendations=[],
+                                citations=[{"paperId": "x", "title": ""},
+                                           {"paperId": "y", "title": "   "}])
+        response, _ = self.fetch(provider=provider)
+        fallback = response.json()["external"]["pipeline"]["fallback"]
+        self.assertEqual(2, fallback["raw_candidates"])
+        self.assertEqual(0, fallback["valid_candidates"])
+        self.assertEqual(0, fallback["shown"])
+
+    def test_no_fallback_key_at_all_when_recommendations_answered(self):
+        # Absent means "never reached", which must stay distinguishable from
+        # "tried and empty".
+        response, stub = self.fetch()
+        pipeline = response.json()["external"]["pipeline"]
+        self.assertNotIn("fallback", pipeline)
+        self.assertIsNone(stub.citation_call)
+
     def test_a_second_request_is_served_from_cache_without_asking_again(self):
         provider = ProviderStub(recommendations=[], citations=clones(30))
         response, stub = self.fetch(provider=provider)

@@ -370,7 +370,14 @@ _DETAIL_REASONS = {
 #      out of each other's cache: an entry carries the `source_kind` it was
 #      built from, and one written before that field existed cannot be
 #      mistaken for either.
-ALGORITHM_VERSION = "6"
+#   7  the citations fallback now records what it did even when it found
+#      nothing or failed (`pipeline.fallback`). An entry written under 6 for
+#      a paper with no recommendations carries no trace of whether the
+#      fallback was tried, so "the provider has no citing papers either" and
+#      "the citations request timed out" are indistinguishable in it --
+#      exactly the diagnosis this field exists to make possible. Re-asking is
+#      the only way to find out which it was.
+ALGORITHM_VERSION = "7"
 
 # ------------------------------------------------------------------- caching
 #
@@ -989,9 +996,25 @@ def _external_section(status, results, stale=False, updated_at=None,
     return section
 
 
+def _fallback_status(outcome):
+    """How the citations request went, as one short code.
+
+    Four values, not three: "the provider has no record of this paper" and
+    "the provider did not answer" are different facts, and collapsing them
+    would put the diagnostic back in the state this whole change is fixing.
+    """
+    if outcome == FOUND:
+        return "ok"
+    if outcome == NOT_FOUND:
+        return "not_found"
+    if outcome_detail(outcome) in ("unexpected_shape", "unreadable_body"):
+        return "malformed"
+    return "unavailable"
+
+
 def _pipeline(resolved=False, provider_status="", raw=0, valid=0,
               after_dedupe=0, scored=0, shown=0,
-              source_kind=SOURCE_RECOMMENDATIONS):
+              source_kind=SOURCE_RECOMMENDATIONS, fallback=None):
     """Where the candidates went. Requirement B, one dict.
 
     Every "External Papers is empty" report has to be answerable from these
@@ -1027,7 +1050,12 @@ def _pipeline(resolved=False, provider_status="", raw=0, valid=0,
             # WHICH endpoint the counts above describe. Without it a reader of
             # the pipeline cannot tell a 0-recommendation paper whose
             # citations filled the list from one the recommender answered.
-            "source_kind": source_kind}
+            "source_kind": source_kind,
+            # Present ONLY when the citations fallback was actually tried,
+            # which happens only when recommendations answered with nothing.
+            # Absent means it was never reached -- never "it was tried and
+            # came back empty", which is what this used to be confused with.
+            **({"fallback": fallback} if fallback is not None else {})}
 
 
 def _external_for(paper_id, current_record, stats, cfg):
@@ -1100,12 +1128,39 @@ def _external_for(paper_id, current_record, stats, cfg):
     # work that cites it, and that later work is a real, checkable answer to
     # "what should I read next" -- just a different kind of answer, which is
     # why it is labelled differently rather than folded in silently.
+    fallback = None
     if raw_count == 0:
         citing, citation_outcome, citation_raw = fetch_external_citations(
             provider_paper_id, cfg)
+        citing = citing or []
+        # RECORDED WHATEVER HAPPENS.
+        #
+        # The bug this fixes: a fallback that returned nothing, or failed,
+        # left no trace at all. The response then looked exactly like one
+        # from a build with no fallback in it -- raw_candidates 0,
+        # source_kind recommendations -- so "we asked and the provider had no
+        # citations either" was indistinguishable from "we never asked", and
+        # a citations outage was invisible.
+        #
+        # `raw` and `valid` are deliberately separate. A non-zero raw with a
+        # zero valid means the provider sent entries that carried no usable
+        # title, which is a normalization problem worth seeing; a zero raw
+        # means the provider genuinely has no citing papers on file.
+        fallback = {
+            "attempted": True,
+            "source_kind": SOURCE_CITATIONS,
+            "status": _fallback_status(citation_outcome),
+            "raw_candidates": citation_raw,
+            "valid_candidates": len(citing),
+            # Filled in below IF this fallback is the one that produced the
+            # list; otherwise nothing reached these stages and 0 is the truth.
+            "after_dedupe": 0,
+            "shown": 0,
+        }
         # A failed fallback must not turn an ANSWER ("nobody recommends this")
-        # into a FAILURE. The recommendations answer stands, and the reader is
-        # told the accurate, narrower thing.
+        # into a FAILURE. The recommendations answer stands, the status above
+        # records exactly how the fallback went, and the reader is told the
+        # accurate, narrower thing.
         if citation_outcome == FOUND and citing:
             candidates = citing
             raw_count = citation_raw
@@ -1128,10 +1183,14 @@ def _external_for(paper_id, current_record, stats, cfg):
     scored = external_recommendations(current_record, candidates, stats,
                                       limit=None, source_kind=source_kind)
     results = scored[:EXTERNAL_MAX_RESULTS]
+    if fallback is not None and source_kind == SOURCE_CITATIONS:
+        # The fallback IS the list, so its funnel is the funnel.
+        fallback["after_dedupe"] = after_dedupe
+        fallback["shown"] = len(results)
     pipeline = _pipeline(resolved=True, provider_status=FOUND, raw=raw_count,
                          valid=valid_count, after_dedupe=after_dedupe,
                          scored=len(scored), shown=len(results),
-                         source_kind=source_kind)
+                         source_kind=source_kind, fallback=fallback)
     # An empty list here is an ANSWER, and the two ways of arriving at it are
     # different facts -- and, under this policy, the ONLY two: the provider
     # had nothing to propose, or it proposed candidates but none survived
