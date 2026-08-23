@@ -55,6 +55,39 @@ export const buildFileUrl = (base, relative) => {
   return `${root}/${encoded}`;
 };
 
+/**
+ * Would this URL be blocked by the browser before the network is touched?
+ *
+ * An `https://` Qresp page may not load an `http://` sub-resource: the browser
+ * refuses it as mixed content, the `<img>` fires `onerror`, and the failure is
+ * indistinguishable from a 404 or an untrusted certificate from inside the
+ * page. It is NOT indistinguishable to a reader, though, because the fix is a
+ * different one: the file server's saved URL needs `https`, and no amount of
+ * trusting a certificate or checking the file exists will help.
+ *
+ * Returns false when it cannot tell (no `window`, an unparseable URL), so a
+ * caller falls back to the general message rather than asserting a cause it
+ * has not established.
+ *
+ * `pageUrl` defaults to the current page and exists so this can be reasoned
+ * about — and tested — without reaching for a global that jsdom will not let
+ * anyone redefine.
+ */
+export const isMixedContent = (url, pageUrl) => {
+  const page =
+    pageUrl ||
+    (typeof window !== "undefined" && window.location
+      ? window.location.href
+      : "");
+  if (!page) return false;
+  try {
+    if (new URL(page).protocol !== "https:") return false;
+    return new URL(url, page).protocol === "http:";
+  } catch (err) {
+    return false;
+  }
+};
+
 // The containing directory of a stored file, as a browsable URL.
 export const buildDirectoryUrl = (base, relative) => {
   const path = trimSlashes(relative);

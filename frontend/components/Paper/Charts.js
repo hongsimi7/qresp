@@ -15,6 +15,7 @@ import Drawer from "../drawer";
 import {
   buildDirectoryUrl,
   buildFileUrl,
+  isMixedContent,
 } from "../../Utils/fileServerUrl";
 import Slider from "../HorizontalSlider";
 import StyledTooltip from "../tooltip";
@@ -120,6 +121,9 @@ const ChartInfo = ({
   const FigureView = ({ rowdata }) => {
     const datatreeLink = buildDirectoryUrl(rowdata.server, rowdata.imageFile);
     const imageUrl = buildFileUrl(rowdata.server, rowdata.imageFile);
+    // Decided once, from the URL alone -- the browser will block this before
+    // any request is made, so it is knowable before the image errors.
+    const mixedContent = isMixedContent(imageUrl);
 
     // Three different reasons produce no URL, and they need three different
     // things from the reader: save the file server, pick an image, or fix a
@@ -163,9 +167,19 @@ const ChartInfo = ({
               }}
             ></img>
             {/* The URL is shown verbatim, never re-cased or hidden: the
-                reader needs to try it themselves. A browser refusing the RCC
-                certificate looks exactly like a 404 from here, so both are
-                named rather than guessed between. */}
+                reader needs to try it themselves.
+
+                One cause IS knowable from here, and it used to be misnamed.
+                An https page cannot load an http sub-resource -- the browser
+                refuses it before any request is made -- and that failure
+                reaches this handler looking exactly like a 404. Telling the
+                reader to trust a certificate then sends them somewhere the
+                problem is not: the fix is the saved file-server URL.
+
+                Everything else stays as it was. A missing file and an
+                untrusted certificate really are indistinguishable from
+                inside the page, so both are named rather than guessed
+                between, and the two escape hatches remain. */}
             <Typography
               variant="caption"
               color="error"
@@ -177,8 +191,12 @@ const ChartInfo = ({
               <Box component="span" sx={{ fontFamily: "monospace" }}>
                 {imageUrl}
               </Box>{" "}
-              — the file may be missing, or your browser may not trust the RCC
-              certificate.{" "}
+              {mixedContent
+                ? "— this page is served over HTTPS and the file server URL " +
+                  "is HTTP, so your browser blocked it. Save the file server " +
+                  "path with an https:// URL in “Where is the paper”."
+                : "— the file may be missing, or your browser may not trust " +
+                  "the RCC certificate."}{" "}
               <a href={imageUrl} rel="noopener noreferrer" target="_blank">
                 Open image
               </a>{" "}

@@ -1,5 +1,22 @@
 import { render, screen } from "@testing-library/react";
 
+// `isMixedContent` reads window.location, which jsdom pins to http and will
+// not let a test redefine. The real implementation is exercised directly by
+// the unit tests below; this seam is only for driving the two COMPONENT
+// branches that depend on its answer. null = use the real one.
+let mockMixedContent = null;
+jest.mock("../Utils/fileServerUrl", () => {
+  const actual = jest.requireActual("../Utils/fileServerUrl");
+  return {
+    __esModule: true,
+    ...actual,
+    isMixedContent: (url, pageUrl) =>
+      mockMixedContent === null
+        ? actual.isMixedContent(url, pageUrl)
+        : mockMixedContent,
+  };
+});
+
 // The lightbox ships ESM that jest does not transform, and it is irrelevant
 // to URL building.
 jest.mock("yet-another-react-lightbox", () => ({
@@ -21,6 +38,7 @@ jest.mock("next/router", () => ({
 }));
 
 import buildFileUrl, {
+  isMixedContent,
   buildDirectoryUrl,
 } from "../Utils/fileServerUrl";
 import ChartsInfo from "../components/Paper/Charts";
@@ -178,6 +196,76 @@ describe("image failures are told apart", () => {
     expect(screen.getByTestId("chart-image-missing")).toHaveTextContent(
       expected
     );
+  });
+
+  // The one remote cause that IS knowable from inside the page. An https page
+  // may not load an http sub-resource: the browser refuses before any request
+  // is made, and the <img> errors exactly as it would on a 404. Blaming the
+  // certificate there sends the reader to fix something that is not broken.
+  describe("an http file server on an https page", () => {
+    // Never leaks into another test: the default is the real detector.
+    afterEach(() => {
+      mockMixedContent = null;
+    });
+
+    const HTTPS_PAGE = "https://qresp.example.org/paperdetails/1";
+    const HTTP_PAGE = "http://qresp.example.org/paperdetails/1";
+
+    it("is recognised before the request, from the URL alone", () => {
+      expect(
+        isMixedContent("http://files.example.org/a.png", HTTPS_PAGE)
+      ).toBe(true);
+      expect(
+        isMixedContent("https://files.example.org/a.png", HTTPS_PAGE)
+      ).toBe(false);
+    });
+
+    it("is not claimed on an http page, where it is not a problem", () => {
+      expect(
+        isMixedContent("http://files.example.org/a.png", HTTP_PAGE)
+      ).toBe(false);
+    });
+
+    it("says nothing it cannot establish", () => {
+      // An unparseable URL, and no page to compare against, are both
+      // "cannot tell" -- which must read as false, not as an accusation.
+      expect(isMixedContent("", HTTPS_PAGE)).toBe(false);
+      expect(isMixedContent("http://files.example.org/a.png", "")).toBe(false);
+      expect(isMixedContent("http://files.example.org/a.png", "not a url")).toBe(
+        false
+      );
+    });
+
+    it("treats a protocol-relative URL as the page's own protocol", () => {
+      expect(isMixedContent("//files.example.org/a.png", HTTPS_PAGE)).toBe(
+        false
+      );
+    });
+
+    // What the reader is told when it IS mixed content. jsdom serves the test
+    // page over http and will not let `window.location` be redefined, so the
+    // detector is driven directly rather than by faking the page's origin.
+    it("names the real fix instead of the certificate", () => {
+      mockMixedContent = true;
+      renderCharts([analyzedChart], "http://files.example.org/paper");
+      const note = screen.getByTestId("chart-image-error");
+      expect(note).toHaveTextContent(/blocked it/i);
+      expect(note).toHaveTextContent(/https:\/\//i);
+      expect(note).not.toHaveTextContent(/may not trust the rcc certificate/i);
+      // The URL is still verbatim, and both escape hatches remain.
+      expect(note).toHaveTextContent(
+        "http://files.example.org/paper/figures/figure1.png"
+      );
+      expect(note.querySelectorAll("a")).toHaveLength(2);
+    });
+
+    it("keeps the certificate wording for every other remote failure", () => {
+      mockMixedContent = false;
+      renderCharts([analyzedChart], ROOT);
+      const note = screen.getByTestId("chart-image-error");
+      expect(note).toHaveTextContent(/may not trust the rcc certificate/i);
+      expect(note).not.toHaveTextContent(/blocked it/i);
+    });
   });
 
   it("names both remote possibilities, with the URL and two actions", () => {
