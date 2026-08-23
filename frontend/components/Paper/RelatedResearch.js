@@ -79,6 +79,11 @@ import RecommendationFeedback from "./RecommendationFeedback";
 // deployment that never had the feature, and there was no way for a reader
 // to tell either from "nothing is related to this paper".
 
+// INTERNAL list only. "Sufficiently related" is a claim about a judgement
+// somebody made, and only Related Qresp Records makes one: its strict
+// evidence gate really can reject every candidate in the corpus. The
+// external list is ranked, never gated, so this sentence is false there --
+// see `externalNotice`.
 const EMPTY_MESSAGE = "No sufficiently related papers were found.";
 const UNAVAILABLE_MESSAGE =
   "Related research is unavailable right now. This is a problem loading the " +
@@ -308,23 +313,40 @@ const ResultList = ({ results, server }) => (
   </Box>
 );
 
-// The external provider is the one part of this that can be missing, off, or
-// broken; each case reads differently so a reader can tell "nothing matched"
-// from "we could not ask".
+// Why the external list is empty, in the reader's words.
 //
-// `disabled` is NOT one of those cases: a server running internal-only has no
-// external half at all, so the heading is dropped rather than explained. A
-// reader should not be told about a feature this deployment does not have.
-// The contract, stated once:
+// This list is NOT gated: every valid, non-duplicate candidate the provider
+// returns is ranked and the top 25 are shown. So "No sufficiently related
+// papers were found" -- which is the right sentence for the INTERNAL list,
+// where a strict evidence gate really can reject everything -- is a false
+// statement here. Nothing was ever judged insufficient; there was simply
+// nothing to rank, or nobody to ask.
 //
-//   provider answered, nothing to show  -> "No sufficiently related papers
-//                                           were found."  (an ANSWER)
-//   provider could not be asked/reached -> "unavailable"  (a FAILURE)
+// The backend already distinguishes these in `external.reason`; this is
+// where that distinction reaches a reader:
 //
-// `ok` covers both "the provider proposed nothing" and "it proposed
-// candidates and none cleared the quality gate". Both are answers, and the
-// gate is never relaxed to fill the list, so both read the same to a reader.
-// The backend distinguishes them in `external.reason` for operators.
+//   provider_returned_no_candidates    Semantic Scholar had nothing for it
+//   no_valid_candidates_after_dedupe   it answered, but nothing survived
+//                                      metadata validation and de-duplication
+//   source_paper_not_in_provider_index we could not ask about this record
+//   timeout / rate-limited / error     we could not ask at all -> Retry
+//
+// `disabled` is not among them: a server running internal-only has no
+// external half, so the heading is dropped rather than explained.
+const EXTERNAL_EMPTY_BY_REASON = {
+  provider_returned_no_candidates:
+    "Semantic Scholar did not return external recommendations for this paper.",
+  no_valid_candidates_after_dedupe:
+    "Semantic Scholar returned suggestions for this paper, but none carried " +
+    "enough usable publication metadata to show.",
+};
+
+// The fallback for an `ok` answer whose reason this build does not know --
+// an older backend, or a reason added later. It says only what is certainly
+// true: there is nothing to show, and it was not Qresp that rejected them.
+const EXTERNAL_EMPTY_FALLBACK =
+  "No external recommendations are available for this paper.";
+
 const externalNotice = (external) => {
   if (external.status === "unresolved") {
     return (
@@ -338,7 +360,9 @@ const externalNotice = (external) => {
       "results above are unaffected."
     );
   }
-  return null;
+  return (
+    EXTERNAL_EMPTY_BY_REASON[external.reason] || EXTERNAL_EMPTY_FALLBACK
+  );
 };
 
 const RelatedResearch = ({ paperId, server }) => {
@@ -591,9 +615,25 @@ const RelatedResearch = ({ paperId, server }) => {
               <Note
                 color={external.status === "unavailable" ? "error" : "secondary"}
               >
-                {notice || EMPTY_MESSAGE}
+                {/* `externalNotice` now always answers for this list, so
+                    EMPTY_MESSAGE -- the gate's sentence -- can no longer
+                    leak onto an ungated one. */}
+                {notice}
               </Note>
             )}
+            {/* A FAILURE is the one empty state worth asking again about: a
+                timeout, a 429 or a provider error may not still be true.
+                "The provider had nothing" and "we could not match this
+                record" are answers, and re-asking would return the same. */}
+            {!externalTotal && external.status === "unavailable" ? (
+              <Box sx={{ mt: 1.5 }}>
+                <SmallStyledButton
+                  onClick={() => setAttempt((value) => value + 1)}
+                >
+                  Try again
+                </SmallStyledButton>
+              </Box>
+            ) : null}
           </Section>
         </Fragment>
       ) : null}

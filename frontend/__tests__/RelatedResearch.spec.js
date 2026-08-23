@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 jest.mock("axios");
@@ -299,10 +299,15 @@ describe("RelatedResearch", () => {
         },
       })
     );
-    const messages = await screen.findAllByText(
-      "No sufficiently related papers were found."
-    );
-    expect(messages).toHaveLength(2);
+    // The two lists are empty for DIFFERENT reasons and say so differently:
+    // the internal one was gated, the external one simply had nothing to
+    // rank. One shared sentence used to claim a judgement about both.
+    expect(
+      await screen.findByText("No sufficiently related papers were found.")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/no external recommendations are available/i)
+    ).toBeInTheDocument();
   });
 
   it("keeps the internal list when the external provider fails", async () => {
@@ -538,10 +543,14 @@ describe("RelatedResearch", () => {
           },
         })
       );
-      // Both lists answered, and both are legitimately empty.
+      // Both lists answered, and both are legitimately empty -- each in its
+      // own words, because only one of them applies a gate.
       expect(
-        await screen.findAllByText("No sufficiently related papers were found.")
-      ).toHaveLength(2);
+        await screen.findByText("No sufficiently related papers were found.")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/no external recommendations are available/i)
+      ).toBeInTheDocument();
       expect(heading()).toBeInTheDocument();
       expect(
         screen.queryByText(/related research is unavailable right now/i)
@@ -641,30 +650,74 @@ describe("RelatedResearch", () => {
         },
       });
 
-    it("says nothing was found when the provider proposed nothing", async () => {
+    // This list is never gated, so "nothing was related enough" is a claim
+    // nobody made. Each empty reason gets the sentence that is actually true.
+    it("says the provider returned nothing when it returned nothing", async () => {
       renderSection(
         externalWith({ reason: "provider_returned_no_candidates" })
       );
       const external = await sectionFor(/recommended external papers/i);
       expect(
         within(external).getByText(
-          "No sufficiently related papers were found."
+          "Semantic Scholar did not return external recommendations for this paper."
         )
       ).toBeInTheDocument();
     });
 
-    it("says the same when nothing survived normalization and dedup", async () => {
+    it("says something different when nothing survived validation", async () => {
       renderSection(
         externalWith({ reason: "no_valid_candidates_after_dedupe" })
       );
       const external = await sectionFor(/recommended external papers/i);
       expect(
-        within(external).getByText(
-          "No sufficiently related papers were found."
-        )
+        within(external).getByText(/none carried enough usable publication metadata/i)
       ).toBeInTheDocument();
       expect(
         within(external).queryByText(/unavailable right now/i)
+      ).not.toBeInTheDocument();
+    });
+
+    it("never tells the reader this list was filtered for relatedness", async () => {
+      // The gate's sentence belongs to the internal list alone. On an
+      // ungated list it describes a judgement that was never made.
+      for (const reason of [
+        "provider_returned_no_candidates",
+        "no_valid_candidates_after_dedupe",
+        "some_reason_this_build_has_never_heard_of",
+      ]) {
+        const { unmount } = renderSection(externalWith({ reason }));
+        const external = await sectionFor(/recommended external papers/i);
+        expect(
+          within(external).queryByText(
+            "No sufficiently related papers were found."
+          )
+        ).not.toBeInTheDocument();
+        // ...and it still says SOMETHING rather than an empty box.
+        expect(external.textContent).toMatch(/no external recommendations|semantic scholar/i);
+        unmount();
+        jest.clearAllMocks();
+      }
+    });
+
+    it("offers a retry only when asking again could change the answer", async () => {
+      // A timeout may not still be true; "the provider had nothing" is an
+      // answer, and re-asking returns the same nothing.
+      renderSection(
+        externalWith({ status: "unavailable", reason: "provider_timeout" })
+      );
+      const failed = await sectionFor(/recommended external papers/i);
+      expect(
+        within(failed).getByRole("button", { name: /try again/i })
+      ).toBeInTheDocument();
+      cleanup();
+      jest.clearAllMocks();
+
+      renderSection(
+        externalWith({ reason: "provider_returned_no_candidates" })
+      );
+      const answered = await sectionFor(/recommended external papers/i);
+      expect(
+        within(answered).queryByRole("button", { name: /try again/i })
       ).not.toBeInTheDocument();
     });
 
@@ -743,8 +796,11 @@ describe("RelatedResearch", () => {
       expect(rendered).toHaveLength(count * 2);
       if (count === 0) {
         expect(
-          screen.getAllByText("No sufficiently related papers were found.")
-        ).toHaveLength(2);
+          screen.getByText("No sufficiently related papers were found.")
+        ).toBeInTheDocument();
+        expect(
+          screen.getByText(/no external recommendations are available/i)
+        ).toBeInTheDocument();
       }
     });
   });

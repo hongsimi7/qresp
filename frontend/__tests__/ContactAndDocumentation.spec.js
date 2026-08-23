@@ -32,14 +32,19 @@ describe("the Contact page", () => {
     expect(EMAIL).toBe("datadev@lists.uchicago.edu");
   });
 
-  it("keeps a one-click Email Qresp button that pre-fills the subject", () => {
-    // The list is a shared inbox receiving more than Qresp; the subject is
-    // what lets whoever reads it sort this mail without opening it.
+  it("links the address inline, with no button", () => {
+    // An address is a fact to read, not a call to action. The mail client
+    // stays one click away; the subject is pre-filled so whoever reads a
+    // shared inbox can sort this mail without opening it.
     render(<Contact />);
-    const button = screen.getByTestId("email-datadev");
-    expect(button).toHaveAttribute("href", MAILTO);
+    const link = screen.getByTestId("email-datadev");
+    expect(link).toHaveAttribute("href", MAILTO);
     expect(MAILTO).toBe("mailto:datadev@lists.uchicago.edu?subject=Qresp");
-    expect(button).toHaveTextContent("Email Qresp");
+    expect(link).toHaveTextContent(EMAIL);
+    expect(link.tagName).toBe("A");
+    expect(
+      screen.queryByRole("button", { name: /email/i })
+    ).not.toBeInTheDocument();
   });
 
   it("points at the canonical project repository, never a personal fork", () => {

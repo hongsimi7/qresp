@@ -3,7 +3,6 @@ import { Fragment } from "react";
 import { Box, Container, Divider, Link as MuiLink, Typography } from "@mui/material";
 
 import SEO from "../components/seo";
-import StyledButton from "../components/button";
 
 // Contact, as a page rather than a `mailto:` in the navigation bar.
 //
@@ -90,23 +89,19 @@ const Contact = () => (
         </Typography>
 
         <Row title="Email">
-          {/* The address as TEXT first. It can be read, copied and pasted
-              into whatever the reader actually uses, which a bare `mailto:`
-              link never allowed. */}
-          <Typography variant="body1" gutterBottom>
-            <MuiLink href={MAILTO} underline="hover">
+          {/* The address as TEXT, linked inline. It can be read, copied and
+              pasted into whatever the reader actually uses -- which a bare
+              `mailto:` navigation entry never allowed -- while the link keeps
+              a mail client one click away for those who want it.
+
+              Deliberately NOT a button. A contact address is a fact to read,
+              not a call to action, and a large CTA promised something more
+              than "this opens your mail client". */}
+          <Typography variant="body1">
+            <MuiLink href={MAILTO} underline="hover" data-testid="email-datadev">
               {EMAIL}
             </MuiLink>
           </Typography>
-          <Box sx={{ mt: 1 }}>
-            <StyledButton
-              href={MAILTO}
-              variant="contained"
-              data-testid="email-datadev"
-            >
-              Email Qresp
-            </StyledButton>
-          </Box>
         </Row>
 
         <Divider sx={{ mb: 3 }} />
