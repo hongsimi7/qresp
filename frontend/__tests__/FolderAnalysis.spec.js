@@ -173,6 +173,37 @@ const analysis = {
   },
 };
 
+// A user for tests that TYPE.
+//
+// Every keystroke re-renders the whole Folder Analysis dialog, which is one
+// of the largest trees in the app, so userEvent's default inter-key pause
+// dominates any test that enters a phrase: a 14-character description spends
+// most of a 5s test budget waiting between keys rather than doing anything.
+// That is what made "does not call an empty optional field a missing one"
+// fail under a full-suite run while passing on its own.
+//
+// `delay: null` removes ONLY the artificial pause. Every key event still
+// fires, in the same order, through the same handlers -- nothing asserted
+// changes, and no product behaviour is involved. Tests that only click do
+// not need this and keep the plain setup.
+const typingUser = () => userEvent.setup({ delay: null });
+
+// Puts `text` into a field in ONE event, the way pasting does.
+//
+// `user.type` fires a key event per character, and every one of them
+// re-renders the whole Folder Analysis dialog -- one of the largest trees in
+// the app. A 14-character description costs ~1.4s that way even with the
+// inter-key delay removed, which is most of a 5s test budget spent on
+// re-renders that assert nothing.
+//
+// The tests that use this are about a value the curator ENTERED, not about
+// keystroke mechanics, and a paste is a real thing a curator does. Tests that
+// are genuinely about editing or appending keep `user.type`.
+const fill = async (user, element, text) => {
+  await user.click(element);
+  await user.paste(text);
+};
+
 const renderWith = (context = {}) => {
   const addMany = jest.fn();
   const setAlert = jest.fn();
@@ -765,7 +796,7 @@ describe("Analyze RCC Folder", () => {
         },
       },
     });
-    const user = userEvent.setup();
+    const user = typingUser();
     renderWith();
     await openAnalysis(user);
     await user.click(screen.getByRole("tab", { name: /unclassified \(60\)/i }));
@@ -860,14 +891,14 @@ describe("Analyze RCC Folder", () => {
 
   it("applies only the selected candidates, with the curator's edits", async () => {
     // delay: null — see the note in the field-contract suite below.
-    const user = userEvent.setup({ delay: null });
+    const user = typingUser();
     const { addMany } = renderWith();
     await openAnalysis(user);
 
     await user.click(
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
-    await user.type(screen.getByLabelText(/^figure caption ?\*?$/i), "Density of states");
+    await fill(user, screen.getByLabelText(/^figure caption ?\*?$/i), "Density of states");
     await user.click(
       screen.getByRole("button", { name: /add selected items to curator/i })
     );
@@ -1774,7 +1805,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     // The exact leak this replaced: `context` used to be built from
     // draft.readme + draft.description, so the model was handed the
     // curator's own answer to the field it was being asked to fill.
-    const user = userEvent.setup();
+    const user = typingUser();
     renderWith();
     await openAnalysis(user);
     // selectAndOpenConsent opens the fields itself, so the value is typed
@@ -1785,7 +1816,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     );
     const readme = await screen.findByLabelText(/^description ?\*?$/i);
     await user.clear(readme);
-    await user.type(readme, "LEAKCANARY");
+    await fill(user, readme, "LEAKCANARY");
 
     await user.click(screen.getByTestId("enhance-script-0"));
     await screen.findByRole("heading", { name: /send .* to gemini\?/i });
@@ -1863,7 +1894,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
   });
 
   it("an abstention leaves the curator's own draft value alone", async () => {
-    const user = userEvent.setup();
+    const user = typingUser();
     const { addMany } = renderWith();
     await openAnalysis(user);
     await user.click(await screen.findByRole("tab", { name: /charts \(1\)/i }));
@@ -1984,7 +2015,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
   });
 
   it("refuses to overwrite a value the curator typed", async () => {
-    const user = userEvent.setup();
+    const user = typingUser();
     renderWith();
     await openAnalysis(user);
     await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
@@ -2410,10 +2441,7 @@ describe("Folder Analysis field contract", () => {
 
   it("offers a dataset Files, Description and Keywords -- and no URLs",
      async () => {
-    // delay: null — every keystroke re-renders the whole dialog, so the
-    // default inter-key delay makes a 25-character phrase the slowest thing
-    // in this file. It changes nothing about what is asserted.
-    const user = userEvent.setup({ delay: null });
+    const user = typingUser();
     renderWith();
     await openFields(user, /datasets \(1\)/i, /select short_traj/i,
                      "dataset-0");
@@ -2427,7 +2455,7 @@ describe("Folder Analysis field contract", () => {
     // but it is not an input on any current surface.
     expect(screen.queryByLabelText(/^urls/i)).toBeNull();
 
-    await user.type(keywords, "silicon");
+    await fill(user, keywords, "silicon");
     expect(keywords).toHaveValue("silicon");
   });
 
@@ -2494,7 +2522,7 @@ describe("Folder Analysis field contract", () => {
   });
 
   it("does not call an empty optional field a missing one", async () => {
-    const user = userEvent.setup();
+    const user = typingUser();
     renderWith();
     await openFields(user, /scripts \(1\)/i, /select plot_vdos\.py/i,
                      "script-0");
@@ -2502,7 +2530,7 @@ describe("Folder Analysis field contract", () => {
     // readme is blank and required, so the badge is there...
     expect(screen.getByTestId("needs-input-script-0")).toBeInTheDocument();
 
-    await user.type(input(/^description ?\*?$/i), "Plots the VDOS");
+    await fill(user, input(/^description ?\*?$/i), "Plots the VDOS");
 
     // ...and it goes once the REQUIRED field is filled, even though Keywords
     // and URLs are still empty.
@@ -2733,7 +2761,7 @@ describe("a card never contradicts itself about what a field holds", () => {
   }, 30000);
 
   it("un-marks applied when the curator edits the value afterwards", async () => {
-    const user = userEvent.setup();
+    const user = typingUser();
     renderWith();
     await suggestForChart(user, SUGGESTION);
 
@@ -2805,11 +2833,11 @@ describe("a card never contradicts itself about what a field holds", () => {
   }, 30000);
 
   it("does not overwrite the curator's own text on any state", async () => {
-    const user = userEvent.setup();
+    const user = typingUser();
     renderWith();
     await openAnalysis(user);
     await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
-    await user.type(caption(), "MY OWN CAPTION");
+    await fill(user, caption(), "MY OWN CAPTION");
 
     await user.click(screen.getByTestId("enhance-chart-0"));
     await screen.findByRole("heading", { name: /send .* to gemini\?/i });
@@ -2839,7 +2867,7 @@ describe("a card never contradicts itself about what a field holds", () => {
   }, 30000);
 
   it("keeps High evidence only while the value is the analysed one", async () => {
-    const user = userEvent.setup();
+    const user = typingUser();
     renderWith();
     await openAnalysis(user);
     await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
@@ -2851,7 +2879,7 @@ describe("a card never contradicts itself about what a field holds", () => {
     // "High" meant "Qresp detected THIS file". Typing over it makes the chip
     // vouch for something nothing verified.
     await user.clear(input(/^figure image ?\*?$/i));
-    await user.type(input(/^figure image ?\*?$/i), "typed/by/hand.png");
+    await fill(user, input(/^figure image ?\*?$/i), "typed/by/hand.png");
     expect(screen.queryByTestId("field-evidence-chart-0-imageFile")).toBeNull();
   }, 30000);
 
