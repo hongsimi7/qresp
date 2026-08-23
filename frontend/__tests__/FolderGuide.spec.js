@@ -193,7 +193,7 @@ describe("How to organize an RCC folder", () => {
 
     const text = document.body.textContent;
     expect(text).toMatch(
-      /can inspect any folder inside the file server roots this server is allowed to read/i
+      /can inspect any folder inside the file server roots a Qresp server is allowed to read/i
     );
     expect(text).toMatch(/deterministic for the qresp folder standard v1/i);
     expect(text).toMatch(/legacy folder names qresp recognizes/i);

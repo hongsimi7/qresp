@@ -1,5 +1,6 @@
 import { Fragment, useRef, useState } from "react";
 
+import NextLink from "next/link";
 import {
   Box,
   Container,
@@ -144,6 +145,42 @@ const Documentation = () => {
 
           <Divider sx={{ mb: 4 }} />
 
+          {/* The Folder Standard goes FIRST, because it is the only layout on
+              this site that changes what the software does. The general
+              template below is good practice; this one is read by the
+              analyzer. A reader who cannot tell which is which will follow
+              whichever they meet first, so they meet this one. */}
+          <Box
+            sx={{
+              border: 1,
+              borderColor: "divider",
+              borderRadius: 1,
+              p: 2.5,
+              mb: 4,
+            }}
+            data-testid="folder-standard-callout"
+          >
+            <Typography variant="h5" component="h2" gutterBottom>
+              <Box component="span" sx={{ fontWeight: "bold" }}>
+                Qresp Folder Standard v1
+              </Box>
+            </Typography>
+            <Typography variant="body1" color="secondary" sx={{ mb: 2 }}>
+              If you will import a folder through <strong>RCC folder
+              analysis</strong>, this is the layout Qresp reads. Following it
+              means charts, datasets, scripts and tools are proposed as records
+              automatically instead of being left for you to sort out by hand.
+            </Typography>
+            <MuiLink
+              component={NextLink}
+              href="/documentation/folder-standard"
+              underline="hover"
+              data-testid="folder-standard-link"
+            >
+              Read the Qresp Folder Standard v1
+            </MuiLink>
+          </Box>
+
           <Typography variant="h5" component="h2" gutterBottom>
             <Box component="span" sx={{ fontWeight: "bold" }}>
               Organizing a research project
@@ -151,10 +188,12 @@ const Documentation = () => {
           </Typography>
           <Typography variant="body1" color="secondary" sx={{ mb: 2 }}>
             Qresp curates whatever structure you already have, so there is no
-            layout it requires. This one is a reasonable default: it separates
-            what was measured from what was derived, and keeps the code that
-            connects them beside both — which is most of what makes a package
-            reproducible by somebody else.
+            layout it requires. This one is a reasonable general default: it
+            separates what was measured from what was derived, and keeps the
+            code that connects them beside both — which is most of what makes a
+            package reproducible by somebody else. It is <em>not</em> the
+            Folder Standard above, and automatic record proposals are not
+            deterministic on it; use the standard if you want those.
           </Typography>
 
           <Box

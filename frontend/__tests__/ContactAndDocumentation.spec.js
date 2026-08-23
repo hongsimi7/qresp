@@ -4,10 +4,17 @@ import userEvent from "@testing-library/user-event";
 import Contact, {
   EMAIL,
   ISSUES,
+  MAILTO,
   PULL_REQUESTS,
   REPOSITORY,
 } from "../pages/contact";
 import Documentation, { DIRECTORY_TEMPLATE } from "../pages/documentation";
+import FolderStandardPage from "../pages/documentation/folder-standard";
+import {
+  TIPS,
+  TREE,
+  TREE_TEXT,
+} from "../components/FolderStandard/content";
 import Header from "../components/header";
 
 jest.mock("../components/AuthControls", () => {
@@ -24,11 +31,29 @@ describe("the Contact page", () => {
     expect(EMAIL).toBe("datadev@lists.uchicago.edu");
   });
 
-  it("keeps a one-click Email DataDev button", () => {
+  it("keeps a one-click Email Qresp button that pre-fills the subject", () => {
+    // The list is a shared inbox receiving more than Qresp; the subject is
+    // what lets whoever reads it sort this mail without opening it.
     render(<Contact />);
     const button = screen.getByTestId("email-datadev");
-    expect(button).toHaveAttribute("href", `mailto:${EMAIL}`);
-    expect(button).toHaveTextContent("Email DataDev");
+    expect(button).toHaveAttribute("href", MAILTO);
+    expect(MAILTO).toBe("mailto:datadev@lists.uchicago.edu?subject=Qresp");
+    expect(button).toHaveTextContent("Email Qresp");
+  });
+
+  it("points at the canonical project repository, never a personal fork", () => {
+    render(<Contact />);
+    [REPOSITORY, ISSUES, PULL_REQUESTS].forEach((href) => {
+      expect(href).toContain("github.com/qresp-code-development/qresp");
+      expect(href).not.toMatch(/hongsimi7/i);
+    });
+  });
+
+  it("says questions, bugs and feature requests all have a home", () => {
+    const { container } = render(<Contact />);
+    expect(container.textContent).toMatch(/questions about qresp/i);
+    expect(container.textContent).toMatch(/bug report/i);
+    expect(container.textContent).toMatch(/feature request/i);
   });
 
   it("links the repository, the issue tracker and pull requests", () => {
@@ -177,5 +202,84 @@ describe("the documentation directory template", () => {
   it("says nothing before the button is pressed", () => {
     render(<Documentation />);
     expect(screen.getByTestId("copy-status")).toHaveTextContent("");
+  });
+});
+
+// The Folder Standard was reachable only from a dialog inside the Curator --
+// the wrong audience and the wrong moment for a researcher laying out a folder
+// before anyone curates it. It now has a URL.
+describe("the public Folder Standard page", () => {
+  it("renders the standard, its tree and its rules", () => {
+    render(<FolderStandardPage />);
+    expect(
+      screen.getByRole("heading", { level: 1, name: /qresp folder standard v1/i })
+    ).toBeInTheDocument();
+    const tree = screen.getByTestId("folder-guide-tree");
+    ["paper-folder/", "datasets/", "charts/", "scripts/", "tools/", "docs/"]
+      .forEach((entry) => expect(tree).toHaveTextContent(entry));
+    expect(screen.getByTestId("folder-guide-standard")).toBeInTheDocument();
+  });
+
+  it("keeps the copy action the Curator guide has", () => {
+    render(<FolderStandardPage />);
+    expect(
+      screen.getByRole("button", { name: /copy standard structure/i })
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the legacy-folder notes visibly separate from the standard", () => {
+    // A compatibility path read as a second, looser layout is how a new paper
+    // ends up organized the old way on purpose.
+    render(<FolderStandardPage />);
+    expect(
+      screen.getByRole("heading", { name: /several images in one figure folder/i })
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("folder-guide-legacy")).toBeInTheDocument();
+  });
+
+  it("offers a way back to the documentation index", () => {
+    render(<FolderStandardPage />);
+    expect(screen.getByTestId("back-to-documentation")).toHaveAttribute(
+      "href",
+      "/documentation"
+    );
+  });
+
+  it("renders the SAME standard the Curator dialog does, not a copy", () => {
+    // The failure this prevents: a researcher lays a folder out from the
+    // public page, then the Curator describes a different layout. Both
+    // surfaces import components/FolderStandard/content, so a rule added in
+    // one appears in the other or in neither.
+    render(<FolderStandardPage />);
+    const page = screen.getByTestId("folder-guide-standard").textContent;
+    TIPS.forEach((tip) => expect(page).toContain(tip));
+    const tree = screen.getByTestId("folder-guide-tree").textContent;
+    TREE.forEach((entry) => expect(tree).toContain(entry.name));
+    // And the copyable text is derived from the drawn tree, so what lands on
+    // a clipboard cannot drift from what was read.
+    TREE.forEach((entry) => expect(TREE_TEXT).toContain(entry.name));
+  });
+});
+
+describe("the documentation index points at the standard", () => {
+  it("links the Folder Standard page", () => {
+    render(<Documentation />);
+    expect(screen.getByTestId("folder-standard-link")).toHaveAttribute(
+      "href",
+      "/documentation/folder-standard"
+    );
+  });
+
+  it("does not present the general template as the Folder Standard", () => {
+    // Two incompatible layouts on one page is the failure this guards: the
+    // general template uses figures/ and data/raw/, which the analyzer does
+    // not read as charts/ and datasets/.
+    const { container } = render(<Documentation />);
+    const callout = screen.getByTestId("folder-standard-callout");
+    expect(callout).toHaveTextContent(/qresp folder standard v1/i);
+    // The general template is explicitly marked as NOT the standard.
+    expect(container.textContent).toMatch(/not.{0,20}the\s+Folder Standard/i);
+    // ...and the standard's own tree is not restated here.
+    expect(screen.queryByTestId("folder-guide-tree")).toBeNull();
   });
 });

@@ -21,6 +21,10 @@ import StyledButton from "../components/button";
 // want it, and names the two GitHub routes that are usually the right ones.
 
 const EMAIL = "datadev@lists.uchicago.edu";
+// The list is a shared inbox that receives more than Qresp. A pre-filled
+// subject is what lets whoever reads it sort this mail without opening it,
+// and costs the sender nothing -- it is still editable in their mail client.
+const MAILTO = `mailto:${EMAIL}?subject=Qresp`;
 const REPOSITORY = "https://github.com/qresp-code-development/qresp";
 const ISSUES = `${REPOSITORY}/issues`;
 const PULL_REQUESTS = `${REPOSITORY}/pulls`;
@@ -81,7 +85,8 @@ const Contact = () => (
         <Typography variant="body1" color="secondary" sx={{ mb: 4 }}>
           Questions about Qresp, a record you are curating, or a Qresp server?
           Write to the DataDev list. For anything about the software itself —
-          a bug, or a change you would like to contribute — GitHub is faster.
+          a bug report or a feature request — GitHub is faster, and the issue
+          stays where the people who can act on it will see it.
         </Typography>
 
         <Row title="Email">
@@ -89,17 +94,17 @@ const Contact = () => (
               into whatever the reader actually uses, which a bare `mailto:`
               link never allowed. */}
           <Typography variant="body1" gutterBottom>
-            <MuiLink href={`mailto:${EMAIL}`} underline="hover">
+            <MuiLink href={MAILTO} underline="hover">
               {EMAIL}
             </MuiLink>
           </Typography>
           <Box sx={{ mt: 1 }}>
             <StyledButton
-              href={`mailto:${EMAIL}`}
+              href={MAILTO}
               variant="contained"
               data-testid="email-datadev"
             >
-              Email DataDev
+              Email Qresp
             </StyledButton>
           </Box>
         </Row>
@@ -127,7 +132,8 @@ const Contact = () => (
           </Typography>
           <Typography variant="body2" color="secondary">
             Please include what you did, what you expected, and what happened
-            instead. A record id or a Qresp server URL helps.
+            instead. A record id or a Qresp server URL helps. Feature requests
+            belong here too.
           </Typography>
         </Row>
 
@@ -143,5 +149,5 @@ const Contact = () => (
   </Fragment>
 );
 
-export { EMAIL, REPOSITORY, ISSUES, PULL_REQUESTS };
+export { EMAIL, MAILTO, REPOSITORY, ISSUES, PULL_REQUESTS };
 export default Contact;
