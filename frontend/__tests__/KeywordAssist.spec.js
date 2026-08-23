@@ -21,6 +21,14 @@ import CuratorState from "../Context/Curator/CuratorState";
 import CuratorContext from "../Context/Curator/curatorContext";
 import SourceTreeContext from "../Context/SourceTree/SourceTreeContext";
 
+// A user for tests that TYPE.
+//
+// Every keystroke re-renders the surrounding Curator form, so userEvent's
+// default inter-key pause dominates any test that enters a phrase and can
+// push it past the 5s budget under a full-suite run -- passing alone, failing
+// together. `delay: null` removes ONLY the artificial pause: every key event
+// still fires, in order, through the same handlers. Nothing asserted changes.
+const typingUser = () => userEvent.setup({ delay: null });
 // Keyword suggestion reads the record's OWN metadata: what the curator typed,
 // and the artifacts they already accepted. Nothing else may leave the
 // browser -- above all no file, path or account detail, because there is no
@@ -404,7 +412,7 @@ describe("Keywords are appended, never replaced", () => {
 
   it("appends to what the curator typed, case-insensitively deduplicated",
      async () => {
-    const user = userEvent.setup();
+    const user = typingUser();
     renderPaperInfo();
     await user.click(screen.getByRole("button", { name: "seed" }));
 
@@ -429,7 +437,7 @@ describe("Keywords are appended, never replaced", () => {
   });
 
   it("does not save or collapse the section when applying", async () => {
-    const user = userEvent.setup();
+    const user = typingUser();
     renderPaperInfo();
     await user.click(screen.getByRole("button", { name: "seed" }));
 

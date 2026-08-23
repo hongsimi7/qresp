@@ -11,6 +11,14 @@ jest.mock("next/router", () => ({
   useRouter: () => ({ push: jest.fn() }),
 }));
 
+// A user for tests that TYPE.
+//
+// Every keystroke re-renders the surrounding Curator form, so userEvent's
+// default inter-key pause dominates any test that enters a phrase and can
+// push it past the 5s budget under a full-suite run -- passing alone, failing
+// together. `delay: null` removes ONLY the artificial pause: every key event
+// still fires, in order, through the same handlers. Nothing asserted changes.
+const typingUser = () => userEvent.setup({ delay: null });
 const metadata = {
   curatorInfo: { firstName: "A", middleName: "", lastName: "B", emailId: "a@b.co" },
   referenceInfo: { title: "Draft title" },
@@ -96,7 +104,7 @@ describe("TopActions toolbar contents", () => {
 
 describe("TopActions draft controls", () => {
   it("asks for a draft name before saving an account draft", async () => {
-    const user = userEvent.setup();
+    const user = typingUser();
     const { saveDraftToServer } = renderTopActions();
 
     await user.click(
@@ -151,7 +159,7 @@ describe("TopActions draft controls", () => {
   });
 
   it("can save the account draft before starting from scratch", async () => {
-    const user = userEvent.setup();
+    const user = typingUser();
     const { setAlert, unsetAlert, resetAll, saveDraftToServer } =
       renderTopActions();
 
