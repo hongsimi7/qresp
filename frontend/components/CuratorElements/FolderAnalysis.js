@@ -983,24 +983,24 @@ const FolderAnalysis = ({ path, artifactType }) => {
           />
         ) : null}
         <Box sx={{ flexGrow: 1, flexBasis: 160, minWidth: 0 }}>
+          {/* The filename, and nothing else.
+
+              `image.reason` said things like "image found in this chart
+              folder" and "filename matches the chart folder" -- one line per
+              image, repeated down a list where every entry was found the same
+              way, restating what the folder heading above already says. The
+              curator is choosing a ROLE for a file they can see the name and
+              thumbnail of; how the analyser noticed it does not help.
+
+              The Review chip went with it: an image's role is in the select
+              beside it, already reading "Review" when that is what it is, so
+              the chip was the same fact twice. Nothing is hidden -- every
+              image found is still listed, and `needsReview` still governs
+              what is ignored until the curator says otherwise. */}
           <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
             {name}
           </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {image.reason}
-          </Typography>
         </Box>
-        {/* An image Qresp will not choose for you stays visible and says so,
-            rather than being hidden or quietly turned into a record. */}
-        {needsReview(chartRoles, appliedPlan, image) ? (
-          <Chip
-            size="small"
-            color="warning"
-            variant="outlined"
-            label="Review"
-            data-testid={`chart-review-${image.path}`}
-          />
-        ) : null}
         {url ? (
           <Button
             size="small"
@@ -1087,21 +1087,6 @@ const FolderAnalysis = ({ path, artifactType }) => {
         )} image(s) in ${chartGroups.length} folder(s)`}
       </Button>
       <Collapse in={chartsOpen} unmountOnExit>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          display="block"
-          sx={{ mb: 1 }}
-        >
-          In the Qresp Folder Standard one <code>charts/&lt;figure-id&gt;/</code>{" "}
-          folder is one Chart. This is for reviewing folders that already hold
-          several images: every image found is listed — none is hidden — and
-          each one either becomes its own Chart, is attached to a Chart in the
-          same folder as a supporting file, or is ignored, because a Chart
-          holds exactly one Figure Image. Images marked{" "}
-          <strong>Review</strong> are ignored until you say otherwise. Charts
-          you create separately can be related afterwards in Workflow.
-        </Typography>
         {chartGroups.map((group) => (
           <Box
             key={group.folder}

@@ -173,20 +173,19 @@ const analysis = {
   },
 };
 
-// A user for tests that TYPE.
+// A user with userEvent's artificial inter-event delay removed.
 //
-// Every keystroke re-renders the whole Folder Analysis dialog, which is one
-// of the largest trees in the app, so userEvent's default inter-key pause
-// dominates any test that enters a phrase: a 14-character description spends
-// most of a 5s test budget waiting between keys rather than doing anything.
-// That is what made "does not call an empty optional field a missing one"
-// fail under a full-suite run while passing on its own.
+// The Folder Analysis dialog is one of the largest trees in the app, and
+// userEvent pauses between the events it dispatches. That pause dominates any
+// test that drives this dialog hard -- a 14-character description spends most
+// of a 5s budget waiting between keystrokes, and a click that re-renders 30
+// candidate cards is not much cheaper.
 //
-// `delay: null` removes ONLY the artificial pause. Every key event still
-// fires, in the same order, through the same handlers -- nothing asserted
-// changes, and no product behaviour is involved. Tests that only click do
-// not need this and keep the plain setup.
-const typingUser = () => userEvent.setup({ delay: null });
+// `delay: null` removes ONLY the pause. Every event still fires, in the same
+// order, through the same handlers -- nothing asserted changes, and no
+// product behaviour is involved. Used where it was MEASURED to matter, not
+// everywhere: a test that clicks one button does not need it.
+const noDelayUser = () => userEvent.setup({ delay: null });
 
 // Puts `text` into a field in ONE event, the way pasting does.
 //
@@ -719,7 +718,10 @@ describe("Analyze RCC Folder", () => {
       },
     };
     axios.post.mockResolvedValue({ data: many });
-    const user = userEvent.setup();
+    // 30 candidate cards, expanded and then re-rendered by a click: the
+    // artificial inter-event delay is the difference between ~3s and over
+    // the 5s budget. Measured, not guessed.
+    const user = noDelayUser();
     renderWith();
     await user.click(analyzeButton());
     await screen.findByRole("tab", { name: /charts \(30\)/i });
@@ -798,7 +800,7 @@ describe("Analyze RCC Folder", () => {
         },
       },
     });
-    const user = typingUser();
+    const user = noDelayUser();
     renderWith();
     await openAnalysis(user);
     await user.click(screen.getByRole("tab", { name: /unclassified \(60\)/i }));
@@ -906,7 +908,7 @@ describe("Analyze RCC Folder", () => {
 
   it("applies only the selected candidates, with the curator's edits", async () => {
     // delay: null — see the note in the field-contract suite below.
-    const user = typingUser();
+    const user = noDelayUser();
     const { addMany } = renderWith();
     await openAnalysis(user);
 
@@ -1812,7 +1814,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     // The exact leak this replaced: `context` used to be built from
     // draft.readme + draft.description, so the model was handed the
     // curator's own answer to the field it was being asked to fill.
-    const user = typingUser();
+    const user = noDelayUser();
     renderWith();
     await openAnalysis(user);
     // selectAndOpenConsent opens the fields itself, so the value is typed
@@ -1901,7 +1903,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
   });
 
   it("an abstention leaves the curator's own draft value alone", async () => {
-    const user = typingUser();
+    const user = noDelayUser();
     const { addMany } = renderWith();
     await openAnalysis(user);
     await user.click(await screen.findByRole("tab", { name: /charts \(1\)/i }));
@@ -2048,7 +2050,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
   });
 
   it("refuses to overwrite a value the curator typed", async () => {
-    const user = typingUser();
+    const user = noDelayUser();
     renderWith();
     await openAnalysis(user);
     await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
@@ -2474,7 +2476,7 @@ describe("Folder Analysis field contract", () => {
 
   it("offers a dataset Files, Description and Keywords -- and no URLs",
      async () => {
-    const user = typingUser();
+    const user = noDelayUser();
     renderWith();
     await openFields(user, /datasets \(1\)/i, /select short_traj/i,
                      "dataset-0");
@@ -2634,7 +2636,7 @@ describe("Folder Analysis field contract", () => {
   });
 
   it("does not call an empty optional field a missing one", async () => {
-    const user = typingUser();
+    const user = noDelayUser();
     renderWith();
     await openFields(user, /scripts \(1\)/i, /select plot_vdos\.py/i,
                      "script-0");
@@ -2873,7 +2875,7 @@ describe("a card never contradicts itself about what a field holds", () => {
   }, 30000);
 
   it("un-marks applied when the curator edits the value afterwards", async () => {
-    const user = typingUser();
+    const user = noDelayUser();
     renderWith();
     await suggestForChart(user, SUGGESTION);
 
@@ -2945,7 +2947,7 @@ describe("a card never contradicts itself about what a field holds", () => {
   }, 30000);
 
   it("does not overwrite the curator's own text on any state", async () => {
-    const user = typingUser();
+    const user = noDelayUser();
     renderWith();
     await openAnalysis(user);
     await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
@@ -2987,7 +2989,7 @@ describe("a card never contradicts itself about what a field holds", () => {
     // The rule it protected still exists where it matters: the backend keeps
     // per-field evidence, and `evidenceChipFor` still refuses to call an
     // edited value analysed.
-    const user = typingUser();
+    const user = noDelayUser();
     renderWith();
     await openAnalysis(user);
     await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
@@ -3162,26 +3164,37 @@ describe("Charts in the record boundary panel", () => {
     expect(panel).toHaveTextContent("figure_S1.png");
     // The second image is NOT hidden just because Qresp would not pick it.
     expect(panel).toHaveTextContent("diagram.png");
-    expect(panel).toHaveTextContent(/filename matches the chart folder/i);
+    // ...but HOW the analyser noticed each file is not repeated per row. The
+    // curator is choosing a role for a file whose name they can see.
+    expect(panel).not.toHaveTextContent(/filename matches the chart folder/i);
+    expect(panel).not.toHaveTextContent(/image found in this chart folder/i);
   });
 
-  it("frames itself as review for folders that already hold several images",
+  it("leaves only what is needed to pick a file and give it a role",
      async () => {
+    // The panel opened with a paragraph of Folder Standard theory above the
+    // list. It is the same guidance the Curator's Folder Guide and the public
+    // /documentation/folder-standard page carry in full, and repeating it
+    // here pushed the files -- the thing being decided about -- down.
     const user = userEvent.setup();
     renderWith();
     const panel = await openPanel(user);
 
-    // The standard's unit is stated first, so this never reads as a second,
-    // looser way to lay out a new paper.
-    expect(panel).toHaveTextContent(
-      /in the qresp folder standard one charts\/<figure-id>\/ folder is one chart/i
+    expect(panel).not.toHaveTextContent(
+      /in the qresp folder standard one charts/i
     );
-    expect(panel).toHaveTextContent(
-      /for reviewing folders that already hold several images/i
-    );
-    expect(panel).toHaveTextContent(/none is hidden/i);
-    expect(panel).toHaveTextContent(/a chart holds exactly one figure image/i);
-    expect(panel).toHaveTextContent(/related afterwards in workflow/i);
+    expect(panel).not.toHaveTextContent(/none is hidden/i);
+    expect(panel).not.toHaveTextContent(/related afterwards in workflow/i);
+
+    // What a curator actually needs is all still here: the folder, each
+    // filename, a role control per image, and a way to look at the file.
+    expect(panel).toHaveTextContent("figures_tables/figure_S1");
+    expect(panel).toHaveTextContent("figure_S1.png");
+    expect(panel).toHaveTextContent("diagram.png");
+    expect(screen.getAllByLabelText(/^role for /i)).toHaveLength(2);
+    expect(
+      screen.getAllByRole("link", { name: /open image/i }).length
+    ).toBeGreaterThan(0);
   });
 
   it("shows a notebook as an attachment, never as a Chart choice", async () => {
@@ -3203,11 +3216,10 @@ describe("Charts in the record boundary panel", () => {
     await openPanel(user);
 
     expect(roleSelect("figure_S1.png")).toHaveTextContent("Create Chart");
-    // Everything else waits for a decision, and says so on screen.
+    // Everything else waits for a decision, and the ROLE control is where
+    // that is said -- the separate "Review" chip was the same fact twice.
     expect(roleSelect("diagram.png")).toHaveTextContent("Ignore");
-    expect(screen.getByTestId(`chart-review-${DIAGRAM}`)).toHaveTextContent(
-      "Review"
-    );
+    expect(screen.queryByTestId(`chart-review-${DIAGRAM}`)).toBeNull();
     expect(screen.queryByTestId(`chart-review-${FIGURE}`)).toBeNull();
   });
 
