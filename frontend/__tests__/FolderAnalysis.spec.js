@@ -285,9 +285,9 @@ describe("Analyze RCC Folder", () => {
       screen.getByRole("tab", { name: /unclassified \(1\)/i })
     ).toBeInTheDocument();
 
-    expect(screen.getByTestId("confidence-chart-0")).toHaveTextContent(
-      "High evidence"
-    );
+    // No evidence badge: it answered how the ANALYSER reached the proposal,
+    // not anything the curator has to act on. Ranking still uses it.
+    expect(screen.queryByTestId("confidence-chart-0")).toBeNull();
     expect(
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     ).toBeInTheDocument();
@@ -441,12 +441,12 @@ describe("Analyze RCC Folder", () => {
 
     // The detected path and the unverifiable figure number must not look
     // alike.
+    // No per-field evidence chip either. The curator judges the VALUE, which
+    // is in the input in front of them.
+    await screen.findByTestId("fields-chart-0");
     expect(
-      await screen.findByTestId("field-evidence-chart-0-imageFile")
-    ).toHaveTextContent("High evidence");
-    // A chip only appears on a field that HAS a value. An empty required
-    // field is already marked by its asterisk and helper text; an empty
-    // optional field says nothing at all.
+      screen.queryByTestId("field-evidence-chart-0-imageFile")
+    ).toBeNull();
     expect(
       screen.queryByTestId("field-evidence-chart-0-number")
     ).toBeNull();
@@ -528,10 +528,10 @@ describe("Analyze RCC Folder", () => {
     renderWith();
     await openAnalysis(user);
 
+    // A weakly-evidenced candidate is still listed, with its name and path,
+    // and is no longer labelled with the analyser's confidence.
     expect(screen.getByText("fig9")).toBeInTheDocument();
-    expect(screen.getByTestId("confidence-chart-9")).toHaveTextContent(
-      "Low evidence"
-    );
+    expect(screen.queryByTestId("confidence-chart-9")).toBeNull();
     expect(
       screen.getByRole("checkbox", { name: /select fig9/i })
     ).toBeInTheDocument();
@@ -681,9 +681,11 @@ describe("Analyze RCC Folder", () => {
 
     // The tab count is honest about the total; the list shows the first 25.
     expect(screen.getAllByRole("checkbox")).toHaveLength(25);
-    // Strongest evidence leads.
-    expect(screen.getAllByTestId(/^confidence-/)[0]).toHaveTextContent(
-      "High evidence"
+    // Strongest evidence still leads -- the ORDER is unchanged, it is only
+    // the badge that is gone, so this checks the order by name.
+    expect(screen.queryAllByTestId(/^confidence-/)).toHaveLength(0);
+    expect(screen.getAllByRole("checkbox")[0]).toHaveAccessibleName(
+      /select figure0\.png/i
     );
     // And the rest are explicitly reachable, described as collapsed.
     expect(
@@ -837,12 +839,19 @@ describe("Analyze RCC Folder", () => {
     renderWith();
     await openAnalysis(user);
 
-    // The state is one short chip; the long explanation is one click away
-    // instead of hanging off it.
-    const badge = screen.getByTestId("structure-mode");
-    expect(badge).toHaveTextContent("Legacy-compatible");
-    expect(badge).not.toHaveTextContent(/Read as charts/);
+    // How the folder was READ is a diagnostic, so the default view no longer
+    // carries a status chip for it -- only the two ways to ask.
+    const controls = screen.getByTestId("structure-mode");
+    expect(controls).not.toHaveTextContent("Legacy-compatible");
     expect(screen.queryByTestId("folder-mapping")).toBeNull();
+
+    // It is still SAID, in scan details.
+    await user.click(
+      screen.getByRole("button", { name: /show scan details/i })
+    );
+    expect(
+      await screen.findByTestId("scan-details-structure-mode")
+    ).toHaveTextContent("Legacy-compatible");
 
     await user.click(
       screen.getByRole("button", { name: /show folder mapping/i })
@@ -868,9 +877,15 @@ describe("Analyze RCC Folder", () => {
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
-    expect(screen.getByTestId("structure-mode")).toHaveTextContent(
+    expect(screen.getByTestId("structure-mode")).not.toHaveTextContent(
       "Needs reorganization"
     );
+    await user.click(
+      screen.getByRole("button", { name: /show scan details/i })
+    );
+    expect(
+      await screen.findByTestId("scan-details-structure-mode")
+    ).toHaveTextContent("Needs reorganization");
   });
 
   it("selects nothing by default and cannot apply until something is checked", async () => {
@@ -1060,22 +1075,13 @@ describe("Analyze RCC Folder", () => {
     renderWith();
     await openAnalysis(user);
 
-    // Explicit and non-alarming: what was scanned, that limits stopped it,
-    // and that the result is not the whole folder.
+    // The four-line Alert is no longer in the way on every open -- but the
+    // fact it carried is not lost, and a curator who wonders why the list
+    // looks short is one click from it.
+    expect(screen.queryByTestId("partial-notice")).toBeNull();
     expect(
-      screen.getByText(/this is a partial view of the folder/i)
-    ).toBeInTheDocument();
-    const notice = screen
-      .getByText(/this is a partial view of the folder/i)
-      .closest(".MuiAlert-root");
-    expect(notice).toHaveTextContent("1971 file(s) across 260 folder(s)");
-    expect(notice).toHaveTextContent(/built-in safety limits/i);
-    expect(notice).toHaveTextContent(/do not represent everything/i);
-    // Not styled as an error — it is an expected, safe outcome.
-    expect(notice).toHaveClass("MuiAlert-colorInfo");
-    expect(notice.className).not.toMatch(/colorError|colorWarning/);
-    // ONE summary alert, not one per warning.
-    expect(screen.getAllByRole("alert")).toHaveLength(1);
+      screen.queryByText(/this is a partial view of the folder/i)
+    ).toBeNull();
 
     // The numbers and the specific reason are in the scan details, closed
     // until asked for.
@@ -1084,6 +1090,10 @@ describe("Analyze RCC Folder", () => {
       screen.getByRole("button", { name: /show scan details/i })
     );
     const details = await screen.findByTestId("scan-details");
+    // The partial-view fact, moved here rather than deleted.
+    expect(details).toHaveTextContent(/this is a partial view/i);
+    expect(details).toHaveTextContent(/do not represent everything/i);
+    expect(details).toHaveTextContent("1971 file(s) across 260 folder(s)");
     expect(details).toHaveTextContent("at most 4 folder levels, 2000 files");
     expect(details).toHaveTextContent("120 directory listings");
     expect(details).toHaveTextContent("30 manifest/script files");
@@ -1466,7 +1476,9 @@ describe("Analyze RCC Folder — capitalized legacy folders", () => {
     renderWith();
     await openAnalysis(user);
 
-    expect(screen.getByTestId("structure-mode")).toHaveTextContent(
+    // The state lives in scan details now; the boundary controls are what
+    // this test is really about.
+    expect(screen.getByTestId("structure-mode")).not.toHaveTextContent(
       "Legacy-compatible"
     );
     await user.click(
@@ -1568,8 +1580,8 @@ describe("Analyze RCC Folder — needs reorganization", () => {
     await screen.findByTestId("structure-mode");
 
     const badge = screen.getByTestId("structure-mode");
-    expect(badge).toHaveTextContent("Needs reorganization");
-    // The reason is one click away rather than pasted onto the chip.
+    expect(badge).not.toHaveTextContent("Needs reorganization");
+    // The reason is one click away rather than pasted onto a chip.
     await user.click(
       screen.getByRole("button", { name: /show folder mapping/i })
     );
@@ -1668,27 +1680,22 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     expect(
       screen.getByRole("heading", { name: /send .*figure1\.png.* to gemini\?/i })
     ).toBeInTheDocument();
-    expect(screen.getByTestId("ai-consent-fields")).toHaveTextContent(
+    expect(screen.getByTestId("ai-consent-scope")).toHaveTextContent(
       /caption and keywords/i
     );
-    // The scope list is what is actually sent, and it must stay truthful:
-    // paper background and notebook MARKDOWN are now in the payload.
+    // The scope is stated in one sentence rather than nine bullets, and it
+    // must still be TRUE: this candidate's own readable evidence, plus the
+    // paper's background.
     const scope = screen.getByTestId("ai-consent-scope");
-    expect(scope).toHaveTextContent(
-      /relative paths, file names and folder names/i
-    );
-    expect(scope).toHaveTextContent(/title and abstract, as background/i);
-    expect(scope).toHaveTextContent(
-      /README, module docstring, top-level function and class names/i
-    );
-    expect(scope).toHaveTextContent(/notebook\s*markdown\s*cells/i);
+    expect(scope).toHaveTextContent(/readable evidence/i);
+    expect(scope).toHaveTextContent(/file names/i);
+    expect(scope).toHaveTextContent(/title and abstract/i);
+    // What comes back, and that it is not applied for you.
     expect(
-      screen.getByText(
-        /raw dataset values, image bytes,\s*notebook code cells/i
-      )
+      screen.getByText(/suggestions only/i)
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/nothing is filled in, added,\s*saved or published/i)
+      screen.getByText(/nothing is filled in, saved or published/i)
     ).toBeInTheDocument();
 
     // Unchecked by default, and the send action is blocked.
@@ -1914,17 +1921,43 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     expect(addMany).not.toHaveBeenCalled();
   }, 20000);
 
-  it("the consent dialog lists the exact sources that will be sent", async () => {
+  it("warns before sending when there is nothing readable to send", async () => {
+    // The consent dialog used to itemise every source. That list restated
+    // what the server enforces anyway, and nine lines of it taught curators
+    // to click past the one step that must not become reflex. What survives
+    // is the case the reader cannot predict: nothing readable was found, so
+    // the request will come back empty.
+    axios.post.mockResolvedValue({
+      data: {
+        ...analysis,
+        candidates: {
+          ...analysis.candidates,
+          scripts: [
+            { ...analysis.candidates.scripts[0], ai_sources: [] },
+          ],
+        },
+      },
+    });
     const user = userEvent.setup();
     renderWith();
     await openAnalysis(user);
     await selectAndOpenConsent(
       user, /scripts \(1\)/i, /select plot_vdos\.py/i
     );
-    const listed = await screen.findByTestId("ai-consent-sources");
-    expect(listed).toHaveTextContent("docstring");
-    expect(listed).toHaveTextContent("scripts/plot_vdos.py");
-    expect(listed).toHaveTextContent("python_symbols");
+    expect(
+      await screen.findByTestId("ai-consent-sources")
+    ).toHaveTextContent(/not enough evidence/i);
+  });
+
+  it("says nothing alarming when there IS evidence to send", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+    await selectAndOpenConsent(
+      user, /scripts \(1\)/i, /select plot_vdos\.py/i
+    );
+    await screen.findByTestId("ai-consent-scope");
+    expect(screen.queryByTestId("ai-consent-sources")).toBeNull();
   });
 
   it("warns in the consent dialog when a candidate has no readable text", async () => {
@@ -2478,6 +2511,82 @@ describe("Folder Analysis field contract", () => {
     );
   });
 
+  it("shows no long helper prose under any edit field", async () => {
+    // The specific sentences that used to sit under each input. Six of them
+    // per candidate is what made a proposal card unreadable.
+    const user = userEvent.setup();
+    renderWith();
+    await openFields(user, null, /select figure1\.png/i, "chart-0");
+
+    const fields = screen.getByTestId("fields-chart-0");
+    [
+      /the image file for this figure/i,
+      /qresp never guesses/i,
+      /use the paper.s caption/i,
+      /keyword\(s\) for what the figure shows/i,
+    ].forEach((prose) => expect(fields.textContent).not.toMatch(prose));
+    // The label, the value and the required marker all stay.
+    expect(input(/^figure caption ?\*?$/i)).toBeRequired();
+    expect(input(/^figure image ?\*?$/i)).toHaveValue("figures/figure1.png");
+  });
+
+  it("shows no evidence chips anywhere in the dialog", async () => {
+    // Header and expanded fields both. Evidence still ranks candidates and
+    // bounds the AI behind the scenes; it is simply not a badge any more.
+    const user = userEvent.setup();
+    renderWith();
+    await openFields(user, null, /select figure1\.png/i, "chart-0");
+
+    expect(screen.queryAllByTestId(/^confidence-/)).toHaveLength(0);
+    expect(screen.queryAllByTestId(/^field-evidence-/)).toHaveLength(0);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).not.toMatch(/high evidence/i);
+    expect(dialog.textContent).not.toMatch(/medium evidence/i);
+    expect(dialog.textContent).not.toMatch(/low evidence/i);
+  });
+
+  it("keeps validation and Add to Curator working without the prose", async () => {
+    // Trimming text must not trim behaviour: the missing-required count, the
+    // asterisks and the add path are all still here.
+    const user = userEvent.setup();
+    const { addMany } = renderWith();
+    await openFields(user, null, /select figure1\.png/i, "chart-0");
+
+    // The count is real: it names the blank required fields and drops as
+    // they are filled.
+    expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
+      "3 required fields missing"
+    );
+    await fill(user, input(/^figure caption ?\*?$/i), "Density of states");
+    await waitFor(() =>
+      expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
+        "2 required fields missing"
+      )
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: /add selected items to curator/i })
+    );
+    expect(addMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps both disclosures closed by default and openable", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    expect(screen.queryByTestId("scan-details")).toBeNull();
+    expect(screen.queryByTestId("folder-mapping")).toBeNull();
+
+    const details = screen.getByRole("button", { name: /show scan details/i });
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    await user.click(details);
+    expect(await screen.findByTestId("scan-details")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /hide scan details/i })
+    ).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("states the required rule once, not under every field", async () => {
     // The dialog used to repeat "Required before Save/Update and Publish"
     // as helper text under EVERY blank required field -- the same sentence
@@ -2512,13 +2621,16 @@ describe("Folder Analysis field contract", () => {
     renderWith();
     await openAnalysis(user);
 
-    const notice = await screen.findByTestId("partial-notice");
-    expect(notice).toHaveTextContent(/partial view of the folder/i);
-    expect(notice).toHaveTextContent("1971 file(s) across 260 folder(s)");
-    // And the long version is still one disclosure away, collapsed.
-    expect(
+    // Trimming the prose must not trim the FACT. It is no longer an Alert
+    // above the candidates, but it is one click away and still says the
+    // list is incomplete.
+    expect(screen.queryByTestId("partial-notice")).toBeNull();
+    await user.click(
       screen.getByRole("button", { name: /show scan details/i })
-    ).toBeInTheDocument();
+    );
+    const details = await screen.findByTestId("scan-details");
+    expect(details).toHaveTextContent(/this is a partial view/i);
+    expect(details).toHaveTextContent("1971 file(s) across 260 folder(s)");
   });
 
   it("does not call an empty optional field a missing one", async () => {
@@ -2866,21 +2978,27 @@ describe("a card never contradicts itself about what a field holds", () => {
     expect(caption()).toHaveValue("MY OWN CAPTION");
   }, 30000);
 
-  it("keeps High evidence only while the value is the analysed one", async () => {
+  it("shows no evidence badge to contradict, before or after an edit", async () => {
+    // This used to be about a chip that said "High evidence" going away when
+    // the curator typed over the analysed value -- a badge vouching for
+    // something nothing had verified. The badge is gone from the UI
+    // altogether, so there is nothing left to contradict the field.
+    //
+    // The rule it protected still exists where it matters: the backend keeps
+    // per-field evidence, and `evidenceChipFor` still refuses to call an
+    // edited value analysed.
     const user = typingUser();
     renderWith();
     await openAnalysis(user);
     await user.click(screen.getByRole("button", { name: "Edit Proposal" }));
+    await screen.findByTestId("fields-chart-0");
 
-    expect(
-      await screen.findByTestId("field-evidence-chart-0-imageFile")
-    ).toHaveTextContent("High evidence");
-
-    // "High" meant "Qresp detected THIS file". Typing over it makes the chip
-    // vouch for something nothing verified.
+    expect(screen.queryByTestId("field-evidence-chart-0-imageFile")).toBeNull();
     await user.clear(input(/^figure image ?\*?$/i));
     await fill(user, input(/^figure image ?\*?$/i), "typed/by/hand.png");
     expect(screen.queryByTestId("field-evidence-chart-0-imageFile")).toBeNull();
+    // The value the curator typed is what the field holds.
+    expect(input(/^figure image ?\*?$/i)).toHaveValue("typed/by/hand.png");
   }, 30000);
 
   it("applying a suggestion saves, publishes and adds nothing", async () => {
@@ -3501,21 +3619,18 @@ describe("typed import dialog ??readable by default", () => {
     );
   });
 
-  it("opens with one line of guidance and one summary alert", async () => {
+  it("opens with one line of guidance and no summary alerts", async () => {
     const user = userEvent.setup();
     const dialog = await openChartImport(user);
 
-    expect(within(dialog).getAllByRole("alert")).toHaveLength(1);
-    expect(screen.getByTestId("partial-notice")).toHaveTextContent(
-      /partial view of the folder/i
-    );
-    // The long version is not in the way.
+    // Nothing to read past: the partial-view Alert and the structure chip
+    // are both diagnostics now, behind Show scan details.
+    expect(within(dialog).queryAllByRole("alert")).toHaveLength(0);
+    expect(screen.queryByTestId("partial-notice")).toBeNull();
     expect(screen.queryByTestId("scan-details")).toBeNull();
     expect(screen.queryByTestId("folder-mapping")).toBeNull();
-    // ...and the state is a chip, not a paragraph glued to one.
     const badge = screen.getByTestId("structure-mode");
-    expect(badge).toHaveTextContent("Legacy-compatible");
-    expect(badge).not.toHaveTextContent(/Read as charts/);
+    expect(badge).not.toHaveTextContent("Legacy-compatible");
   });
 
   it("keeps every scan number and every warning behind Show scan details",
@@ -3613,7 +3728,7 @@ describe("typed import dialog ??readable by default", () => {
     expect(grid.getPropertyValue("--Grid-columnSpacing").trim()).toBe("16px");
   });
 
-  it("keeps input, helper text and evidence chip in one field group",
+  it("keeps the field group to the input alone, with no prose or chip",
      async () => {
     const user = userEvent.setup();
     await openChartImport(user);
@@ -3622,7 +3737,7 @@ describe("typed import dialog ??readable by default", () => {
     await screen.findByTestId("fields-chart-0");
 
     const group = screen.getByTestId("field-group-chart-0-imageFile");
-    // One column, one spacing rule: input -> helper text -> evidence chip.
+    // The layout rule survives; what it lays out is now one thing.
     expect(group).toHaveStyle("display: flex");
     expect(group).toHaveStyle("flex-direction: column");
     expect(group).toHaveStyle("gap: 8px");
@@ -3630,16 +3745,13 @@ describe("typed import dialog ??readable by default", () => {
     const input = within(group).getByLabelText(/^figure image ?\*?$/i, {
       selector: "input",
     });
-    const chip = screen.getByTestId("field-evidence-chart-0-imageFile");
     expect(group).toContainElement(input);
-    expect(group).toContainElement(chip);
-    // The chip is BELOW the helper text, not pulled up over the input.
-    const helper = group.querySelector(".MuiFormHelperText-root");
-    expect(helper).toBeInTheDocument();
+    // Neither the paragraph under the input nor the evidence badge.
     expect(
-      helper.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-    expect(chip).not.toHaveStyle("margin-top: -12px");
+      screen.queryByTestId("field-evidence-chart-0-imageFile")
+    ).toBeNull();
+    expect(group.textContent).not.toMatch(/the image file for this figure/i);
+    expect(group.textContent).not.toMatch(/qresp never guesses/i);
   });
 
   it("shows no evidence or missing chip on an untouched optional field",

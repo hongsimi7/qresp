@@ -34,9 +34,7 @@ import {
   APPLIED,
   NOT_APPLIED,
   PARTIALLY_APPLIED,
-  evidenceChipFor,
   fieldsFor,
-  helpFor,
   isRequired,
   labelFor,
   missingRequired,
@@ -150,18 +148,6 @@ const isRenderable = (candidate) => {
   return Boolean(
     (primary || "").trim() && ((candidate.paths || [])[0] || "").trim()
   );
-};
-
-// Evidence vocabulary, shared by the card chip and the per-field chips.
-// "High evidence" is reserved for something a file directly states — an AI
-// suggestion can never earn it (see the suggestion panel below).
-const HIGH_EVIDENCE = "high";
-
-const EVIDENCE_LABELS = {
-  high: "High evidence",
-  medium: "Medium evidence",
-  low: "Low evidence",
-  needs_input: "Needs input",
 };
 
 // Layout constants, hoisted so emotion serializes them once instead of on
@@ -1216,14 +1202,16 @@ const FolderAnalysis = ({ path, artifactType }) => {
             data-testid={`status-${candidate.id}`}
             sx={CARD_STATUS_SX}
           >
-            <Chip
-              size="small"
-              color={candidate.confidence === HIGH_EVIDENCE ? "success" : "info"}
-              label={
-                EVIDENCE_LABELS[candidate.confidence] || candidate.confidence
-              }
-              data-testid={`confidence-${candidate.id}`}
-            />
+            {/* No evidence chip. "High / Medium / Low evidence" answered a
+                question a curator was not asking -- how the analyser reached
+                this proposal -- and sat in the one place on the card where
+                the thing they ARE asking about belongs: what is still
+                missing. The missing-required count stays; it is the only
+                status here that tells them to act.
+
+                Evidence is untouched behind the card: it still orders
+                candidates, bounds what may be sent to the AI, and decides
+                when the AI abstains. */}
             {needs.length > 0 && (
               <Tooltip
                 title={`Missing: ${needs
@@ -1357,23 +1345,11 @@ const FolderAnalysis = ({ path, artifactType }) => {
             data-testid={`fields-${candidate.id}`}
           >
             {fieldsFor(candidate.kind).map(({ key: field, required }) => {
-              // The chip is derived from the CURRENT value, the value the
-              // analysis proposed, and the standing the analysis recorded --
-              // never from the standing alone. `field_evidence` describes the
-              // proposal, so it is only true while the proposal is still what
-              // the field holds. See `evidenceChipFor` for the whole rule; the
-              // bug it fixes is a "Needs input" chip surviving under a caption
-              // the AI had just filled.
-              const evidence = evidenceChipFor(candidate.kind, field, {
-                draft,
-                original,
-                fieldEvidence: candidate.field_evidence,
-              });
               return (
-                // ONE field group per field: input, helper text, evidence
-                // chip, in that order and with the same spacing everywhere,
-                // so two fields on the same row line their chips up instead
-                // of each one hanging off its own input.
+                // ONE field group per field. It now holds only the input --
+                // the helper paragraph and the evidence chip that used to sit
+                // under it are gone -- but the column layout stays, so two
+                // fields on the same row still line up.
                 <Grid
                   key={field}
                   size={{ xs: 12, md: 6 }}
@@ -1393,40 +1369,24 @@ const FolderAnalysis = ({ path, artifactType }) => {
                       setField(candidate.id, field, event.target.value)
                     }
                     // The contract's own explanation of the field, so
-                    // Folder Analysis and the Add/Edit form cannot describe
-                    // the same field two different ways.
-                    // The helper text belongs to the input, so it keeps the
-                    // TextField's own margin rather than floating between
-                    // the input and the chip.
                     sx={FIELD_INPUT_SX}
-                    // What this FIELD is, and nothing else. "Required to
-                    // Save, Update, or Publish" used to be repeated here on
-                    // every blank required field -- the same sentence up to
-                    // a dozen times in one dialog, restating what the
-                    // asterisk on the label already says and what the legend
-                    // at the top says once in full.
-                    helperText={helpFor(candidate.kind, field) || " "}
+                    // No helper text. The label names the field, the asterisk
+                    // marks it required, and the legend at the top says once
+                    // what the asterisk means. A paragraph under every input
+                    // ("The image file for this figure...", "Qresp never
+                    // guesses it...") pushed the values a curator came here
+                    // to check off the card, and repeated for each of six
+                    // fields on each of several candidates.
+                    //
+                    // The evidence chip is gone for the same reason. "High /
+                    // Medium / Low evidence" describes how the ANALYSER
+                    // arrived at a proposal; a curator reading the value is
+                    // deciding whether it is right, which they do by looking
+                    // at it. Evidence still governs the backend's candidate
+                    // ranking, what may be sent to the AI, and when it
+                    // abstains -- see `evidenceChipFor` in Utils and the
+                    // abstention policy. Only the badge is removed.
                   />
-                  {evidence ? (
-                    // Below the helper text, never overlapping the input
-                    // border or the next field. The group's 8px gap does the
-                    // spacing, so nothing is pulled up into its neighbour.
-                    <Box>
-                      <Chip
-                        size="small"
-                        variant={evidence === HIGH_EVIDENCE ? "filled" : "outlined"}
-                        color={
-                          evidence === HIGH_EVIDENCE
-                            ? "success"
-                            : evidence === "medium"
-                            ? "info"
-                            : "default"
-                        }
-                        label={EVIDENCE_LABELS[evidence] || evidence}
-                        data-testid={`field-evidence-${candidate.id}-${field}`}
-                      />
-                    </Box>
-                  ) : null}
                 </Grid>
               );
             })}
@@ -1588,26 +1548,12 @@ const FolderAnalysis = ({ path, artifactType }) => {
                   : "Proposals from this folder's file names and manifests. "}
                 Nothing is selected, saved or published until you say so.
               </Typography>
-              {/* One summary when the crawl stopped early. The numbers that
-                  explain WHY are in Show scan details. */}
-              {analysis.truncated && (
-                <Alert severity="info" sx={{ mb: 1.5 }} data-testid="partial-notice">
-                  <strong>This is a partial view of the folder.</strong> Qresp
-                  scanned{" "}
-                  {(analysis.counts || {}).files != null
-                    ? `${analysis.counts.files} file(s) across ${
-                        (analysis.counts || {}).directories || 0
-                      } folder(s)`
-                    : "part of the folder"}{" "}
-                  and stopped at its built-in safety limits, so the candidates
-                  below do not represent everything that is there. Nothing was
-                  skipped silently — see <strong>Show scan details</strong>.
-                </Alert>
-              )}
-              {/* How the folder was read: a short chip, and the two ways to
-                  see the long version. Derived from the folder's shape by the
-                  Folder Standard validator — session-only, and nothing on the
-                  file server is renamed. */}
+              {/* The two ways to see how the folder was read. The partial-view
+                  Alert and the structure chip that used to sit here are now
+                  the first two lines of Show scan details: both describe how
+                  the SCAN went, which is a question a curator asks when
+                  something looks wrong, not something to read past on every
+                  open. Neither fact was dropped. */}
               <Box
                 sx={{
                   mb: 2,
@@ -1618,25 +1564,6 @@ const FolderAnalysis = ({ path, artifactType }) => {
                 }}
                 data-testid="structure-mode"
               >
-                  {analysis.structure_mode ? (
-                    <Chip
-                      size="small"
-                      color={
-                        analysis.structure_mode === "standard"
-                          ? "success"
-                          : analysis.structure_mode === "legacy"
-                          ? "info"
-                          : "warning"
-                      }
-                      label={
-                        analysis.structure_mode === "standard"
-                          ? "Qresp Standard"
-                          : analysis.structure_mode === "legacy"
-                          ? "Legacy-compatible"
-                          : "Needs reorganization"
-                      }
-                    />
-                  ) : null}
                   <Button
                     size="small"
                     sx={{ textTransform: "none", whiteSpace: "nowrap" }}
@@ -1674,6 +1601,41 @@ const FolderAnalysis = ({ path, artifactType }) => {
                   <Typography variant="subtitle2" gutterBottom>
                     Scan details
                   </Typography>
+                  {/* The two facts that used to sit above the candidates as a
+                      four-line Alert and a status chip. They are diagnostics,
+                      not things to act on, so they live here -- but they are
+                      still SAID, because "the list you are looking at is not
+                      the whole folder" is not a detail a curator can be left
+                      to infer. */}
+                  {analysis.truncated ? (
+                    <Typography
+                      variant="caption"
+                      display="block"
+                      color="warning.main"
+                      data-testid="scan-details-truncated"
+                      sx={{ mb: 0.5 }}
+                    >
+                      This is a partial view: the scan stopped at its built-in
+                      safety limits, so the candidates do not represent
+                      everything in this folder.
+                    </Typography>
+                  ) : null}
+                  {analysis.structure_mode ? (
+                    <Typography
+                      variant="caption"
+                      display="block"
+                      data-testid="scan-details-structure-mode"
+                      sx={{ mb: 0.5 }}
+                    >
+                      {`Folder structure read as: ${
+                        analysis.structure_mode === "standard"
+                          ? "Qresp Standard"
+                          : analysis.structure_mode === "legacy"
+                          ? "Legacy-compatible"
+                          : "Needs reorganization"
+                      }.`}
+                    </Typography>
+                  ) : null}
                   {(analysis.counts || {}).files != null && (
                     <Typography variant="caption" display="block">
                       {`Scanned ${analysis.counts.files} file(s) across ${
@@ -2131,77 +2093,25 @@ const FolderAnalysis = ({ path, artifactType }) => {
           Gemini?
         </DialogTitle>
         <DialogContent dividers>
-          <Typography variant="body2" gutterBottom>
-            Qresp will send, for <strong>this one candidate</strong> and for
-            nothing else:
-          </Typography>
-          <Box
-            component="ul"
-            sx={{ pl: 3, mt: 0, mb: 2 }}
-            data-testid="ai-consent-scope"
-          >
-            <Typography component="li" variant="body2">
-              their relative paths, file names and folder names
-            </Typography>
-            <Typography component="li" variant="body2">
-              this paper&rsquo;s title and abstract, as background for the
-              research topic
-            </Typography>
-            <Typography component="li" variant="body2">
-              short text Qresp has already read from{" "}
-              <strong>inside this candidate&rsquo;s own folder</strong> —
-              README, module docstring, top-level function and class names,
-              notebook <em>markdown</em> cells, and pinned
-              package/version declarations
-            </Typography>
-          </Box>
-          {/* The exact bundle, itemised. A consent screen that describes a
-              category is weaker than one that shows the list, and the list is
-              already on the candidate — the server sends nothing else. */}
+          {/* Short on purpose.
+
+              The scope this dialog describes is enforced by the server, not by
+              the reader agreeing to a list: `ai_sources` is the whole bundle,
+              and raw dataset values, image bytes, notebook code cells and
+              outputs, function bodies and credentials are never in it. That
+              boundary is pinned by tests, which is a stronger guarantee than
+              a paragraph nobody finishes. Nine lines of bullets restating it
+              mostly taught curators to click past the consent step -- which
+              is the one thing a consent step must not teach.
+
+              What stays is what the reader cannot get anywhere else: what is
+              sent, what comes back, whether there is anything to send, and an
+              unchecked box. */}
           {aiConsentOpen ? (
-            <Box sx={{ mb: 2 }} data-testid="ai-consent-sources">
-              {(aiConsentOpen.ai_sources || []).length ? (
-                <Fragment>
-                  <Typography variant="body2" gutterBottom>
-                    For this candidate that is:
-                  </Typography>
-                  <Box component="ul" sx={{ pl: 3, mt: 0, mb: 0 }}>
-                    {(aiConsentOpen.ai_sources || []).map((source, index) => (
-                      <Typography
-                        component="li"
-                        variant="caption"
-                        key={`${source.type}-${source.path}-${index}`}
-                        sx={{ display: "block", wordBreak: "break-word" }}
-                      >
-                        <strong>{source.type}</strong>
-                        {source.path ? ` · ${source.path}` : ""}
-                      </Typography>
-                    ))}
-                  </Box>
-                </Fragment>
-              ) : (
-                <Alert severity="info" sx={{ py: 0.5 }}>
-                  Qresp found no readable text inside this candidate, so only
-                  its file names and the paper&rsquo;s background will be
-                  sent. Expect the answer to be “not enough evidence”.
-                </Alert>
-              )}
-            </Box>
-          ) : null}
-          <Typography variant="body2" gutterBottom>
-            It will <strong>not</strong> send raw dataset values, image bytes,
-            notebook code cells, notebook outputs, function bodies,
-            credentials, your account details, anything you have typed into
-            this candidate&rsquo;s own fields, or anything from outside this
-            candidate.
-          </Typography>
-          {aiConsentOpen ? (
-            <Typography
-              variant="body2"
-              sx={{ mb: 1 }}
-              data-testid="ai-consent-fields"
-            >
-              It will ask for:{" "}
+            <Typography variant="body2" gutterBottom data-testid="ai-consent-scope">
+              Sends this candidate&rsquo;s readable evidence — file names and
+              the short text Qresp has already read from its own folder — plus
+              the paper&rsquo;s title and abstract, and asks Gemini for{" "}
               <strong>
                 {Object.keys(aiTargets(aiConsentOpen.kind))
                   .map((slot) =>
@@ -2216,9 +2126,17 @@ const FolderAnalysis = ({ path, artifactType }) => {
             </Typography>
           ) : null}
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            Gemini returns suggestions only. Nothing is filled in, added,
-            saved or published as a result.
+            Suggestions only — nothing is filled in, saved or published for
+            you.
           </Typography>
+          {/* The one case where the answer is predictable, and worth saying
+              before a request rather than after it. */}
+          {aiConsentOpen && !(aiConsentOpen.ai_sources || []).length ? (
+            <Alert severity="info" sx={{ py: 0.5, mb: 1 }} data-testid="ai-consent-sources">
+              Qresp found no readable text in this candidate, so expect “not
+              enough evidence”.
+            </Alert>
+          ) : null}
           <FormControlLabel
             control={
               <Checkbox
