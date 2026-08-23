@@ -48,11 +48,12 @@ const FolderStandard = () => (
           </Box>
         </Typography>
         <Typography variant="body1" color="secondary" sx={{ mb: 4 }}>
-          This is the folder layout Qresp&apos;s automatic analysis reads. You
-          do not have to follow it — Qresp curates the folder you already have,
-          and never renames anything — but a folder that does follow it is
-          proposed as records without anyone having to answer questions about
-          it first.
+          This is Qresp&apos;s official folder structure, and the only one it
+          publishes — the layout its automatic analysis reads. You do not have
+          to follow it: Qresp curates the folder you already have, never
+          renames anything, and still recognizes older folder names. But a
+          folder that does follow it is proposed as records without anyone
+          having to answer questions about it first.
         </Typography>
 
         <Divider sx={{ mb: 3 }} />

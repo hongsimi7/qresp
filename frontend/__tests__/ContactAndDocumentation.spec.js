@@ -1,5 +1,4 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 
 import Contact, {
   EMAIL,
@@ -8,7 +7,9 @@ import Contact, {
   PULL_REQUESTS,
   REPOSITORY,
 } from "../pages/contact";
-import Documentation, { DIRECTORY_TEMPLATE } from "../pages/documentation";
+import Documentation, {
+  FOLDER_STANDARD_PATH,
+} from "../pages/documentation";
 import FolderStandardPage from "../pages/documentation/folder-standard";
 import {
   TIPS,
@@ -115,96 +116,6 @@ describe("the navigation entry points", () => {
   });
 });
 
-describe("the documentation directory template", () => {
-  const originalClipboard = navigator.clipboard;
-
-  const withClipboard = (clipboard) => {
-    Object.defineProperty(navigator, "clipboard", {
-      value: clipboard,
-      configurable: true,
-      writable: true,
-    });
-  };
-
-  afterEach(() => {
-    withClipboard(originalClipboard);
-    jest.restoreAllMocks();
-  });
-
-  it("shows the template a reader is meant to copy", () => {
-    render(<Documentation />);
-    const block = screen.getByTestId("directory-template");
-    [
-      "project/",
-      "README.md",
-      "data/",
-      "raw/",
-      "processed/",
-      "figures/",
-      "scripts/",
-      "tools/",
-      "docs/",
-    ].forEach((entry) => expect(block).toHaveTextContent(entry));
-  });
-
-  it("copies exactly what is on screen", async () => {
-    const writeText = jest.fn().mockResolvedValue(undefined);
-    withClipboard({ writeText });
-    render(<Documentation />);
-    await userEvent.click(screen.getByTestId("copy-template"));
-    expect(writeText).toHaveBeenCalledWith(DIRECTORY_TEMPLATE);
-    // What is rendered and what is copied come from the same constant, so
-    // they cannot drift apart.
-    expect(DIRECTORY_TEMPLATE).toContain("project/");
-    expect(DIRECTORY_TEMPLATE).toContain("    processed/");
-  });
-
-  it("announces that the copy succeeded", async () => {
-    withClipboard({ writeText: jest.fn().mockResolvedValue(undefined) });
-    render(<Documentation />);
-    await userEvent.click(screen.getByTestId("copy-template"));
-    const status = await screen.findByTestId("copy-status");
-    expect(status).toHaveAttribute("role", "status");
-    expect(status).toHaveAttribute("aria-live", "polite");
-    expect(status).toHaveTextContent(/copied to your clipboard/i);
-  });
-
-  it("falls back to selecting the text when there is no clipboard API", async () => {
-    withClipboard(undefined);
-    render(<Documentation />);
-    await userEvent.click(screen.getByTestId("copy-template"));
-    const status = await screen.findByTestId("copy-status");
-    expect(status).toHaveTextContent(/press ctrl\+c/i);
-    // Selected, so the keyboard shortcut has something to act on.
-    expect(window.getSelection().toString()).toContain("project/");
-  });
-
-  it("falls back the same way when the clipboard refuses", async () => {
-    // An insecure context or a denied permission rejects rather than throwing
-    // at call time; the reader must not be left with a button that did
-    // nothing visible.
-    withClipboard({ writeText: jest.fn().mockRejectedValue(new Error("no")) });
-    render(<Documentation />);
-    await userEvent.click(screen.getByTestId("copy-template"));
-    const status = await screen.findByTestId("copy-status");
-    expect(status).toHaveTextContent(/press ctrl\+c/i);
-  });
-
-  it("says so when it cannot copy or select", async () => {
-    withClipboard(undefined);
-    jest.spyOn(window, "getSelection").mockReturnValue(undefined);
-    render(<Documentation />);
-    await userEvent.click(screen.getByTestId("copy-template"));
-    const status = await screen.findByTestId("copy-status");
-    expect(status).toHaveTextContent(/could not be copied/i);
-  });
-
-  it("says nothing before the button is pressed", () => {
-    render(<Documentation />);
-    expect(screen.getByTestId("copy-status")).toHaveTextContent("");
-  });
-});
-
 // The Folder Standard was reachable only from a dialog inside the Curator --
 // the wrong audience and the wrong moment for a researcher laying out a folder
 // before anyone curates it. It now has a URL.
@@ -261,25 +172,66 @@ describe("the public Folder Standard page", () => {
   });
 });
 
+// ONE published folder structure, and it is the Folder Standard. The index
+// used to carry a second, general research-package template (project/,
+// data/raw/, data/processed/, figures/) with a copy button of its own. Two
+// copyable structures side by side asked a reader to choose, and the one they
+// were most likely to copy was the one on this page -- which the RCC analyzer
+// does not read.
 describe("the documentation index points at the standard", () => {
   it("links the Folder Standard page", () => {
     render(<Documentation />);
     expect(screen.getByTestId("folder-standard-link")).toHaveAttribute(
       "href",
-      "/documentation/folder-standard"
+      FOLDER_STANDARD_PATH
     );
+    expect(FOLDER_STANDARD_PATH).toBe("/documentation/folder-standard");
   });
 
-  it("does not present the general template as the Folder Standard", () => {
-    // Two incompatible layouts on one page is the failure this guards: the
-    // general template uses figures/ and data/raw/, which the analyzer does
-    // not read as charts/ and datasets/.
-    const { container } = render(<Documentation />);
+  it("names the Folder Standard as the layout Qresp reads", () => {
+    render(<Documentation />);
     const callout = screen.getByTestId("folder-standard-callout");
     expect(callout).toHaveTextContent(/qresp folder standard v1/i);
-    // The general template is explicitly marked as NOT the standard.
-    expect(container.textContent).toMatch(/not.{0,20}the\s+Folder Standard/i);
-    // ...and the standard's own tree is not restated here.
+  });
+
+  it("publishes no second folder structure of its own", () => {
+    const { container } = render(<Documentation />);
+    // The general template, its copy button, and its status line are gone --
+    // not relabelled. A caveat under a copy button is no match for the button.
+    expect(screen.queryByTestId("directory-template")).toBeNull();
+    expect(screen.queryByTestId("copy-template")).toBeNull();
+    expect(screen.queryByTestId("copy-status")).toBeNull();
+    // The standard's own tree is not restated here either; it lives on one
+    // page, and this one links to it.
     expect(screen.queryByTestId("folder-guide-tree")).toBeNull();
+    // No <pre> block: there is nothing on this page to copy.
+    expect(container.querySelector("pre")).toBeNull();
+  });
+
+  it("does not suggest the folder names the analyzer does not read", () => {
+    // `figures/` and `data/raw/` are not `charts/` and `datasets/`. Offering
+    // them as a structure to follow is what made the two pages contradict.
+    const { container } = render(<Documentation />);
+    const text = container.textContent;
+    expect(text).not.toMatch(/figures\//);
+    expect(text).not.toMatch(/data\/raw\//);
+    expect(text).not.toMatch(/data\/processed\//);
+    expect(text).not.toMatch(/\bproject\/\s*$/m);
+  });
+
+  it("uses no wording that reads as a second, looser example", () => {
+    const { container } = render(<Documentation />);
+    const text = container.textContent;
+    expect(text).not.toMatch(/reasonable (general )?default/i);
+    expect(text).not.toMatch(/example (project )?(directory )?structure/i);
+    expect(text).not.toMatch(/general(-purpose)? (template|layout)/i);
+  });
+
+  it("still says legacy folder names keep working", () => {
+    // Removing a SUGGESTION from the docs must not read as removing SUPPORT.
+    // The analyzer's legacy aliases are untouched.
+    const { container } = render(<Documentation />);
+    expect(container.textContent).toMatch(/keep working/i);
+    expect(container.textContent).toMatch(/Figures_Tables|Plot_Scripts/);
   });
 });

@@ -116,6 +116,13 @@ Classifying every file by extension is what produced hundreds of bogus
 candidates. A paper folder already says where one record ends and the next
 begins, so the analyzer reads its SHAPE instead.
 
+> The tree below is what the ANALYZER reads, described here for people
+> reading the design. What USERS are shown — the same tree, its rules, and a
+> copyable version — is rendered from
+> `frontend/components/FolderStandard/content.js`, which the Curator's Folder
+> Guide and the public `/documentation/folder-standard` page both import. If
+> this section and that module ever disagree, the module is what shipped.
+
 ```text
 paper-folder/
   README.md

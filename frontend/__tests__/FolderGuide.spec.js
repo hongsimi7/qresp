@@ -6,6 +6,11 @@ import {
 import userEvent from "@testing-library/user-event";
 
 import FolderGuide from "../components/CuratorElements/FolderGuide";
+import {
+  LEGACY_NOTES,
+  TIPS,
+  TREE,
+} from "../components/FolderStandard/content";
 import { ARTIFACT_FIELDS } from "../Utils/artifactFields";
 
 // The guide states the Qresp Folder Standard v1: a recommended contract for
@@ -290,6 +295,36 @@ describe("How to organize an RCC folder", () => {
     expect(
       await screen.findByText(/could not copy — select the tree above/i)
     ).toBeInTheDocument();
+  });
+
+  it("states the shared standard, not a copy of it", async () => {
+    // The Curator dialog and /documentation/folder-standard render the SAME
+    // module. If this ever forks, a researcher can lay a folder out from the
+    // public page and then be told something different here -- with no way to
+    // know which one the analyzer implements.
+    const user = userEvent.setup();
+    render(<FolderGuide />);
+    await user.click(
+      screen.getByRole("button", { name: /how to organize an rcc folder/i })
+    );
+
+    const rules = await screen.findByTestId("folder-guide-standard");
+    TIPS.forEach((tip) => expect(rules).toHaveTextContent(tip));
+    const legacy = screen.getByTestId("folder-guide-legacy");
+    LEGACY_NOTES.forEach((note) => expect(legacy).toHaveTextContent(note));
+    const tree = screen.getByTestId("folder-guide-tree");
+    TREE.forEach((entry) => expect(tree).toHaveTextContent(entry.name));
+  });
+
+  it("points at the public page for anyone who is not a curator here", async () => {
+    const user = userEvent.setup();
+    render(<FolderGuide />);
+    await user.click(
+      screen.getByRole("button", { name: /how to organize an rcc folder/i })
+    );
+    expect(
+      await screen.findByTestId("folder-guide-public-link")
+    ).toHaveAttribute("href", "/documentation/folder-standard");
   });
 
   it("closes again and leaves nothing behind", async () => {
