@@ -73,6 +73,61 @@ describe("convertReqSchematoState", () => {
       "University of Chicago"
     );
   });
+
+  // Two fields, two levels, two meanings. `insertedBy.affiliation` is where
+  // the PERSON doing the curating works; `institution` is about the RECORD.
+  // They live at different levels of the document and neither is derived from
+  // the other -- a curator at Duke can curate a paper from UChicago, and the
+  // record must be able to say so.
+  describe("curator affiliation is not the record's institution", () => {
+    const withAffiliation = {
+      ...paperDoc,
+      info: {
+        ...paperDoc.info,
+        insertedBy: { ...paperDoc.info.insertedBy, affiliation: "Duke University" },
+      },
+    };
+
+    it("does not fill institution from the curator's affiliation", () => {
+      const loaded = convertReqSchematoState(withAffiliation);
+      expect(loaded.curatorInfo.affiliation).toBe("Duke University");
+      // The record says nothing about an institution, and loading a curator
+      // who has one does not invent one.
+      expect(loaded.paperInfo.institution).toBe("");
+    });
+
+    it("keeps the two apart when both are set to different values", () => {
+      const loaded = convertReqSchematoState({
+        ...withAffiliation,
+        institution: "University of Chicago",
+      });
+      expect(loaded.curatorInfo.affiliation).toBe("Duke University");
+      expect(loaded.paperInfo.institution).toBe("University of Chicago");
+    });
+
+    it("sends them back as two separate fields", () => {
+      const loaded = convertReqSchematoState({
+        ...withAffiliation,
+        institution: "University of Chicago",
+      });
+      const payload = convertStateToUpdatePayload(loaded, paperDoc, null);
+      expect(payload.institution).toBe("University of Chicago");
+      expect(payload.info.insertedBy.affiliation).toBe("Duke University");
+    });
+
+    it("does not fill the curator's affiliation from the record", () => {
+      const loaded = convertReqSchematoState({
+        ...paperDoc,
+        info: {
+          ...paperDoc.info,
+          insertedBy: { ...paperDoc.info.insertedBy, affiliation: "" },
+        },
+        institution: "University of Chicago",
+      });
+      expect(loaded.paperInfo.institution).toBe("University of Chicago");
+      expect(loaded.curatorInfo.affiliation).toBe("");
+    });
+  });
 });
 
 describe("convertStateToUpdatePayload round trip", () => {

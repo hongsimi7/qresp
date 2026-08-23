@@ -228,6 +228,40 @@ class TestPaperDAO(unittest.TestCase):
             allSearchObjects[0]['_Search__id'])
         self.assertEqual("University of Chicago", paperDetails['institution'])
 
+    def test_the_curator_affiliation_is_not_the_record_institution(self):
+        """Two fields, two levels, two meanings.
+
+        `info.insertedBy.affiliation` is where the PERSON doing the curating
+        works -- a `Person` attribute, shared with PIs and authors.
+        `institution` is a `Paper` attribute about the RECORD. A curator at
+        Duke can perfectly well curate a paper from UChicago, so neither may
+        ever be filled in from the other.
+        """
+        dao = PaperDAO()
+        __location__ = os.path.realpath(
+            os.path.join(os.getcwd(), os.path.dirname(__file__)))
+        with open(os.path.join(__location__, 'data.json')) as f:
+            paperdata = json.load(f)
+        paperdata['reference']['title'] = "Affiliation is not institution"
+        paperdata['info']['insertedBy']['affiliation'] = "Duke University"
+        # Deliberately NOT setting `institution`.
+        paperid = dao.insertIntoPapers(paperdata)
+        self.assertIsNotNone(paperid)
+
+        allSearchObjects = dao.getAllFilteredSearchObjects(
+            paperTitle='Affiliation is not institution')
+        self.assertEqual(1, len(allSearchObjects))
+        # A curator WITH an affiliation does not give the record one.
+        self.assertEqual("", allSearchObjects[0]["_Search__institution"])
+
+        details = dao.getPaperDetails(allSearchObjects[0]['_Search__id'])
+        self.assertEqual("", details['institution'])
+        # ...and the curator's own affiliation is untouched by any of this.
+        # `PaperDetails` flattens insertedBy, so it is a sibling key here --
+        # which is exactly why the two must not share a name or a value.
+        self.assertEqual("Duke University", details['affiliation'])
+        self.assertNotEqual(details['affiliation'], details['institution'])
+
     def test_getWorkflowForChartDetails(self):
         """
         Tests workflow details given chart id and paper id
