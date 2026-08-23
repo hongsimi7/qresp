@@ -81,6 +81,32 @@ class TestUpdatePaper(PermissionTestBase):
         self.assertEqual(OWNER, updated.owner_email)
         self.assertEqual(["still-mine"], list(updated.tags))
 
+    def test_institution_survives_an_edit_that_does_not_touch_it(self):
+        # `institution` has to be a DECLARED field on the Paper model:
+        # update_paper keeps only `k in Paper._fields` when it merges the
+        # stored document with the payload, so an undeclared field would be
+        # silently dropped on every edit, not just the ones that set it.
+        self.login(OWNER)
+        Paper.objects(id=self.owned_id).update(
+            set__institution="University of Chicago")
+        response = self.update(self.owned_id, {"tags": ["edited"]})
+        self.assertEqual(200, response.status_code, response.text)
+        updated = Paper.objects.get(id=self.owned_id)
+        self.assertEqual("University of Chicago", updated.institution)
+        self.assertEqual(["edited"], list(updated.tags))
+
+    def test_institution_can_be_set_and_cleared_through_an_edit(self):
+        self.login(OWNER)
+        response = self.update(
+            self.owned_id, {"institution": "Duke University"})
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(
+            "Duke University", Paper.objects.get(id=self.owned_id).institution)
+
+        response = self.update(self.owned_id, {"institution": ""})
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual("", Paper.objects.get(id=self.owned_id).institution)
+
     def test_missing_paper_returns_404(self):
         self.login(ADMIN)
         response = self.update("000000000000000000000000", {"tags": ["x"]})

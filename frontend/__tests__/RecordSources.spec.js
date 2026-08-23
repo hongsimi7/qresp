@@ -208,3 +208,57 @@ describe("the source tag on a record card", () => {
     expect(screen.queryByTestId("record-source")).not.toBeInTheDocument();
   });
 });
+
+// Institution: an optional, record-level fact a curator typed in by hand --
+// see project.models.Paper.institution. Distinct from the source-repository
+// tags above (which answer where the record is STORED, not what institution
+// it is ABOUT), so it sits on the author row instead.
+describe("the institution chip on a record card", () => {
+  const inTable = (children) => (
+    <TableSearchContext.Provider value={{ query: "", setQuery: () => {} }}>
+      {children}
+    </TableSearchContext.Provider>
+  );
+
+  it("shows the curator's exact institution text next to the authors", () => {
+    render(
+      inTable(
+        <Summary
+          rowdata={record("a", {
+            _Search__institution: "University of Chicago",
+          })}
+        />
+      )
+    );
+    const chip = screen.getByTestId("record-institution");
+    // Never abbreviated -- the curator's own wording, verbatim.
+    expect(chip).toHaveTextContent("University of Chicago");
+    expect(chip).not.toHaveTextContent("UChicago");
+    expect(
+      screen.getByLabelText("Institution: University of Chicago")
+    ).toBeInTheDocument();
+  });
+
+  it("renders no chip for an old record with no institution on file", () => {
+    render(inTable(<Summary rowdata={record("a")} />));
+    expect(
+      screen.queryByTestId("record-institution")
+    ).not.toBeInTheDocument();
+  });
+
+  it("puts the institution chip on the author row, not the journal line", () => {
+    render(
+      inTable(
+        <Summary
+          rowdata={record("a", {
+            _Search__institution: "Duke University",
+          })}
+        />
+      )
+    );
+    const authorText = screen.getByText("Robin Sharedname");
+    const chip = screen.getByTestId("record-institution");
+    // Same flex row: the chip's own parent is the author text's parent.
+    expect(chip.parentElement).toBe(authorText.closest("div"));
+  });
+});

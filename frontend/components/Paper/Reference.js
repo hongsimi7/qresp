@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 import PropTypes from "prop-types";
 
-import { Typography, Box } from "@mui/material";
+import { Chip, Typography, Box } from "@mui/material";
 
 import LabelValue from "../labelvalue";
 import Tag from "../tag";
@@ -23,6 +23,7 @@ const ReferenceInfo = ({ referenceData }) => {
     notebookPath,
     abstract,
     fileServerPath,
+    institution,
   } = referenceData;
 
   const notebook = notebookFile
@@ -42,9 +43,32 @@ const ReferenceInfo = ({ referenceData }) => {
             {title} <SocialShare />
           </Box>
         </Typography>
-        <Typography variant="subtitle1" color="secondary" gutterBottom>
-          by {authors}
-        </Typography>
+        {/* The byline. Institution rides in the SAME row, right after the
+            author text -- a compact fact about the record, not a new line
+            of its own. */}
+        <Box
+          sx={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            columnGap: 1,
+            rowGap: 0.5,
+            mb: 1,
+          }}
+        >
+          <Typography variant="subtitle1" component="span" color="secondary">
+            by {authors}
+          </Typography>
+          {institution ? (
+            <Chip
+              size="small"
+              variant="outlined"
+              label={institution}
+              aria-label={`Institution: ${institution}`}
+              data-testid="record-institution"
+            />
+          ) : null}
+        </Box>
       </Box>
       <Box>
         {tags.map((tag) => (

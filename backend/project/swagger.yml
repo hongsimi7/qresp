@@ -78,6 +78,17 @@ paths:
                   type: "string"
                 _Search__id":
                   type: "string"
+                _Search__institution:
+                  type: "string"
+                  description: >-
+                    Optional, record-level, entered by the curator. The
+                    institution associated with this RECORD -- not an
+                    assertion that every listed author belongs to it, and
+                    never inferred from authors, collections, the server URL,
+                    an email domain or a DOI. Empty string on a record
+                    published before the field existed, and on one whose
+                    curator left it blank; both are valid and neither needs a
+                    migration.
                 _Search__notebookFile:
                   type: "string"
                 _Search__notebookPath:
@@ -140,7 +151,13 @@ paths:
       tags:
         - "Paper details"
       summary: "Fetches details of paper given id"
-      description: "Fetches paper details given id"
+      description: "Fetches paper details given id. Includes the optional
+        record-level `institution` field -- the institution associated with
+        this RECORD as typed by the curator, not an assertion that every
+        listed author belongs to it, and never inferred from authors,
+        collections, the server URL, an email domain or a DOI. It is an empty
+        string on a record published before the field existed and on one whose
+        curator left it blank; both are valid and neither needs a migration."
       parameters:
         - in: path
           name: id
@@ -605,18 +622,26 @@ paths:
       operationId: "project.related.related_research"
       tags:
         - "Paper details"
-      summary: "Related Qresp records and related external papers for a
-        record (read-only; public active records only)"
-      description: "Computes Related Qresp Records from the published
-        scientific metadata of active records, and judges Semantic Scholar
-        recommendations with the same Qresp quality gate. Up to 150 candidates
-        are requested from the provider once per cache miss; the ones that
-        clear the gate are returned, at most 25 of them, all in this one
-        response. Off unless QRESP_RELATED_RESEARCH_ENABLED is set, in which
-        case both lists come back empty with status `disabled`. External
-        results are cached separately from the Paper document and never
-        written into it; a provider timeout, 404, 429 or malformed answer
-        degrades the external section only. Nothing here modifies a record."
+      summary: "Related Qresp records (strict-gated) and recommended external
+        papers (re-ranked, not gated) for a record (read-only; public active
+        records only)"
+      description: "Two lists, two DIFFERENT policies -- do not read one
+        contract onto the other. `internal` (Related Qresp Records) computes
+        this server's own corpus against Qresp's strict evidence gate; a
+        candidate that does not pass is never returned, and at most 3 are.
+        `external` (Recommended External Papers) asks Semantic Scholar for up
+        to 150 candidates once per cache miss and RE-RANKS every
+        deduplicated one by the same deterministic score -- the evidence gate
+        is still computed per candidate and carried as a diagnostic, but it
+        is never used to remove one. The best 25 by score (provider order as
+        the tie-break) are returned, all in this one response, so a
+        candidate with weak or zero Qresp evidence can still appear, usually
+        near the tail. Off unless QRESP_RELATED_RESEARCH_ENABLED is set, in
+        which case both lists come back empty with status `disabled`.
+        External results are cached separately from the Paper document and
+        never written into it; a provider timeout, 404, 429 or malformed
+        answer degrades the external section only. Nothing here modifies a
+        record."
       parameters:
         - in: path
           name: id
@@ -639,24 +664,33 @@ paths:
       responses:
         200:
           description: >-
-            Two independent lists with SEPARATE caps, neither ever padded.
-            `internal` holds at most 3 Qresp records. `external` holds at most
-            25 papers, selected by the same quality gate from up to 150
-            provider candidates; the UI shows them five to a page over at most
-            five pages, and paging is a slice of THIS response — it triggers
-            no further request to this endpoint and no further request to
-            Semantic Scholar. `external.pipeline` reports where the candidates
-            went (`raw_candidates`, `after_dedupe`, `after_gate`, `shown`),
-            with `0 <= shown <= 25` and `shown <= after_gate`.
+            Two independent lists with SEPARATE caps AND separate policies,
+            neither ever padded. `internal` holds at most 3 Qresp records,
+            every one of which PASSED Qresp's evidence gate. `external` holds
+            at most 25 papers, RE-RANKED (not filtered) from up to 150
+            provider candidates by that same deterministic score — a
+            candidate that would have failed the evidence gate can still be
+            among them, typically near the end of the list; the gate's
+            verdict is not exposed on the result and must not be inferred
+            from a result's mere presence. The UI shows external results five
+            to a page over at most five pages, and paging is a slice of THIS
+            response — it triggers no further request to this endpoint and no
+            further request to Semantic Scholar. `external.pipeline` reports
+            where the candidates went (`raw_candidates`, `valid_candidates`,
+            `after_dedupe`, `scored_candidates`, `shown`), with
+            `0 <= shown <= 25 <= scored_candidates` and, under the current
+            policy, `scored_candidates == after_dedupe` always (nothing is
+            removed between de-duplication and the display cap).
             `internal[].id` links to the Qresp detail page and
             `internal[].server` names the Qresp server it lives on (empty for
             this one); `external[].url` prefers an HTTPS DOI link.
             `source_server` echoes the server both lists were computed from.
-            Every result carries grounded `reasons` (at most three). Each
-            section reports a `status`: `ok`, `disabled`, `unavailable`, and
-            for the external one also `unresolved` and `stale`, which is true
-            when a refresh failed and the last successful results are being
-            served.
+            Every result carries grounded `reasons` (at most three) when Qresp
+            found nameable evidence; an external result with no evidence
+            carries none rather than an invented explanation. Each section
+            reports a `status`: `ok`, `disabled`, `unavailable`, and for the
+            external one also `unresolved` and `stale`, which is true when a
+            refresh failed and the last successful results are being served.
         400:
           description: The requested Qresp server is not one this server federates with
         404:

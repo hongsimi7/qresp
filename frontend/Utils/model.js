@@ -62,6 +62,10 @@ const convertStatetoReqSchema = (state, servers) => {
     collections: state.paperInfo.collections,
     tags: state.paperInfo.tags,
     license: state.license,
+    // Record-level, optional -- see project.models.Paper.institution on the
+    // backend. Never derived from PIs/collections/servers/DOIs; whatever the
+    // curator typed (or left blank) here is the whole answer.
+    institution: state.paperInfo.institution || "",
     documentation: { readme: state.documentation },
     workflow: {
       ...state.workflow,
@@ -135,6 +139,9 @@ const convertReqSchematoState = (req) => {
       tags: req.tags || [],
       notebookFile: info.notebookFile || "",
       notebookPath: info.notebookPath || "",
+      // Absent on records published before the field existed => "", so the
+      // edit form simply shows an empty (optional) input, not an error.
+      institution: req.institution || "",
     },
     referenceInfo: infoFromReferenceBlock(req.reference || {}),
     documentation: documentation.readme || "",

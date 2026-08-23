@@ -54,6 +54,7 @@ const PaperDetails = ({ paper, error, preview = false, query }) => {
     affiliation,
     heads,
     license,
+    institution,
   } = paper;
 
   const workflows = paper.workflows;
@@ -74,6 +75,7 @@ const PaperDetails = ({ paper, error, preview = false, query }) => {
     notebookPath,
     abstract,
     fileServerPath,
+    institution,
   };
 
   const { setAlert, unsetAlert } = useContext(AlertContext);

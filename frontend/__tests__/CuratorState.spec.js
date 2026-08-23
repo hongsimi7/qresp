@@ -357,6 +357,61 @@ describe("CuratorState draft persistence", () => {
     expect(screen.getByTestId("unsaved-status")).toHaveTextContent("unsaved");
   });
 
+  it("resumes a saved institution unchanged", async () => {
+    localStorage.setItem(
+      "state",
+      JSON.stringify({
+        ...savedDraft,
+        paperInfo: { ...savedDraft.paperInfo, institution: "University of Chicago" },
+      })
+    );
+    const InstitutionProbe = () => {
+      const { paperInfo, resumeDraft } = useContext(CuratorContext);
+      return (
+        <div>
+          <span data-testid="institution">
+            {paperInfo.institution || "blank"}
+          </span>
+          <button onClick={resumeDraft}>Resume</button>
+        </div>
+      );
+    };
+    const user = userEvent.setup();
+    render(
+      <CuratorState>
+        <InstitutionProbe />
+      </CuratorState>
+    );
+    await user.click(screen.getByRole("button", { name: /resume/i }));
+    expect(screen.getByTestId("institution")).toHaveTextContent(
+      "University of Chicago"
+    );
+  });
+
+  it("defaults institution to blank when resuming a draft saved before the field existed", async () => {
+    // savedDraft.paperInfo carries no institution key at all.
+    localStorage.setItem("state", JSON.stringify(savedDraft));
+    const InstitutionProbe = () => {
+      const { paperInfo, resumeDraft } = useContext(CuratorContext);
+      return (
+        <div>
+          <span data-testid="institution">
+            {paperInfo.institution || "blank"}
+          </span>
+          <button onClick={resumeDraft}>Resume</button>
+        </div>
+      );
+    };
+    const user = userEvent.setup();
+    render(
+      <CuratorState>
+        <InstitutionProbe />
+      </CuratorState>
+    );
+    await user.click(screen.getByRole("button", { name: /resume/i }));
+    expect(screen.getByTestId("institution")).toHaveTextContent("blank");
+  });
+
   it("keeps RCC analysis runtime-only and clears it when the saved path changes", async () => {
     const user = userEvent.setup();
     render(

@@ -47,6 +47,7 @@ const PaperInfoForm = ({ editor }) => {
     collections: Yup.string().required("Required"),
     tags: Yup.string().required("Required"),
     notebookFile: Yup.string(),
+    institution: Yup.string(),
   });
 
   const formattedNames = namesUtil.get(paperInfo.PIs);
@@ -245,6 +246,22 @@ const PaperInfoForm = ({ editor }) => {
                 });
                 setValue("tags", [...current, ...fresh].join(", "));
               }}
+            />
+          </Grid>
+          <Grid>
+            {/* Record-level, optional, and never inferred from anything else
+                on this form: not from the PIs above, not from a collection,
+                not from where this server happens to be running. A curator
+                who leaves it blank publishes a record with no institution
+                badge -- that is a valid, unremarkable answer. */}
+            <TextInputField
+              id="institution"
+              placeholder="e.g. University of Chicago"
+              name="institution"
+              helperText="The institution associated with this record. Not a claim that every listed author belongs to it."
+              label="Institution (optional)"
+              register={register}
+              error={errors.institution}
             />
           </Grid>
           <Grid>

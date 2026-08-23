@@ -192,6 +192,16 @@ class Paper(Document):
     collections = ListField(required=True)
     schema = StringField(required=True)
     tags = ListField(required=True)
+    # The institution associated with this RECORD, as typed by the curator --
+    # e.g. "University of Chicago". Optional, and deliberately never derived:
+    # not from an author's name or affiliation, not from `collections`, not
+    # from the server's own hostname, not from an email domain, not from a
+    # DOI. A record with several authors from several institutions is not a
+    # claim that all of them belong to this one; it identifies the record,
+    # not every person listed on it. Absent on every record published before
+    # this field existed => no institution badge is shown, and nothing here
+    # needs a migration to make that true.
+    institution = StringField(max_length=200)
     versions = ListField()
     license = StringField(required=True)
     # Verified identity (session email) of the account that published this
@@ -281,9 +291,15 @@ class RelatedResearchCache(Document):
     They live here instead, keyed by paper id, with an explicit expiry so a
     later follow-up study can appear on its own.
 
-    Stored: only the provider's public bibliographic metadata for the
-    candidates that already passed Qresp's quality gate, plus the reasons
-    Qresp computed. Never stored: the API key, any header, any provider error
+    Stored: only the provider's public bibliographic metadata for the top
+    `EXTERNAL_MAX_RESULTS` candidates Qresp's deterministic score ranked
+    highest, plus the reasons Qresp computed for each. NOT "candidates that
+    passed Qresp's quality gate" -- the gate no longer decides which external
+    candidates are stored or shown (see `related.ALGORITHM_VERSION` and
+    `relatedness.rerank_external`); it still runs on every candidate and its
+    verdict rides along as a diagnostic, but a candidate with weak or zero
+    evidence can be stored here if the provider proposed it and it ranked in
+    the top 25. Never stored: the API key, any header, any provider error
     body, any session/user/owner data, any RCC URL or file path, any file
     content. `results` is empty for a `status` other than 'ok'.
 
@@ -311,9 +327,18 @@ class RelatedResearchCache(Document):
     # before this field existed => also a miss, which is the whole migration.
     algorithm_version = StringField(max_length=16)
     # Why the list is what it is: `ok`, `provider_returned_no_candidates`,
-    # `all_candidates_below_quality_gate`, `provider_rate_limited`, ... Kept
-    # so "the external list is empty" can be diagnosed from the cache without
+    # `no_valid_candidates_after_dedupe`, `provider_rate_limited`, ... Kept so
+    # "the external list is empty" can be diagnosed from the cache without
     # re-asking the provider. A code, never a provider message.
+    #
+    # `no_valid_candidates_after_dedupe` replaced the old
+    # `all_candidates_below_quality_gate`: the evidence gate can no longer
+    # empty this list by itself (external results are re-ranked, not
+    # gate-filtered -- see related.py), so the only way a non-empty provider
+    # answer still yields zero results is that nothing survived normalization
+    # and de-duplication. A stored `all_candidates_below_quality_gate` is
+    # simply a value from before the algorithm-version bump that invalidated
+    # it; nothing here still writes or interprets it as current.
     reason = StringField(max_length=64)
     # Where the provider's candidates went: booleans, a status string and
     # counts, and nothing else -- no title, no abstract, no provider body, no

@@ -105,4 +105,58 @@ describe("PaperInfoForm with array-backed state (edit mode)", () => {
     );
   });
 
+  // Optional, record-level, never inferred: see project.models.Paper.institution.
+  describe("institution", () => {
+    it("offers an optional institution field labelled and placeholder-hinted", () => {
+      renderForm();
+      expect(screen.getByText(/institution \(optional\)/i)).toBeInTheDocument();
+      expect(
+        screen.getByPlaceholderText(/e\.g\. university of chicago/i)
+      ).toBeInTheDocument();
+    });
+
+    it("shows a blank institution as an empty, valid input -- not an error", () => {
+      renderForm();
+      expect(
+        screen.getByPlaceholderText(/e\.g\. university of chicago/i)
+      ).toHaveValue("");
+      expect(screen.queryByText(/institution.*required/i)).not.toBeInTheDocument();
+    });
+
+    it("preloads a saved institution on edit", () => {
+      renderForm({ institution: "University of Chicago" });
+      expect(
+        screen.getByPlaceholderText(/e\.g\. university of chicago/i)
+      ).toHaveValue("University of Chicago");
+    });
+
+    it("round-trips a curator-typed institution through save", async () => {
+      const { setPaperInfo } = renderForm();
+      const user = userEvent.setup();
+      await user.type(
+        screen.getByPlaceholderText(/e\.g\. university of chicago/i),
+        "Duke University"
+      );
+      await user.click(screen.getByRole("button", { name: /^save$/i }));
+      await waitFor(() => expect(setPaperInfo).toHaveBeenCalled());
+      expect(setPaperInfo).toHaveBeenCalledWith(
+        expect.objectContaining({ institution: "Duke University" })
+      );
+    });
+
+    it("round-trips a cleared institution as an empty string", async () => {
+      const { setPaperInfo } = renderForm({
+        institution: "University of Chicago",
+      });
+      const user = userEvent.setup();
+      await user.clear(
+        screen.getByPlaceholderText(/e\.g\. university of chicago/i)
+      );
+      await user.click(screen.getByRole("button", { name: /^save$/i }));
+      await waitFor(() => expect(setPaperInfo).toHaveBeenCalled());
+      expect(setPaperInfo).toHaveBeenCalledWith(
+        expect.objectContaining({ institution: "" })
+      );
+    });
+  });
 });

@@ -18,6 +18,7 @@ const Summary = ({ rowdata }) => {
     _Search__authors,
     _Search__doi,
     _Search__id,
+    _Search__institution,
     _Search__publication,
     _Search__tags,
     _Search__title,
@@ -62,15 +63,40 @@ const Summary = ({ rowdata }) => {
               </span>
             </Grid>
             <Grid size={12}>
-              <Typography
-                variant="subtitle1"
-                component="div"
-                color="secondary"
-                style={{ wordBreak: "break-all" }}
-                gutterBottom
+              {/* Institution sits on the SAME row as the authors, right after
+                  the author text -- not the source-repository row below,
+                  which answers a different question (where the record is
+                  STORED, not what institution it is ABOUT). Flex-wrap so a
+                  long institution name or a long author list drops to its
+                  own line on a narrow viewport rather than overlapping. */}
+              <Box
+                sx={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  columnGap: 1,
+                  rowGap: 0.5,
+                  mb: 1,
+                }}
               >
-                {_Search__authors}
-              </Typography>
+                <Typography
+                  variant="subtitle1"
+                  component="span"
+                  color="secondary"
+                  style={{ wordBreak: "break-all" }}
+                >
+                  {_Search__authors}
+                </Typography>
+                {_Search__institution ? (
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={_Search__institution}
+                    aria-label={`Institution: ${_Search__institution}`}
+                    data-testid="record-institution"
+                  />
+                ) : null}
+              </Box>
             </Grid>
             <Grid size={12}>
               <a

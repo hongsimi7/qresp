@@ -54,6 +54,25 @@ describe("convertReqSchematoState", () => {
     expect(minimal.workflow).toEqual({ nodes: [], edges: [] });
     expect(minimal.documentation).toBe("");
   });
+
+  // Optional and record-level: a record published before the field existed
+  // has no `institution` key at all, and that must load as "", not throw or
+  // surface as undefined in the edit form's text input.
+  it("defaults institution to an empty string on a record that predates it", () => {
+    expect(state.paperInfo.institution).toBe("");
+    const minimal = convertReqSchematoState({ reference: { title: "t" } });
+    expect(minimal.paperInfo.institution).toBe("");
+  });
+
+  it("loads a curator-entered institution unchanged", () => {
+    const withInstitution = convertReqSchematoState({
+      ...paperDoc,
+      institution: "University of Chicago",
+    });
+    expect(withInstitution.paperInfo.institution).toBe(
+      "University of Chicago"
+    );
+  });
 });
 
 describe("convertStateToUpdatePayload round trip", () => {
@@ -106,5 +125,24 @@ describe("convertStateToUpdatePayload round trip", () => {
     expect(payload).not.toHaveProperty("_id");
     expect(payload).not.toHaveProperty("version");
     expect(payload).not.toHaveProperty("versions");
+  });
+
+  it("round-trips a blank institution as an empty string, not omitted", () => {
+    // paperDoc predates the field: the payload must still carry the key so a
+    // PUT can clear a previously-set value, rather than the key vanishing.
+    expect(payload.institution).toBe("");
+  });
+
+  it("round-trips a curator-entered institution", () => {
+    const withInstitution = convertReqSchematoState({
+      ...paperDoc,
+      institution: "University of Chicago",
+    });
+    const withPayload = convertStateToUpdatePayload(
+      withInstitution,
+      paperDoc,
+      null
+    );
+    expect(withPayload.institution).toBe("University of Chicago");
   });
 });

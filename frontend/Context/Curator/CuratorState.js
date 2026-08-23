@@ -78,6 +78,10 @@ const CuratorState = (props) => {
       tags: [],
       notebookFile: "",
       notebookPath: "",
+      // Optional, record-level -- see project.models.Paper.institution on
+      // the backend. Never inferred from PIs, collections or anything else
+      // already in this state; a blank string publishes as "no institution".
+      institution: "",
     },
     // The PRIMARY paper's bibliography ("Publication Information for This
     // Paper") — the ONE canonical source that publishes as the record's

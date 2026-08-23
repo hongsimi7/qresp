@@ -654,6 +654,9 @@ class Search(object):
         self.notebookPath = ""
         self.notebookFile = ""
         self.year = 0
+        # Optional, record-level -- see project.models.Paper.institution.
+        # Absent on records published before the field existed.
+        self.institution = ""
 
     @property
     def id(self):
@@ -775,6 +778,14 @@ class Search(object):
     def year(self, val):
         self.__year = val
 
+    @property
+    def institution(self):
+        return self.__institution
+
+    @institution.setter
+    def institution(self, val):
+        self.__institution = val
+
     def __hash__(self):
         return hash(self.__title)
 
@@ -817,6 +828,8 @@ class PaperDetails(object):
     timeStamp = ""
     documentation = ""
     license = ""
+    # Optional, record-level -- see project.models.Paper.institution.
+    institution = ""
 
 
 class WorkflowInfo:

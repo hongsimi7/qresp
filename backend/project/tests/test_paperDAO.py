@@ -189,6 +189,45 @@ class TestPaperDAO(unittest.TestCase):
         self.assertEqual(
             workflowdetails['paperTitle'], allSearchObjects[0]['_Search__title'])
 
+    def test_search_institution_is_empty_on_a_legacy_record(self):
+        """`data.json` predates the `institution` field. A record published
+        before it existed must still load and search without a migration --
+        it simply carries no institution badge."""
+        dao = PaperDAO()
+        allSearchObjects = dao.getAllFilteredSearchObjects()
+        self.assertEqual("", allSearchObjects[0]["_Search__institution"])
+
+    def test_paper_details_institution_is_empty_on_a_legacy_record(self):
+        dao = PaperDAO()
+        allSearchObjects = dao.getAllFilteredSearchObjects()
+        paperDetails = dao.getPaperDetails(
+            allSearchObjects[0]['_Search__id'])
+        self.assertEqual("", paperDetails['institution'])
+
+    def test_institution_round_trips_through_search_and_details(self):
+        """A NEW record carrying an optional institution reports the exact
+        curator-entered value from both public read paths -- never
+        abbreviated, never inferred from anything else on the record."""
+        dao = PaperDAO()
+        __location__ = os.path.realpath(
+            os.path.join(os.getcwd(), os.path.dirname(__file__)))
+        with open(os.path.join(__location__, 'data.json')) as f:
+            paperdata = json.load(f)
+        paperdata['reference']['title'] = "A distinct title for institution"
+        paperdata['institution'] = "University of Chicago"
+        paperid = dao.insertIntoPapers(paperdata)
+        self.assertIsNotNone(paperid)
+
+        allSearchObjects = dao.getAllFilteredSearchObjects(
+            paperTitle='A distinct title for institution')
+        self.assertEqual(1, len(allSearchObjects))
+        self.assertEqual("University of Chicago",
+                         allSearchObjects[0]["_Search__institution"])
+
+        paperDetails = dao.getPaperDetails(
+            allSearchObjects[0]['_Search__id'])
+        self.assertEqual("University of Chicago", paperDetails['institution'])
+
     def test_getWorkflowForChartDetails(self):
         """
         Tests workflow details given chart id and paper id

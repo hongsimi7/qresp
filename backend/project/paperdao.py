@@ -191,6 +191,7 @@ class PaperDAO(MongoDBConnection, WorkflowObject):
             search.notebookPath = paper.info.notebookPath
             search.notebookFile = paper.info.notebookFile
             search.year = int(paper.reference.year)
+            search.institution = getattr(paper, 'institution', '') or ''
             filteredSearchobjects.append(search.__dict__)
         return filteredSearchobjects
 
@@ -233,6 +234,7 @@ class PaperDAO(MongoDBConnection, WorkflowObject):
         paperDetails.notebookFile = getattr(paper.info, 'notebookFile', '')
         paperDetails.ProjectName = getattr(paper.info, 'ProjectName', '')
         paperDetails.year = int(paper.reference.year)
+        paperDetails.institution = getattr(paper, 'institution', '') or ''
         paperDetails.charts = paper.charts
         paperDetails.datasets = paper.datasets
         paperDetails.scripts = paper.scripts

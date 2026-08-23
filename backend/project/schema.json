@@ -619,6 +619,14 @@
       "default": "",
       "description": "The CC license for the data being made available"
     },
+    "institution": {
+      "$id": "#/properties/institution",
+      "type": ["string", "null"],
+      "title": "The Institution Schema",
+      "default": "",
+      "examples": ["University of Chicago"],
+      "description": "Optional. The institution associated with this record, entered by the curator -- not an assertion that every listed author belongs to it, and never inferred from authors, collections, the server, an email domain, or a DOI."
+    },
     "schema": {
       "$id": "#/properties/schema",
       "type": ["string"],
