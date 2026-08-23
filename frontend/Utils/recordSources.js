@@ -49,6 +49,29 @@ export const sourceLabel = (server, names) => {
 };
 
 /**
+ * What the badge on a record card SAYS: "Hosted by University of Chicago".
+ *
+ * The prefix lives here, in one place, rather than in each component that
+ * renders a badge — the wording is a product decision, not a per-card one,
+ * and two components spelling it differently is exactly the drift this
+ * module exists to prevent.
+ *
+ * It answers WHERE THE RECORD IS SERVED FROM, and nothing else. It is not a
+ * claim about the paper's authors, their institutions, or who funded the
+ * work — a UChicago node can host a paper written entirely at another
+ * university. The record's own `institution` field is the separate, optional,
+ * curator-entered answer to that different question, and the two are rendered
+ * as separate chips so neither can be read as the other.
+ */
+export const hostedBy = (label) => {
+  const name = String(label || "").trim();
+  return name ? `Hosted by ${name}` : "";
+};
+
+/** `hostedBy` for a caller that holds the registry rather than a resolved name. */
+export const hostedByLabel = (server, names) => hostedBy(sourceLabel(server, names));
+
+/**
  * The identity two nodes' copies of one paper share.
  *
  * A normalized DOI only. A DOI is assigned by the publisher and is the same

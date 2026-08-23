@@ -22,7 +22,7 @@ import axios from "axios";
 import AlertContext from "../Context/Alert/alertContext";
 import ServerContext from "../Context/Servers/serverContext";
 import { resolveServerSideApiBase } from "../Utils/serverSideApi";
-import { mergeRecordsByServer } from "../Utils/recordSources";
+import { mergeRecordsByServer, sourceLabel } from "../Utils/recordSources";
 
 // The four endpoints a Qresp node is asked for are NOT equal, and treating
 // them as one list is what let a missing authors list be reported as missing
@@ -56,6 +56,14 @@ const search = ({
     router.reload();
     unsetAlert();
   };
+
+  // Which nodes, said the way the rest of the page says them. A notice that
+  // names "https://qresp.hybrid3.duke.edu" while every record beside it is
+  // badged "Hosted by Duke University" is asking the reader to work out that
+  // those are the same node. `sourceLabel` falls back to the host, so an
+  // unnamed node is still identified by a fact rather than by nothing.
+  const nodeNames = (servers) =>
+    (servers || []).map((server) => sourceLabel(server, servernames)).join(", ");
 
   const [data, setData] = useState(initialdata);
 
@@ -205,9 +213,21 @@ const search = ({
               never a modal over them, which cannot be dismissed past. */}
           {!unavailable && failed.length > 0 ? (
             <Box sx={{ mb: 2 }} data-testid="search-partial-failure">
-              <Alert severity="warning">
+              <Alert
+                severity="warning"
+                // Reloading is the only thing that can fix a node that was
+                // down when the page was rendered server-side, and without
+                // this the reader's only option was to guess that.
+                action={
+                  <RegularStyledButton onClick={refresh}>
+                    Retry
+                  </RegularStyledButton>
+                }
+                // A node URL is long and a phone is narrow.
+                sx={{ overflowWrap: "anywhere" }}
+              >
                 Some Qresp nodes could not be reached, so their records are
-                missing from these results: {failed.join(", ")}.
+                missing from these results: {nodeNames(failed)}.
               </Alert>
             </Box>
           ) : null}
@@ -255,7 +275,7 @@ const search = ({
                     : "These Qresp nodes could not be searched: "
                   : "Some Qresp nodes could not be searched, so their " +
                     "matching records are missing from these results: "}
-                {runtime.failed.join(", ")}
+                {nodeNames(runtime.failed)}
               </Alert>
             </Box>
           ) : null}
@@ -271,9 +291,7 @@ const search = ({
                 }
               >
                 {failed.length
-                  ? `These Qresp nodes could not be reached: ${failed.join(
-                      ", "
-                    )}.`
+                  ? `These Qresp nodes could not be reached: ${nodeNames(failed)}.`
                   : "No Qresp node could be reached."}{" "}
                 No records could be loaded — this is a connection problem, not
                 an empty node.

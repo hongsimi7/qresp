@@ -4,6 +4,8 @@ import Summary from "../components/Paper/Summary";
 import { TableSearchContext } from "../components/Table/TableSearch";
 import {
   buildServerNames,
+  hostedBy,
+  hostedByLabel,
   mergeRecordsByServer,
   recordIdentity,
   sourceLabel,
@@ -159,6 +161,91 @@ describe("one list across two repositories", () => {
     it("has nothing to say about a missing server", () => {
       expect(sourceLabel("", NAMES)).toBe("");
     });
+
+    // The "Hosted by" wording lives in ONE place, so two components cannot
+    // spell the same product decision differently.
+    it("builds the hosting badge text from the registry name", () => {
+      expect(hostedByLabel(UCHICAGO, NAMES)).toBe("Hosted by UChicago");
+      expect(hostedBy("Duke University")).toBe("Hosted by Duke University");
+    });
+
+    it("says nothing rather than 'Hosted by' with no node", () => {
+      expect(hostedBy("")).toBe("");
+      expect(hostedByLabel("", NAMES)).toBe("");
+    });
+
+    it("derives the badge from the server, never from the record's fields", () => {
+      // A record whose authors, DOI and institution all point elsewhere is
+      // still labelled by the node it was READ FROM. The badge is
+      // provenance, not a claim about the paper.
+      expect(
+        hostedByLabel(DUKE, NAMES)
+      ).toBe("Hosted by Duke");
+      const row = mergeRecordsByServer(
+        {
+          [DUKE]: [
+            record("a", {
+              _Search__authors: "Someone At Stanford",
+              _Search__doi: "10.1000/uchicago-press",
+              _Search__institution: "University of Chicago",
+            }),
+          ],
+        },
+        NAMES,
+        [DUKE]
+      )[0];
+      expect(row.paper._Search__sources[0].label).toBe("Duke");
+    });
+  });
+});
+
+// Two chips, two different questions. Conflating them would put a curator's
+// optional, hand-typed claim and an automatic fact about the serving node
+// into one badge that means neither.
+describe("record Institution versus hosting node", () => {
+  const inTable = (children) => (
+    <TableSearchContext.Provider value={{ query: "", setQuery: () => {} }}>
+      {children}
+    </TableSearchContext.Provider>
+  );
+
+  const cardFor = (overrides, sources) =>
+    render(
+      inTable(
+        <Summary
+          rowdata={{ ...record("a", overrides), _Search__sources: sources }}
+        />
+      )
+    );
+
+  it("shows both, as separate chips, when they disagree", () => {
+    cardFor({ _Search__institution: "University of Chicago" }, [
+      { server: DUKE, label: "Duke University" },
+    ]);
+    const institution = screen.getByTestId("record-institution");
+    const hosted = screen.getByTestId("record-source");
+    expect(institution).toHaveTextContent("University of Chicago");
+    expect(institution).not.toHaveTextContent("Hosted by");
+    expect(hosted).toHaveTextContent("Hosted by Duke University");
+    expect(institution).not.toBe(hosted);
+  });
+
+  it("shows the hosting badge even when no institution was entered", () => {
+    cardFor({}, [{ server: DUKE, label: "Duke University" }]);
+    expect(screen.queryByTestId("record-institution")).not.toBeInTheDocument();
+    expect(screen.getByTestId("record-source")).toHaveTextContent(
+      "Hosted by Duke University"
+    );
+  });
+
+  it("shows the institution chip even for a card with no source list", () => {
+    // A saved row or a single-node list carries no `_Search__sources`; the
+    // record's own institution is unaffected by that.
+    cardFor({ _Search__institution: "Duke University" }, undefined);
+    expect(screen.getByTestId("record-institution")).toHaveTextContent(
+      "Duke University"
+    );
+    expect(screen.queryByTestId("record-source")).not.toBeInTheDocument();
   });
 });
 
@@ -179,28 +266,45 @@ describe("the source tag on a record card", () => {
       )
     );
 
-  it("names the repository in text, not by colour", () => {
-    cardFor([{ server: UCHICAGO, label: "UChicago" }]);
+  it("says where the record is hosted, in text rather than by colour", () => {
+    cardFor([{ server: UCHICAGO, label: "University of Chicago" }]);
     const tag = screen.getByTestId("record-source");
-    expect(tag).toHaveTextContent("UChicago");
-  });
-
-  it("gives the tag an accessible label that says what it is", () => {
-    cardFor([{ server: DUKE, label: "Duke" }]);
-    expect(
-      screen.getByLabelText("Source repository: Duke")
-    ).toBeInTheDocument();
+    // The whole meaning is in the visible text: a bare "University of
+    // Chicago" beside a title does not say what the relationship is.
+    expect(tag).toHaveTextContent("Hosted by University of Chicago");
   });
 
   it("renders both tags for a paper published on both nodes", () => {
     cardFor([
-      { server: UCHICAGO, label: "UChicago" },
-      { server: DUKE, label: "Duke" },
+      { server: UCHICAGO, label: "University of Chicago" },
+      { server: DUKE, label: "Duke University" },
     ]);
     const list = screen.getByRole("list", {
-      name: /repositories publishing this record/i,
+      name: /qresp nodes hosting this record/i,
     });
-    expect(within(list).getAllByTestId("record-source")).toHaveLength(2);
+    const tags = within(list).getAllByTestId("record-source");
+    expect(tags).toHaveLength(2);
+    expect(tags[0]).toHaveTextContent("Hosted by University of Chicago");
+    expect(tags[1]).toHaveTextContent("Hosted by Duke University");
+  });
+
+  it("puts the hosting badge on the author row, beside the authors", () => {
+    cardFor([{ server: DUKE, label: "Duke University" }]);
+    const authorText = screen.getByText("Robin Sharedname");
+    const list = screen.getByRole("list", {
+      name: /qresp nodes hosting this record/i,
+    });
+    expect(list.parentElement).toBe(authorText.closest("div"));
+  });
+
+  it("falls back to the node's host rather than inventing a name", () => {
+    // No display name in the registry: the badge still says something TRUE.
+    cardFor([
+      { server: "https://qresp.example.org", label: "qresp.example.org" },
+    ]);
+    expect(screen.getByTestId("record-source")).toHaveTextContent(
+      "Hosted by qresp.example.org"
+    );
   });
 
   it("renders no tag when there is nothing true to say", () => {

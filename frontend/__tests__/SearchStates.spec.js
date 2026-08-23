@@ -8,7 +8,7 @@
  * everyone here directly, so this page is the first thing a visitor sees and
  * it has to be honest about which of the three states it is in.
  */
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, within } from "@testing-library/react";
 
 const routerEvents = {
   handlers: {},
@@ -48,6 +48,11 @@ const PAPER = (id, title) => ({
 
 const ALPHA = "https://alpha.example.org";
 const BETA = "https://beta.example.org";
+// How a node is NAMED in a notice. The registry publishes no display name
+// for these, so `sourceLabel` falls back to the host -- still a fact, and
+// the same way every record badge on the page names its node.
+const ALPHA_NAME = "alpha.example.org";
+const BETA_NAME = "beta.example.org";
 
 const dataWith = (papersByServer) => ({
   papers: papersByServer,
@@ -118,7 +123,7 @@ describe("search page states", () => {
 
     const panel = screen.getByTestId("search-unavailable");
     expect(panel).toHaveTextContent(/could not be reached/i);
-    expect(panel).toHaveTextContent(ALPHA);
+    expect(panel).toHaveTextContent(ALPHA_NAME);
     // ...and it does NOT claim the node has no records.
     expect(screen.queryByTestId("record-count")).toBeNull();
     expect(screen.queryByText(/0 +Records Available/i)).toBeNull();
@@ -140,9 +145,39 @@ describe("search page states", () => {
     );
     // ...and the failure is a warning beside them, not instead of them.
     const warning = screen.getByTestId("search-partial-failure");
-    expect(warning).toHaveTextContent(BETA);
+    expect(warning).toHaveTextContent(BETA_NAME);
     expect(screen.queryByTestId("search-unavailable")).toBeNull();
     expect(setAlert).not.toHaveBeenCalled();
+  });
+
+  it("offers a retry on the partial failure, not just on the total one", () => {
+    // A node that was down when this page rendered server-side can only be
+    // re-asked by reloading. Without a control the reader has to guess that.
+    renderSearch({
+      initialdata: dataWith({ [ALPHA]: [PAPER("a", "From alpha")] }),
+      error: { is: true, msg: "", failed: [BETA], total: false },
+    });
+    const warning = screen.getByTestId("search-partial-failure");
+    within(warning)
+      .getByRole("button", { name: /retry/i })
+      .click();
+    expect(reload).toHaveBeenCalled();
+    // The records that DID arrive are untouched by asking again.
+    expect(screen.getByText("From alpha")).toBeInTheDocument();
+  });
+
+  it("names a failed node the way the record badges name it", () => {
+    // A notice saying "https://beta.example.org" beside rows badged
+    // "Hosted by beta.example.org" makes the reader work out that those are
+    // the same node.
+    renderSearch({
+      initialdata: dataWith({ [ALPHA]: [PAPER("a", "From alpha")] }),
+      error: { is: true, msg: "", failed: [BETA], total: false },
+      servernames: { [BETA]: "Duke University" },
+    });
+    const warning = screen.getByTestId("search-partial-failure");
+    expect(warning).toHaveTextContent("Duke University");
+    expect(warning).not.toHaveTextContent("https://beta.example.org");
   });
 
   it("shows a loading state instead of a record count during navigation", () => {
@@ -240,14 +275,14 @@ describe("search page: record-source vs filter failures", () => {
     withError({ failed: [BETA] });
     const notice = screen.getByTestId("search-partial-failure");
     expect(notice).toHaveTextContent(/records are missing/i);
-    expect(notice).toHaveTextContent(BETA);
+    expect(notice).toHaveTextContent(BETA_NAME);
     expect(screen.queryByTestId("search-filter-failure")).toBeNull();
   });
 
   it("shows both notices when the two failures happen together", () => {
     withError({ failed: [BETA], filters: { [ALPHA]: ["authors"] } });
     expect(screen.getByTestId("search-partial-failure")).toHaveTextContent(
-      BETA
+      BETA_NAME
     );
     expect(screen.getByTestId("search-filter-failure")).toHaveTextContent(
       ALPHA

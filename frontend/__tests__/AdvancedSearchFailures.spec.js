@@ -32,6 +32,10 @@ import Search from "../pages/search";
 
 const ALPHA = "https://alpha.example.org";
 const BETA = "https://beta.example.org";
+// Notices name a node the way the record badges do: the registry display
+// name, or the host when there is none.
+const ALPHA_NAME = "alpha.example.org";
+const BETA_NAME = "beta.example.org";
 
 const PAPER = (id, title) => ({
   _Search__id: id,
@@ -123,8 +127,8 @@ describe("Advanced Search server failures", () => {
     expect(await screen.findByText("Alpha match")).toBeInTheDocument();
     const notice = await screen.findByTestId("advanced-search-failure");
     expect(notice).toHaveTextContent(/could not be searched/i);
-    expect(notice).toHaveTextContent(BETA);
-    expect(notice).not.toHaveTextContent(ALPHA);
+    expect(notice).toHaveTextContent(BETA_NAME);
+    expect(notice).not.toHaveTextContent(ALPHA_NAME);
     // No modal, ever, and no internal detail from the thrown error.
     expect(setAlert).not.toHaveBeenCalled();
     expect(screen.queryByText(/10\.0\.0\.5/)).toBeNull();

@@ -8,6 +8,7 @@ import { styled } from "@mui/material/styles";
 import Tag from "../tag";
 
 import { TableSearchContext } from "../Table/TableSearch";
+import { hostedBy } from "../../Utils/recordSources";
 
 const StyledPaper = styled(Paper)({
   backgroundColor: "inherit",
@@ -63,12 +64,20 @@ const Summary = ({ rowdata }) => {
               </span>
             </Grid>
             <Grid size={12}>
-              {/* Institution sits on the SAME row as the authors, right after
-                  the author text -- not the source-repository row below,
-                  which answers a different question (where the record is
-                  STORED, not what institution it is ABOUT). Flex-wrap so a
-                  long institution name or a long author list drops to its
-                  own line on a narrow viewport rather than overlapping. */}
+              {/* The author line, and the two chips that qualify it. Both sit
+                  on THIS row, right after the author text, and both wrap
+                  rather than overlapping the year column on a narrow
+                  viewport.
+
+                  They answer two different questions and are deliberately
+                  kept as separate chips so neither can be read as the other:
+
+                    Institution   optional, typed by a curator, about the
+                                  RECORD. Absent unless somebody entered it.
+                    Hosted by ... automatic and factual, about the SERVER
+                                  this copy was read from. Never guessed from
+                                  authors, DOIs, collections or hostname
+                                  patterns -- see Utils/recordSources. */}
               <Box
                 sx={{
                   display: "flex",
@@ -77,6 +86,7 @@ const Summary = ({ rowdata }) => {
                   columnGap: 1,
                   rowGap: 0.5,
                   mb: 1,
+                  minWidth: 0,
                 }}
               >
                 <Typography
@@ -94,7 +104,40 @@ const Summary = ({ rowdata }) => {
                     label={_Search__institution}
                     aria-label={`Institution: ${_Search__institution}`}
                     data-testid="record-institution"
+                    sx={{ maxWidth: "100%" }}
                   />
+                ) : null}
+                {sources.length ? (
+                  // A LIST, so a screen reader hears "2 items" for a paper
+                  // published on two nodes. The visible text carries the whole
+                  // meaning ("Hosted by Duke University"); colour and position
+                  // are not asked to say anything on their own.
+                  <Box
+                    component="ul"
+                    aria-label="Qresp nodes hosting this record"
+                    sx={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 0.5,
+                      listStyle: "none",
+                      m: 0,
+                      p: 0,
+                      minWidth: 0,
+                    }}
+                  >
+                    {sources.map((source) => (
+                      <Box component="li" key={source.server} sx={{ minWidth: 0 }}>
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          color="primary"
+                          label={hostedBy(source.label)}
+                          data-testid="record-source"
+                          sx={{ maxWidth: "100%" }}
+                        />
+                      </Box>
+                    ))}
+                  </Box>
                 ) : null}
               </Box>
             </Grid>
@@ -109,41 +152,6 @@ const Summary = ({ rowdata }) => {
                 </Typography>
               </a>
             </Grid>
-            {sources.length ? (
-              <Grid size={12}>
-                {/* A LIST, so a screen reader hears "2 items" for a paper on
-                    two nodes. The label carries the word "Source" in its
-                    accessible name: colour and position alone would not tell
-                    a reader what "Duke" beside a title means, and the visible
-                    text is the label itself rather than a colour swatch. */}
-                <Box
-                  component="ul"
-                  aria-label="Repositories publishing this record"
-                  sx={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: 0.5,
-                    listStyle: "none",
-                    m: 0,
-                    mb: 0.5,
-                    p: 0,
-                  }}
-                >
-                  {sources.map((source) => (
-                    <Box component="li" key={source.server}>
-                      <Chip
-                        size="small"
-                        variant="outlined"
-                        color="primary"
-                        label={source.label}
-                        aria-label={`Source repository: ${source.label}`}
-                        data-testid="record-source"
-                      />
-                    </Box>
-                  ))}
-                </Box>
-              </Grid>
-            ) : null}
             <Grid size={12}>
               {_Search__tags.map((tag) => (
                 <Tag
