@@ -318,9 +318,14 @@ describe("Analyze RCC Folder", () => {
     );
     expect(await screen.findByLabelText(/^figure caption ?\*?$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^figure image ?\*?$/i)).toBeInTheDocument();
+    // The rule is stated ONCE, in the legend at the top -- not repeated
+    // under every blank required field, which is what it used to do.
+    expect(screen.getByTestId("required-note")).toHaveTextContent(
+      /required to save, update, or publish/i
+    );
     expect(
-      screen.getAllByText(/required before save\/update and publish/i).length
-    ).toBeGreaterThan(0);
+      screen.queryAllByText(/required to save, update, or publish/i)
+    ).toHaveLength(1);
   });
 
   it("Edit proposal opens the fields without selecting the candidate", async () => {
@@ -2437,10 +2442,55 @@ describe("Folder Analysis field contract", () => {
     expect(input(/^reproduction notebook ?\*?$/i)).not.toBeRequired();
     expect(input(/^input \/ supporting files/i)).not.toBeRequired();
 
+    // One concise legend. The asterisk is a marker; the sentence beside it
+    // is what carries the meaning, so nothing here depends on seeing colour.
     expect(screen.getByTestId("required-note")).toHaveTextContent(
-      "* Required before Save/Update and Publish. Folder proposals may be " +
-        "added incomplete."
+      "* Required to Save, Update, or Publish. Proposals can be added with " +
+        "these blank and completed later."
     );
+  });
+
+  it("states the required rule once, not under every field", async () => {
+    // The dialog used to repeat "Required before Save/Update and Publish"
+    // as helper text under EVERY blank required field -- the same sentence
+    // up to a dozen times, restating both the asterisk on the label and the
+    // legend at the top.
+    const user = userEvent.setup();
+    renderWith();
+    await openFields(user, null, /select figure1\.png/i, "chart-0");
+
+    expect(
+      screen.queryAllByText(/required to save, update, or publish/i)
+    ).toHaveLength(1);
+    expect(
+      screen.queryByText(/required before save\/update and publish/i)
+    ).toBeNull();
+    // The marker itself is untouched: `required` still drives MUI's real
+    // aria-required, which is what a screen reader acts on.
+    expect(input(/^figure caption ?\*?$/i)).toBeRequired();
+  });
+
+  it("keeps a real scan warning visible while the prose is trimmed", async () => {
+    // Cutting explanatory text must not cut the facts a curator needs to
+    // know the view is incomplete. This is the line that says so.
+    axios.post.mockResolvedValue({
+      data: {
+        ...analysis,
+        truncated: true,
+        counts: { files: 1971, directories: 260 },
+      },
+    });
+    const user = userEvent.setup();
+    renderWith();
+    await openAnalysis(user);
+
+    const notice = await screen.findByTestId("partial-notice");
+    expect(notice).toHaveTextContent(/partial view of the folder/i);
+    expect(notice).toHaveTextContent("1971 file(s) across 260 folder(s)");
+    // And the long version is still one disclosure away, collapsed.
+    expect(
+      screen.getByRole("button", { name: /show scan details/i })
+    ).toBeInTheDocument();
   });
 
   it("does not call an empty optional field a missing one", async () => {

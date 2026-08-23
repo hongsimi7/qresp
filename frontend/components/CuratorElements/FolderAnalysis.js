@@ -220,9 +220,22 @@ const CARD_ACTIONS_SX = {
   "& .MuiButton-root": { whiteSpace: "nowrap", minWidth: "auto" },
 };
 
+// The required marker, defined ONCE and used both on the field labels and in
+// the legend that explains them. Two separate colour choices would drift, and
+// a legend whose asterisk does not look like the asterisks it describes is
+// not a legend.
+//
+// Colour is never the whole message: the legend spells the rule out in words,
+// and each required input carries MUI's real `aria-required`, so nothing here
+// depends on a reader distinguishing red from grey.
+const REQUIRED_MARKER_COLOR = "error.main";
+
 const FIELD_GROUP_SX = { display: "flex", flexDirection: "column", gap: 1 };
 
-const FIELD_INPUT_SX = { "& .MuiFormHelperText-root": { mt: 0.5, mx: 0 } };
+const FIELD_INPUT_SX = {
+  "& .MuiFormHelperText-root": { mt: 0.5, mx: 0 },
+  "& .MuiFormLabel-asterisk": { color: REQUIRED_MARKER_COLOR },
+};
 
 // ONE alignment contract for everything a candidate card expands: Details,
 // the AI suggestion and the proposal form.
@@ -1344,7 +1357,6 @@ const FolderAnalysis = ({ path, artifactType }) => {
             data-testid={`fields-${candidate.id}`}
           >
             {fieldsFor(candidate.kind).map(({ key: field, required }) => {
-              const blank = !String(draft[field] || "").trim();
               // The chip is derived from the CURRENT value, the value the
               // analysis proposed, and the standing the analysis recorded --
               // never from the standing alone. `field_evidence` describes the
@@ -1387,16 +1399,13 @@ const FolderAnalysis = ({ path, artifactType }) => {
                     // TextField's own margin rather than floating between
                     // the input and the chip.
                     sx={FIELD_INPUT_SX}
-                    helperText={
-                      [
-                        required && blank
-                          ? "Required before Save/Update and Publish."
-                          : "",
-                        helpFor(candidate.kind, field),
-                      ]
-                        .filter(Boolean)
-                        .join(" ") || " "
-                    }
+                    // What this FIELD is, and nothing else. "Required to
+                    // Save, Update, or Publish" used to be repeated here on
+                    // every blank required field -- the same sentence up to
+                    // a dozen times in one dialog, restating what the
+                    // asterisk on the label already says and what the legend
+                    // at the top says once in full.
+                    helperText={helpFor(candidate.kind, field) || " "}
                   />
                   {evidence ? (
                     // Below the helper text, never overlapping the input
@@ -1535,7 +1544,10 @@ const FolderAnalysis = ({ path, artifactType }) => {
           dividers
           sx={{ overflowY: "auto", overscrollBehavior: "contain" }}
         >
-          {/* Said ONCE, here, rather than repeated under every candidate. */}
+          {/* Said ONCE, here, rather than repeated under every field of every
+              candidate. The asterisk is drawn in the same colour as the ones
+              on the labels below, and the sentence beside it carries the
+              whole meaning, so the marker never depends on colour alone. */}
           <Typography
             variant="caption"
             color="text.secondary"
@@ -1543,8 +1555,20 @@ const FolderAnalysis = ({ path, artifactType }) => {
             sx={{ mb: 2 }}
             data-testid="required-note"
           >
-            * Required before Save/Update and Publish. Folder proposals may be
-            added incomplete.
+            <Box
+              component="span"
+              aria-hidden="true"
+              sx={{ color: REQUIRED_MARKER_COLOR, fontWeight: "bold" }}
+            >
+              *
+            </Box>{" "}
+            Required to Save, Update, or Publish.{" "}
+            {/* The one distinction that is NOT redundant with the line above:
+                an incomplete proposal is still allowed INTO the Curator. It
+                just cannot leave it. */}
+            <Box component="span">
+              Proposals can be added with these blank and completed later.
+            </Box>
           </Typography>
           {loading && (
             <Box sx={{ display: "flex", gap: 2, alignItems: "center" }}>
