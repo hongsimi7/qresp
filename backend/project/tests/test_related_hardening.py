@@ -341,9 +341,12 @@ class TestExternalPipelineCounts(CacheTestCase):
     def test_the_stored_pipeline_carries_counts_only(self):
         self.external()
         stored = RelatedResearchCache.objects.first().pipeline
+        # An exact set, so a new key has to be added here deliberately -- this
+        # is what stops provider payload drifting into the cache.
         self.assertEqual({"resolved", "provider_status", "raw_candidates",
                           "valid_candidates", "after_dedupe",
-                          "scored_candidates", "shown"}, set(stored))
+                          "scored_candidates", "shown",
+                          "source_kind"}, set(stored))
         for key, value in stored.items():
             self.assertIsInstance(value, (bool, int, str), key)
         # Nothing from the provider's payload.

@@ -1243,6 +1243,65 @@ describe("RelatedResearch", () => {
       );
     });
 
+    // The fallback list is not a set of recommendations, and must never be
+    // labelled as one: nobody recommended these papers, they were found by
+    // following citations because the recommender had nothing.
+    describe("when the results came from the citations fallback", () => {
+      const citing = (overrides = {}) =>
+        payload({
+          external: {
+            status: "ok",
+            provider: "Semantic Scholar",
+            source_kind: "citations",
+            count: 1,
+            results: [externalResult({ source_kind: "citations" })],
+            stale: false,
+            updated_at: null,
+            ...overrides,
+          },
+        });
+
+      it("labels each result by what it actually is", async () => {
+        renderSection(citing());
+        const external = await sectionFor(/recommended external papers/i);
+        expect(
+          within(external).getByText(/cites this paper/i)
+        ).toBeInTheDocument();
+        expect(
+          within(external).queryByText(/recommended by semantic scholar/i)
+        ).not.toBeInTheDocument();
+      });
+
+      it("says why the list is citations rather than recommendations", async () => {
+        renderSection(citing());
+        await sectionFor(/recommended external papers/i);
+        expect(
+          screen.getByText(/had no recommendations for this paper/i)
+        ).toBeInTheDocument();
+      });
+
+      it("keeps the Qresp ranking signals heading", async () => {
+        renderSection(citing());
+        const external = await sectionFor(/recommended external papers/i);
+        expect(
+          within(external).getByText(/qresp ranking signals/i)
+        ).toBeInTheDocument();
+      });
+
+      it("falls back to the recommendation label for an older backend", async () => {
+        // A backend that predates `source_kind` sends none. Its results ARE
+        // recommendations, so that is what they are called.
+        renderSection(payload());
+        const external = await sectionFor(/recommended external papers/i);
+        expect(
+          within(external).getByText(/recommended by semantic scholar/i)
+        ).toBeInTheDocument();
+        expect(
+          within(external).queryByText(/cites this paper/i)
+        ).not.toBeInTheDocument();
+      });
+    });
+
     it("still shows the Semantic Scholar badge on every external result", async () => {
       renderSection(payload());
       const external = await sectionFor(/recommended external papers/i);

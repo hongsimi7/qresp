@@ -122,11 +122,46 @@ const EXTERNAL_DISCLAIMER =
   "metadata similarity signals. They may be incomplete or inaccurate; " +
   "review each paper before relying on it.";
 
+// The same sentence for the fallback list, which is not a set of suggestions
+// at all: it is later work that cites this paper, found because the
+// recommender had nothing. The whole list shares one source, so this is
+// decided once from the section rather than per result.
+const EXTERNAL_CITATIONS_DISCLAIMER =
+  "Semantic Scholar had no recommendations for this paper, so these are " +
+  "later works that cite it, ordered using Qresp's publication metadata " +
+  "similarity signals. They may be incomplete or inaccurate; review each " +
+  "paper before relying on it.";
+
+const externalDisclaimerFor = (external) =>
+  (external || {}).source_kind === "citations"
+    ? EXTERNAL_CITATIONS_DISCLAIMER
+    : EXTERNAL_DISCLAIMER;
+
 // The heading over an external result's grounded evidence, when it has any.
 // Deliberately NOT "Why related": for an external candidate, evidence is
 // what MOVED it up the list, not the reason it is on the list at all -- a
 // candidate with none is still there, just further down.
 const EXTERNAL_REASONS_HEADING = "Qresp ranking signals";
+
+// Where an external candidate actually came from.
+//
+// The backend has two sources and they are not interchangeable: the
+// recommendations endpoint answers "this resembles your paper", the citations
+// endpoint answers "this cites your paper". The second is used only when the
+// first returns nothing, and calling its results "Recommended by Semantic
+// Scholar" would be a false statement about their provenance -- nobody
+// recommended them; they were found by following citations.
+//
+// An unknown or missing kind falls back to the recommendation label, which is
+// what every result carried before the fallback existed.
+const SOURCE_LABELS = {
+  recommendations: "Recommended by Semantic Scholar",
+  citations: "Cites this paper",
+};
+const DEFAULT_SOURCE_LABEL = SOURCE_LABELS.recommendations;
+
+const sourceLabelFor = (result) =>
+  SOURCE_LABELS[result.source_kind] || DEFAULT_SOURCE_LABEL;
 const INTERNAL_REASONS_HEADING = "Why related";
 
 // Standard "visually hidden but read by assistive tech" pattern: present in
@@ -258,7 +293,7 @@ const Result = ({ result, server }) => (
         <Chip
           size="small"
           variant="outlined"
-          label="Recommended by Semantic Scholar"
+          label={sourceLabelFor(result)}
           sx={{ maxWidth: "100%" }}
         />
       ) : null}
@@ -545,7 +580,7 @@ const RelatedResearch = ({ paperId, server }) => {
               color="secondary"
               sx={{ mb: 1, wordBreak: "break-word" }}
             >
-              {EXTERNAL_DISCLAIMER}
+              {externalDisclaimerFor(external)}
             </Typography>
             {external.stale ? (
               <Note color="error">

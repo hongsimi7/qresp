@@ -346,6 +346,16 @@ class RelatedResearchCache(Document):
     # live one did. Absent on entries written before this field existed, which
     # is why every reader treats it as optional.
     pipeline = DictField()
+    # WHICH provider endpoint produced `results`: 'recommendations' (the
+    # primary source) or 'citations' (the fallback, used only when
+    # recommendations answered with nothing).
+    #
+    # Stored as a field of its own rather than left inside `pipeline` so the
+    # two can never be confused for one another by a reader, a query, or a
+    # future refresh: an entry states the source it was built from, and one
+    # written before this field existed has none and is a miss anyway, because
+    # the algorithm version moved in the same change.
+    source_kind = StringField(max_length=32)
     provider = StringField(max_length=64)
     # 'ok' (provider answered), 'unresolved' (this paper could not be
     # identified confidently enough to ask), 'unavailable' (provider failed).

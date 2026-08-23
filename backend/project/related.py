@@ -110,6 +110,13 @@ SEMANTIC_SCHOLAR_TITLE_MATCH_URL = (
     SEMANTIC_SCHOLAR_ORIGIN + "/graph/v1/paper/search/match")
 SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL = (
     SEMANTIC_SCHOLAR_ORIGIN + "/recommendations/v1/papers/forpaper/")
+# The FALLBACK source, used only when recommendations answers with an empty
+# list. "Who cited this paper" is a different question from "what is like this
+# paper", and the answer is a different kind of thing -- later work building on
+# it, not a similarity match -- so it is labelled differently everywhere it
+# surfaces. See `SOURCE_CITATIONS`.
+SEMANTIC_SCHOLAR_CITATIONS_URL_TEMPLATE = (
+    SEMANTIC_SCHOLAR_ORIGIN + "/graph/v1/paper/%s/citations")
 PROVIDER_NAME = "Semantic Scholar"
 PROVIDER_KEY = "semantic_scholar"
 
@@ -125,6 +132,13 @@ PROVIDER_HEADERS = {"User-Agent": "Qresp/2.0 (research data curation)"}
 # `abstract` whatever is requested; `_normalize_candidate` allowlists what is
 # copied out, so it never reaches a profile, the cache, or the response.)
 RECOMMENDATION_FIELDS = "title,abstract,year,authors.name,externalIds,fieldsOfStudy"
+# The citations endpoint nests each candidate under `citingPaper`, so every
+# field has to be asked for with that prefix. The SET is identical to
+# RECOMMENDATION_FIELDS -- the scorer needs exactly the same inputs whichever
+# endpoint supplied the candidate, and asking for more would widen what is
+# cached for no gain.
+CITATION_FIELDS = ",".join(
+    "citingPaper." + field for field in RECOMMENDATION_FIELDS.split(","))
 # Resolution asks for the paper's identity and nothing else.
 #
 # It deliberately does NOT ask for `references.externalIds`. A live check
@@ -146,6 +160,26 @@ RESOLUTION_FIELDS = "paperId,title,externalIds"
 # way, so the cost of asking for 150 instead of 20 is a larger response body
 # and nothing else.
 EXTERNAL_CANDIDATE_LIMIT = 150
+
+# Candidates asked of the CITATIONS endpoint, which is consulted only when
+# recommendations answers with an empty list.
+#
+# The provider allows up to 1000 here. 500 is the ceiling this code uses, and
+# the reason is the timeout: every entry carries an abstract, and a
+# thousand-abstract body does not reliably arrive inside the 8s default
+# SEMANTIC_SCHOLAR_TIMEOUT_SECONDS -- a request that times out yields NOTHING,
+# which is strictly worse for the reader than one that returns 500 candidates
+# for a 25-slot list. It is already twenty times the display cap, so the
+# ranking pool is not what limits quality here.
+EXTERNAL_CITATION_LIMIT = 500
+
+# Which provider endpoint a result came from. This reaches the response and
+# the cache, because the two are not interchangeable to a reader: a
+# recommendation is "this resembles your paper", a citation is "this cites
+# your paper". Labelling the second as the first would be a false claim about
+# where it came from.
+SOURCE_RECOMMENDATIONS = "recommendations"
+SOURCE_CITATIONS = "citations"
 
 # The candidate pool is deliberately NOT overridden: the request carries no
 # `from` parameter, so the provider uses its default.
@@ -327,7 +361,16 @@ _DETAIL_REASONS = {
 #      in-process federated cache entries are invalidated only because the
 #      version they share with the external cache moved, not because
 #      anything about how they are computed did.
-ALGORITHM_VERSION = "5"
+#   6  a paper the recommendations endpoint has NOTHING for now falls back to
+#      the citations endpoint -- later work citing it -- re-ranked by the same
+#      score and labelled as a different source. An entry written under 5
+#      recorded that emptiness as final, with `provider_returned_no_candidates`
+#      and no results; serving it would keep showing an empty list for a paper
+#      this policy can now answer. The bump is also what keeps the two sources
+#      out of each other's cache: an entry carries the `source_kind` it was
+#      built from, and one written before that field existed cannot be
+#      mistaken for either.
+ALGORITHM_VERSION = "6"
 
 # ------------------------------------------------------------------- caching
 #
@@ -643,6 +686,48 @@ def fetch_external_candidates(paper_id, cfg, pool=None):
     return candidates, Outcome(FOUND, "ok"), len(raw)
 
 
+def fetch_external_citations(paper_id, cfg):
+    """Papers that CITE `paper_id`, as external candidates.
+
+    The fallback for a paper the recommendations endpoint has nothing for --
+    which happens, and is not a Qresp defect: a recent or narrow paper can be
+    absent from the recommender's neighbourhood while still having later work
+    built on it.
+
+    Same (candidates, outcome, raw_count) contract as
+    `fetch_external_candidates`, and the same three-way outcome split, so the
+    caller treats a failure here exactly as it treats one there.
+
+    The response nests each candidate under `citingPaper`; an entry whose
+    `citingPaper` is missing or is not an object is skipped rather than
+    guessed at. `provider_rank` is the provider's own order, kept as the
+    tie-break only -- the citations endpoint returns no score, and inventing
+    one from citation counts would be a ranking signal nobody asked for.
+    """
+    params = {"fields": CITATION_FIELDS, "limit": EXTERNAL_CITATION_LIMIT}
+    payload, outcome = _get(
+        SEMANTIC_SCHOLAR_CITATIONS_URL_TEMPLATE % quote(paper_id, safe=""),
+        cfg, params)
+    if outcome != FOUND:
+        return None, outcome, 0
+    raw = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(raw, list):
+        # A 200 without the documented key is not an answer this endpoint can
+        # read; treating it as "no citations" would cache a lie.
+        print("Related research citations returned an unexpected shape")
+        return None, Outcome(UNAVAILABLE, "unexpected_shape"), 0
+    raw = raw[:EXTERNAL_CITATION_LIMIT]
+    candidates = []
+    for position, item in enumerate(raw):
+        citing = item.get("citingPaper") if isinstance(item, dict) else None
+        if not isinstance(citing, dict):
+            continue
+        candidate = _normalize_candidate(citing, provider_rank=position)
+        if candidate:
+            candidates.append(candidate)
+    return candidates, Outcome(FOUND, "ok"), len(raw)
+
+
 def dedupe_candidates(candidates, current_doi, current_title):
     """Drop the paper itself, repeats, and anything unusable.
 
@@ -692,7 +777,8 @@ def _load_cache(paper_id):
 
 
 def _store_cache(paper_id, status, results, cfg, fingerprint, previous=None,
-                 reason=REASON_OK, pipeline=None):
+                 reason=REASON_OK, pipeline=None,
+                 source_kind=SOURCE_RECOMMENDATIONS):
     """Persist the external outcome. Only the RE-RANKED candidates' public
     bibliographic metadata (not gate-passing: see ALGORITHM_VERSION history),
     the reasons Qresp computed, and the metadata fingerprint are written --
@@ -729,6 +815,7 @@ def _store_cache(paper_id, status, results, cfg, fingerprint, previous=None,
             set__algorithm_version=ALGORITHM_VERSION,
             set__reason=reason,
             set__pipeline=pipeline or {},
+            set__source_kind=source_kind,
             set__fetched_at=now,
             set__last_success_at=last_success_at,
             set__expires_at=expires_at,
@@ -773,7 +860,9 @@ def _section_from_entry(entry):
                              stale=(status != STATUS_OK and bool(results)),
                              updated_at=entry.last_success_at,
                              reason=entry.reason or None,
-                             pipeline=entry.pipeline or None)
+                             pipeline=entry.pipeline or None,
+                             source_kind=(entry.source_kind
+                                          or SOURCE_RECOMMENDATIONS))
 
 
 # ------------------------------------------------------- recommendation core
@@ -785,7 +874,8 @@ def _display_authors(names, limit=8):
     return ", ".join(names)
 
 
-def _result(profile, assessment, source, server=None):
+def _result(profile, assessment, source, server=None,
+            source_kind=None):
     return {
         "id": profile.key if source == "internal" else None,
         "title": profile.title,
@@ -801,6 +891,10 @@ def _result(profile, assessment, source, server=None):
         # would resolve to nothing (or, worse, to a different record).
         # External results belong to no Qresp server and say so with None.
         "server": (server or "") if source == "internal" else None,
+        # WHICH provider endpoint proposed this. Only external results have
+        # one, and the UI labels them differently: "Recommended by Semantic
+        # Scholar" is a false claim about a paper that merely cites this one.
+        "source_kind": source_kind if source == "external" else None,
         "reasons": assessment.reasons(3),
     }
 
@@ -828,7 +922,8 @@ def internal_recommendations(current_record, corpus_records,
 
 def external_recommendations(current_record, candidates, stats,
                              citation_dois=frozenset(),
-                             limit=EXTERNAL_MAX_RESULTS):
+                             limit=EXTERNAL_MAX_RESULTS,
+                             source_kind=SOURCE_RECOMMENDATIONS):
     """Re-rank the provider's candidates by Qresp's deterministic score.
 
     UNLIKE `internal_recommendations`, this never applies Qresp's evidence
@@ -849,7 +944,7 @@ def external_recommendations(current_record, candidates, stats,
     if limit is None:
         limit = len(profiles)
     ranked = rerank_external(current, profiles, stats, citation_dois, limit)
-    return [_result(profile, assessment, "external")
+    return [_result(profile, assessment, "external", source_kind=source_kind)
             for profile, assessment in ranked]
 
 
@@ -862,7 +957,8 @@ def _record_dict(paper):
 
 
 def _external_section(status, results, stale=False, updated_at=None,
-                      reason=None, pipeline=None):
+                      reason=None, pipeline=None,
+                      source_kind=SOURCE_RECOMMENDATIONS):
     """One external section.
 
     `reason` and `pipeline` are the answer to "why is this empty?". The UI
@@ -883,6 +979,10 @@ def _external_section(status, results, stale=False, updated_at=None,
         "updated_at": updated_at.isoformat() if updated_at else None,
         "reason": reason or (REASON_OK if status == STATUS_OK
                              else REASON_DISABLED),
+        # WHICH endpoint the results came from. The UI labels a citation
+        # differently from a recommendation, because it IS different: one
+        # resembles the paper, the other cites it.
+        "source_kind": source_kind,
     }
     if pipeline is not None:
         section["pipeline"] = pipeline
@@ -890,7 +990,8 @@ def _external_section(status, results, stale=False, updated_at=None,
 
 
 def _pipeline(resolved=False, provider_status="", raw=0, valid=0,
-              after_dedupe=0, scored=0, shown=0):
+              after_dedupe=0, scored=0, shown=0,
+              source_kind=SOURCE_RECOMMENDATIONS):
     """Where the candidates went. Requirement B, one dict.
 
     Every "External Papers is empty" report has to be answerable from these
@@ -922,7 +1023,11 @@ def _pipeline(resolved=False, provider_status="", raw=0, valid=0,
     return {"resolved": bool(resolved), "provider_status": provider_status,
             "raw_candidates": raw, "valid_candidates": valid,
             "after_dedupe": after_dedupe, "scored_candidates": scored,
-            "shown": shown}
+            "shown": shown,
+            # WHICH endpoint the counts above describe. Without it a reader of
+            # the pipeline cannot tell a 0-recommendation paper whose
+            # citations filled the list from one the recommender answered.
+            "source_kind": source_kind}
 
 
 def _external_for(paper_id, current_record, stats, cfg):
@@ -983,6 +1088,29 @@ def _external_for(paper_id, current_record, stats, cfg):
         return failed(STATUS_UNRESOLVED, REASON_SOURCE_UNRESOLVED,
                       _pipeline(resolved=True, provider_status=NOT_FOUND))
 
+    source_kind = SOURCE_RECOMMENDATIONS
+    # The FALLBACK, and its trigger is deliberately narrow: recommendations
+    # ANSWERED, and answered with exactly nothing. A failure does not come
+    # here (it returned above), and neither does a non-empty answer, however
+    # weak -- the recommendations pool stays the primary source and is never
+    # topped up or blended.
+    #
+    # This is not a defect workaround. A recent or narrowly-scoped paper can
+    # be absent from the recommender's neighbourhood while still having later
+    # work that cites it, and that later work is a real, checkable answer to
+    # "what should I read next" -- just a different kind of answer, which is
+    # why it is labelled differently rather than folded in silently.
+    if raw_count == 0:
+        citing, citation_outcome, citation_raw = fetch_external_citations(
+            provider_paper_id, cfg)
+        # A failed fallback must not turn an ANSWER ("nobody recommends this")
+        # into a FAILURE. The recommendations answer stands, and the reader is
+        # told the accurate, narrower thing.
+        if citation_outcome == FOUND and citing:
+            candidates = citing
+            raw_count = citation_raw
+            source_kind = SOURCE_CITATIONS
+
     valid_count = len(candidates)
     candidates = dedupe_candidates(candidates, doi, title)
     after_dedupe = len(candidates)
@@ -998,11 +1126,12 @@ def _external_for(paper_id, current_record, stats, cfg):
     # The cut is the EXTERNAL cap, not the internal one. Nothing is added to
     # reach it: 25 is a ceiling on what was scored, never a target.
     scored = external_recommendations(current_record, candidates, stats,
-                                      limit=None)
+                                      limit=None, source_kind=source_kind)
     results = scored[:EXTERNAL_MAX_RESULTS]
     pipeline = _pipeline(resolved=True, provider_status=FOUND, raw=raw_count,
                          valid=valid_count, after_dedupe=after_dedupe,
-                         scored=len(scored), shown=len(results))
+                         scored=len(scored), shown=len(results),
+                         source_kind=source_kind)
     # An empty list here is an ANSWER, and the two ways of arriving at it are
     # different facts -- and, under this policy, the ONLY two: the provider
     # had nothing to propose, or it proposed candidates but none survived
@@ -1018,9 +1147,10 @@ def _external_for(paper_id, current_record, stats, cfg):
     else:
         reason = REASON_NO_VALID_CANDIDATES
     _store_cache(paper_id, STATUS_OK, results, cfg, fingerprint, entry,
-                 reason=reason, pipeline=pipeline)
+                 reason=reason, pipeline=pipeline, source_kind=source_kind)
     return _external_section(STATUS_OK, results, stale=False, updated_at=now,
-                             reason=reason, pipeline=pipeline)
+                             reason=reason, pipeline=pipeline,
+                             source_kind=source_kind)
 
 
 def _local_hostname():

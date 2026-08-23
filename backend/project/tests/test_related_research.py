@@ -210,7 +210,8 @@ class ProviderStub:
     """
 
     def __init__(self, resolution=None, recommendations=None,
-                 resolution_mode="ok", recommendation_mode="ok"):
+                 resolution_mode="ok", recommendation_mode="ok",
+                 citations=None, citation_mode="ok"):
         self.calls = []
         self.resolution = (resolution if resolution is not None
                            else {"paperId": "S2-SUBJECT",
@@ -222,13 +223,20 @@ class ProviderStub:
                                 else [RELATED_EXTERNAL, UNRELATED_EXTERNAL])
         self.resolution_mode = resolution_mode
         self.recommendation_mode = recommendation_mode
+        # The FALLBACK endpoint. Default empty, so a test that does not opt in
+        # sees the fallback fire and find nothing -- which is the behaviour
+        # every pre-existing test already asserts.
+        self.citations = citations if citations is not None else []
+        self.citation_mode = citation_mode
 
     def get(self, url, params=None, headers=None, timeout=None):
         self.calls.append({"url": url, "params": params or {},
                            "headers": headers or {}, "timeout": timeout})
         recommending = url.startswith(
             related.SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL)
+        citing = url.endswith("/citations")
         mode = (self.recommendation_mode if recommending
+                else self.citation_mode if citing
                 else self.resolution_mode)
         if mode == "not_found":
             return FakeResponse({"error": "Paper not found"}, 404)
@@ -236,6 +244,9 @@ class ProviderStub:
             return _failure_response(mode)
         if recommending:
             return FakeResponse({"recommendedPapers": self.recommendations})
+        if citing:
+            return FakeResponse(
+                {"data": [{"citingPaper": paper} for paper in self.citations]})
         if url.startswith(related.SEMANTIC_SCHOLAR_TITLE_MATCH_URL):
             return FakeResponse({"data": [self.resolution]})
         return FakeResponse(self.resolution)
@@ -247,6 +258,17 @@ class ProviderStub:
                     related.SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL):
                 return call
         return None
+
+    @property
+    def citation_call(self):
+        for call in self.calls:
+            if call["url"].endswith("/citations"):
+                return call
+        return None
+
+    @property
+    def citation_calls(self):
+        return [c for c in self.calls if c["url"].endswith("/citations")]
 
 
 class RelatedTestCase(unittest.TestCase):
@@ -463,6 +485,117 @@ class TestInternalRecommendations(RelatedTestCase):
 
 
 # ------------------------------------------------------------ external list
+
+class TestCitationFallback(RelatedTestCase):
+    """A paper the recommender has nothing for is not necessarily a paper with
+    nothing to show.
+
+    The recommendations endpoint answers with an empty list for real papers --
+    a recent one, or a narrow one, can sit outside its neighbourhood while
+    still having later work built on it. That later work is a different KIND
+    of answer, so it is fetched from a different endpoint, labelled as a
+    different source, and cached as one.
+    """
+
+    def test_the_fallback_does_not_fire_when_recommendations_answered(self):
+        # The primary source stays primary. Two candidates is a thin answer,
+        # but it is an ANSWER, and it is never topped up from elsewhere.
+        response, stub = self.fetch()
+        external = response.json()["external"]
+        self.assertEqual(related.SOURCE_RECOMMENDATIONS,
+                         external["source_kind"])
+        self.assertIsNone(stub.citation_call)
+
+    def test_an_empty_recommendation_falls_back_to_citations(self):
+        provider = ProviderStub(recommendations=[],
+                                citations=clones(30, prefix="cite"))
+        response, stub = self.fetch(provider=provider)
+        external = response.json()["external"]
+        self.assertEqual("ok", external["status"])
+        self.assertEqual(related.SOURCE_CITATIONS, external["source_kind"])
+        # Re-ranked and capped exactly as recommendations are.
+        self.assertEqual(related.EXTERNAL_MAX_RESULTS, external["count"])
+        pipeline = external["pipeline"]
+        self.assertEqual(30, pipeline["raw_candidates"])
+        self.assertEqual(related.SOURCE_CITATIONS, pipeline["source_kind"])
+        # No gate: everything deduplicated was scored.
+        self.assertEqual(pipeline["after_dedupe"],
+                         pipeline["scored_candidates"])
+        # Every RESULT says where it came from, so the UI cannot mislabel one.
+        for result in external["results"]:
+            self.assertEqual(related.SOURCE_CITATIONS, result["source_kind"])
+
+    def test_the_citation_request_asks_the_documented_endpoint(self):
+        provider = ProviderStub(recommendations=[], citations=clones(3))
+        _, stub = self.fetch(provider=provider)
+        call = stub.citation_call
+        self.assertIsNotNone(call)
+        self.assertTrue(call["url"].startswith(
+            related.SEMANTIC_SCHOLAR_ORIGIN + "/graph/v1/paper/"))
+        self.assertEqual(related.EXTERNAL_CITATION_LIMIT,
+                         call["params"]["limit"])
+        # Every field is asked for under the nesting the endpoint uses.
+        for field in related.RECOMMENDATION_FIELDS.split(","):
+            self.assertIn("citingPaper." + field, call["params"]["fields"])
+
+    def test_a_short_citation_list_is_short_not_padded(self):
+        provider = ProviderStub(recommendations=[],
+                                citations=clones(4, prefix="few"))
+        response, _ = self.fetch(provider=provider)
+        external = response.json()["external"]
+        self.assertEqual(4, external["count"])
+        self.assertEqual(related.SOURCE_CITATIONS, external["source_kind"])
+
+    def test_both_empty_keeps_the_provider_empty_answer(self):
+        provider = ProviderStub(recommendations=[], citations=[])
+        response, stub = self.fetch(provider=provider)
+        external = response.json()["external"]
+        self.assertEqual("ok", external["status"])
+        self.assertEqual(0, external["count"])
+        self.assertEqual(related.REASON_PROVIDER_EMPTY, external["reason"])
+        # It was ASKED -- the fallback fired and found nothing.
+        self.assertIsNotNone(stub.citation_call)
+
+    def test_a_failed_fallback_leaves_the_recommendation_answer_alone(self):
+        # "Nobody recommends this" is an ANSWER. A citations timeout must not
+        # promote it to a FAILURE the reader is told to retry.
+        for mode in ("timeout", "rate_limited", "server_error"):
+            provider = ProviderStub(recommendations=[], citation_mode=mode)
+            response, _ = self.fetch(provider=provider)
+            external = response.json()["external"]
+            self.assertEqual("ok", external["status"], mode)
+            self.assertEqual(related.REASON_PROVIDER_EMPTY,
+                             external["reason"], mode)
+            self.assertEqual(related.SOURCE_RECOMMENDATIONS,
+                             external["source_kind"], mode)
+            RelatedResearchCache.drop_collection()
+            related.reset_caches()
+
+    def test_a_second_request_is_served_from_cache_without_asking_again(self):
+        provider = ProviderStub(recommendations=[], citations=clones(30))
+        response, stub = self.fetch(provider=provider)
+        self.assertEqual(related.SOURCE_CITATIONS,
+                         response.json()["external"]["source_kind"])
+        first = len(stub.citation_calls)
+        self.assertEqual(1, first)
+
+        again, stub2 = self.fetch(provider=provider)
+        external = again.json()["external"]
+        # The cached entry remembers WHICH source produced it.
+        self.assertEqual(related.SOURCE_CITATIONS, external["source_kind"])
+        self.assertEqual(related.EXTERNAL_MAX_RESULTS, external["count"])
+        # ...and asking again cost no provider call at all.
+        self.assertEqual(first, len(stub.citation_calls))
+
+    def test_a_cached_citation_entry_records_its_source(self):
+        provider = ProviderStub(recommendations=[], citations=clones(6))
+        self.fetch(provider=provider)
+        entry = RelatedResearchCache.objects(
+            paper_id=self.subject_id).first()
+        self.assertIsNotNone(entry)
+        self.assertEqual(related.SOURCE_CITATIONS, entry.source_kind)
+        self.assertEqual(related.ALGORITHM_VERSION, entry.algorithm_version)
+
 
 class TestExternalProvider(RelatedTestCase):
     def test_the_request_asks_the_fixed_endpoint_for_150_candidates(self):
