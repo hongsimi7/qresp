@@ -8,7 +8,6 @@ import { styled } from "@mui/material/styles";
 import Tag from "../tag";
 
 import { TableSearchContext } from "../Table/TableSearch";
-import { hostedBy } from "../../Utils/recordSources";
 
 const StyledPaper = styled(Paper)({
   backgroundColor: "inherit",
@@ -24,23 +23,15 @@ const Summary = ({ rowdata }) => {
     _Search__tags,
     _Search__title,
     _Search__server,
-    _Search__sources,
   } = rowdata;
 
   const { setQuery } = useContext(TableSearchContext);
 
-  // Which Qresp node publishes this record. The Explorer lists several nodes
-  // at once, so "where did this come from" is a question the card has to
-  // answer; a paper published on two nodes carries both tags rather than
-  // appearing twice.
-  //
-  // Older callers pass no `_Search__sources` (a single-node list, or a saved
-  // row), so the record's own server is the fallback and the tag is simply
-  // absent when there is nothing true to say.
-  const sources =
-    Array.isArray(_Search__sources) && _Search__sources.length
-      ? _Search__sources
-      : [];
+  // `_Search__sources` is still built and still carried on the row -- it is
+  // what dedupe uses to merge a paper published on two nodes into one line,
+  // and `_Search__server` is what the detail link routes by. It is simply not
+  // RENDERED: which node served a copy is infrastructure, not a fact about
+  // the paper, and showing it as a badge invited it to be read as one.
 
   return (
     <Fragment>
@@ -64,20 +55,24 @@ const Summary = ({ rowdata }) => {
               </span>
             </Grid>
             <Grid size={12}>
-              {/* The author line, and the two chips that qualify it. Both sit
-                  on THIS row, right after the author text, and both wrap
-                  rather than overlapping the year column on a narrow
-                  viewport.
+              {/* The author line and, when a curator entered one, the
+                  record's Institution -- right after the author text, and
+                  wrapping rather than overlapping the year column.
 
-                  They answer two different questions and are deliberately
-                  kept as separate chips so neither can be read as the other:
+                  There is deliberately NO badge naming the Qresp node this
+                  copy was read from. A node is shared federation and search
+                  infrastructure; which one served a record says nothing about
+                  who did the work, and a public card reading "Hosted by
+                  University of Chicago" beside a paper written elsewhere
+                  invites exactly that misreading. The node is still tracked
+                  internally -- `_Search__server` still routes the detail
+                  link, dedupe still merges copies across nodes, and a node
+                  that fails is still reported -- it is just not presented as
+                  a property of the paper.
 
-                    Institution   optional, typed by a curator, about the
-                                  RECORD. Absent unless somebody entered it.
-                    Hosted by ... automatic and factual, about the SERVER
-                                  this copy was read from. Never guessed from
-                                  authors, DOIs, collections or hostname
-                                  patterns -- see Utils/recordSources. */}
+                  Institution is the only institutional claim shown here, it
+                  is typed by a curator, and it is never inferred from the
+                  server, the authors, a DOI or a collection. */}
               <Box
                 sx={{
                   display: "flex",
@@ -98,46 +93,16 @@ const Summary = ({ rowdata }) => {
                   {_Search__authors}
                 </Typography>
                 {_Search__institution ? (
+                  // The visible text carries the whole meaning, so a reader
+                  // never has to infer what a bare institution name beside a
+                  // title is claiming.
                   <Chip
                     size="small"
                     variant="outlined"
-                    label={_Search__institution}
-                    aria-label={`Institution: ${_Search__institution}`}
+                    label={`Institution: ${_Search__institution}`}
                     data-testid="record-institution"
                     sx={{ maxWidth: "100%" }}
                   />
-                ) : null}
-                {sources.length ? (
-                  // A LIST, so a screen reader hears "2 items" for a paper
-                  // published on two nodes. The visible text carries the whole
-                  // meaning ("Hosted by Duke University"); colour and position
-                  // are not asked to say anything on their own.
-                  <Box
-                    component="ul"
-                    aria-label="Qresp nodes hosting this record"
-                    sx={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 0.5,
-                      listStyle: "none",
-                      m: 0,
-                      p: 0,
-                      minWidth: 0,
-                    }}
-                  >
-                    {sources.map((source) => (
-                      <Box component="li" key={source.server} sx={{ minWidth: 0 }}>
-                        <Chip
-                          size="small"
-                          variant="outlined"
-                          color="primary"
-                          label={hostedBy(source.label)}
-                          data-testid="record-source"
-                          sx={{ maxWidth: "100%" }}
-                        />
-                      </Box>
-                    ))}
-                  </Box>
                 ) : null}
               </Box>
             </Grid>

@@ -3,17 +3,22 @@ import { normalizeDoi } from "./doi";
 // Where a record came from, for a list that mixes several Qresp nodes.
 //
 // The Explorer opens on EVERY federated node, so one list can hold a record
-// from UChicago beside a record from Duke — and the same paper can be
-// published on both. Two jobs follow from that: label each record with its
-// node, and show a paper once rather than twice.
+// from one node beside a record from another — and the same paper can be
+// published on both. The job here is to show that paper ONCE, and to keep
+// track of which node each copy came from so its detail link resolves.
 //
-// Neither job may be done by guessing. The label comes from
+// The node is NOT shown to a reader. A Qresp node is shared federation and
+// search infrastructure; which one served a copy says nothing about who wrote
+// the paper or where the work was done, and a badge naming the operating
+// institution invited exactly that misreading. `sourceLabel` survives for
+// internal use and for operator-facing diagnostics.
+//
+// What is derived here is never guessed. A label comes from
 // `qresp_server_name` in the federation list (`/api/federation/servers`,
 // which the backend builds from the same entries it enforces `?server=`
-// against); deriving "UChicago" from a hostname containing `uchicago.edu`
-// would be a regex that breaks the moment a node is renamed or two nodes
-// share a domain. A node with no name published falls back to its HOST, which
-// is still true, never to an invented label.
+// against); deriving a name from a hostname would be a regex that breaks the
+// moment a node is renamed or two nodes share a domain. A node with no name
+// published falls back to its HOST, which is still true.
 
 const trimOrigin = (value) =>
   typeof value === "string" ? value.replace(/\/+$/, "") : "";
@@ -33,8 +38,9 @@ export const buildServerNames = (servers) => {
 };
 
 /**
- * The label shown on a record card. Falls back to the node's HOST — a fact —
- * and finally to the raw string, so a tag is never blank and never invented.
+ * A node's short name, for internal bookkeeping and operator diagnostics --
+ * NOT for display on a public record card. Falls back to the node's HOST — a
+ * fact — and finally to the raw string, so it is never blank or invented.
  */
 export const sourceLabel = (server, names) => {
   const origin = trimOrigin(server);
@@ -47,29 +53,6 @@ export const sourceLabel = (server, names) => {
     return origin;
   }
 };
-
-/**
- * What the badge on a record card SAYS: "Hosted by University of Chicago".
- *
- * The prefix lives here, in one place, rather than in each component that
- * renders a badge — the wording is a product decision, not a per-card one,
- * and two components spelling it differently is exactly the drift this
- * module exists to prevent.
- *
- * It answers WHERE THE RECORD IS SERVED FROM, and nothing else. It is not a
- * claim about the paper's authors, their institutions, or who funded the
- * work — a UChicago node can host a paper written entirely at another
- * university. The record's own `institution` field is the separate, optional,
- * curator-entered answer to that different question, and the two are rendered
- * as separate chips so neither can be read as the other.
- */
-export const hostedBy = (label) => {
-  const name = String(label || "").trim();
-  return name ? `Hosted by ${name}` : "";
-};
-
-/** `hostedBy` for a caller that holds the registry rather than a resolved name. */
-export const hostedByLabel = (server, names) => hostedBy(sourceLabel(server, names));
 
 /**
  * The identity two nodes' copies of one paper share.
@@ -90,8 +73,8 @@ export const recordIdentity = (paper) => {
  *
  * Each row's paper carries `_Search__sources`: every node that publishes it,
  * in the order the nodes were searched, each with its origin and its label.
- * A paper on both nodes therefore shows BOTH tags rather than appearing
- * twice.
+ * That is what makes a paper published on two nodes ONE row instead of two;
+ * it is bookkeeping, and none of it is rendered.
  *
  * The first node to publish a record wins the fields that are rendered (title,
  * authors, tags) and the link target, so a duplicate cannot silently change
@@ -119,8 +102,8 @@ export const mergeRecordsByServer = (papersByServer, names, serverOrder) => {
       const identity = recordIdentity(paper);
       const seen = identity ? byIdentity.get(identity) : undefined;
       if (seen) {
-        // Same paper, another node. One row, two tags — and no duplicate tag
-        // if a node somehow lists the record twice.
+        // Same paper, another node. One row, and no duplicate entry if a
+        // node somehow lists the record twice.
         if (!seen.paper._Search__sources.some((s) => s.server === server)) {
           seen.paper._Search__sources.push(source);
         }

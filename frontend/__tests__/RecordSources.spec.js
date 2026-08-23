@@ -4,8 +4,6 @@ import Summary from "../components/Paper/Summary";
 import { TableSearchContext } from "../components/Table/TableSearch";
 import {
   buildServerNames,
-  hostedBy,
-  hostedByLabel,
   mergeRecordsByServer,
   recordIdentity,
   sourceLabel,
@@ -162,25 +160,9 @@ describe("one list across two repositories", () => {
       expect(sourceLabel("", NAMES)).toBe("");
     });
 
-    // The "Hosted by" wording lives in ONE place, so two components cannot
-    // spell the same product decision differently.
-    it("builds the hosting badge text from the registry name", () => {
-      expect(hostedByLabel(UCHICAGO, NAMES)).toBe("Hosted by UChicago");
-      expect(hostedBy("Duke University")).toBe("Hosted by Duke University");
-    });
-
-    it("says nothing rather than 'Hosted by' with no node", () => {
-      expect(hostedBy("")).toBe("");
-      expect(hostedByLabel("", NAMES)).toBe("");
-    });
-
-    it("derives the badge from the server, never from the record's fields", () => {
-      // A record whose authors, DOI and institution all point elsewhere is
-      // still labelled by the node it was READ FROM. The badge is
-      // provenance, not a claim about the paper.
-      expect(
-        hostedByLabel(DUKE, NAMES)
-      ).toBe("Hosted by Duke");
+    // The label is INTERNAL bookkeeping now -- it identifies the node a copy
+    // was read from so dedupe and the detail link work. Nothing renders it.
+    it("still tracks which node a copy came from, for dedupe and routing", () => {
       const row = mergeRecordsByServer(
         {
           [DUKE]: [
@@ -195,14 +177,16 @@ describe("one list across two repositories", () => {
         [DUKE]
       )[0];
       expect(row.paper._Search__sources[0].label).toBe("Duke");
+      expect(row.paper._Search__server).toBe(DUKE);
     });
   });
 });
 
-// Two chips, two different questions. Conflating them would put a curator's
-// optional, hand-typed claim and an automatic fact about the serving node
-// into one badge that means neither.
-describe("record Institution versus hosting node", () => {
+// A Qresp node is shared federation and search infrastructure. Which node
+// served a copy says nothing about who wrote the paper, so the public card
+// makes exactly one institutional claim -- the curator's own -- and never
+// names the node.
+describe("what a record card says about institutions", () => {
   const inTable = (children) => (
     <TableSearchContext.Provider value={{ query: "", setQuery: () => {} }}>
       {children}
@@ -218,151 +202,52 @@ describe("record Institution versus hosting node", () => {
       )
     );
 
-  it("shows both, as separate chips, when they disagree", () => {
+  it("never badges the node a record was read from", () => {
+    cardFor({}, [
+      { server: UCHICAGO, label: "UChicago" },
+      { server: DUKE, label: "Duke" },
+    ]);
+    expect(screen.queryByTestId("record-source")).not.toBeInTheDocument();
+    expect(screen.queryByText(/hosted by/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/UChicago/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Duke/)).not.toBeInTheDocument();
+  });
+
+  it("shows the curator's Institution, said in full, beside the authors", () => {
     cardFor({ _Search__institution: "University of Chicago" }, [
-      { server: DUKE, label: "Duke University" },
+      { server: DUKE, label: "Duke" },
     ]);
-    const institution = screen.getByTestId("record-institution");
-    const hosted = screen.getByTestId("record-source");
-    expect(institution).toHaveTextContent("University of Chicago");
-    expect(institution).not.toHaveTextContent("Hosted by");
-    expect(hosted).toHaveTextContent("Hosted by Duke University");
-    expect(institution).not.toBe(hosted);
+    const chip = screen.getByTestId("record-institution");
+    // The label carries its own meaning, so a bare name can never be read as
+    // something else -- and it is the curator's exact text, never abbreviated.
+    expect(chip).toHaveTextContent("Institution: University of Chicago");
+    // On the author row, not a line of its own below the journal.
+    const authors = screen.getByText("Robin Sharedname");
+    expect(authors.parentElement).toContainElement(chip);
   });
 
-  it("shows the hosting badge even when no institution was entered", () => {
-    cardFor({}, [{ server: DUKE, label: "Duke University" }]);
+  it("shows no institution badge at all when none was entered", () => {
+    cardFor({}, [{ server: DUKE, label: "Duke" }]);
     expect(screen.queryByTestId("record-institution")).not.toBeInTheDocument();
-    expect(screen.getByTestId("record-source")).toHaveTextContent(
-      "Hosted by Duke University"
-    );
+    expect(screen.queryByText(/institution/i)).not.toBeInTheDocument();
   });
 
-  it("shows the institution chip even for a card with no source list", () => {
-    // A saved row or a single-node list carries no `_Search__sources`; the
-    // record's own institution is unaffected by that.
-    cardFor({ _Search__institution: "Duke University" }, undefined);
+  it("never derives Institution from the node that served the record", () => {
+    // The card is rendered from a Duke-hosted copy and says "University of
+    // Chicago", because that is what a curator typed. Nothing fills it in.
+    cardFor({ _Search__institution: "University of Chicago" }, [
+      { server: DUKE, label: "Duke" },
+    ]);
     expect(screen.getByTestId("record-institution")).toHaveTextContent(
-      "Duke University"
-    );
-    expect(screen.queryByTestId("record-source")).not.toBeInTheDocument();
-  });
-});
-
-describe("the source tag on a record card", () => {
-  // Summary reads the table's search context to make a keyword tag
-  // clickable. The provider is supplied here so the card can be rendered on
-  // its own, which is what these assertions are about.
-  const inTable = (children) => (
-    <TableSearchContext.Provider value={{ query: "", setQuery: () => {} }}>
-      {children}
-    </TableSearchContext.Provider>
-  );
-
-  const cardFor = (sources) =>
-    render(
-      inTable(
-        <Summary rowdata={{ ...record("a"), _Search__sources: sources }} />
-      )
-    );
-
-  it("says where the record is hosted, in text rather than by colour", () => {
-    cardFor([{ server: UCHICAGO, label: "University of Chicago" }]);
-    const tag = screen.getByTestId("record-source");
-    // The whole meaning is in the visible text: a bare "University of
-    // Chicago" beside a title does not say what the relationship is.
-    expect(tag).toHaveTextContent("Hosted by University of Chicago");
-  });
-
-  it("renders both tags for a paper published on both nodes", () => {
-    cardFor([
-      { server: UCHICAGO, label: "University of Chicago" },
-      { server: DUKE, label: "Duke University" },
-    ]);
-    const list = screen.getByRole("list", {
-      name: /qresp nodes hosting this record/i,
-    });
-    const tags = within(list).getAllByTestId("record-source");
-    expect(tags).toHaveLength(2);
-    expect(tags[0]).toHaveTextContent("Hosted by University of Chicago");
-    expect(tags[1]).toHaveTextContent("Hosted by Duke University");
-  });
-
-  it("puts the hosting badge on the author row, beside the authors", () => {
-    cardFor([{ server: DUKE, label: "Duke University" }]);
-    const authorText = screen.getByText("Robin Sharedname");
-    const list = screen.getByRole("list", {
-      name: /qresp nodes hosting this record/i,
-    });
-    expect(list.parentElement).toBe(authorText.closest("div"));
-  });
-
-  it("falls back to the node's host rather than inventing a name", () => {
-    // No display name in the registry: the badge still says something TRUE.
-    cardFor([
-      { server: "https://qresp.example.org", label: "qresp.example.org" },
-    ]);
-    expect(screen.getByTestId("record-source")).toHaveTextContent(
-      "Hosted by qresp.example.org"
+      "Institution: University of Chicago"
     );
   });
 
-  it("renders no tag when there is nothing true to say", () => {
-    render(inTable(<Summary rowdata={record("a")} />));
-    expect(screen.queryByTestId("record-source")).not.toBeInTheDocument();
-  });
-});
-
-// Institution: an optional, record-level fact a curator typed in by hand --
-// see project.models.Paper.institution. Distinct from the source-repository
-// tags above (which answer where the record is STORED, not what institution
-// it is ABOUT), so it sits on the author row instead.
-describe("the institution chip on a record card", () => {
-  const inTable = (children) => (
-    <TableSearchContext.Provider value={{ query: "", setQuery: () => {} }}>
-      {children}
-    </TableSearchContext.Provider>
-  );
-
-  it("shows the curator's exact institution text next to the authors", () => {
-    render(
-      inTable(
-        <Summary
-          rowdata={record("a", {
-            _Search__institution: "University of Chicago",
-          })}
-        />
-      )
-    );
-    const chip = screen.getByTestId("record-institution");
-    // Never abbreviated -- the curator's own wording, verbatim.
-    expect(chip).toHaveTextContent("University of Chicago");
-    expect(chip).not.toHaveTextContent("UChicago");
-    expect(
-      screen.getByLabelText("Institution: University of Chicago")
-    ).toBeInTheDocument();
-  });
-
-  it("renders no chip for an old record with no institution on file", () => {
-    render(inTable(<Summary rowdata={record("a")} />));
-    expect(
-      screen.queryByTestId("record-institution")
-    ).not.toBeInTheDocument();
-  });
-
-  it("puts the institution chip on the author row, not the journal line", () => {
-    render(
-      inTable(
-        <Summary
-          rowdata={record("a", {
-            _Search__institution: "Duke University",
-          })}
-        />
-      )
-    );
-    const authorText = screen.getByText("Robin Sharedname");
-    const chip = screen.getByTestId("record-institution");
-    // Same flex row: the chip's own parent is the author text's parent.
-    expect(chip.parentElement).toBe(authorText.closest("div"));
+  it("still routes the detail link by the node that holds the record", () => {
+    // The node is not shown, but it is still USED: a federated record's id
+    // resolves only on its own server.
+    cardFor({}, [{ server: DUKE, label: "Duke" }]);
+    const link = screen.getByRole("link", { name: /Record a/i });
+    expect(link.getAttribute("href")).toContain("/paperdetails/a");
   });
 });

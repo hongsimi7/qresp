@@ -63,8 +63,7 @@ const ReferenceInfo = ({ referenceData }) => {
             <Chip
               size="small"
               variant="outlined"
-              label={institution}
-              aria-label={`Institution: ${institution}`}
+              label={`Institution: ${institution}`}
               data-testid="record-institution"
             />
           ) : null}

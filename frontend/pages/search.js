@@ -22,7 +22,7 @@ import axios from "axios";
 import AlertContext from "../Context/Alert/alertContext";
 import ServerContext from "../Context/Servers/serverContext";
 import { resolveServerSideApiBase } from "../Utils/serverSideApi";
-import { mergeRecordsByServer, sourceLabel } from "../Utils/recordSources";
+import { mergeRecordsByServer } from "../Utils/recordSources";
 
 // The four endpoints a Qresp node is asked for are NOT equal, and treating
 // them as one list is what let a missing authors list be reported as missing
@@ -57,13 +57,22 @@ const search = ({
     unsetAlert();
   };
 
-  // Which nodes, said the way the rest of the page says them. A notice that
-  // names "https://qresp.hybrid3.duke.edu" while every record beside it is
-  // badged "Hosted by Duke University" is asking the reader to work out that
-  // those are the same node. `sourceLabel` falls back to the host, so an
-  // unnamed node is still identified by a fact rather than by nothing.
-  const nodeNames = (servers) =>
-    (servers || []).map((server) => sourceLabel(server, servernames)).join(", ");
+  // HOW MANY sources are missing, never WHICH institution runs them.
+  //
+  // A public notice reading "Duke University could not be reached" puts an
+  // institution's name next to a failure it has nothing to do with -- a Qresp
+  // node is shared search infrastructure, and a reader has no use for its
+  // operator's name. The count is the part they can act on: it says whether
+  // the results in front of them are complete.
+  //
+  // The origins themselves are unchanged in `error.failed`, so an operator
+  // reading the response still knows exactly which node failed.
+  const sourceCount = (servers) => (servers || []).length;
+  const sourcesUnavailable = (servers) => {
+    const count = sourceCount(servers);
+    return count === 1 ? "one source is unavailable"
+                       : `${count} sources are unavailable`;
+  };
 
   const [data, setData] = useState(initialdata);
 
@@ -226,8 +235,9 @@ const search = ({
                 // A node URL is long and a phone is narrow.
                 sx={{ overflowWrap: "anywhere" }}
               >
-                Some Qresp nodes could not be reached, so their records are
-                missing from these results: {nodeNames(failed)}.
+                {`Some records are missing from these results — ${sourcesUnavailable(
+                  failed
+                )}.`}
               </Alert>
             </Box>
           ) : null}
@@ -238,14 +248,17 @@ const search = ({
           {!unavailable && filterFailures.length > 0 ? (
             <Box sx={{ mb: 2 }} data-testid="search-filter-failure">
               <Alert severity="info">
-                Records were loaded, but some search filters are unavailable
-                from:{" "}
-                {filterFailures
-                  .map(([server, endpoints]) =>
-                    `${server} (${(endpoints || []).join(", ")})`
+                {/* WHICH filters are short, not which institution's node was
+                    short of them. The endpoint names are the actionable part
+                    -- they say which dropdown to distrust -- so they stay;
+                    the node's name is what goes. */}
+                {`Records were loaded, but some search filters have fewer options than usual (${Array.from(
+                  new Set(
+                    filterFailures.flatMap(([, endpoints]) => endpoints || [])
                   )
-                  .join("; ")}
-                .
+                ).join(", ")}) — ${sourcesUnavailable(
+                  filterFailures.map(([server]) => server)
+                )}.`}
               </Alert>
             </Box>
           ) : null}
@@ -269,13 +282,15 @@ const search = ({
               >
                 {runtime.total
                   ? runtime.keptPrevious
-                    ? "The search could not be refreshed. The previous " +
-                      "results are still shown. These Qresp nodes could not " +
-                      "be searched: "
-                    : "These Qresp nodes could not be searched: "
-                  : "Some Qresp nodes could not be searched, so their " +
-                    "matching records are missing from these results: "}
-                {nodeNames(runtime.failed)}
+                    ? `The search could not be refreshed and the previous results are still shown — ${sourcesUnavailable(
+                        runtime.failed
+                      )}.`
+                    : `The search could not be run — ${sourcesUnavailable(
+                        runtime.failed
+                      )}.`
+                  : `Some matching records are missing from these results — ${sourcesUnavailable(
+                      runtime.failed
+                    )}.`}
               </Alert>
             </Box>
           ) : null}
@@ -291,8 +306,8 @@ const search = ({
                 }
               >
                 {failed.length
-                  ? `These Qresp nodes could not be reached: ${nodeNames(failed)}.`
-                  : "No Qresp node could be reached."}{" "}
+                  ? `No records could be loaded — ${sourcesUnavailable(failed)}.`
+                  : "No records could be loaded — no source could be reached."}{" "}
                 No records could be loaded — this is a connection problem, not
                 an empty node.
               </Alert>

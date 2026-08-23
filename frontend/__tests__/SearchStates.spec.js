@@ -48,11 +48,10 @@ const PAPER = (id, title) => ({
 
 const ALPHA = "https://alpha.example.org";
 const BETA = "https://beta.example.org";
-// How a node is NAMED in a notice. The registry publishes no display name
-// for these, so `sourceLabel` falls back to the host -- still a fact, and
-// the same way every record badge on the page names its node.
-const ALPHA_NAME = "alpha.example.org";
-const BETA_NAME = "beta.example.org";
+// Notices count sources, they do not name them: a Qresp node is shared
+// infrastructure, and putting its operator's name beside a failure invites a
+// reader to blame an institution for an outage it has nothing to do with.
+const ONE_UNAVAILABLE = /one source is unavailable/i;
 
 const dataWith = (papersByServer) => ({
   papers: papersByServer,
@@ -122,8 +121,9 @@ describe("search page states", () => {
     });
 
     const panel = screen.getByTestId("search-unavailable");
-    expect(panel).toHaveTextContent(/could not be reached/i);
-    expect(panel).toHaveTextContent(ALPHA_NAME);
+    expect(panel).toHaveTextContent(/no records could be loaded/i);
+    expect(panel).toHaveTextContent(ONE_UNAVAILABLE);
+    expect(panel).not.toHaveTextContent(ALPHA);
     // ...and it does NOT claim the node has no records.
     expect(screen.queryByTestId("record-count")).toBeNull();
     expect(screen.queryByText(/0 +Records Available/i)).toBeNull();
@@ -145,7 +145,8 @@ describe("search page states", () => {
     );
     // ...and the failure is a warning beside them, not instead of them.
     const warning = screen.getByTestId("search-partial-failure");
-    expect(warning).toHaveTextContent(BETA_NAME);
+    expect(warning).toHaveTextContent(ONE_UNAVAILABLE);
+    expect(warning).not.toHaveTextContent(BETA);
     expect(screen.queryByTestId("search-unavailable")).toBeNull();
     expect(setAlert).not.toHaveBeenCalled();
   });
@@ -166,18 +167,30 @@ describe("search page states", () => {
     expect(screen.getByText("From alpha")).toBeInTheDocument();
   });
 
-  it("names a failed node the way the record badges name it", () => {
-    // A notice saying "https://beta.example.org" beside rows badged
-    // "Hosted by beta.example.org" makes the reader work out that those are
-    // the same node.
+  it("names no institution, however the node is registered", () => {
+    // The registry knows this node as "Duke University". A public outage
+    // notice must not say so: the institution did not cause the outage and
+    // the reader cannot act on the name.
     renderSearch({
       initialdata: dataWith({ [ALPHA]: [PAPER("a", "From alpha")] }),
       error: { is: true, msg: "", failed: [BETA], total: false },
       servernames: { [BETA]: "Duke University" },
     });
     const warning = screen.getByTestId("search-partial-failure");
-    expect(warning).toHaveTextContent("Duke University");
-    expect(warning).not.toHaveTextContent("https://beta.example.org");
+    expect(warning).toHaveTextContent(ONE_UNAVAILABLE);
+    expect(warning).not.toHaveTextContent(/duke/i);
+    expect(warning).not.toHaveTextContent(BETA);
+  });
+
+  it("counts the sources when more than one is down", () => {
+    renderSearch({
+      initialdata: dataWith({ [ALPHA]: [PAPER("a", "From alpha")] }),
+      error: { is: true, msg: "", failed: [BETA, "https://gamma.example.org"],
+               total: false },
+    });
+    expect(screen.getByTestId("search-partial-failure")).toHaveTextContent(
+      /2 sources are unavailable/i
+    );
   });
 
   it("shows a loading state instead of a record count during navigation", () => {
@@ -258,12 +271,13 @@ describe("search page: record-source vs filter failures", () => {
     expect(screen.getByTestId("record-count")).toHaveTextContent(
       "1 Records Available"
     );
-    // ...so the notice names the filters, and the failed endpoints.
+    // ...so the notice names the FILTERS that are short -- which is the part
+    // a reader can act on -- and not the node, which is not.
     const notice = screen.getByTestId("search-filter-failure");
-    expect(notice).toHaveTextContent(/search filters are unavailable/i);
-    expect(notice).toHaveTextContent(ALPHA);
+    expect(notice).toHaveTextContent(/search filters have fewer options/i);
     expect(notice).toHaveTextContent(/authors/);
     expect(notice).toHaveTextContent(/collections/);
+    expect(notice).not.toHaveTextContent(ALPHA);
     // The wrong sentence must not appear anywhere.
     expect(screen.queryByText(/records are missing/i)).toBeNull();
     expect(screen.queryByTestId("search-partial-failure")).toBeNull();
@@ -275,17 +289,17 @@ describe("search page: record-source vs filter failures", () => {
     withError({ failed: [BETA] });
     const notice = screen.getByTestId("search-partial-failure");
     expect(notice).toHaveTextContent(/records are missing/i);
-    expect(notice).toHaveTextContent(BETA_NAME);
+    expect(notice).toHaveTextContent(ONE_UNAVAILABLE);
     expect(screen.queryByTestId("search-filter-failure")).toBeNull();
   });
 
   it("shows both notices when the two failures happen together", () => {
     withError({ failed: [BETA], filters: { [ALPHA]: ["authors"] } });
     expect(screen.getByTestId("search-partial-failure")).toHaveTextContent(
-      BETA_NAME
+      ONE_UNAVAILABLE
     );
     expect(screen.getByTestId("search-filter-failure")).toHaveTextContent(
-      ALPHA
+      /authors/
     );
     expect(screen.getByText("From alpha")).toBeInTheDocument();
     expect(screen.queryByTestId("search-unavailable")).toBeNull();

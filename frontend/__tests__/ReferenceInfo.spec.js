@@ -30,11 +30,11 @@ describe("the institution chip on the paper-details byline", () => {
       />
     );
     const chip = screen.getByTestId("record-institution");
-    expect(chip).toHaveTextContent("University of Chicago");
+    // The label says what the value IS, visibly -- not only to a screen
+    // reader -- so a bare institution name beside a byline cannot be read as
+    // something else, and it is the curator's exact text, never abbreviated.
+    expect(chip).toHaveTextContent("Institution: University of Chicago");
     expect(chip).not.toHaveTextContent("UChicago");
-    expect(
-      screen.getByLabelText("Institution: University of Chicago")
-    ).toBeInTheDocument();
   });
 
   it("renders no chip for an old record with no institution on file", () => {
