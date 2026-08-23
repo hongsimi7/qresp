@@ -614,14 +614,20 @@ def render_tsv(rows):
 # times the work for the part of the list fewest people reach.
 DEFAULT_DEEP_SAMPLE = 60
 
-# ...and how many REJECTED candidates to mix in.
+# ...and how many candidates NOT SHOWN to a reader to mix in -- beyond the
+# 25-result display cap, whatever their own gate verdict happened to be.
 #
-# Without these the sheet cannot answer the question it most needs to. Every
-# visible candidate passed the gate, so a review file containing only visible
-# candidates can produce false POSITIVES and never a single false negative --
-# not because there are none, but because none was ever put in front of a
-# person. A zero arrived at that way is indistinguishable in the JSON from a
-# zero that was measured, which is the worse of the two failures.
+# Without these the sheet cannot answer the question it most needs to. A
+# review file containing only visible candidates can produce false POSITIVES
+# and never a single false negative -- not because there are none, but
+# because none was ever put in front of a person. A zero arrived at that way
+# is indistinguishable in the JSON from a zero that was measured, which is
+# the worse of the two failures. (The name is kept from when this population
+# was exactly "gate-rejected"; under the current re-ranking policy it is
+# "not visible", a slightly broader set that also catches the rarer case of a
+# candidate the gate WOULD have accepted but that still scored outside the
+# cap. Both are worth a human's eye, so both are sampled without asking
+# which one they are.)
 DEFAULT_REJECTED_SAMPLE = 60
 
 
@@ -671,13 +677,14 @@ def _stratify_by_page(pairs, limit):
 
 
 def _stratify_rejected(pairs, limit):
-    """A deterministic spread of REJECTED (record, candidate) pairs.
+    """A deterministic spread of (record, candidate) pairs NOT shown to a
+    reader -- beyond the display cap, regardless of their own gate verdict.
 
     Stratified by score band -- the near-misses are where a false negative is
     most likely, and a sample drawn without bands would be almost all bottom
     scores -- and, within a band, preferring a record not in the sample yet.
-    Bands are tertiles of the rejected scores in this pool, so they adapt to
-    the corpus instead of being hardcoded. No randomness anywhere.
+    Bands are tertiles of the scores in this pool, so they adapt to the
+    corpus instead of being hardcoded. No randomness anywhere.
     """
     scores = [float(candidate.get("gate_score") or 0.0)
               for _record, candidate in pairs]
@@ -751,12 +758,22 @@ def external_review_rows(record_rows, source,
 
       * every visible page-1 result;
       * a deterministic stratified sample of visible pages 2-5;
-      * a deterministic stratified sample of candidates the gate REJECTED.
+      * a deterministic stratified sample of candidates NOT shown to a
+        reader -- outside the 25-result display cap.
 
-    The third group is what makes a false negative findable at all. Every
-    visible candidate passed the gate, so a sheet built only from visible ones
-    can surface false positives and structurally never a false negative --
-    and the resulting zero looks exactly like a measured zero.
+    The third group is what makes a false negative findable at all. A sheet
+    built only from visible candidates can surface false positives and
+    structurally never a false negative -- and the resulting zero looks
+    exactly like a measured zero. Under the CURRENT policy "not shown" is a
+    broader population than "gate-rejected": nothing between de-duplication
+    and the display cap is removed for failing the evidence gate, so a
+    candidate can be visible with a REJECTED verdict (ranked in by score
+    alone), and, less commonly, a candidate can be hidden with an ACCEPTED
+    verdict (it passed the gate but still scored outside the top 25). Both
+    belong in this sample -- the question is "did the reader see it", not
+    "did the gate like it" -- so the selection below is keyed on visibility
+    alone; `gate_decision` still rides along on every row for later analysis
+    but never decides who is sampled.
 
     Only the two papers' own bibliography goes in the sheet: the gate's score,
     its verdict, its reasons, the display rank and the page number are all
@@ -776,7 +793,11 @@ def external_review_rows(record_rows, source,
         for candidate in ((record.get("external") or {}).get(source) or []):
             if candidate.get("visible"):
                 visible.append((record, candidate))
-            elif candidate.get("gate_decision") == "rejected":
+            else:
+                # NOT shown, for whatever reason -- see the docstring above.
+                # `gate_decision` is not consulted here on purpose: under the
+                # current policy it does not decide visibility, so it must
+                # not decide sampling either.
                 rejected.append((record, candidate))
     visible.sort(key=lambda pair: (pair[0].get("record_id") or "",
                                    pair[1].get("display_rank") or 0))
@@ -1119,35 +1140,49 @@ def external_production_summary(record_rows, source,
 
     Reported apart from the diagnostic pools because only this one describes
     the product. Everything here is a COUNT, and none of it is a quality
-    claim: how many candidates arrived and how many were displayed says
-    nothing about whether the displayed ones are related. That question needs
-    ratings, and `external_display_metrics` is where it is answered.
+    claim: how many candidates arrived and how many were shown says nothing
+    about whether the shown ones are related. That question needs ratings,
+    and `external_display_metrics` is where it is answered.
+
+    `scored_candidates` is always equal to `after_dedupe` here -- by
+    construction, since nothing between de-duplication and the display cap is
+    removed for failing the evidence gate. That equality is not simplified
+    away: it is the funnel's own proof that this pool is re-ranked, not
+    gated. (`gate_would_pass` reports, separately and only as a diagnostic,
+    how many of the SHOWN candidates would also have passed the old
+    gate-as-filter rule -- i.e. how much the policy change actually altered
+    what a reader sees versus what a stricter rule would have shown.)
     """
     records = len(record_rows or [])
-    resolved = with_candidates = with_displayed = 0
-    raw = after_dedupe = after_gate = displayed = 0
+    resolved = with_candidates = with_shown = 0
+    raw = valid = after_dedupe = scored = shown_total = 0
+    shown_and_would_pass_gate = shown_total_for_gate_check = 0
     outcomes = {}
-    display_pages = {}
+    shown_pages = {}
     for record in record_rows or []:
         pipeline = (record.get("external_pipeline") or {}).get(source) or {}
         raw += pipeline.get("raw_candidates", 0)
+        valid += pipeline.get("valid_candidates", 0)
         after_dedupe += pipeline.get("after_dedupe", 0)
-        after_gate += pipeline.get("after_gate", 0)
-        shown = pipeline.get("displayed", 0)
-        displayed += shown
+        scored += pipeline.get("scored_candidates", 0)
+        shown = pipeline.get("shown", 0)
+        shown_total += shown
         if pipeline.get("resolved"):
             resolved += 1
         if pipeline.get("raw_candidates"):
             with_candidates += 1
         if shown:
-            with_displayed += 1
+            with_shown += 1
         outcome = str((record.get("provider_outcomes") or {}).get(source)
                       or "not_attempted")
         outcomes[outcome] = outcomes.get(outcome, 0) + 1
         for candidate in ((record.get("external") or {}).get(source) or []):
             if candidate.get("visible"):
                 page = str(candidate.get("display_page"))
-                display_pages[page] = display_pages.get(page, 0) + 1
+                shown_pages[page] = shown_pages.get(page, 0) + 1
+                shown_total_for_gate_check += 1
+                if candidate.get("gate_decision") == "accepted":
+                    shown_and_would_pass_gate += 1
     return {
         "source": source,
         "candidate_limit": None,   # filled in by the caller, which imports it
@@ -1159,16 +1194,28 @@ def external_production_summary(record_rows, source,
         "provider_resolution_ratio": _ratio(resolved, records),
         "records_with_candidates": with_candidates,
         "coverage": _ratio(with_candidates, records),
-        "records_with_a_displayed_result": with_displayed,
-        "display_coverage": _ratio(with_displayed, records),
+        "records_with_a_displayed_result": with_shown,
+        "display_coverage": _ratio(with_shown, records),
         "raw_candidates": raw,
+        "valid_candidates": valid,
         "after_dedupe": after_dedupe,
-        "after_gate": after_gate,
-        "displayed": displayed,
-        "gate_pass_rate": _ratio(after_gate, after_dedupe),
-        "displayed_per_record": _ratio(displayed, records),
-        "displayed_by_page": dict(sorted(display_pages.items())),
+        "scored_candidates": scored,
+        "shown": shown_total,
+        "displayed_per_record": _ratio(shown_total, records),
+        "shown_by_page": dict(sorted(shown_pages.items())),
         "provider_outcomes": dict(sorted(outcomes.items())),
+        # Diagnostic only -- never used to decide what is shown.
+        "gate_would_pass": {
+            "shown_candidates": shown_total_for_gate_check,
+            "would_have_passed_the_gate": shown_and_would_pass_gate,
+            "ratio": _ratio(shown_and_would_pass_gate,
+                            shown_total_for_gate_check),
+            "note": "Of the candidates actually shown, how many would also "
+                    "have cleared Qresp's strict evidence gate. Below 1.0 "
+                    "means the re-ranking policy is showing readers papers "
+                    "the old gate-as-filter rule would have hidden -- "
+                    "expected, not a defect.",
+        },
     }
 
 
@@ -1431,7 +1478,15 @@ def external_display_metrics(rows, records, source,
 
     universe = production_candidates(records, source)
     visible = [c for c in universe if c.get("visible")]
-    rejected = [c for c in universe if c.get("gate_decision") == "rejected"]
+    # NOT shown, for whatever reason. Under the current re-ranking policy
+    # this is NOT the same set as "gate_decision == rejected": nothing
+    # between de-duplication and the display cap is removed for failing the
+    # evidence gate, so a hidden candidate here is (overwhelmingly) one that
+    # simply scored outside the top 25, and may carry either gate verdict.
+    # The false-negative question below is "did the reader see it", so
+    # visibility -- not the gate's opinion -- is what selects this
+    # population.
+    rejected = [c for c in universe if not c.get("visible")]
 
     def rating_of(facts):
         return ratings.get(candidate_identity(facts), "")
@@ -1462,11 +1517,15 @@ def external_display_metrics(rows, records, source,
         "visible_candidates": len(visible),
     }
 
-    # A false NEGATIVE lives BELOW the gate by definition, so it can only be
-    # found among candidates the gate REJECTED -- and only among the ones
-    # somebody was actually asked about. `sampled_candidates` is that
-    # denominator, and it is deliberately not `rejected_candidates_in_pool`:
-    # this is a sample, never a corpus-wide rate.
+    # A false NEGATIVE is a genuinely related paper the reader never saw, so
+    # it can only be found among candidates that were NOT shown -- and only
+    # among the ones somebody was actually asked about. `sampled_candidates`
+    # is that denominator, and it is deliberately not
+    # `rejected_candidates_in_pool`: this is a sample, never a corpus-wide
+    # rate. (The field and variable names here predate the re-ranking
+    # policy, from when "not shown" and "gate-rejected" were the same
+    # population; they are kept for output stability, but the population
+    # itself is now "not shown", full stop -- see `rejected` above.)
     sampled_rejected = [c for c in rejected
                         if candidate_identity(c) in ratings]
     rejected_ratings = [rating_of(c) for c in sampled_rejected]
@@ -1484,10 +1543,13 @@ def external_display_metrics(rows, records, source,
         "rating_coverage": (_ratio(len(rated_rejected), len(sampled_rejected))
                             if sampled_rejected else None),
         "rejected_candidates_in_pool": len(rejected),
-        "note": "A SAMPLE of rejected candidates, not a corpus-wide false-"
-                "negative rate. Divide by `sampled_candidates`, never by "
-                "`rejected_candidates_in_pool`, and treat `available: false` "
-                "as unmeasured rather than as zero.",
+        "note": "A SAMPLE of candidates NOT SHOWN to a reader (beyond the "
+                "display cap; the field name predates the re-ranking policy "
+                "and no longer means strictly \"gate-rejected\"), not a "
+                "corpus-wide false-negative rate. Divide by "
+                "`sampled_candidates`, never by `rejected_candidates_in_pool`"
+                ", and treat `available: false` as unmeasured rather than as "
+                "zero.",
     }
 
     records_with_visible = {c.get("record_id") for c in visible}

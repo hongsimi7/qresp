@@ -16,15 +16,33 @@ A visitor reading a record's detail page gets, at the bottom of the page, two
 independent lists:
 
 - **Related Qresp Records** — other active, published records on this server.
-  At most **3**, rendered as one list.
-- **Related External Papers** — papers proposed by Semantic Scholar that then
-  passed Qresp's own quality gate. At most **25**, drawn from up to **150**
-  candidates and shown **five per page over at most five pages**.
+  Every result **passed Qresp's strict evidence gate**. At most **3**, rendered
+  as one list.
+- **Recommended External Papers** — papers proposed by Semantic Scholar, then
+  **re-ranked** by Qresp's deterministic score. The gate does **not** filter
+  this list: a valid provider candidate is never removed for failing it, so a
+  paper with weak or zero Qresp signal can still appear, near the end. At most
+  **25**, drawn from up to **150** candidates and shown **five per page over at
+  most five pages**.
+
+**Two lists, two policies — never conflate them.** For the internal list the
+gate DECIDES what is shown; for the external list it only ORDERS. That is the
+single most important distinction in this document, and everything below is
+written to keep the two apart:
+
+| | Related Qresp Records | Recommended External Papers |
+| --- | --- | --- |
+| Candidates from | this server's own corpus | Semantic Scholar |
+| The gate | **filters** — a failing record is dropped | **does not filter** — it only contributes to the score |
+| Ordering | Qresp score, descending | Qresp score descending, provider rank ascending as tie-break |
+| Cap | 3 | 25 (5 per page × 5 pages) |
+| An empty list means | nothing cleared the gate | the provider proposed nothing usable — **never** "Qresp rejected them all" |
+| Evidence heading in the UI | "Why related" | "Qresp ranking signals" (omitted when there is none) |
 
 The two caps are independent on purpose: the internal list is a handful of
 records from one server's own corpus, while the external one is drawn from the
 whole literature. Neither is ever padded — a short list, including an empty
-one, is what the gate produced.
+one, is what the pipeline produced.
 
 Both are computed **at view time**, never pinned into the record. Nothing is
 written to the `Paper` document at curation, publish, or read time.
@@ -96,8 +114,10 @@ the same `?server=` the Explorer already puts on a detail-page URL. See
     "reason": "ok",                        // WHY -- see the table below
     "pipeline": {                          // where the candidates went
       "resolved": true, "provider_status": "found",
-      "raw_candidates": 150, "after_dedupe": 147,
-      "after_gate": 31, "shown": 25        // shown is capped at 25, not 3
+      "raw_candidates": 150, "valid_candidates": 148,
+      "after_dedupe": 147,
+      "scored_candidates": 147,            // == after_dedupe, ALWAYS: nothing is gate-filtered
+      "shown": 25                          // the top 25 after re-ranking, not 3
     },
     "provider": "Semantic Scholar",
     "count": 1,
@@ -175,23 +195,32 @@ interchangeable — the first two rows below are a perfectly healthy `ok`.
 | --- | --- | --- | --- |
 | `ok` | `ok` | results were shown | full TTL |
 | `provider_returned_no_candidates` | `ok` | the provider answered with an empty list | full TTL |
-| `all_candidates_below_quality_gate` | `ok` | it proposed candidates; none cleared Qresp's gate | full TTL |
+| `no_valid_candidates_after_dedupe` | `ok` | it proposed candidates, but none survived validation and dedup (unusable metadata, this paper itself, repeats) | full TTL |
 | `source_paper_not_in_provider_index` | `unresolved` | this paper could not be identified at the provider | full TTL |
 | `provider_rate_limited` | `unavailable` | HTTP 429 | 1 hour |
 | `provider_timeout` | `unavailable` | the provider never answered | 1 hour |
 | `provider_error` | `unavailable` | 5xx, unreadable body, unexpected shape | 1 hour |
 
+> **There is no "the gate rejected them all" row, and there cannot be one.**
+> The predecessor of `no_valid_candidates_after_dedupe` was
+> `all_candidates_below_quality_gate`, and it described a state that no longer
+> exists: nothing is removed from the external list for failing the gate. An
+> empty external list now means only that the provider had nothing, could not
+> be asked, or proposed nothing that survived *metadata* validation and dedup.
+
 `pipeline` carries the counts behind that verdict — `resolved`,
-`provider_status`, `raw_candidates`, `after_dedupe`, `after_gate`, `shown` —
-so "the external list is empty" is answerable without re-asking the provider.
-Counts only: no title, no abstract, no provider body, no credential.
+`provider_status`, `raw_candidates`, `valid_candidates`, `after_dedupe`,
+`scored_candidates`, `shown` — so "the external list is empty" is answerable
+without re-asking the provider. Counts only: no title, no abstract, no
+provider body, no credential.
 
 | field | meaning |
 | --- | --- |
 | `raw_candidates` | what the provider proposed, at most **150** |
-| `after_dedupe` | …minus this paper itself and repeats |
-| `after_gate` | …minus everything the quality gate rejected, **before the cap** |
-| `shown` | …after the cap: always `0 <= shown <= 25` and `shown <= after_gate` |
+| `valid_candidates` | …minus entries whose public metadata could not be normalized |
+| `after_dedupe` | …minus this paper itself and repeats (earliest provider rank kept) |
+| `scored_candidates` | how many Qresp scored. **Always equal to `after_dedupe`** — every deduplicated candidate is scored and none is dropped, which is what makes gate-filtering impossible by construction rather than by convention |
+| `shown` | …after the cap: always `0 <= shown <= 25` and `shown <= scored_candidates`. "The top re-ranked provider candidates", **not** "the ones that passed the gate" |
 
 `pipeline` describes the **external** list only. Related Qresp Records is not
 built from provider candidates and has no pipeline.
@@ -203,8 +232,9 @@ the next real refresh fills it in.
 
 **An empty answer and a failure are never cached the same way.** A healthy
 empty list is a fact about the record and keeps the full TTL; a failure keeps
-an hour and never overwrites a good answer. The quality gate is never relaxed
-to fill the list.
+an hour and never overwrites a good answer. The internal gate is never relaxed
+to fill the internal list, and the external list is never gate-filtered in the
+first place.
 
 ### Provider outcome → status → how long it is kept
 
@@ -416,6 +446,14 @@ fields are not loaded into the `Profile` object at all, which is enforced by
 
 ### Measured over the whole public corpus at 150 candidates
 
+> **Historical — measured under the OLD gate-filtered external policy.** These
+> numbers were collected on 2026-08-13, before the external list stopped being
+> gate-filtered. They are kept because the provider-side figures (requests,
+> 429s, resolution rate) are still valid, but the funnel below describes a
+> pipeline that no longer exists: `after_gate` has no counterpart today, and
+> under the current policy the shown count for these records would be far
+> higher. Re-run `collect` for current figures.
+
 Read-only sweep of **every** record a public Qresp instance publishes, on
 2026-08-13. The count was **verified at run time** from `/api/search` (65
 records, all with a DOI, none held back by triage) rather than assumed.
@@ -483,24 +521,53 @@ Removed: results with no title, the current paper (by normalized DOI **or** by
 normalized title key), a DOI already seen, a title already seen. Order is
 preserved so the de-duplication is deterministic.
 
-### Then Qresp judges them
+### Then Qresp re-orders them
 
-The provider's ranking is **discarded**. Every surviving candidate is scored by
-the same gate the internal list uses, against the same Qresp corpus statistics,
-and only the ones that clear it are shown — at most **25**.
+Every surviving candidate is scored by the same arithmetic the internal list
+uses, against the same Qresp corpus statistics. That score decides the
+**order** — and only the order. **No candidate is removed for scoring badly.**
+The list is then cut to the first **25**.
 
-The provider's *position* in its own answer is kept on the normalized
-candidate as `provider_rank`, for offline diagnostics only. It is not read by
-`build_external_profile`, does not reach the response or the cache, and is
-never evidence: being ranked first by somebody else is not a reason Qresp can
-name to a reader. The provider's proprietary score is not requested at all.
+The exact flow, end to end:
 
-> **Why 150 candidates and not 20.** A larger pool buys **coverage, not
-> accuracy.** The gate is unchanged, so every one of the extra 130 candidates
-> still has to produce nameable evidence; the only difference is that there
-> are more of them to try. It is one request per cache miss either way. If
-> fewer than 25 pass, fewer than 25 are returned — the rule is never relaxed
-> to fill a page.
+```text
+Semantic Scholar, up to 150 candidates
+  → normalize valid public metadata                 (valid_candidates)
+  → drop self-reference and duplicates,
+    keeping each survivor's EARLIEST provider rank  (after_dedupe)
+  → score every one of them with Qresp's
+    deterministic relevance signals                 (scored_candidates)
+  → sort: Qresp score DESC, provider_rank ASC
+  → take the first 25                               (shown)
+```
+
+`scored_candidates` equals `after_dedupe` by construction — the scoring step
+has no filter in it — which is what makes "Qresp rejected them all" an
+impossible explanation for an empty external list rather than merely a
+discouraged one.
+
+The provider's *position* in its own answer is kept on the normalized candidate
+as `provider_rank` and used as the **tie-break** when two candidates score
+identically, preserving the provider's relative order among equals. It is not
+read by the scorer, never reaches the reader, and is never evidence: being
+ranked first by somebody else is not a reason Qresp can name. The provider's
+proprietary score is not requested at all and is never displayed.
+
+**A weak candidate near the tail is intended, not a defect.** A candidate with
+little or no nameable Qresp evidence can occupy slot 22 of 25. Semantic Scholar
+proposed it; Qresp's job on this list is to put the most plausible ones first,
+not to overrule the provider about what belongs in its own recommendation set.
+The UI is written to match — see "Product wording".
+
+Author, institution, collection, PI and generic-English-word signals are **not**
+part of this score. Widening the pool must not be paid for by loosening what
+counts as relevance.
+
+> **Why 150 candidates and not 20.** A larger pool buys **coverage**: more of
+> what the provider actually knows about reaches the reader, ordered by Qresp's
+> best guess at relevance. It is one request per cache miss either way. If
+> fewer than 25 candidates survive normalization and dedup, fewer than 25 are
+> returned — the list is cut short rather than padded.
 
 ### Exactly what leaves this server
 
@@ -522,16 +589,38 @@ access log would capture it.
 
 ## Quality gate
 
-A candidate is shown only when it has
+A candidate **passes** the gate when it has
 
 - **at least one STRONG** piece of evidence, **or**
 - **at least two MEDIUM** pieces from **independent families**.
 
-The cut happens LAST: gate, then sort, then cut — to **3** for the internal
-list and to **25** for the external one. `pipeline.after_gate` reports how many
-cleared the gate and `pipeline.shown` how many survived the cap, so
-`after_gate >= shown` and the difference is visible rather than hidden by
-counting the truncated list.
+**What passing means depends on which list you are in.** This is the one place
+the two policies actually diverge in code, and the rest of this document only
+restates it:
+
+| | Related Qresp Records (`relatedness.rank`) | Recommended External Papers (`relatedness.rerank_external`) |
+| --- | --- | --- |
+| Steps | **gate**, then sort, then cut to 3 | score, then sort, then cut to 25 — **no gate step at all** |
+| A failing candidate | is dropped | is **kept**, and sorts to the back |
+| Only removal rule | failing the gate | a missing title — unusable data, not a relatedness judgement |
+| Sort key | Qresp score, descending | Qresp score descending, then `provider_rank` ascending |
+
+For the internal list, `pipeline` does not apply; the cap of 3 is the whole
+story. For the external list `pipeline.scored_candidates` reports how many were
+scored and `pipeline.shown` how many survived the cap — and because nothing is
+filtered in between, `scored_candidates == after_dedupe` always holds. The
+difference between `scored_candidates` and `shown` is **the display cap alone**.
+
+`assess()` still computes a pass/fail verdict for every external candidate, and
+`rerank_external` still carries it — but as a **diagnostic only**, for the
+evaluator and for operators. Nothing in the serving path reads
+`assessment.passed` to decide external visibility.
+
+`provider_rank` is the provider's position in its own answer. It is a
+**tie-break only**: it is never part of the score, never displayed, and never
+treated as evidence. Two candidates that score identically keep the provider's
+relative order; a candidate that scores higher wins regardless of where the
+provider put it.
 
 Families: `citation`, `terms`, `methods`, `text`. Only the strongest evidence
 per family is kept, so two views of one overlap count once.
@@ -607,9 +696,38 @@ object at all**, so none of them can push a candidate through the gate. They
 are additionally stripped from the text vectors, so two abstracts that share
 nothing but such words measure as *unrelated*, not as a strong match.
 
+**A record's Institution.** The optional, curator-entered record-level
+`institution` field (see below) is deliberately absent from every scoring
+input. It is not in the federation allowlist that builds a cross-server
+candidate, so it is not merely unweighted — it never reaches the scorer at all.
+Two records from the same institution are not thereby related, any more than
+two papers in the same journal are.
+
 Both word lists are singular-folded at import (`_fold_variants`), because
 `tokenize` folds plurals before anything else sees a token — an entry written
 as `technologies` would otherwise never match the `technologie` that arrives.
+
+### The Institution field is metadata, not a signal
+
+`Paper.institution` is an **optional, record-level** string a curator types by
+hand. It identifies the institution associated with the record; it is **not** an
+assertion that every listed author belongs to it.
+
+It is **never inferred** — not from the authors, not from the PIs, not from a
+collection, not from the server URL, not from an email domain, not from a DOI
+prefix. Whatever the curator typed, verbatim, is the whole answer, and blank is
+a valid and unremarkable one. It is displayed exactly as entered: "University
+of Chicago" is never abbreviated to "UChicago".
+
+It is backward compatible in both directions: records published before the
+field existed simply have no value, show no badge, and need no migration.
+
+| Where | What |
+| --- | --- |
+| Curator form | a plain text input labelled `Institution (optional)` |
+| Explorer / search cards | a compact outlined chip on the **author row**, right after the author text — not a line of its own under the journal |
+| Paper details | the same chip on the byline |
+| Ranking | **nothing.** See "Never evidence, alone or in combination" above |
 
 ### Why these thresholds
 
@@ -647,9 +765,17 @@ without reading the algorithm.
 
 ### Ordering
 
-`3 × strong + 1 × medium + cosine + min(shared IDF, 10)/10`, then year
-descending, then title. Ordering is presentation only; it can never promote a
-candidate that failed the gate.
+`3 × strong + 1 × medium + cosine + min(shared IDF, 10)/10`.
+
+**Related Qresp Records** then sorts year descending, then title. There,
+ordering is presentation only: it can never promote a candidate that failed the
+gate, because a failing candidate is not in the list to promote.
+
+**Recommended External Papers** sorts by that same score descending, then
+`provider_rank` ascending. There, ordering is the *whole* selection mechanism —
+nothing was filtered, so a candidate's position is the only thing deciding
+whether a reader sees it. The score is identical in both cases; what differs is
+what happens to the candidates it ranks last.
 
 ---
 
@@ -788,10 +914,21 @@ Measured, and pinned by `test_related_cache.py`:
 ### Algorithm version
 
 `ALGORITHM_VERSION` is part of every cache key, in memory and in Mongo. A
-tightened quality gate therefore takes effect at once instead of waiting for
-entries to age out — which matters most for exactly the entries a tightening
-is meant to correct: the weak and empty ones. An entry written before the
-field existed has none, so it is a miss. That is the whole migration.
+change to what the algorithm produces therefore takes effect at once instead of
+waiting for entries to age out — which matters most for exactly the entries the
+change is meant to correct: the weak and empty ones. An entry written before
+the field existed has none, so it is a miss. That is the whole migration.
+
+**Current value: `"5"`.** Bumped from `"4"` when the external list stopped
+being gate-filtered. Every `"4"` entry was written by the old policy, so its
+external half is a gate-filtered list — often far shorter than the 25 the same
+record yields today, and sometimes empty for a record that now has results.
+Those entries must not be served, and the bump is what guarantees they are not:
+they simply miss and are recomputed. Nothing is deleted or migrated; the stale
+documents age out on their own TTL.
+
+The federated in-process result cache is keyed by algorithm version too, so a
+cross-server answer cannot outlive the policy that produced it either.
 
 ---
 
@@ -828,7 +965,8 @@ happen to issue the same id can never serve each other's recommendations.
   to stop a hot page from hammering a failing or rate-limiting provider,
   short enough that recovery is quick. `unresolved` (not in the index) is a
   stable fact and keeps the full TTL.
-- **Stored:** the gate-passing candidates' public bibliographic metadata, the
+- **Stored:** the returned candidates' public bibliographic metadata (internal:
+  the ones that passed the gate; external: the top 25 after re-ranking), the
   reasons Qresp computed, and the metadata fingerprint. **Never stored:** the
   API key, any header, any provider error body, any session/user/owner data,
   any RCC URL or file path, any file content.
@@ -939,7 +1077,7 @@ dead provider leaves Related Qresp Records fully working.
 ### The two switches
 
 Related Qresp Records is local computation over records this server already
-holds. Related External Papers is a request to a third party. Those are
+holds. Recommended External Papers is a request to a third party. Those are
 different decisions, so they are different variables — an operator may
 reasonably want the first and no outbound traffic at all.
 
@@ -1144,12 +1282,16 @@ Every candidate is kept, accepted or not, with its `rank`, `provider_rank`,
 | `visible` | would a reader see this at all? |
 | `display_rank` | its 1-based slot in the rendered list (1–25 external, 1–3 internal), or `null` |
 | `display_page` | which page of five it lands on (external), or `null` |
-| `provider_rank` | its position in the **provider's** answer. Diagnostic only: not the provider's score, not read by the gate, never a reason |
+| `provider_rank` | its position in the **provider's** answer. Used only as a tie-break in the external re-ranking; not the provider's score, never a reason, never displayed |
 | `in_top5` | the historical name for `visible`; kept so older artifacts still read |
 
-"The gate accepted it" and "a reader sees it" are different facts, and with a
-25-slot list drawn from 150 candidates they diverge a lot. Recording only the
-first cannot answer the question the feature is judged on.
+`gate_decision` is recorded for external candidates as a **diagnostic**, not as
+an explanation of visibility. "The gate accepted it" and "a reader sees it" are
+now fully independent facts: with a 25-slot list drawn from 150 ungated
+candidates, a rejected candidate can be on page 1 and an accepted one can be
+nowhere at all. **The evaluator must never report gate-passing as the reason an
+external item is visible** — for the external list, the only reason is its
+position after re-ranking.
 
 ### Before it spends anything
 
@@ -1180,7 +1322,7 @@ down when the plan was made.
 | --- | --- |
 | `raw-results.jsonl` | one line per record: the record, every candidate from every pool with scores, verdicts, display rank/page, and the provider outcome and pipeline counts per pool |
 | `human-review.tsv` | `pair_id, record_id, record_title, source, candidate_title, reasons, gate_score, gate_decision, human_rating, human_note` — the shown candidates plus the best near-misses, with **`human_rating` blank** |
-| `external-review.tsv` | the **blind** sheet for Related External Papers (see below), **`human_rating` blank** |
+| `external-review.tsv` | the **blind** sheet for Recommended External Papers (see below), **`human_rating` blank** |
 | `summary.json` | sample size, flagged vs not-sampled records, per-pool coverage and gate pass rate, the `external_production` block, the review-export report, provider request counts |
 | `metrics.json` | written by `summarize` |
 
@@ -1190,10 +1332,17 @@ unrated). Anything else stops the scoring with the offending line numbers.
 `summary.json` carries **`external_production`** — the production pool alone,
 apart from the diagnostic ones: provider resolution ratio, records with
 candidates, records with a displayed result, and the funnel
-`raw_candidates → after_dedupe → after_gate → displayed`, plus
-`displayed_by_page`. Every one of those is a **count**. None of them is a
-quality claim: how many papers were displayed says nothing about whether they
-are related.
+`raw_candidates → valid_candidates → after_dedupe → scored_candidates → shown`,
+plus `shown_by_page`. Every one of those is a **count**. None of them is a
+quality claim: how many papers were shown says nothing about whether they are
+related.
+
+It also carries a **`gate_would_pass`** sub-dict. That is informational only —
+how many external candidates the strict gate *would* have accepted, had it been
+consulted. It is not a visibility statistic and must never be reported as the
+reason an external candidate was shown. (The old `gate_pass_rate` field is
+gone: under the current policy it would be trivially ≈ 1.0 of what is shown and
+would invite exactly that misreading.)
 
 ### The blind external review sheet
 
@@ -1204,16 +1353,24 @@ feature. It holds three groups, and **a reviewer cannot tell them apart**:
 | --- | --- | --- |
 | every **visible page-1** result | all of them | — |
 | a stratified sample of visible **pages 2–5** | `--external-review-sample`, default 60 | round-robin over the pages, preferring a record not yet sampled |
-| a stratified sample of candidates the gate **REJECTED** | `--external-rejected-sample`, default 60 | round-robin over score-band tertiles, preferring a record not yet sampled |
+| a stratified sample of candidates a reader was **NOT shown** | `--external-rejected-sample`, default 60 | round-robin over score-band tertiles, preferring a record not yet sampled |
 
 No RNG anywhere, so a re-run is comparable to the run before it.
 
-> **Why the rejected sample exists.** Every visible candidate passed the gate.
-> A sheet built only from visible candidates can therefore surface false
-> *positives* and **structurally never a single false negative** — and the
-> resulting `0` is indistinguishable in the JSON from a measured `0`. The
-> false negative is the failure the gate cannot see in itself, so the only way
-> to find one is to put rejected candidates in front of a person too.
+> **Not shown ≠ gate-rejected.** The third group is selected purely by
+> `visible == false`. Under the current policy the gate does not remove
+> anything from the external list, so a candidate it *would* reject can be on
+> screen, and one it *would* accept can fall past the 25-result display cap.
+> Selecting by gate verdict would therefore both miss real hidden candidates
+> and mislabel visible ones. (The field name `rejected_*` is kept for output
+> stability with existing consumers; read it as "not shown".)
+>
+> **Why the not-shown sample exists.** A sheet built only from visible
+> candidates can surface false *positives* and **structurally never a single
+> false negative** — and the resulting `0` is indistinguishable in the JSON
+> from a measured `0`. A false negative is the failure the ranking cannot see
+> in itself, so the only way to find one is to put candidates the reader never
+> saw in front of a person too.
 
 | Column | |
 | --- | --- |
@@ -1307,7 +1464,10 @@ count is not a corpus-wide false-negative rate.
 ## Tests
 
 ```text
-backend/project/tests/test_relatedness.py         32 tests — the pure gate + fingerprint
+backend/project/tests/test_relatedness.py         38 tests — the pure gate + fingerprint,
+                                                             and rerank_external: a
+                                                             gate-failing candidate is kept,
+                                                             provider_rank breaks ties only
 backend/project/tests/test_related_research.py    95 tests — endpoint/provider/cache/switches,
                                                              federated records, limit=150,
                                                              the 25-result external cap
@@ -1356,23 +1516,50 @@ arithmetic warrants. If a model ever reranks at serve time, that is the moment
 the wording changes, and not before. A frontend test asserts the section
 contains no such claim.
 
-The existing policies are unchanged by any of this: at most 3 internal and 25
-external, candidates below the quality gate stay hidden, an empty list is an
-acceptable answer, and every candidate comes from a real Qresp record or a real
-provider result. Nothing generates a title, a DOI or a paper.
+The result policies: at most 3 internal and 25 external; internal candidates
+below the quality gate stay hidden; an empty list is an acceptable answer; and
+every candidate comes from a real Qresp record or a real provider result.
+Nothing generates a title, a DOI or a paper.
 
-**No numeric "relation score" is displayed.** The reader gets the grounded
-`Why related` sentences and nothing that looks like a percentage, a star
-rating or a confidence — there is no such number to show, and inventing one
-would dress arithmetic up as a verdict.
+**The external section says what it actually is.** It is headed *Recommended
+External Papers*, and exactly one line above the results reads:
+
+> Suggestions from Semantic Scholar, ordered using Qresp's publication metadata
+> similarity signals. They may be incomplete or inaccurate; review each paper
+> before relying on it.
+
+Each external result keeps its **Recommended by Semantic Scholar** badge. The
+UI must **not** describe an external result as "verified related", and must not
+claim external results are "shown only when Qresp found evidence they are
+related" — that sentence was true under the old gate-filtered policy and is
+false now.
+
+**External evidence gets its own heading.** When an external result has
+non-empty Qresp evidence it is headed **"Qresp ranking signals"** — what moved
+it up the list, not the reason it is on the list. When it has none, no heading
+and no explanation is shown; nothing is invented to fill the space. Internal
+results keep **"Why related"**, which remains accurate for them: the reasons
+ARE why the record cleared the gate.
+
+**No numeric "relation score" is displayed** in either list — no percentage, no
+star rating, no confidence, and never the provider's own score. There is no
+such number to show a reader, and inventing one would dress arithmetic up as a
+verdict.
 
 ### Pagination of the external list
 
-Related External Papers is laid out **five per page, at most five pages**;
+Recommended External Papers is laid out **five per page, at most five pages**;
 Related Qresp Records is not paginated at all. The control renders only when
-there is more than one page, and it is accompanied by a live-announced range
-("Showing 6-10 of 23 related external papers") so a keyboard or screen-reader
-user is told what changed rather than having to count list items.
+there is more than one page.
+
+**The range is announced but not drawn.** There is no visible
+"Showing 1-5 of 15…" line: the page numbers, `aria-current="page"` on the
+current one, and the pager's `aria-label` ("Recommended external papers pages")
+are what a sighted reader needs. A screen-reader-only live region carries the
+same range text ("Showing 6-10 of 23 recommended external papers") so a
+keyboard or screen-reader user is told what changed rather than having to count
+list items. The pager is fully keyboard operable and keeps its visible focus
+ring.
 
 The page resets to 1 whenever the record id, the source server, or the fetched
 answer changes: page 4 of the previous record's list is meaningless against a
@@ -1394,7 +1581,7 @@ nothing:
 | --- | --- | --- |
 | loading | request in flight | "Looking for related research…" + progress bar |
 | results | at least one list is non-empty | the lists |
-| empty | the backend answered and nothing cleared the gate | "No sufficiently related papers were found." |
+| empty | the backend answered and there is nothing to show — internally, nothing cleared the gate; externally, the provider proposed nothing usable | "No sufficiently related papers were found." |
 | unavailable | the request failed, or the source Qresp server could not be read | "Related research is unavailable right now…" + **Try again** |
 | *(nothing)* | `enabled: false` | the deployment does not have this feature |
 | *(nothing)* | unpublished preview | excluded by the page, which never mounts the component |

@@ -305,7 +305,7 @@ describe("recommendation feedback", () => {
       renderSection(23);
       await widget();
       const pager = screen.getByRole("navigation", {
-        name: /related external papers pages/i,
+        name: /recommended external papers pages/i,
       });
       await userEvent.click(
         within(pager).getByRole("button", { name: /go to page 3/i })
@@ -315,6 +315,32 @@ describe("recommendation feedback", () => {
       const body = axios.post.mock.calls[0][1];
       expect(body.page_at_submit).toBe(3);
       expect(body.pages_viewed).toBe(3);
+    });
+
+    it("groups the heading, scale and anchor caption into one centered block", async () => {
+      renderSection(3);
+      const heading = (await widget()).querySelector(
+        "#recommendation-feedback-heading"
+      );
+      const group = screen.getByRole("group");
+      const caption = screen.getByText(
+        "1: Very dissatisfied · 3: Neutral · 5: Very satisfied"
+      );
+      // One compact group: all three share the same immediate parent.
+      expect(heading.parentElement).toBe(group.parentElement);
+      expect(caption.parentElement).toBe(group.parentElement);
+    });
+
+    it("keeps the reasons, comment and send button outside the centered group", async () => {
+      renderSection(3);
+      const box = await widget();
+      await userEvent.click(rating(2));
+      const group = screen.getByRole("group");
+      const centeredGroup = group.parentElement;
+      const reasons = within(box).getByTestId("feedback-reasons");
+      const sendButton = screen.getByRole("button", { name: /send feedback/i });
+      expect(centeredGroup.contains(reasons)).toBe(false);
+      expect(centeredGroup.contains(sendButton)).toBe(false);
     });
 
     it("forwards the source server for a federated record", async () => {
@@ -445,7 +471,7 @@ describe("recommendation feedback", () => {
   describe("nothing to rate", () => {
     it("renders no widget when there are no recommendations", async () => {
       renderSection(0);
-      await screen.findByRole("heading", { name: /related external papers/i });
+      await screen.findByRole("heading", { name: /recommended external papers/i });
       expect(
         screen.queryByTestId("recommendation-feedback")
       ).not.toBeInTheDocument();
@@ -458,7 +484,7 @@ describe("recommendation feedback", () => {
       // An older backend, or a deployment with no signing secret. A rating
       // the server cannot verify is one it will refuse anyway.
       renderSection(3, { context: null });
-      await screen.findByRole("heading", { name: /related external papers/i });
+      await screen.findByRole("heading", { name: /recommended external papers/i });
       expect(
         screen.queryByTestId("recommendation-feedback")
       ).not.toBeInTheDocument();

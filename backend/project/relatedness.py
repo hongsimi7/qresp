@@ -14,17 +14,30 @@ two records' own scientific metadata. Everything the user reads under
 sentence is written by a model, and no DOI, paper title or material name is
 hardcoded anywhere in this file.
 
-The gate
---------
-A candidate is shown only if it has
+The gate -- and who it applies to
+---------------------------------
+A candidate PASSES if it has
 
   * at least one STRONG piece of evidence, or
   * at least two MEDIUM pieces of evidence from INDEPENDENT families.
 
 "Independent" means different signal families (terms / text / methods /
 citation): two mediums derived from the same overlap are one observation, not
-two. Every one of those families is about SUBJECT MATTER. At most
-MAX_RESULTS (3) are shown, and the list is never padded to reach it.
+two. Every one of those families is about SUBJECT MATTER.
+
+The gate is a FILTER only for **Related Qresp Records** (`rank()`, below): a
+candidate that does not pass is dropped, and at most MAX_RESULTS (3) of the
+ones that do are shown, never padded to reach it.
+
+**Recommended External Papers does not use the gate as a filter at all.**
+Semantic Scholar supplies the candidate list; `rerank_external()` computes the
+exact same `assess()` verdict for every candidate, but only to ORDER them --
+`assessment.passes` is carried on the result for diagnostics and is never
+read to decide whether a candidate is returned. A candidate with weak or even
+zero evidence can still appear, usually near the tail of the (at most 25)
+results, because Semantic Scholar proposed it and nothing here removes a
+proposal for lacking Qresp's evidence. See `related.py` for where the two
+policies split.
 
 Deliberately NOT read at all
 ----------------------------
@@ -524,11 +537,18 @@ class Profile(object):
     __slots__ = ("key", "title", "doi", "year", "authors", "url", "source",
                  "text_counts", "keyword_terms", "method_terms", "title_key",
                  "surface_terms", "title_terms", "term_sources",
-                 "software_terms", "organization_terms")
+                 "software_terms", "organization_terms", "provider_rank")
 
     def __init__(self, key, title="", doi="", year=None, authors=(), url="",
-                 source="internal"):
+                 source="internal", provider_rank=None):
         self.key = key
+        # 0-based position in the PROVIDER's own answer. None for every
+        # internal profile -- this server never asks anybody to rank its own
+        # corpus. For an external profile it is the tie-break
+        # `rerank_external()` falls back to when two candidates score
+        # identically; it is never itself a component of the score, and
+        # `assess()` never reads it.
+        self.provider_rank = provider_rank
         self.title = title or ""
         self.doi = normalize_doi(doi)
         self.year = year
@@ -865,6 +885,7 @@ def build_external_profile(paper):
         authors=paper.get("authors") or [],
         url=paper.get("url") or "",
         source="external",
+        provider_rank=paper.get("provider_rank"),
     )
     profile.add_text(profile.title, weight=2, is_title=True)
     profile.add_text(paper.get("abstract"))
@@ -1256,4 +1277,51 @@ def rank(current, candidates, stats, citation_dois=frozenset(),
     scored.sort(key=lambda pair: (-pair[1].score,
                                   -(pair[0].year or 0),
                                   pair[0].title.lower()))
+    return scored[:limit]
+
+
+def rerank_external(current, candidates, stats, citation_dois=frozenset(),
+                    limit=None):
+    """Score every candidate and order them -- WITHOUT the gate.
+
+    This is `rank()`'s twin for **Recommended External Papers**, and the two
+    must never be merged: `rank()` drops a candidate that fails `assess()`;
+    this function drops nothing. Every candidate Semantic Scholar proposed
+    (after de-duplication, upstream of this call) is assessed, and the
+    ordering is:
+
+        Qresp's deterministic score, descending
+        provider_rank, ascending  -- the ONLY tie-break
+
+    `assessment.passes` is computed exactly as it is for Related Qresp
+    Records -- the evidence rule is not weakened or strengthened here -- but
+    it is carried on the result purely as a diagnostic (`gate_decision` in the
+    evaluator, `qresp_match` if a caller wants it); nothing in this function
+    reads it to decide whether a candidate is returned.
+
+    A candidate missing a title is still dropped: that is a data-quality
+    floor (`rank()` applies the same one), not a relatedness judgement.
+
+    `limit=None` returns every scored candidate, in order, so a caller can
+    report how many there were before its own cap is applied -- exactly the
+    convention `rank()` and `external_recommendations()` already use.
+    """
+    scored = []
+    for candidate in candidates:
+        if not candidate.title:
+            continue
+        assessment = assess(current, candidate, stats, citation_dois)
+        scored.append((candidate, assessment))
+    # Ties are near-guaranteed here (many candidates score 0.0 -- no shared
+    # evidence at all), which is exactly why the provider's own order is the
+    # tie-break rather than year/title as `rank()` uses: those would impose an
+    # opinion neither Qresp nor Semantic Scholar actually holds, where falling
+    # back to "the order the provider judged these in" does not.
+    missing_rank = len(scored) + 1
+    scored.sort(key=lambda pair: (
+        -pair[1].score,
+        pair[0].provider_rank if pair[0].provider_rank is not None
+        else missing_rank))
+    if limit is None:
+        return scored
     return scored[:limit]

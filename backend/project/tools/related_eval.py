@@ -7,10 +7,20 @@ WHY this exists
 ---------------
 The quality gate was calibrated by reasoning, and the one thing nobody has
 measured is whether it agrees with a physicist. Its own accept/reject decision
-therefore cannot be the answer key. This tool lays the gate's verdicts out
-next to the candidates it threw away, so a person can rate them and the gate
-can be judged against those ratings -- including the failure that matters
-most, a genuinely related paper the gate rejected.
+therefore cannot be the answer key.
+
+For Related Qresp Records the gate still DECIDES what is shown, so this tool
+lays its verdicts out next to the candidates it threw away and lets a person
+judge it against those ratings -- including the failure that matters most, a
+genuinely related record the gate rejected.
+
+For Recommended External Papers the gate no longer decides anything: every
+candidate Semantic Scholar proposes is scored and ranked, and the gate's own
+verdict rides along only as a diagnostic (see `related.py`,
+`relatedness.rerank_external`). The question this tool asks about that list is
+therefore different -- not "did the gate get it right" but "are the papers a
+reader is actually shown related" -- and it is answered the same way, by
+comparing the system's output against a human's rating.
 
 WHAT IT WILL NOT DO
 -------------------
@@ -33,22 +43,29 @@ WHAT IT WILL NOT DO
 Related External Papers, as displayed
 -------------------------------------
 Production asks the provider for `related.EXTERNAL_CANDIDATE_LIMIT` (150)
-candidates and shows at most `related.EXTERNAL_MAX_RESULTS` (25) of the ones
-that clear the gate, five to a page over five pages. This tool models that
-exactly: every candidate carries `display_rank` (1-25), `display_page` (1-5)
-and `visible`, so "the gate accepted it" is never confused with "a reader
-sees it". `external-review.tsv` is the BLIND sheet -- every visible page-1
+candidates, scores and ranks every deduplicated one, and shows the best
+`related.EXTERNAL_MAX_RESULTS` (25) by that score -- five to a page over five
+pages. NONE are removed for a low score or a failed evidence gate; only the
+display cap shortens the list. This tool models that exactly: every candidate
+carries `display_rank` (1-25), `display_page` (1-5), `visible`, AND
+`gate_decision` as an independent diagnostic, so "the gate accepted it" is
+never confused with "a reader sees it" -- under this policy a candidate can be
+visible with `gate_decision == "rejected"`, and that is expected, not a bug in
+the tool. `external-review.tsv` is the BLIND sheet -- every visible page-1
 result, a deterministic stratified sample of pages 2-5, and a deterministic
-stratified sample of candidates the gate REJECTED, with no gate score,
-verdict, reason, rank or page number in it and the rows ordered by an opaque
-`pair_id` so position leaks nothing either.
+stratified sample of candidates the reader was NOT shown (beyond the
+25-result cap, whatever their gate verdict), with no gate score, verdict,
+reason, rank or page number in it and the rows ordered by an opaque `pair_id`
+so position leaks nothing either.
 
-The rejected sample is what makes a false negative findable. Every visible
-candidate passed the gate, so a sheet built only from visible ones can only
-ever report zero false negatives -- and that zero is indistinguishable from a
-measured one. `summarize` reports the sampled denominator alongside the
-count, and reports `available: false` rather than `0` when no rejected
-candidate has been rated.
+The hidden sample is what makes a false negative findable. Precision over the
+visible list can only ever surface false POSITIVES; a false negative -- a
+genuinely related paper the reader never saw -- can only be found among
+candidates that did NOT make the cut, so a sheet built only from visible ones
+would report zero false negatives forever, indistinguishable from a measured
+zero. `summarize` reports the sampled denominator alongside the count, and
+reports `available: false` rather than `0` when none of the sampled hidden
+candidates has been rated.
 
 Precision is measured over the UNIQUE VISIBLE CANDIDATES in
 `raw-results.jsonl`, never over review rows: a candidate can appear in more
@@ -72,8 +89,10 @@ from project.tools import ai_review
 from project.tools import eval_core as core
 
 # Candidate pools compared side by side. `default` is what production asks
-# for; the other two exist to answer "is the gate discarding good candidates,
-# or is the provider never offering any?".
+# for and re-ranks (see relatedness.rerank_external); the other two are
+# diagnostic-only alternative provider pools, evaluated the same way, that
+# exist to answer "would a different pool have given the score more to work
+# with, or is the provider simply not offering anything usable?".
 POOL_DEFAULT = "recommendations_default"
 POOL_ALL_CS = "recommendations_all_cs"
 POOL_TITLE = "title_resolution"
@@ -82,9 +101,9 @@ SOURCE_INTERNAL = "internal"
 
 # The blind sheet for Related External Papers: every visible page-1 result, a
 # stratified sample of pages 2-5, and a stratified sample of the candidates
-# the gate REJECTED -- the last of which is the only way a false negative can
-# be found at all. A person's ratings live here, so it is a PROTECTED file
-# that no automated pass may write.
+# NOT shown (beyond the display cap) -- the last of which is the only way a
+# false negative can be found at all. A person's ratings live here, so it is
+# a PROTECTED file that no automated pass may write.
 EXTERNAL_REVIEW_FILE = "external-review.tsv"
 
 DEFAULT_RATE_LIMIT = 1.0        # requests per second, provider-wide
@@ -217,14 +236,31 @@ def _provider_paper_id(candidate):
     return candidate.get("key") or None
 
 
-def _display_ranks(current, profiles, stats, limit):
-    """profile key -> the 1-based slot production would render it in.
+def _internal_display_ranks(current, profiles, stats, limit):
+    """profile key -> the 1-based slot production would render it in, for
+    RELATED QRESP RECORDS.
 
     The production ranking itself, not a copy of it: `R.rank` gates, sorts and
     cuts exactly as `related.py` does, so a candidate is "visible" here if and
-    only if a reader would see it.
+    only if a reader would see it. Internal only -- see
+    `_external_display_ranks` for the differently-policied external pools.
     """
     ranked = R.rank(current, profiles, stats, frozenset(), limit)
+    return {profile.key: index
+            for index, (profile, _assessment) in enumerate(ranked, start=1)}
+
+
+def _external_display_ranks(current, profiles, stats, limit):
+    """profile key -> the 1-based slot production would render it in, for an
+    EXTERNAL pool.
+
+    Mirrors `related.external_recommendations`, not `_internal_display_ranks`:
+    every candidate is scored and ordered by Qresp's score (provider rank as
+    the tie-break), and NONE is dropped for failing the evidence gate -- only
+    the `limit` cuts the list. A candidate absent from the returned mapping is
+    absent because it scored outside the cap, never because the gate said no.
+    """
+    ranked = R.rerank_external(current, profiles, stats, frozenset(), limit)
     return {profile.key: index
             for index, (profile, _assessment) in enumerate(ranked, start=1)}
 
@@ -243,8 +279,12 @@ def _evaluate_candidates(current_record, candidates, stats, source,
     profiles = [(candidate, R.build_external_profile(candidate))
                 for candidate in candidates]
     current = R.build_internal_profile(current_record)
-    display = _display_ranks(current, [p for _, p in profiles], stats,
-                             display_limit)
+    # EXTERNAL ranking -- score-ordered, never gated. See
+    # `_external_display_ranks`; using `_internal_display_ranks` (the gated
+    # one) here would silently reintroduce the policy this tool exists to
+    # measure honestly.
+    display = _external_display_ranks(current, [p for _, p in profiles],
+                                      stats, display_limit)
 
     rows = []
     for rank_index, (candidate, profile) in enumerate(profiles):
@@ -306,32 +346,39 @@ def _external_pools(current_record, normalized, stats, cfg, live,
         if not provider_id:
             outcomes[pool] = "unresolved"
             continue
-        candidates, outcome = related.fetch_external_candidates(
+        candidates, outcome, raw_count = related.fetch_external_candidates(
             provider_id, cfg, pool=pool_param)
         outcomes[pool] = outcome
         pipelines[pool]["resolved"] = True
         if outcome != related.FOUND or not candidates:
             continue
-        raw_count = len(candidates)
+        valid_count = len(candidates)
         candidates = related.dedupe_candidates(candidates, doi, title)
         rows = _evaluate_candidates(current_record, candidates, stats,
                                     pool, record_id=record_id,
                                     display_limit=related.EXTERNAL_MAX_RESULTS)
         pools[pool] = rows
+        # `scored_candidates` is EVERY deduplicated candidate: under the
+        # current policy nothing between de-duplication and the display cap
+        # is removed, so it always equals `after_dedupe` -- which is the
+        # point, not an oversight. `gate_decision` is still tallied
+        # separately (not shown here) via `collection_summary`'s per-pool
+        # `accepted`/`gate_pass_rate`, as a diagnostic independent of what
+        # was actually displayed.
         pipelines[pool] = {
             "resolved": True,
             "raw_candidates": raw_count,
+            "valid_candidates": valid_count,
             "after_dedupe": len(candidates),
-            "after_gate": sum(1 for row in rows
-                              if row["gate_decision"] == "accepted"),
-            "displayed": sum(1 for row in rows if row["visible"]),
+            "scored_candidates": len(rows),
+            "shown": sum(1 for row in rows if row["visible"]),
         }
     return pools, outcomes, pipelines
 
 
 def _empty_pipeline():
-    return {"resolved": False, "raw_candidates": 0, "after_dedupe": 0,
-            "after_gate": 0, "displayed": 0}
+    return {"resolved": False, "raw_candidates": 0, "valid_candidates": 0,
+            "after_dedupe": 0, "scored_candidates": 0, "shown": 0}
 
 
 def _internal_rows(entry, corpus_entries, stats):
@@ -345,10 +392,11 @@ def _internal_rows(entry, corpus_entries, stats):
     others = [(other, R.build_internal_profile(other["record"]))
               for other in corpus_entries
               if other["normalized"]["id"] != entry["normalized"]["id"]]
-    # The INTERNAL cap, which the external widening did not touch, and no
-    # pagination: Related Qresp Records is rendered whole.
-    display = _display_ranks(current, [profile for _, profile in others],
-                             stats, related.MAX_RESULTS)
+    # The INTERNAL cap, which the external re-ranking did not touch, and no
+    # pagination: Related Qresp Records is rendered whole, still gated.
+    display = _internal_display_ranks(
+        current, [profile for _, profile in others], stats,
+        related.MAX_RESULTS)
 
     rows = []
     for rank_index, (other, profile) in enumerate(others):
@@ -586,7 +634,7 @@ def _write_outputs(args, record_rows, skipped, api_key_present, client):
     print("  %s   (%d records)" % (raw_path, len(record_rows)))
     print("  %s   (%d rows to rate)" % (tsv_path, len(rows) - 1))
     print("  %s   (%d rows: %d on page 1, %d sampled from pages 2-%d, "
-          "%d sampled from the %d the gate REJECTED)"
+          "%d sampled from the %d NOT shown -- beyond the display cap)"
           % (external_path, external_report["rows"],
              external_report["page_1_rows"],
              external_report["pages_2_to_5_rows"],
@@ -600,10 +648,11 @@ def _write_outputs(args, record_rows, skipped, api_key_present, client):
         for key in ("records", "records_resolved_at_provider",
                     "records_with_candidates",
                     "records_with_a_displayed_result", "raw_candidates",
-                    "after_dedupe", "after_gate", "displayed"):
+                    "valid_candidates", "after_dedupe", "scored_candidates",
+                    "shown"):
             print("  %-32s %s" % (key, production.get(key)))
-        print("  %-32s %s" % ("displayed_by_page",
-                              production.get("displayed_by_page")))
+        print("  %-32s %s" % ("shown_by_page",
+                              production.get("shown_by_page")))
     print("\nThese are COVERAGE numbers. They say nothing about whether the")
     print("displayed papers are related -- that needs human ratings.")
     print("\nNext: a domain expert fills human_rating "
@@ -1371,12 +1420,14 @@ def _print_external_display(external):
              else positives["count"], positives["rated"]))
     negatives = external["false_negatives_sampled"]
     if not negatives["available"]:
-        print("  false negatives          UNMEASURED -- %d rejected candidate"
-              "(s) were put in front of a reviewer and %d rated. This is NOT "
-              "zero." % (negatives["sampled_candidates"], negatives["rated"]))
+        print("  false negatives          UNMEASURED -- %d candidate(s) NOT "
+              "shown to a reader were put in front of a reviewer and %d "
+              "rated. This is NOT zero."
+              % (negatives["sampled_candidates"], negatives["rated"]))
     else:
-        print("  false negatives          %d of %d rated rejected candidates "
-              "(sample of %d rejected in the pool -- NOT a corpus-wide rate)"
+        print("  false negatives          %d of %d rated hidden candidates "
+              "(sample of %d not shown to a reader -- NOT a corpus-wide "
+              "rate)"
               % (negatives["count"], negatives["rated"],
                  negatives["rejected_candidates_in_pool"]))
     accepted = external["records_with_an_accepted_external_result"]
@@ -1439,10 +1490,13 @@ def build_parser():
     collect_parser.add_argument(
         "--external-rejected-sample", type=int,
         default=core.DEFAULT_REJECTED_SAMPLE,
-        help="rows to draw from the external candidates the gate REJECTED "
-             "(default %d), stratified by score band and spread across "
-             "records. Without them a false negative cannot be found at all, "
-             "because every displayed candidate passed the gate."
+        help="rows to draw from the external candidates NOT shown to a "
+             "reader -- beyond the 25-result display cap, regardless of "
+             "their own gate verdict (default %d), stratified by score band "
+             "and spread across records. Without them a false negative "
+             "cannot be found at all: only what is visible can be rated from "
+             "the page samples, and a visible candidate is never a false "
+             "negative by definition."
              % core.DEFAULT_REJECTED_SAMPLE)
     collect_parser.add_argument("--include-flagged", action="store_true",
                                 help="also sample records flagged as test or "

@@ -150,7 +150,10 @@ const RecommendationFeedback = ({
 
   if (!authenticated) {
     return (
-      <Box sx={{ mt: 2 }} data-testid="recommendation-feedback-signin">
+      <Box
+        sx={{ mt: 2, mx: "auto", maxWidth: 480, textAlign: "center" }}
+        data-testid="recommendation-feedback-signin"
+      >
         <Typography variant="body2" sx={{ fontWeight: "bold", mb: 0.5 }}>
           {HEADING}
         </Typography>
@@ -238,41 +241,58 @@ const RecommendationFeedback = ({
   }[status];
 
   return (
-    <Box sx={{ mt: 2 }} data-testid="recommendation-feedback">
-      <Typography
-        variant="body2"
-        component="h4"
-        id="recommendation-feedback-heading"
-        sx={{ fontWeight: "bold", mb: 1 }}
+    <Box
+      sx={{ mt: 2, mx: "auto", maxWidth: 480 }}
+      data-testid="recommendation-feedback"
+    >
+      {/* The heading, the rating controls and the anchor text are ONE
+          compact group, centered together -- keyboard focus and tab order
+          are unaffected by sx, and MUI's own focus ring on each
+          ToggleButton is untouched. */}
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          textAlign: "center",
+          gap: 0.5,
+        }}
       >
-        {HEADING}
-      </Typography>
-      <ToggleButtonGroup
-        exclusive
-        value={rating}
-        onChange={chooseRating}
-        size="small"
-        aria-labelledby="recommendation-feedback-heading"
-        aria-busy={status === "loading"}
-      >
-        {SCALE.map((step) => (
-          <ToggleButton
-            key={step.value}
-            value={step.value}
-            // The full meaning, not just the digit: "4" alone tells a screen
-            // reader nothing about which end of the scale it is.
-            aria-label={scaleAriaLabel(step)}
-            data-testid={`feedback-rating-${step.value}`}
-          >
-            {step.label}
-          </ToggleButton>
-        ))}
-      </ToggleButtonGroup>
-      {/* The anchors in text, so the scale is readable without hovering
-          anything and without relying on the order of the buttons alone. */}
-      <Typography variant="caption" color="secondary" component="div">
-        1: Very dissatisfied · 3: Neutral · 5: Very satisfied
-      </Typography>
+        <Typography
+          variant="body2"
+          component="h4"
+          id="recommendation-feedback-heading"
+          sx={{ fontWeight: "bold" }}
+        >
+          {HEADING}
+        </Typography>
+        <ToggleButtonGroup
+          exclusive
+          value={rating}
+          onChange={chooseRating}
+          size="small"
+          aria-labelledby="recommendation-feedback-heading"
+          aria-busy={status === "loading"}
+        >
+          {SCALE.map((step) => (
+            <ToggleButton
+              key={step.value}
+              value={step.value}
+              // The full meaning, not just the digit: "4" alone tells a
+              // screen reader nothing about which end of the scale it is.
+              aria-label={scaleAriaLabel(step)}
+              data-testid={`feedback-rating-${step.value}`}
+            >
+              {step.label}
+            </ToggleButton>
+          ))}
+        </ToggleButtonGroup>
+        {/* The anchors in text, so the scale is readable without hovering
+            anything and without relying on the order of the buttons alone. */}
+        <Typography variant="caption" color="secondary" component="div">
+          1: Very dissatisfied · 3: Neutral · 5: Very satisfied
+        </Typography>
+      </Box>
 
       {rating !== null && rating <= LOW_RATING ? (
         <Box sx={{ mt: 1.5 }} data-testid="feedback-reasons">

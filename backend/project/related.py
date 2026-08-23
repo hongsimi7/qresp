@@ -9,18 +9,29 @@ It answers with two independent lists:
   metadata of the active records this server holds. No external service is
   involved and no configuration is required.
 * **Related External Papers** -- candidates proposed by the free Semantic
-  Scholar Recommendations API, then judged by Qresp's own quality gate. Being
-  returned by the provider is NOT a reason to show a paper; the provider's
-  ranking is deliberately ignored.
+  Scholar Recommendations API, RE-RANKED by Qresp's deterministic relevance
+  score. Being returned by the provider IS enough to be shown; Qresp's own
+  evidence gate (the one Related Qresp Records is filtered by) is computed
+  for every candidate and carried as a diagnostic, but it never removes one.
+  The provider's own ranking survives too, as the tie-break when two
+  candidates score identically -- it is discarded only as the PRIMARY order,
+  never dropped outright.
 
-The two lists have SEPARATE caps, and deliberately so. Related Qresp Records
-shows at most `MAX_RESULTS` (3) records from this server's own corpus.
+The two lists have SEPARATE caps and SEPARATE policies, and deliberately so.
+
+Related Qresp Records shows at most `MAX_RESULTS` (3) records from this
+server's own corpus, and only the ones that PASS Qresp's evidence gate
+(`relatedness.rank`).
+
 Related External Papers asks the provider for `EXTERNAL_CANDIDATE_LIMIT`
-(150) candidates and shows at most `EXTERNAL_MAX_RESULTS` (25) of the ones
-that clear the gate, laid out five to a page over at most five pages. All
-0-25 come back in one response and are cached as one entry, so turning a page
-in the UI is a slice of data the browser already holds and costs no provider
-request.
+(150) candidates, deduplicates them, scores every one that survives, and
+shows the best `EXTERNAL_MAX_RESULTS` (25) by that score
+(`relatedness.rerank_external`) -- laid out five to a page over at most five
+pages. NOTHING is removed here for failing the evidence gate: a candidate
+with weak or zero Qresp signal can still appear, typically near the tail of
+the 25, because Semantic Scholar proposed it. All 0-25 come back in one
+response and are cached as one entry, so turning a page in the UI is a slice
+of data the browser already holds and costs no provider request.
 
 No language model is involved anywhere in this feature. Every ordering,
 threshold and "Why related" sentence comes from `project/relatedness.py`,
@@ -50,9 +61,12 @@ the record and the corpus it is scored against are then read from that peer via
 `project/federation.py`, which is also what refuses every server that is not in
 the federated registry. The peer must be an allowlisted HTTPS origin; only
 allowlisted published metadata is copied out of its answer; nothing is written
-to this server's database. Scoring, the quality gate, the result caps and the
-external provider are the same code in both modes -- the only difference is
-where the two record sets came from.
+to this server's database. Scoring, the evidence gate, the re-ranking, the
+result caps and the external provider are the same code in both modes -- the
+only difference is where the two record sets came from. That includes WHICH
+list is gated: Related Qresp Records is filtered by the gate on a federated
+record exactly as it is locally, and Recommended External Papers is re-ranked
+without one, exactly as it is locally.
 
 What leaves this server
 -----------------------
@@ -83,7 +97,7 @@ from project.relatedness import MAX_RESULTS as relatedness_max_results
 from project.relatedness import (CorpusStats, build_external_profile,
                                  build_internal_profile, metadata_fingerprint,
                                  normalize_doi, normalize_title_key, rank,
-                                 tokenize)
+                                 rerank_external, tokenize)
 
 # ---------------------------------------------------------------- provider
 #
@@ -121,15 +135,16 @@ RECOMMENDATION_FIELDS = "title,abstract,year,authors.name,externalIds,fieldsOfSt
 # see RELATED_RESEARCH.md for the one extra call that would provide it.
 RESOLUTION_FIELDS = "paperId,title,externalIds"
 
-# Candidates asked of the provider, before Qresp's gate removes most of them.
-# EXTERNAL ONLY -- the internal list is computed from this server's own corpus
-# and never asks anybody for candidates.
+# Candidates asked of the provider. EXTERNAL ONLY -- the internal list is
+# computed from this server's own corpus and never asks anybody for
+# candidates.
 #
-# 150, not 20. A bigger pool buys COVERAGE, not accuracy: the gate is
-# unchanged, so every extra candidate still has to earn its place, and the
-# only difference is that there are more of them to earn it. It is one request
-# per cache miss either way, so the cost of asking for 150 instead of 20 is a
-# larger response body and nothing else.
+# 150, not 20. A bigger pool buys COVERAGE: every one of the 150 is scored and
+# ordered, none is thrown out for a low score, so a wider pool means more real
+# candidates competing for the 25 display slots instead of more candidates the
+# gate would have discarded anyway. It is one request per cache miss either
+# way, so the cost of asking for 150 instead of 20 is a larger response body
+# and nothing else.
 EXTERNAL_CANDIDATE_LIMIT = 150
 
 # The candidate pool is deliberately NOT overridden: the request carries no
@@ -145,16 +160,21 @@ EXTERNAL_CANDIDATE_LIMIT = 150
 #                                  0 candidates or a full 20. Of three real
 #                                  PaperStack records checked, one came back
 #                                  with 20 candidates, of which 3 cleared
-#                                  Qresp's gate and were shown; the other two
-#                                  came back with 0.
+#                                  Qresp's gate (a fact still worth knowing
+#                                  today, though it no longer decides what is
+#                                  shown -- under the current policy all 20
+#                                  would have been scored and ranked); the
+#                                  other two came back with 0.
 #   from=all-cs                ->  18-20 candidates, but from Computer
 #                                  Science whatever the source paper's field.
 #                                  Against a condensed-matter and a materials
 #                                  -chemistry paper the best candidate scored
 #                                  cosine 0.022 / 0.025 (the MODERATE bar is
 #                                  0.16) and no candidate shared even three
-#                                  specific terms. All 38 were correctly
-#                                  rejected by the quality gate.
+#                                  specific terms. All 38 would score at the
+#                                  very bottom of a re-ranked list today, and
+#                                  in 2026 all 38 were correctly rejected by
+#                                  the quality gate that then decided display.
 #
 # So the default pool DOES work for some Qresp records, and an empty answer
 # from it is the provider's coverage, not a Qresp bug -- which is exactly what
@@ -178,10 +198,11 @@ MAX_RESULTS = relatedness_max_results
 # laid out. These are the external half's own numbers; changing them cannot
 # touch Related Qresp Records.
 #
-# The gate is applied to every deduplicated candidate first and the cut is
-# made last (gate, sort, cut -- see `relatedness.rank`), so a record with
-# fewer than EXTERNAL_MAX_RESULTS passing candidates gets a SHORTER list. The
-# list is never padded to fill a page.
+# EVERY deduplicated candidate is scored and the cut is made last (score,
+# sort, cut -- see `relatedness.rerank_external`; NOT gated, unlike
+# `relatedness.rank`), so a record with fewer than EXTERNAL_MAX_RESULTS
+# deduplicated candidates gets a SHORTER list -- never one padded to fill a
+# page, and never one shortened because a candidate's evidence was weak.
 EXTERNAL_RESULTS_PER_PAGE = 5
 EXTERNAL_MAX_PAGES = 5
 # Stated as the product, not as a bare 25, so the three numbers cannot drift:
@@ -232,11 +253,13 @@ class Outcome(str):
     subclass carrying the same value; `outcome.detail` additionally says
     whether that non-answer was a 429, a timeout or something else.
 
-    That distinction is the point: "Related External Papers is empty" has at
-    least five different causes -- the provider had nothing, the gate rejected
-    everything, the paper is not in the index, we were rate limited, the
-    provider never answered -- and a reader was shown one sentence for all of
-    them.
+    That distinction is the point: "Related External Papers is empty" has
+    several different causes -- the provider had nothing, nothing survived
+    normalization and de-duplication, the paper is not in the index, we were
+    rate limited, the provider never answered -- and a reader was shown one
+    sentence for all of them. (An empty list can no longer mean "the gate
+    rejected everything that came back": under the current policy nothing is
+    removed between de-duplication and the display cap.)
     """
     detail = ""
 
@@ -252,11 +275,20 @@ def outcome_detail(outcome):
 
 # Why the external list is what it is. `status` is what the UI switches on;
 # `reason` is the diagnosis, and the two are NOT interchangeable --
-# `provider_returned_no_candidates` and `all_candidates_below_quality_gate`
+# `provider_returned_no_candidates` and `no_valid_candidates_after_dedupe`
 # are both a perfectly healthy `ok`.
 REASON_OK = "ok"
 REASON_PROVIDER_EMPTY = "provider_returned_no_candidates"
-REASON_ALL_FILTERED = "all_candidates_below_quality_gate"
+# Replaces the old `all_candidates_below_quality_gate`. Under the current
+# policy the gate cannot empty this list any more -- nothing here is ever
+# removed for failing `assess()` -- so the ONLY way a non-empty provider
+# answer still ends up with zero results is that nothing survived
+# normalization and de-duplication: every entry lacked a usable title, was
+# this paper itself, or repeated another entry. `REASON_ALL_FILTERED` name
+# retired along with the behaviour it described; a stored value of the old
+# string is simply a cache miss (see ALGORITHM_VERSION) rather than something
+# this module still has to interpret.
+REASON_NO_VALID_CANDIDATES = "no_valid_candidates_after_dedupe"
 REASON_SOURCE_UNRESOLVED = "source_paper_not_in_provider_index"
 REASON_RATE_LIMITED = "provider_rate_limited"
 REASON_TIMEOUT = "provider_timeout"
@@ -284,7 +316,18 @@ _DETAIL_REASONS = {
 #      results chosen from a 20-candidate pool; serving it as if it were the
 #      new behaviour would show a reader a one-page list and call it the
 #      whole answer.
-ALGORITHM_VERSION = "4"
+#   5  external results are RE-RANKED, not gated: Qresp's evidence gate no
+#      longer removes a Semantic Scholar candidate from Recommended External
+#      Papers, only orders it (relatedness.rerank_external). An entry written
+#      under 4 holds only the candidates that happened to pass the OLD gate,
+#      which is a materially different -- and narrower -- list than this
+#      policy produces; serving it would show a reader a stale, gate-filtered
+#      answer under the new contract. Related Qresp Records is UNCHANGED by
+#      this bump: it is still gated and still capped at three, and its
+#      in-process federated cache entries are invalidated only because the
+#      version they share with the external cache moved, not because
+#      anything about how they are computed did.
+ALGORITHM_VERSION = "5"
 
 # ------------------------------------------------------------------- caching
 #
@@ -553,10 +596,18 @@ def _normalize_candidate(raw, provider_rank=None):
 def fetch_external_candidates(paper_id, cfg, pool=None):
     """At most EXTERNAL_CANDIDATE_LIMIT recommendations for `paper_id`.
 
-    Returns (candidates, outcome) with the same three-way split as the lookup:
-    a 404 here means the provider has nothing to recommend for this paper
-    (NOT_FOUND, a stable fact), while a timeout, 429, 5xx or a 200 that does
-    not carry `recommendedPapers` means it did not answer (UNAVAILABLE).
+    Returns (candidates, outcome, raw_count) with the same three-way outcome
+    split as the lookup: a 404 here means the provider has nothing to
+    recommend for this paper (NOT_FOUND, a stable fact), while a timeout,
+    429, 5xx or a 200 that does not carry `recommendedPapers` means it did not
+    answer (UNAVAILABLE).
+
+    `raw_count` is how many entries the provider's answer actually held,
+    bounded to EXTERNAL_CANDIDATE_LIMIT, BEFORE `_normalize_candidate` drops
+    anything unusable (no title). It is always 0 when `candidates` is None.
+    This is what lets the pipeline tell "the provider sent nothing" apart
+    from "the provider sent things, none of them usable" -- `len(candidates)`
+    alone cannot, because it is already past that filter.
 
     `pool` overrides the candidate pool for ONE call. Serving traffic never
     passes it -- the module constant governs there. It exists so the offline
@@ -573,22 +624,23 @@ def fetch_external_candidates(paper_id, cfg, pool=None):
         SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL + quote(paper_id, safe=""),
         cfg, params)
     if outcome != FOUND:
-        return None, outcome
+        return None, outcome, 0
     raw = payload.get("recommendedPapers") if isinstance(payload, dict) else None
     if not isinstance(raw, list):
         # A 200 without the documented key is not an answer this endpoint can
         # read; treating it as "no recommendations" would cache a lie.
         print("Related research provider returned an unexpected shape")
-        return None, Outcome(UNAVAILABLE, "unexpected_shape")
-    candidates = []
+        return None, Outcome(UNAVAILABLE, "unexpected_shape"), 0
     # No more than EXTERNAL_CANDIDATE_LIMIT are processed however many the
     # provider volunteers: `limit` is a request, and the bound has to hold on
     # what actually came back.
-    for position, item in enumerate(raw[:EXTERNAL_CANDIDATE_LIMIT]):
+    raw = raw[:EXTERNAL_CANDIDATE_LIMIT]
+    candidates = []
+    for position, item in enumerate(raw):
         candidate = _normalize_candidate(item, provider_rank=position)
         if candidate:
             candidates.append(candidate)
-    return candidates, Outcome(FOUND, "ok")
+    return candidates, Outcome(FOUND, "ok"), len(raw)
 
 
 def dedupe_candidates(candidates, current_doi, current_title):
@@ -641,10 +693,11 @@ def _load_cache(paper_id):
 
 def _store_cache(paper_id, status, results, cfg, fingerprint, previous=None,
                  reason=REASON_OK, pipeline=None):
-    """Persist the external outcome. Only gate-passing public bibliographic
-    metadata, the reasons Qresp computed, and the metadata fingerprint are
-    written -- never the API key, a request header, a provider error body, or
-    anything about the user.
+    """Persist the external outcome. Only the RE-RANKED candidates' public
+    bibliographic metadata (not gate-passing: see ALGORITHM_VERSION history),
+    the reasons Qresp computed, and the metadata fingerprint are written --
+    never the API key, a request header, a provider error body, or anything
+    about the user.
 
     How long it is kept is decided HERE, by what the provider actually said:
 
@@ -694,9 +747,11 @@ def _cache_is_usable(entry, fingerprint, now):
     next request. That is the whole migration.
 
     The same is true of the algorithm version. An answer computed under an
-    older set of scoring rules describes a product that no longer exists, and
-    the entries that matter most here are the WEAK and EMPTY ones -- exactly
-    what a tightened gate is supposed to stop showing.
+    older set of rules describes a product that no longer exists -- whether
+    the change tightened the internal gate or, as with this feature's move
+    from gating external results to re-ranking them, widened what external
+    shows -- and the entries that matter most here are exactly the ones a
+    version bump is meant to stop serving.
     """
     if entry is None or not entry.expires_at or entry.expires_at <= now:
         return False
@@ -774,24 +829,26 @@ def internal_recommendations(current_record, corpus_records,
 def external_recommendations(current_record, candidates, stats,
                              citation_dois=frozenset(),
                              limit=EXTERNAL_MAX_RESULTS):
-    """Apply Qresp's own gate to the provider's candidates.
+    """Re-rank the provider's candidates by Qresp's deterministic score.
 
-    The provider's ordering is discarded: candidates are re-ranked by the
-    evidence Qresp can name, and the ones that clear the gate are the only
-    ones returned. Rarity is still measured against the Qresp corpus, so
-    "specific" means the same thing in both lists.
+    UNLIKE `internal_recommendations`, this never applies Qresp's evidence
+    gate as a filter: every deduplicated candidate is scored
+    (`relatedness.rerank_external`) and ordered best-first, provider rank as
+    the tie-break, and nothing is dropped for failing `assess()`. Rarity is
+    still measured against the Qresp corpus, so "specific" means the same
+    thing it means for Related Qresp Records -- only what happens with a LOW
+    score differs: here it still gets a slot, just a late one.
 
-    `limit=None` returns EVERY candidate that cleared the gate, still in
-    score order, so the caller can report how many passed before the cap was
-    applied. The default is unchanged, so other callers keep the capped list
-    they already expect. The order is the same either way -- gate, sort, then
-    cut -- and the cut is the caller's to make.
+    `limit=None` returns EVERY scored candidate, still in order, so the
+    caller can report how many there were before the display cap was applied.
+    The default is unchanged, so other callers keep the capped list they
+    already expect.
     """
     current = build_internal_profile(current_record)
     profiles = [build_external_profile(candidate) for candidate in candidates]
     if limit is None:
         limit = len(profiles)
-    ranked = rank(current, profiles, stats, citation_dois, limit)
+    ranked = rerank_external(current, profiles, stats, citation_dois, limit)
     return [_result(profile, assessment, "external")
             for profile, assessment in ranked]
 
@@ -810,8 +867,9 @@ def _external_section(status, results, stale=False, updated_at=None,
 
     `reason` and `pipeline` are the answer to "why is this empty?". The UI
     switches on `status` alone -- the contract it had before is unchanged --
-    but an operator reading the response, or the QA CLI, can now tell a
-    rate limit from an empty index from a gate that rejected everything.
+    but an operator reading the response, or the QA CLI, can now tell a rate
+    limit from an empty index from a provider answer that had nothing usable
+    in it once duplicates and unusable entries were removed.
 
     `pipeline` counts what survived each stage. Counts only: no title, no
     abstract, no provider body, no key.
@@ -831,28 +889,40 @@ def _external_section(status, results, stale=False, updated_at=None,
     return section
 
 
-def _pipeline(resolved=False, provider_status="", raw=0, after_dedupe=0,
-              after_gate=0, shown=0):
+def _pipeline(resolved=False, provider_status="", raw=0, valid=0,
+              after_dedupe=0, scored=0, shown=0):
     """Where the candidates went. Requirement B, one dict.
 
     Every "External Papers is empty" report has to be answerable from these
-    six numbers alone:
+    numbers alone:
 
       resolved         did the provider recognise THIS paper at all?
       provider_status  found / not_found / unavailable, from the provider
-      raw              candidates it proposed (at most 150)
+      raw_candidates   entries the provider proposed (at most 150), before
+                       normalization
+      valid_candidates ...minus anything `_normalize_candidate` could not use
+                       (no title)
       after_dedupe     ...minus this paper itself and repeats
-      after_gate       ...minus everything Qresp's quality gate rejected
+      scored_candidates
+                       every deduplicated candidate, scored -- ALWAYS equal
+                       to after_dedupe under the current policy, because
+                       nothing is removed for failing the evidence gate. The
+                       equality is not a coincidence to simplify away: it is
+                       the visible proof that the gate did not filter this
+                       list. (Related Qresp Records has no such field --
+                       there, "scored" and "passed" are different counts by
+                       design.)
       shown            ...capped at EXTERNAL_MAX_RESULTS (25), so
-                       0 <= shown <= 25 and shown <= after_gate
+                       0 <= shown <= 25 and shown <= scored_candidates
 
     `shown` is the external list's own count. It has nothing to say about
     Related Qresp Records, which is not built from provider candidates and has
     no pipeline.
     """
     return {"resolved": bool(resolved), "provider_status": provider_status,
-            "raw_candidates": raw, "after_dedupe": after_dedupe,
-            "after_gate": after_gate, "shown": shown}
+            "raw_candidates": raw, "valid_candidates": valid,
+            "after_dedupe": after_dedupe, "scored_candidates": scored,
+            "shown": shown}
 
 
 def _external_for(paper_id, current_record, stats, cfg):
@@ -902,7 +972,8 @@ def _external_for(paper_id, current_record, stats, cfg):
         return failed(STATUS_UNRESOLVED, REASON_SOURCE_UNRESOLVED,
                       _pipeline(provider_status=NOT_FOUND))
 
-    candidates, outcome = fetch_external_candidates(provider_paper_id, cfg)
+    candidates, outcome, raw_count = fetch_external_candidates(
+        provider_paper_id, cfg)
     if outcome == UNAVAILABLE:
         reason = _DETAIL_REASONS.get(outcome_detail(outcome),
                                      REASON_PROVIDER_ERROR)
@@ -912,35 +983,40 @@ def _external_for(paper_id, current_record, stats, cfg):
         return failed(STATUS_UNRESOLVED, REASON_SOURCE_UNRESOLVED,
                       _pipeline(resolved=True, provider_status=NOT_FOUND))
 
-    raw_count = len(candidates)
+    valid_count = len(candidates)
     candidates = dedupe_candidates(candidates, doi, title)
+    after_dedupe = len(candidates)
     # No citation source is wired (see RESOLUTION_FIELDS): the citation family
     # simply never fires, rather than being inferred from something weaker.
     #
-    # EVERY candidate that clears the gate is counted, and only then is the
-    # list cut to EXTERNAL_MAX_RESULTS. Counting the cut list made
-    # `after_gate` and `shown` identical by construction, which hid the one
-    # thing the pair was there to show: how much the cap is discarding.
+    # EVERY deduplicated candidate is scored, and only then is the list cut to
+    # EXTERNAL_MAX_RESULTS -- nothing is dropped in between for failing
+    # Qresp's evidence gate. `scored` and `after_dedupe` are therefore the
+    # SAME number below, by construction; that equality is what proves this
+    # policy to anyone reading the pipeline rather than the source.
     #
     # The cut is the EXTERNAL cap, not the internal one. Nothing is added to
-    # reach it: 25 is a ceiling on what passed, never a target.
-    passing = external_recommendations(current_record, candidates, stats,
-                                       limit=None)
-    results = passing[:EXTERNAL_MAX_RESULTS]
+    # reach it: 25 is a ceiling on what was scored, never a target.
+    scored = external_recommendations(current_record, candidates, stats,
+                                      limit=None)
+    results = scored[:EXTERNAL_MAX_RESULTS]
     pipeline = _pipeline(resolved=True, provider_status=FOUND, raw=raw_count,
-                         after_dedupe=len(candidates),
-                         after_gate=len(passing), shown=len(results))
+                         valid=valid_count, after_dedupe=after_dedupe,
+                         scored=len(scored), shown=len(results))
     # An empty list here is an ANSWER, and the two ways of arriving at it are
-    # different facts: the provider had nothing to propose, or it proposed
-    # candidates and none of them cleared Qresp's gate. Both are `ok` -- the
-    # gate is never relaxed to fill the list -- but only one of them is a
-    # statement about the provider's coverage.
+    # different facts -- and, under this policy, the ONLY two: the provider
+    # had nothing to propose, or it proposed candidates but none survived
+    # normalization and de-duplication (every one was unusable, was this
+    # paper itself, or repeated another entry). A non-empty `after_dedupe`
+    # cannot produce an empty `results` any more, because nothing between
+    # de-duplication and the display cap removes a candidate -- see
+    # `_pipeline`'s note on `scored_candidates`.
     if results:
         reason = REASON_OK
     elif raw_count == 0:
         reason = REASON_PROVIDER_EMPTY
     else:
-        reason = REASON_ALL_FILTERED
+        reason = REASON_NO_VALID_CANDIDATES
     _store_cache(paper_id, STATUS_OK, results, cfg, fingerprint, entry,
                  reason=reason, pipeline=pipeline)
     return _external_section(STATUS_OK, results, stale=False, updated_at=now,
@@ -1058,8 +1134,8 @@ def related_research(id, server=None):
     naming this server, it means exactly what it always did: read from the
     local database. Naming an allowlisted federated peer, the record and the
     corpus are read from that peer instead, and everything downstream --
-    scoring, the quality gate, the two result caps, the external provider --
-    is the same code operating on the same shapes.
+    scoring, the evidence gate, the re-ranking, the two result caps, the
+    external provider -- is the same code operating on the same shapes.
 
     Read-only in both modes: it never changes a Paper, a draft, an ownership
     field, a publication state or any curation state, and a federated record

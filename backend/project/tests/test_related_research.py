@@ -492,10 +492,11 @@ class TestExternalProvider(RelatedTestCase):
         cfg = related.config()
         with mock.patch.object(related, 'requests',
                                ProviderStub(recommendations=payload)):
-            candidates, outcome = related.fetch_external_candidates(
+            candidates, outcome, raw_count = related.fetch_external_candidates(
                 "S2-SUBJECT", cfg)
         self.assertEqual(related.FOUND, outcome)
         self.assertEqual(150, len(candidates))
+        self.assertEqual(150, raw_count)
         kept = related.dedupe_candidates(candidates, "10.1000/subject",
                                          "Rareword resonance of gadgetite "
                                          "lattices")
@@ -514,9 +515,10 @@ class TestExternalProvider(RelatedTestCase):
         cfg = related.config()
         with mock.patch.object(related, 'requests',
                                ProviderStub(recommendations=payload)):
-            candidates, _ = related.fetch_external_candidates("S2-SUBJECT",
-                                                              cfg)
+            candidates, _, raw_count = related.fetch_external_candidates(
+                "S2-SUBJECT", cfg)
         self.assertEqual(related.EXTERNAL_CANDIDATE_LIMIT, len(candidates))
+        self.assertEqual(related.EXTERNAL_CANDIDATE_LIMIT, raw_count)
 
     def test_the_candidate_pool_is_the_providers_default_and_not_settable(self):
         # Measured live: the alternative pool ("all-cs") answers with Computer
@@ -678,15 +680,30 @@ class TestExternalProvider(RelatedTestCase):
         self.assertEqual([], body["external"]["results"])
         self.assertIsNone(stub.recommendation_call)
 
-    def test_being_recommended_is_not_by_itself_a_reason_to_show_a_paper(self):
+    def test_being_recommended_is_now_enough_by_itself_to_show_a_paper(self):
+        # The core policy this feature implements: Semantic Scholar
+        # proposing a candidate is enough for it to appear in Recommended
+        # External Papers. Qresp's evidence gate is still computed for every
+        # candidate, but it only RE-RANKS -- it never removes one.
         response, _ = self.fetch()
         external = response.json()["external"]["results"]
         titles = [item["title"] for item in external]
         self.assertIn("Rareword resonance in gadgetite single crystals", titles)
-        self.assertNotIn("A study of data analysis in another discipline",
-                         titles)
-        for item in external:
-            self.assertTrue(item["reasons"])
+        # The candidate with no nameable evidence is no longer excluded --
+        # it is simply ranked behind the one that has some.
+        self.assertIn("A study of data analysis in another discipline", titles)
+        self.assertLess(
+            titles.index("Rareword resonance in gadgetite single crystals"),
+            titles.index("A study of data analysis in another discipline"))
+        by_title = {item["title"]: item for item in external}
+        # Grounded evidence is still named when it exists...
+        self.assertTrue(
+            by_title["Rareword resonance in gadgetite single crystals"][
+                "reasons"])
+        # ...and nothing is invented when it does not.
+        self.assertEqual(
+            [], by_title["A study of data analysis in another discipline"][
+                "reasons"])
 
     def test_external_results_prefer_an_https_doi_link(self):
         response, _ = self.fetch()
@@ -713,18 +730,33 @@ class TestExternalProvider(RelatedTestCase):
                          * related.EXTERNAL_MAX_PAGES,
                          related.EXTERNAL_MAX_RESULTS)
 
-    def test_fewer_passing_candidates_give_a_shorter_list_never_a_padded_one(self):
-        # Nine clear the gate out of a pool of nine plus one that cannot.
-        # Nine is what a reader gets: the list is not topped up to 25, and
-        # the unrelated candidate is not promoted to fill a page.
+    def test_fewer_than_25_deduplicated_candidates_give_a_shorter_list(self):
+        # The list is exactly as long as what survived de-duplication (capped
+        # at 25) -- never padded to fill a page.
+        response, _ = self.fetch(
+            provider=ProviderStub(recommendations=clones(9)))
+        results = response.json()["external"]["results"]
+        self.assertEqual(9, len(results))
+
+    def test_a_weak_candidate_no_longer_shortens_the_list(self):
+        # The exact scenario the OLD gate-as-filter policy handled
+        # differently: nine strong candidates plus one with no nameable
+        # evidence. All TEN are returned now -- nothing is dropped for a
+        # weak or absent evidence verdict, only for being a duplicate or
+        # unusable. The weak one still ranks last: real evidence still
+        # outranks none.
         response, _ = self.fetch(provider=ProviderStub(
             recommendations=clones(9) + [UNRELATED_EXTERNAL]))
         results = response.json()["external"]["results"]
-        self.assertEqual(9, len(results))
-        self.assertNotIn("A study of data analysis in another discipline",
-                         [item["title"] for item in results])
-        for item in results:
+        self.assertEqual(10, len(results))
+        titles = [item["title"] for item in results]
+        self.assertIn("A study of data analysis in another discipline",
+                      titles)
+        self.assertEqual(
+            "A study of data analysis in another discipline", titles[-1])
+        for item in results[:-1]:
             self.assertTrue(item["reasons"])
+        self.assertEqual([], results[-1]["reasons"])
 
     def test_the_internal_list_keeps_its_own_cap_when_the_external_one_grows(self):
         # The same request that returns 25 external results must still return
@@ -802,10 +834,33 @@ class TestTheFeedbackContextIsIssuedHere(RelatedTestCase):
         self.assertEqual([], external["results"])
         self.assertIsNone(external.get("feedback_context"))
 
-    def test_a_list_where_the_gate_rejected_everything_gets_no_context(self):
+    def test_a_weak_candidate_still_gets_a_context(self):
+        # Under the current policy a candidate the OLD gate would have
+        # rejected is still SHOWN (see TestExternalProvider), so it is still
+        # something a reader can rate -- the context must exist for it.
         response, _ = self.fetch(
             provider=ProviderStub(recommendations=[UNRELATED_EXTERNAL]))
-        self.assertIsNone(self.external(response).get("feedback_context"))
+        external = self.external(response)
+        self.assertTrue(external["results"])
+        self.assertIsNotNone(external.get("feedback_context"))
+
+    def test_a_list_with_only_the_paper_itself_gets_no_context(self):
+        # The scenario that still produces zero results under the current
+        # policy: the provider proposed something, but nothing distinct
+        # survived de-duplication (raw_candidates > 0, after_dedupe == 0) --
+        # nothing here failed the evidence gate; there was simply nothing
+        # left to score.
+        self_reference = recommendation(
+            "Rareword resonance of gadgetite lattices",  # == the subject's
+            "A different abstract under the same title.",  # own title
+            doi="10.9999/not-the-real-doi")
+        response, _ = self.fetch(
+            provider=ProviderStub(recommendations=[self_reference]))
+        external = self.external(response)
+        self.assertEqual([], external["results"])
+        self.assertEqual(related.REASON_NO_VALID_CANDIDATES,
+                         external["reason"])
+        self.assertIsNone(external.get("feedback_context"))
 
     def test_an_unavailable_provider_gets_no_context(self):
         stub = ProviderStub(recommendation_mode="timeout")

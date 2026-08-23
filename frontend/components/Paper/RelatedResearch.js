@@ -19,11 +19,27 @@ import RecommendationFeedback from "./RecommendationFeedback";
 // Related Research, computed by the backend at view time (never pinned into
 // the record) from GET /api/paper/{id}/related.
 //
-// Two independent lists: Qresp records the SOURCE server holds, and external
-// papers proposed by Semantic Scholar. Both are already filtered by the
-// backend's quality gate and capped there, so this component renders exactly
-// what it is given and never pads a short list. Every result carries the
-// grounded reasons the backend computed; nothing here invents text.
+// Two independent lists, and TWO DIFFERENT POLICIES -- this component must
+// never blur them together:
+//
+//   Related Qresp Records       every result PASSED Qresp's strict evidence
+//                                gate. Capped at 3. "Why related" is a fair
+//                                heading here: the reasons ARE why it is
+//                                related enough to be shown at all.
+//   Recommended External Papers Semantic Scholar's own candidates,
+//                                RE-RANKED by Qresp's score but never
+//                                filtered by the gate. Capped at 25. A
+//                                result here can carry weak or zero Qresp
+//                                signal and still appear -- being proposed
+//                                by the provider is reason enough. Calling
+//                                that "Why related" or "verified related"
+//                                would misdescribe what the backend did, so
+//                                this list gets its own neutral heading
+//                                ("Qresp ranking signals") and is shown only
+//                                when there is something non-empty to show.
+//
+// Both are already capped by the backend, so this component renders exactly
+// what it is given and never pads a short list.
 //
 // The two lists have DIFFERENT caps and only one of them is paginated.
 // Related Qresp Records is at most three records from one server's corpus and
@@ -92,6 +108,38 @@ const DISCLAIMER =
   "These suggestions are generated automatically from publication metadata " +
   "and research-similarity signals. They may be incomplete or inaccurate. " +
   "Review each paper before relying on the suggested connection.";
+
+// EXTERNAL ONLY, shown once above that list. It says explicitly what the
+// heading above no longer implies: these are the PROVIDER's candidates,
+// merely ordered by Qresp, not a claim that Qresp verified any of them.
+const EXTERNAL_DISCLAIMER =
+  "Suggestions from Semantic Scholar, ordered using Qresp's publication " +
+  "metadata similarity signals. They may be incomplete or inaccurate; " +
+  "review each paper before relying on it.";
+
+// The heading over an external result's grounded evidence, when it has any.
+// Deliberately NOT "Why related": for an external candidate, evidence is
+// what MOVED it up the list, not the reason it is on the list at all -- a
+// candidate with none is still there, just further down.
+const EXTERNAL_REASONS_HEADING = "Qresp ranking signals";
+const INTERNAL_REASONS_HEADING = "Why related";
+
+// Standard "visually hidden but read by assistive tech" pattern: present in
+// the accessibility tree, invisible on screen, never affecting layout. Used
+// for the page-range announcement, which must reach a screen reader without
+// becoming the visible "Showing X-Y of Z" text the product explicitly does
+// not want on screen any more.
+const VISUALLY_HIDDEN_SX = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0, 0, 0, 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
 
 const formatDate = (value) => {
   if (!value) return null;
@@ -214,7 +262,9 @@ const Result = ({ result, server }) => (
       <Box sx={{ mt: 1, minWidth: 0 }}>
         <Typography variant="caption" color="secondary" component="div">
           <Box component="span" sx={{ fontWeight: "bold" }}>
-            Why related
+            {result.source === "external"
+              ? EXTERNAL_REASONS_HEADING
+              : INTERNAL_REASONS_HEADING}
           </Box>
         </Typography>
         <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
@@ -461,7 +511,18 @@ const RelatedResearch = ({ paperId, server }) => {
       {showExternal ? (
         <Fragment>
           <Divider />
-          <Section title="Related External Papers">
+          <Section title="Recommended External Papers">
+            {/* Shown ONCE, above the results -- this is the disclaimer that
+                matters most for this list: it is Semantic Scholar's
+                candidates, merely ordered by Qresp, not a Qresp-verified
+                set. */}
+            <Typography
+              variant="body2"
+              color="secondary"
+              sx={{ mb: 1, wordBreak: "break-word" }}
+            >
+              {EXTERNAL_DISCLAIMER}
+            </Typography>
             {external.stale ? (
               <Note color="error">
                 {staleDate
@@ -476,26 +537,26 @@ const RelatedResearch = ({ paperId, server }) => {
                   <Box
                     sx={{
                       display: "flex",
-                      flexWrap: "wrap",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 1,
+                      justifyContent: "center",
                       mt: 1,
                     }}
                   >
-                    {/* Announced, not merely drawn: a keyboard or screen
-                        reader user changing pages is told what they are now
-                        looking at, without having to count list items. */}
-                    <Typography
-                      variant="body2"
-                      color="secondary"
+                    {/* No visible "Showing X-Y of Z" text. The page count,
+                        the current page (aria-current, built into MUI's
+                        Pagination) and the aria-label below are the
+                        "appropriate aria labels/current page semantics" this
+                        control needs; a screen-reader-only live region
+                        additionally announces the range on every change,
+                        without adding anything a sighted reader sees. */}
+                    <Box
                       role="status"
                       aria-live="polite"
+                      sx={VISUALLY_HIDDEN_SX}
                     >
                       {`Showing ${externalStart + 1}-${
                         externalStart + visibleExternal.length
-                      } of ${externalTotal} related external papers`}
-                    </Typography>
+                      } of ${externalTotal} recommended external papers`}
+                    </Box>
                     <Pagination
                       count={externalPageCount}
                       page={currentExternalPage}
@@ -507,14 +568,10 @@ const RelatedResearch = ({ paperId, server }) => {
                       }}
                       size="small"
                       color="primary"
-                      aria-label="Related external papers pages"
+                      aria-label="Recommended external papers pages"
                     />
                   </Box>
                 ) : null}
-                <Typography variant="caption" color="secondary" component="div">
-                  Candidates proposed by Semantic Scholar; shown only when
-                  Qresp found evidence they are related.
-                </Typography>
                 {/* Only under a list that HAS results, and only with the
                     signed context the backend issues alongside them. "Were
                     these helpful?" under an empty section asks about nothing,

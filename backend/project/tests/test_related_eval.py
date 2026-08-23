@@ -1089,9 +1089,11 @@ class TestExternalDisplayModelling(unittest.TestCase):
             self.assertTrue(pipeline["resolved"])
             self.assertEqual(40, pipeline["raw_candidates"])
             self.assertEqual(40, pipeline["after_dedupe"])
-            self.assertEqual(40, pipeline["after_gate"])
+            # Nothing is filtered by the gate any more: every deduplicated
+            # candidate is scored, so this count always equals `after_dedupe`.
+            self.assertEqual(40, pipeline["scored_candidates"])
             self.assertEqual(related.EXTERNAL_MAX_RESULTS,
-                             pipeline["displayed"])
+                             pipeline["shown"])
 
     def test_the_summary_reports_the_production_pool_on_its_own(self):
         self.collect(external_clones(40))
@@ -1105,9 +1107,9 @@ class TestExternalDisplayModelling(unittest.TestCase):
         self.assertEqual(2, production["records"])
         self.assertEqual(2, production["records_resolved_at_provider"])
         self.assertEqual(80, production["raw_candidates"])
-        self.assertEqual(50, production["displayed"])
+        self.assertEqual(50, production["shown"])
         self.assertEqual({"1": 10, "2": 10, "3": 10, "4": 10, "5": 10},
-                         production["displayed_by_page"])
+                         production["shown_by_page"])
         # The diagnostic pools are still collected, and are still elsewhere.
         self.assertIn(related_eval.POOL_ALL_CS, summary["pools"])
 
@@ -1132,8 +1134,14 @@ class TestExternalDisplayModelling(unittest.TestCase):
             self.assertEqual("", cells[note_at])
 
     def test_the_export_covers_page_one_in_full_and_samples_the_rest(self):
+        # Isolated from the "beyond the display cap" sample below: with the
+        # gate no longer filtering anything, that pool is never empty once
+        # candidates outnumber the cap, so it is switched off here to keep
+        # this test about the page-1-vs-pages-2-5 split alone.
         self.collect(external_clones(40), extra=["--external-review-sample",
-                                                 "6"])
+                                                 "6",
+                                                 "--external-rejected-sample",
+                                                 "0"])
         summary = json.loads(self.read("summary.json"))
         report = summary["external_review_export"]
         # Two records x five page-1 results, exported exhaustively...
@@ -1141,9 +1149,8 @@ class TestExternalDisplayModelling(unittest.TestCase):
         # ...and a bounded, spread-out sample of the deeper pages.
         self.assertEqual(6, report["pages_2_to_5_rows"])
         self.assertEqual(40, report["pages_2_to_5_available"])
-        # Every clone clears the gate here, so there is nothing rejected to
-        # sample and the sheet says so rather than omitting the field.
-        self.assertEqual(0, report["rejected_available"])
+        # 40 candidates, 25 shown per record: 15 are beyond the display cap.
+        self.assertEqual(30, report["rejected_available"])
         self.assertEqual(0, report["rejected_rows"])
         self.assertEqual(16, report["rows"])
         # Spread across pages rather than six rows of page 2.
@@ -1151,18 +1158,20 @@ class TestExternalDisplayModelling(unittest.TestCase):
                          report["deep_sample"]["by_page"])
 
     def test_rejected_candidates_are_exported_so_a_false_negative_is_findable(self):
-        # Without these the sheet contains only candidates that PASSED the
-        # gate, so a reviewer filling it in can only ever produce zero false
-        # negatives -- and that zero is indistinguishable from a measured one.
+        # Without these the sheet contains only candidates a reader was
+        # actually SHOWN, so a reviewer filling it in can only ever produce
+        # zero false negatives -- and that zero is indistinguishable from a
+        # measured one. 30 candidates a record, 25 shown: 5 beyond the cap.
         self.collect(external_clones(10) + rejected_clones(20),
                      extra=["--external-rejected-sample", "8"])
         summary = json.loads(self.read("summary.json"))
         report = summary["external_review_export"]
-        self.assertEqual(40, report["rejected_available"])   # 20 x 2 records
+        self.assertEqual(10, report["rejected_available"])   # 5 x 2 records
         self.assertEqual(8, report["rejected_rows"])
-        # Ten visible per record over two records: five on page 1 each.
+        # 25 visible per record over two records: five on page 1 each, the
+        # other twenty spread over pages 2-5.
         self.assertEqual(10, report["page_1_rows"])
-        self.assertEqual(10, report["pages_2_to_5_available"])
+        self.assertEqual(40, report["pages_2_to_5_available"])
         self.assertEqual(report["page_1_rows"] + report["pages_2_to_5_rows"]
                          + report["rejected_rows"], report["rows"])
         # Spread across score bands rather than eight bottom-scoring ones.
@@ -1170,12 +1179,16 @@ class TestExternalDisplayModelling(unittest.TestCase):
             len(report["rejected_sample"]["by_score_band"]), 1)
         self.assertEqual(2, report["rejected_sample"]["distinct_records"])
 
-        # The exported rejected rows really are candidates the gate rejected.
+        # The extra rows really are candidates a reader was NOT shown. Under
+        # the new policy that is a question of VISIBILITY, not of the gate:
+        # the gate no longer removes anything from this list, so a candidate
+        # it would reject can be on screen and one it accepts can fall past
+        # the display cap.
         rejected_ids = set()
         for line in self.read("raw-results.jsonl").strip().split("\n"):
             record = json.loads(line)
             for candidate in record["external"][related_eval.POOL_DEFAULT]:
-                if candidate["gate_decision"] == "rejected":
+                if not candidate["visible"]:
                     rejected_ids.add(candidate["pair_id"])
         exported = [line.split("\t")[0] for line in
                     self.read(related_eval.EXTERNAL_REVIEW_FILE).split("\n")[1:]
@@ -1205,7 +1218,7 @@ class TestExternalDisplayModelling(unittest.TestCase):
                      extra=["--external-rejected-sample", "0"])
         report = json.loads(self.read("summary.json"))["external_review_export"]
         self.assertEqual(0, report["rejected_rows"])
-        self.assertEqual(40, report["rejected_available"])
+        self.assertEqual(10, report["rejected_available"])
 
     def test_the_export_is_deterministic(self):
         first = None

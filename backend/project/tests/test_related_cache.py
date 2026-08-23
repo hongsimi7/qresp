@@ -214,6 +214,22 @@ class TestAlgorithmVersionInvalidation(CacheTestCase):
                          RelatedResearchCache.objects.first().algorithm_version)
         self.assertNotEqual("3", related.ALGORITHM_VERSION)
 
+    def test_an_entry_written_under_the_gate_filtered_external_list_is_a_miss(self):
+        # The migration THIS bump is for. An entry stamped "4" holds an
+        # external list the quality gate filtered: often far shorter than the
+        # 25 the same record yields now, and sometimes empty for a record that
+        # today has results. Serving it would present the old policy's answer
+        # under the new one's contract, so the stored answer is discarded and
+        # recomputed rather than topped up.
+        self.views(1, env=ENABLED)
+        RelatedResearchCache.objects.update(set__algorithm_version="4")
+        related.reset_caches()
+        _, provider = self.views(1, env=ENABLED)
+        self.assertTrue(provider.calls)
+        self.assertEqual(related.ALGORITHM_VERSION,
+                         RelatedResearchCache.objects.first().algorithm_version)
+        self.assertNotEqual("4", related.ALGORITHM_VERSION)
+
     def test_the_bumped_key_still_namespaces_a_federated_record(self):
         # A version bump must not flatten the server namespace: the same
         # 24-hex id on two Qresp servers is two different papers, and one of
@@ -268,16 +284,49 @@ class TestWhyTheExternalListIsEmpty(CacheTestCase):
         self.assertEqual(related.REASON_PROVIDER_EMPTY, section["reason"])
         self.assertEqual(0, section["pipeline"]["raw_candidates"])
 
-    def test_the_gate_rejected_every_candidate(self):
+    def test_a_gate_rejected_candidate_is_shown_ranked_low_not_removed(self):
+        # The policy this task implements: the evidence gate no longer
+        # empties this list. A candidate with no nameable evidence is still
+        # scored, still ranked, and still shown -- it simply carries no
+        # `reasons`. `REASON_ALL_FILTERED` ("all_candidates_below_quality_
+        # gate") does not fire any more; see
+        # `test_the_provider_proposed_only_the_paper_itself` for what still
+        # empties this list.
         from project.tests.test_related_research import UNRELATED_EXTERNAL
         section = self.external(
             provider=ProviderStub(recommendations=[UNRELATED_EXTERNAL]))
         self.assertEqual("ok", section["status"])
-        self.assertEqual(related.REASON_ALL_FILTERED, section["reason"])
-        # The counts say exactly where they went.
+        self.assertEqual(related.REASON_OK, section["reason"])
+        self.assertEqual(1, len(section["results"]))
+        self.assertEqual([], section["results"][0]["reasons"])
+        # The counts say exactly where it went: proposed, deduplicated,
+        # SCORED (not filtered -- `scored_candidates == after_dedupe` is the
+        # proof), and shown.
         self.assertEqual(1, section["pipeline"]["raw_candidates"])
+        self.assertEqual(1, section["pipeline"]["valid_candidates"])
         self.assertEqual(1, section["pipeline"]["after_dedupe"])
-        self.assertEqual(0, section["pipeline"]["after_gate"])
+        self.assertEqual(1, section["pipeline"]["scored_candidates"])
+        self.assertEqual(1, section["pipeline"]["shown"])
+
+    def test_the_provider_proposed_only_the_paper_itself(self):
+        # What STILL empties this list under the current policy: nothing
+        # survived de-duplication, not "the gate rejected everything".
+        from project.tests.test_related_research import recommendation
+        self_reference = recommendation(
+            "Rareword resonance of gadgetite lattices",  # the subject's own
+            "A different abstract under the same title.",  # title
+            doi="10.9999/not-the-real-doi")
+        section = self.external(
+            provider=ProviderStub(recommendations=[self_reference]))
+        self.assertEqual("ok", section["status"])
+        self.assertEqual(related.REASON_NO_VALID_CANDIDATES,
+                         section["reason"])
+        self.assertEqual([], section["results"])
+        self.assertEqual(1, section["pipeline"]["raw_candidates"])
+        self.assertEqual(1, section["pipeline"]["valid_candidates"])
+        self.assertEqual(0, section["pipeline"]["after_dedupe"])
+        self.assertEqual(0, section["pipeline"]["scored_candidates"])
+        self.assertEqual(0, section["pipeline"]["shown"])
 
     def test_this_paper_is_not_in_the_providers_index(self):
         stub = ProviderStub()

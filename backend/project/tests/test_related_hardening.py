@@ -254,42 +254,51 @@ class TestStaleRefreshRunsOnce(CacheTestCase):
 # ------------------------------------------------- 3. pipeline correctness
 
 class TestExternalPipelineCounts(CacheTestCase):
-    def test_after_gate_can_exceed_what_is_shown(self):
-        # Forty candidates clear the gate; twenty-five are shown. The old code
-        # counted the truncated list, so these were always equal and the cap
-        # was invisible.
+    def test_scored_equals_after_dedupe_and_can_exceed_shown(self):
+        # Forty candidates are deduplicated and SCORED (none removed for a
+        # low or absent evidence verdict); twenty-five are shown. The old
+        # code counted the gate-filtered list here, so `after_gate` and
+        # `shown` were always equal and the cap was invisible. Under the
+        # current policy `scored_candidates` is deliberately identical to
+        # `after_dedupe` -- that equality IS the proof nothing was filtered
+        # -- and it is `shown`, not `scored_candidates`, that the cap acts on.
         from project.tests.test_related_research import clones
         section = self.external(
             provider=ProviderStub(recommendations=clones(40)))
         pipeline = section["pipeline"]
         self.assertEqual(40, pipeline["raw_candidates"])
+        self.assertEqual(40, pipeline["valid_candidates"])
         self.assertEqual(40, pipeline["after_dedupe"])
-        self.assertEqual(40, pipeline["after_gate"])
+        self.assertEqual(40, pipeline["scored_candidates"])
+        self.assertEqual(pipeline["after_dedupe"], pipeline["scored_candidates"])
         self.assertEqual(related.EXTERNAL_MAX_RESULTS, pipeline["shown"])
-        self.assertGreater(pipeline["after_gate"], pipeline["shown"])
+        self.assertGreater(pipeline["scored_candidates"], pipeline["shown"])
         self.assertEqual(related.EXTERNAL_MAX_RESULTS, len(section["results"]))
 
-    def test_the_four_counts_are_distinguishable_at_every_stage(self):
-        # raw > after_dedupe > after_gate > shown, all four different, so no
-        # pair of them can be silently equal by construction.
+    def test_the_funnel_counts_are_distinguishable_at_every_stage(self):
+        # raw > valid > after_dedupe > shown. `after_dedupe` and
+        # `scored_candidates` are the ONE deliberate exception -- see the
+        # test above -- so this proves the OTHER three stages still remove
+        # something real: two entries with no title at all (dropped by
+        # normalization, before de-duplication even runs) and two exact
+        # repeats (dropped by de-duplication).
         from project.tests.test_related_research import (UNRELATED_EXTERNAL,
                                                          clones)
         passing = clones(30)
-        # Two exact repeats (same DOI) and two candidates the gate rejects.
         payload = (passing + passing[:2]
-                   + [UNRELATED_EXTERNAL,
-                      dict(UNRELATED_EXTERNAL, paperId="other-unrelated",
-                           title="Another unrelated discipline entirely",
-                           externalIds={"DOI": "10.2000/external-c"})])
+                   + [dict(UNRELATED_EXTERNAL, paperId="no-title-1", title=""),
+                      dict(UNRELATED_EXTERNAL, paperId="no-title-2",
+                           title="   ")])
         section = self.external(provider=ProviderStub(recommendations=payload))
         pipeline = section["pipeline"]
         self.assertEqual(34, pipeline["raw_candidates"])
-        self.assertEqual(32, pipeline["after_dedupe"])
-        self.assertEqual(30, pipeline["after_gate"])
+        self.assertEqual(32, pipeline["valid_candidates"])
+        self.assertEqual(30, pipeline["after_dedupe"])
+        self.assertEqual(30, pipeline["scored_candidates"])
         self.assertEqual(25, pipeline["shown"])
         self.assertEqual(25, len(section["results"]))
 
-    def test_shown_is_never_more_than_the_cap_and_never_more_than_the_gate(self):
+    def test_shown_is_never_more_than_the_cap_and_never_more_than_scored(self):
         from project.tests.test_related_research import clones
         for provider in (ProviderStub(), ProviderStub(recommendations=[]),
                          ProviderStub(recommendations=clones(40))):
@@ -297,7 +306,8 @@ class TestExternalPipelineCounts(CacheTestCase):
             pipeline = section["pipeline"]
             self.assertLessEqual(pipeline["shown"],
                                  related.EXTERNAL_MAX_RESULTS)
-            self.assertLessEqual(pipeline["shown"], pipeline["after_gate"])
+            self.assertLessEqual(pipeline["shown"],
+                                 pipeline["scored_candidates"])
             self.assertEqual(len(section["results"]), pipeline["shown"])
 
     def test_a_cache_hit_reports_the_same_reason_and_pipeline(self):
@@ -332,7 +342,8 @@ class TestExternalPipelineCounts(CacheTestCase):
         self.external()
         stored = RelatedResearchCache.objects.first().pipeline
         self.assertEqual({"resolved", "provider_status", "raw_candidates",
-                          "after_dedupe", "after_gate", "shown"}, set(stored))
+                          "valid_candidates", "after_dedupe",
+                          "scored_candidates", "shown"}, set(stored))
         for key, value in stored.items():
             self.assertIsInstance(value, (bool, int, str), key)
         # Nothing from the provider's payload.

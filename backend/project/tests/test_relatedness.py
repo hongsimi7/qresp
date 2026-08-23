@@ -545,5 +545,129 @@ class TestExternalProfiles(unittest.TestCase):
         self.assertEqual(["last"], [p.key for p, _ in ranked])
 
 
+class TestRerankExternal(unittest.TestCase):
+    """`rerank_external` is `rank`'s twin for Recommended External Papers, and
+    the one thing that must never be true of it is what IS true of `rank`:
+    a candidate is never dropped for failing `assess()`. Only a missing title
+    (a data floor, not a relatedness judgement) removes one.
+    """
+
+    def build(self, current, candidates, corpus, limit=None):
+        stats = stats_for(corpus)
+        return R.rerank_external(R.build_internal_profile(current),
+                                 candidates, stats, frozenset(), limit)
+
+    def test_a_candidate_that_fails_the_strict_gate_is_still_returned(self):
+        # The exact scenario `TestExternalProfiles` shows `rank()` dropping --
+        # here it must survive.
+        current = record("a", "Rareword resonance of gadgetite",
+                         "Rareword resonance in gadgetite lattices probed "
+                         "with a cryogenic spectrometer.")
+        good = R.build_external_profile({
+            "key": "X1", "doi": "10.9999/x1", "provider_rank": 0,
+            "title": "Rareword resonance in gadgetite lattices",
+            "abstract": "Rareword resonance of gadgetite lattices probed by "
+                        "a cryogenic spectrometer.",
+            "year": 2022, "authors": ["Someone Else"], "fields": ["Physics"]})
+        bad = R.build_external_profile({
+            "key": "X2", "doi": "10.9999/x2", "provider_rank": 1,
+            "title": "A study of data analysis in another discipline",
+            "abstract": "This study presents a simulation and data analysis.",
+            "year": 2022, "authors": ["Nobody Here"], "fields": ["Economics"]})
+        ranked = self.build(current, [bad, good], filler(20) + [current])
+        keys = [p.key for p, _assessment in ranked]
+        self.assertIn("X1", keys)
+        self.assertIn("X2", keys)
+        # Real evidence still outranks none.
+        self.assertEqual(["X1", "X2"], keys)
+        # The gate's OWN verdict rides along as a diagnostic; it is computed,
+        # just never consulted to decide inclusion.
+        verdicts = {p.key: a.passes for p, a in ranked}
+        self.assertTrue(verdicts["X1"])
+        self.assertFalse(verdicts["X2"])
+
+    def test_ties_are_broken_by_provider_rank_ascending(self):
+        # Two candidates with IDENTICAL evidence (same title/abstract shape,
+        # different labels) score the same; the one the provider ranked
+        # first must come first here too.
+        current = record("a", "Rareword resonance of gadgetite",
+                         "Rareword resonance in gadgetite lattices.")
+        text = "Nothing shared with the current record at all."
+        earlier = R.build_external_profile({
+            "key": "earlier", "provider_rank": 3,
+            "title": "Unrelated subject one", "abstract": text})
+        later = R.build_external_profile({
+            "key": "later", "provider_rank": 7,
+            "title": "Unrelated subject two", "abstract": text})
+        # Handed in the OPPOSITE order, so a passing test cannot be an
+        # accident of input order.
+        ranked = self.build(current, [later, earlier], filler(20) + [current])
+        self.assertEqual(["earlier", "later"], [p.key for p, _ in ranked])
+
+    def test_score_still_outranks_provider_rank(self):
+        # The tie-break only applies to a TIE. A later-ranked candidate with
+        # real evidence still beats an earlier-ranked one with none.
+        current = record("a", "Rareword resonance of gadgetite",
+                         "Rareword resonance in gadgetite lattices probed "
+                         "with a cryogenic spectrometer.")
+        first_but_weak = R.build_external_profile({
+            "key": "weak", "provider_rank": 0,
+            "title": "Unrelated subject entirely",
+            "abstract": "Nothing to do with the record at hand."})
+        last_but_strong = R.build_external_profile({
+            "key": "strong", "provider_rank": 99,
+            "title": "Rareword resonance of gadgetite films",
+            "abstract": "Rareword resonance in gadgetite lattices probed "
+                        "with a cryogenic spectrometer."})
+        ranked = self.build(current, [first_but_weak, last_but_strong],
+                            filler(20) + [current])
+        self.assertEqual(["strong", "weak"], [p.key for p, _ in ranked])
+
+    def test_untitled_candidates_are_still_dropped(self):
+        # The one floor that still applies: a candidate with no title is not
+        # a relatedness judgement, it is unusable data.
+        current = record("a", "Rareword resonance of gadgetite",
+                         "Rareword resonance of gadgetite lattices.")
+        untitled = R.build_external_profile({
+            "key": "notitle", "title": "",
+            "abstract": "Rareword resonance of gadgetite lattices."})
+        ranked = self.build(current, [untitled], filler(20) + [current])
+        self.assertEqual([], ranked)
+
+    def test_limit_none_returns_every_scored_candidate_in_order(self):
+        current = record("a", "Rareword resonance of gadgetite",
+                         "Rareword resonance in gadgetite lattices.")
+        candidates = [R.build_external_profile({
+            "key": "c%d" % i, "provider_rank": i,
+            "title": "Unrelated candidate %d" % i,
+            "abstract": "Shares nothing with the current record."})
+            for i in range(12)]
+        ranked = self.build(current, candidates, filler(20) + [current],
+                            limit=None)
+        self.assertEqual(12, len(ranked))
+        capped = self.build(current, candidates, filler(20) + [current],
+                            limit=5)
+        self.assertEqual(5, len(capped))
+        # The cap takes the FRONT of the already-ordered list, never a
+        # different subset.
+        self.assertEqual([p.key for p, _ in ranked][:5],
+                         [p.key for p, _ in capped])
+
+    def test_a_candidate_with_no_provider_rank_still_sorts_deterministically(self):
+        # Internal profiles (and any hand-built external one) carry no
+        # provider_rank at all. Two such candidates tied on score must not
+        # raise or sort arbitrarily.
+        current = record("a", "Rareword resonance of gadgetite",
+                         "Rareword resonance of gadgetite lattices.")
+        one = R.build_external_profile({
+            "key": "one", "title": "Unrelated subject A",
+            "abstract": "Nothing shared."})
+        two = R.build_external_profile({
+            "key": "two", "title": "Unrelated subject B",
+            "abstract": "Nothing shared."})
+        ranked = self.build(current, [one, two], filler(20) + [current])
+        self.assertEqual({"one", "two"}, {p.key for p, _ in ranked})
+
+
 if __name__ == "__main__":
     unittest.main()
