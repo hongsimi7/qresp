@@ -132,63 +132,57 @@ describe("search page states", () => {
     expect(reload).toHaveBeenCalled();
   });
 
-  it("keeps the results of the nodes that worked when only some failed", () => {
+  it("shows the working sources' records with no warning at all", () => {
+    // Federation is plumbing. A visitor did not choose which nodes back this
+    // search and can do nothing about one being down, so a warning above a
+    // page that is working asks them to worry about a move they do not have.
     renderSearch({
       initialdata: dataWith({ [ALPHA]: [PAPER("a", "From alpha")] }),
       error: { is: true, msg: "", failed: [BETA], total: false },
     });
 
-    // The successful node's records are still there...
     expect(screen.getByText("From alpha")).toBeInTheDocument();
     expect(screen.getByTestId("record-count")).toHaveTextContent(
       "1 Records Available"
     );
-    // ...and the failure is a warning beside them, not instead of them.
-    const warning = screen.getByTestId("search-partial-failure");
-    expect(warning).toHaveTextContent(ONE_UNAVAILABLE);
-    expect(warning).not.toHaveTextContent(BETA);
+    expect(screen.queryByTestId("search-partial-failure")).toBeNull();
+    expect(screen.queryByText(/records are missing/i)).toBeNull();
+    expect(screen.queryByText(/source is unavailable/i)).toBeNull();
     expect(screen.queryByTestId("search-unavailable")).toBeNull();
     expect(setAlert).not.toHaveBeenCalled();
   });
 
-  it("offers a retry on the partial failure, not just on the total one", () => {
-    // A node that was down when this page rendered server-side can only be
-    // re-asked by reloading. Without a control the reader has to guess that.
+  it("offers no retry when the page is working, only when it is not", () => {
+    // There is nothing to retry FROM: the records the reader asked for are
+    // on screen. The retry belongs to the total failure, where they are not.
     renderSearch({
       initialdata: dataWith({ [ALPHA]: [PAPER("a", "From alpha")] }),
       error: { is: true, msg: "", failed: [BETA], total: false },
     });
-    const warning = screen.getByTestId("search-partial-failure");
-    within(warning)
-      .getByRole("button", { name: /retry/i })
-      .click();
-    expect(reload).toHaveBeenCalled();
-    // The records that DID arrive are untouched by asking again.
-    expect(screen.getByText("From alpha")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
   });
 
-  it("names no institution, however the node is registered", () => {
-    // The registry knows this node as "Duke University". A public outage
-    // notice must not say so: the institution did not cause the outage and
-    // the reader cannot act on the name.
+  it("names no institution when everything is down either", () => {
+    // The registry knows this node as "Duke University". The error a reader
+    // DOES see must not put an institution's name on an outage.
     renderSearch({
-      initialdata: dataWith({ [ALPHA]: [PAPER("a", "From alpha")] }),
-      error: { is: true, msg: "", failed: [BETA], total: false },
+      initialdata: dataWith({}),
+      error: { is: true, msg: "", failed: [BETA], total: true },
       servernames: { [BETA]: "Duke University" },
     });
-    const warning = screen.getByTestId("search-partial-failure");
-    expect(warning).toHaveTextContent(ONE_UNAVAILABLE);
-    expect(warning).not.toHaveTextContent(/duke/i);
-    expect(warning).not.toHaveTextContent(BETA);
+    const panel = screen.getByTestId("search-unavailable");
+    expect(panel).toHaveTextContent(ONE_UNAVAILABLE);
+    expect(panel).not.toHaveTextContent(/duke/i);
+    expect(panel).not.toHaveTextContent(BETA);
   });
 
   it("counts the sources when more than one is down", () => {
     renderSearch({
-      initialdata: dataWith({ [ALPHA]: [PAPER("a", "From alpha")] }),
+      initialdata: dataWith({}),
       error: { is: true, msg: "", failed: [BETA, "https://gamma.example.org"],
-               total: false },
+               total: true },
     });
-    expect(screen.getByTestId("search-partial-failure")).toHaveTextContent(
+    expect(screen.getByTestId("search-unavailable")).toHaveTextContent(
       /2 sources are unavailable/i
     );
   });
@@ -285,19 +279,22 @@ describe("search page: record-source vs filter failures", () => {
     expect(setAlert).not.toHaveBeenCalled();
   });
 
-  it("still says records are missing when a node's records really are", () => {
+  it("says nothing at all when a node's records are missing but others answered", () => {
+    // The distinction this describe block exists for is unchanged: a failed
+    // RECORDS endpoint and a failed FILTER endpoint are different events.
+    // What changed is that the first no longer warns while the page works.
     withError({ failed: [BETA] });
-    const notice = screen.getByTestId("search-partial-failure");
-    expect(notice).toHaveTextContent(/records are missing/i);
-    expect(notice).toHaveTextContent(ONE_UNAVAILABLE);
+    expect(screen.queryByTestId("search-partial-failure")).toBeNull();
     expect(screen.queryByTestId("search-filter-failure")).toBeNull();
+    expect(screen.getByText("From alpha")).toBeInTheDocument();
   });
 
-  it("shows both notices when the two failures happen together", () => {
+  it("keeps the filter notice when both kinds of failure happen together", () => {
+    // The filter notice survives because it is about something the reader
+    // CAN act on -- a dropdown that is short of options, which changes what
+    // they can search for. The missing-records banner does not.
     withError({ failed: [BETA], filters: { [ALPHA]: ["authors"] } });
-    expect(screen.getByTestId("search-partial-failure")).toHaveTextContent(
-      ONE_UNAVAILABLE
-    );
+    expect(screen.queryByTestId("search-partial-failure")).toBeNull();
     expect(screen.getByTestId("search-filter-failure")).toHaveTextContent(
       /authors/
     );

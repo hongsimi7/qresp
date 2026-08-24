@@ -217,30 +217,19 @@ const search = ({
       />
       <Container>
         <Box sx={{ display: "flex", flexDirection: "column", m: 2 }}>
-          {/* Some nodes answered and some did not. The ones that answered are
-              still worth reading, so this is a notice beside the results --
-              never a modal over them, which cannot be dismissed past. */}
-          {!unavailable && failed.length > 0 ? (
-            <Box sx={{ mb: 2 }} data-testid="search-partial-failure">
-              <Alert
-                severity="warning"
-                // Reloading is the only thing that can fix a node that was
-                // down when the page was rendered server-side, and without
-                // this the reader's only option was to guess that.
-                action={
-                  <RegularStyledButton onClick={refresh}>
-                    Retry
-                  </RegularStyledButton>
-                }
-                // A node URL is long and a phone is narrow.
-                sx={{ overflowWrap: "anywhere" }}
-              >
-                {`Some records are missing from these results — ${sourcesUnavailable(
-                  failed
-                )}.`}
-              </Alert>
-            </Box>
-          ) : null}
+          {/* NO banner when only some sources failed.
+              
+              Federation is plumbing. A visitor searching for a paper did not
+              choose which nodes back this search, cannot tell which node
+              would have held their paper, and cannot do anything about one
+              being down -- so a warning above every result asked them to
+              worry about something they have no move on, on a page that was
+              working. The results that DID arrive are shown normally.
+              
+              The failure is not swallowed: `error.failed` still carries the
+              exact origins for an operator reading the response, and the
+              TOTAL failure below still says so plainly and offers a retry,
+              because there the page genuinely has nothing to show. */}
 
           {/* Records ARE here; some of the dropdowns above the table just
               have fewer options than they should. Announcing that as missing

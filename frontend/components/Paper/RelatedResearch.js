@@ -26,7 +26,7 @@ import RecommendationFeedback from "./RecommendationFeedback";
 //                                gate. Capped at 3. "Why related" is a fair
 //                                heading here: the reasons ARE why it is
 //                                related enough to be shown at all.
-//   Recommended External Papers Semantic Scholar's own candidates,
+//   Related External Papers    Semantic Scholar's own candidates,
 //                                RE-RANKED by Qresp's score but never
 //                                filtered by the gate. Capped at 25. A
 //                                result here can carry weak or zero Qresp
@@ -570,7 +570,15 @@ const RelatedResearch = ({ paperId, server }) => {
       {showExternal ? (
         <Fragment>
           <Divider />
-          <Section title="Recommended External Papers">
+          {/* "Related External Papers", not "Recommended".
+              
+              The list has two possible sources and only one of them
+              recommends anything: the citations fallback returns papers that
+              CITE this one, which nobody recommended. A heading that says
+              "Recommended" is false for half the cases it has to cover, so
+              the heading states the relationship both sources share and each
+              RESULT carries its own precise provenance badge. */}
+          <Section title="Related External Papers">
             {/* Shown ONCE, above the results -- this is the disclaimer that
                 matters most for this list: it is Semantic Scholar's
                 candidates, merely ordered by Qresp, not a Qresp-verified
@@ -614,7 +622,7 @@ const RelatedResearch = ({ paperId, server }) => {
                     >
                       {`Showing ${externalStart + 1}-${
                         externalStart + visibleExternal.length
-                      } of ${externalTotal} recommended external papers`}
+                      } of ${externalTotal} related external papers`}
                     </Box>
                     <Pagination
                       count={externalPageCount}
@@ -627,7 +635,7 @@ const RelatedResearch = ({ paperId, server }) => {
                       }}
                       size="small"
                       color="primary"
-                      aria-label="Recommended external papers pages"
+                      aria-label="Related external papers pages"
                     />
                   </Box>
                 ) : null}

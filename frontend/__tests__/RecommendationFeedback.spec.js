@@ -82,6 +82,61 @@ const rating = (value) => screen.getByTestId(`feedback-rating-${value}`);
 describe("recommendation feedback", () => {
   afterEach(() => jest.resetAllMocks());
 
+  // The block asks the reader for something, which makes it a different kind
+  // of thing from the list above it. Without a rule and real space it read as
+  // a sixth search result.
+  describe("how it sits under the results", () => {
+    const styleOf = (node) => window.getComputedStyle(node);
+
+    it("is separated from the results by a rule and real space", async () => {
+      renderSection(3);
+      const block = await screen.findByTestId("recommendation-feedback");
+      const style = styleOf(block);
+      expect(style.borderTopStyle).toBe("solid");
+      expect(parseFloat(style.borderTopWidth)).toBeGreaterThan(0);
+      expect(parseFloat(style.paddingTop)).toBeGreaterThanOrEqual(16);
+      expect(parseFloat(style.marginTop)).toBeGreaterThanOrEqual(24);
+    });
+
+    it("is centered at a readable width", async () => {
+      renderSection(3);
+      const style = styleOf(await screen.findByTestId("recommendation-feedback"));
+      expect(style.marginLeft).toBe("auto");
+      expect(style.marginRight).toBe("auto");
+      expect(parseFloat(style.maxWidth)).toBeLessThanOrEqual(560);
+      expect(parseFloat(style.maxWidth)).toBeGreaterThan(0);
+    });
+
+    it("spaces its parts with ONE rule, not a different margin each", async () => {
+      // Rating group, reasons, comment, button and status are siblings in a
+      // flex column with a single gap. That is what stopped the gaps looking
+      // arbitrary, and it is what keeps them from colliding on a phone.
+      const user = userEvent.setup();
+      renderSection(3);
+      const block = await screen.findByTestId("recommendation-feedback");
+      const style = styleOf(block);
+      expect(style.display).toBe("flex");
+      expect(style.flexDirection).toBe("column");
+      expect(parseFloat(style.gap)).toBeGreaterThan(0);
+
+      // With a low rating every optional part is on screen at once; none of
+      // them carries its own top margin to fight the gap.
+      await user.click(screen.getByTestId("feedback-rating-1"));
+      const reasons = await screen.findByTestId("feedback-reasons");
+      expect(parseFloat(styleOf(reasons).marginTop) || 0).toBe(0);
+    });
+
+    it("keeps the signed-out prompt in the same frame", async () => {
+      // The two states must not shift the page under a reader who signs in.
+      renderSection(3, { authenticated: false });
+      const block = await screen.findByTestId("recommendation-feedback-signin");
+      const style = styleOf(block);
+      expect(style.borderTopStyle).toBe("solid");
+      expect(style.marginLeft).toBe("auto");
+      expect(style.marginRight).toBe("auto");
+    });
+  });
+
   describe("signed in", () => {
     it("asks whether the recommendations were helpful", async () => {
       renderSection(3);
@@ -305,7 +360,7 @@ describe("recommendation feedback", () => {
       renderSection(23);
       await widget();
       const pager = screen.getByRole("navigation", {
-        name: /recommended external papers pages/i,
+        name: /related external papers pages/i,
       });
       await userEvent.click(
         within(pager).getByRole("button", { name: /go to page 3/i })
@@ -471,7 +526,7 @@ describe("recommendation feedback", () => {
   describe("nothing to rate", () => {
     it("renders no widget when there are no recommendations", async () => {
       renderSection(0);
-      await screen.findByRole("heading", { name: /recommended external papers/i });
+      await screen.findByRole("heading", { name: /related external papers/i });
       expect(
         screen.queryByTestId("recommendation-feedback")
       ).not.toBeInTheDocument();
@@ -484,7 +539,7 @@ describe("recommendation feedback", () => {
       // An older backend, or a deployment with no signing secret. A rating
       // the server cannot verify is one it will refuse anyway.
       renderSection(3, { context: null });
-      await screen.findByRole("heading", { name: /recommended external papers/i });
+      await screen.findByRole("heading", { name: /related external papers/i });
       expect(
         screen.queryByTestId("recommendation-feedback")
       ).not.toBeInTheDocument();

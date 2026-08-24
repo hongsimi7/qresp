@@ -151,7 +151,17 @@ const RecommendationFeedback = ({
   if (!authenticated) {
     return (
       <Box
-        sx={{ mt: 2, mx: "auto", maxWidth: 480, textAlign: "center" }}
+        // The same frame as the signed-in block: a rule, real space above
+        // it, and the same width. The two states must not shift the page.
+        sx={{
+          borderTop: 1,
+          borderColor: "divider",
+          pt: 3,
+          mt: 4,
+          mx: "auto",
+          maxWidth: 480,
+          textAlign: "center",
+        }}
         data-testid="recommendation-feedback-signin"
       >
         <Typography variant="body2" sx={{ fontWeight: "bold", mb: 0.5 }}>
@@ -242,7 +252,24 @@ const RecommendationFeedback = ({
 
   return (
     <Box
-      sx={{ mt: 2, mx: "auto", maxWidth: 480 }}
+      sx={{
+        // A rule and real space above it, so the feedback block reads as a
+        // separate thing being asked rather than as a sixth search result.
+        borderTop: 1,
+        borderColor: "divider",
+        pt: 3,
+        mt: 4,
+        mx: "auto",
+        // Comfortable to read and to reach on a phone; the whole block is
+        // centered rather than hugging the left edge under a wide list.
+        maxWidth: 480,
+        // ONE spacing rule for the whole stack -- rating group, reasons,
+        // comment, button, status -- instead of a different mt on each,
+        // which is what made the gaps look arbitrary.
+        display: "flex",
+        flexDirection: "column",
+        gap: 2,
+      }}
       data-testid="recommendation-feedback"
     >
       {/* The heading, the rating controls and the anchor text are ONE
@@ -295,7 +322,7 @@ const RecommendationFeedback = ({
       </Box>
 
       {rating !== null && rating <= LOW_RATING ? (
-        <Box sx={{ mt: 1.5 }} data-testid="feedback-reasons">
+        <Box data-testid="feedback-reasons">
           <Typography variant="body2" component="div" id="feedback-reasons-label">
             What went wrong? (optional)
           </Typography>
@@ -321,7 +348,7 @@ const RecommendationFeedback = ({
 
       {rating !== null ? (
         <Fragment>
-          <Box sx={{ mt: 1 }}>
+          <Box>
             <TextField
               size="small"
               fullWidth
@@ -338,7 +365,7 @@ const RecommendationFeedback = ({
               slotProps={{ htmlInput: { maxLength: MAX_COMMENT } }}
             />
           </Box>
-          <Box sx={{ mt: 1 }}>
+          <Box>
             <RegularStyledButton
               onClick={() => send(rating, reasons, comment)}
               disabled={status === "saving"}
@@ -359,7 +386,7 @@ const RecommendationFeedback = ({
         color={
           status === "failed" || status === "expired" ? "error" : "secondary"
         }
-        sx={{ mt: 0.5, minHeight: "1.2em" }}
+        sx={{ minHeight: "1.2em" }}
       >
         {message || ""}
       </Typography>

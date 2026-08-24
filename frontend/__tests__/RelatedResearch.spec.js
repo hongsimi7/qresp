@@ -189,7 +189,7 @@ describe("RelatedResearch", () => {
   it("keeps the internal and external lists separate", async () => {
     renderSection(payload());
     const internal = await sectionFor(/related qresp records/i);
-    const external = await sectionFor(/recommended external papers/i);
+    const external = await sectionFor(/related external papers/i);
     expect(
       within(internal).getByText(/gadgetite thin films/)
     ).toBeInTheDocument();
@@ -244,7 +244,7 @@ describe("RelatedResearch", () => {
 
   it("marks external results with their provenance and internal results without it", async () => {
     renderSection(payload());
-    const external = await sectionFor(/recommended external papers/i);
+    const external = await sectionFor(/related external papers/i);
     expect(
       within(external).getByText(/recommended by semantic scholar/i)
     ).toBeInTheDocument();
@@ -280,7 +280,7 @@ describe("RelatedResearch", () => {
       })
     );
     const internal = await sectionFor(/related qresp records/i);
-    const external = await sectionFor(/recommended external papers/i);
+    const external = await sectionFor(/related external papers/i);
     expect(within(internal).getAllByTestId("related-result")).toHaveLength(5);
     expect(within(external).getAllByTestId("related-result")).toHaveLength(5);
   });
@@ -390,7 +390,7 @@ describe("RelatedResearch", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/gadgetite thin films/)).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: /recommended external papers/i })
+      screen.queryByRole("heading", { name: /related external papers/i })
     ).not.toBeInTheDocument();
     expect(
       screen.queryByText(/recommended by semantic scholar/i)
@@ -656,7 +656,7 @@ describe("RelatedResearch", () => {
       renderSection(
         externalWith({ reason: "provider_returned_no_candidates" })
       );
-      const external = await sectionFor(/recommended external papers/i);
+      const external = await sectionFor(/related external papers/i);
       expect(
         within(external).getByText(
           "Semantic Scholar did not return external recommendations for this paper."
@@ -668,7 +668,7 @@ describe("RelatedResearch", () => {
       renderSection(
         externalWith({ reason: "no_valid_candidates_after_dedupe" })
       );
-      const external = await sectionFor(/recommended external papers/i);
+      const external = await sectionFor(/related external papers/i);
       expect(
         within(external).getByText(/none carried enough usable publication metadata/i)
       ).toBeInTheDocument();
@@ -686,7 +686,7 @@ describe("RelatedResearch", () => {
         "some_reason_this_build_has_never_heard_of",
       ]) {
         const { unmount } = renderSection(externalWith({ reason }));
-        const external = await sectionFor(/recommended external papers/i);
+        const external = await sectionFor(/related external papers/i);
         expect(
           within(external).queryByText(
             "No sufficiently related papers were found."
@@ -705,7 +705,7 @@ describe("RelatedResearch", () => {
       renderSection(
         externalWith({ status: "unavailable", reason: "provider_timeout" })
       );
-      const failed = await sectionFor(/recommended external papers/i);
+      const failed = await sectionFor(/related external papers/i);
       expect(
         within(failed).getByRole("button", { name: /try again/i })
       ).toBeInTheDocument();
@@ -715,7 +715,7 @@ describe("RelatedResearch", () => {
       renderSection(
         externalWith({ reason: "provider_returned_no_candidates" })
       );
-      const answered = await sectionFor(/recommended external papers/i);
+      const answered = await sectionFor(/related external papers/i);
       expect(
         within(answered).queryByRole("button", { name: /try again/i })
       ).not.toBeInTheDocument();
@@ -725,7 +725,7 @@ describe("RelatedResearch", () => {
       renderSection(
         externalWith({ status: "unavailable", reason: "provider_rate_limited" })
       );
-      const external = await sectionFor(/recommended external papers/i);
+      const external = await sectionFor(/related external papers/i);
       expect(
         within(external).getByText(/external recommendations are unavailable/i)
       ).toBeInTheDocument();
@@ -740,7 +740,7 @@ describe("RelatedResearch", () => {
       renderSection(
         externalWith({ status: "unavailable", reason: "provider_timeout" })
       );
-      const external = await sectionFor(/recommended external papers/i);
+      const external = await sectionFor(/related external papers/i);
       expect(
         within(external).getByText(/external recommendations are unavailable/i)
       ).toBeInTheDocument();
@@ -753,7 +753,7 @@ describe("RelatedResearch", () => {
           reason: "source_paper_not_in_provider_index",
         })
       );
-      const external = await sectionFor(/recommended external papers/i);
+      const external = await sectionFor(/related external papers/i);
       expect(
         within(external).getByText(/could not be matched in the external index/i)
       ).toBeInTheDocument();
@@ -914,7 +914,7 @@ describe("RelatedResearch", () => {
       });
 
     const externalTitles = async () => {
-      const section = await sectionFor(/recommended external papers/i);
+      const section = await sectionFor(/related external papers/i);
       return within(section)
         .getAllByTestId("related-result")
         .map((node) => node.querySelector("a, span").textContent);
@@ -922,7 +922,7 @@ describe("RelatedResearch", () => {
 
     const pager = () =>
       screen.getByRole("navigation", {
-        name: /recommended external papers pages/i,
+        name: /related external papers pages/i,
       });
 
     it("shows five external results per page", async () => {
@@ -938,7 +938,7 @@ describe("RelatedResearch", () => {
 
     it("offers one page per five results and no more than five pages", async () => {
       renderSection(paged(23));
-      await sectionFor(/recommended external papers/i);
+      await sectionFor(/related external papers/i);
       // 23 results => ceil(23 / 5) = 5 pages.
       expect(
         within(pager()).getByRole("button", { name: /go to page 5/i })
@@ -952,7 +952,7 @@ describe("RelatedResearch", () => {
       // A server that has not been redeployed, or one that ever returns more
       // than it promises, must not produce a page the contract does not have.
       renderSection(paged(60));
-      await sectionFor(/recommended external papers/i);
+      await sectionFor(/related external papers/i);
       expect(
         within(pager()).getByRole("button", { name: /go to page 5/i })
       ).toBeInTheDocument();
@@ -960,15 +960,15 @@ describe("RelatedResearch", () => {
         within(pager()).queryByRole("button", { name: /go to page 6/i })
       ).not.toBeInTheDocument();
       expect(
-        screen.getByText("Showing 1-5 of 25 recommended external papers")
+        screen.getByText("Showing 1-5 of 25 related external papers")
       ).toBeInTheDocument();
     });
 
     it("moves to the next five results and announces the range", async () => {
       renderSection(paged(23));
-      await sectionFor(/recommended external papers/i);
+      await sectionFor(/related external papers/i);
       expect(
-        screen.getByText("Showing 1-5 of 23 recommended external papers")
+        screen.getByText("Showing 1-5 of 23 related external papers")
       ).toBeInTheDocument();
 
       await userEvent.click(
@@ -985,7 +985,7 @@ describe("RelatedResearch", () => {
       // Found by its text, not as "the one status on the page": the feedback
       // widget below the list has a status region of its own.
       const range = screen.getByText(
-        "Showing 6-10 of 23 recommended external papers"
+        "Showing 6-10 of 23 related external papers"
       );
       expect(range).toHaveAttribute("role", "status");
       expect(range).toHaveAttribute("aria-live", "polite");
@@ -993,7 +993,7 @@ describe("RelatedResearch", () => {
 
     it("shows the short last page rather than five padded slots", async () => {
       renderSection(paged(23));
-      await sectionFor(/recommended external papers/i);
+      await sectionFor(/related external papers/i);
       await userEvent.click(
         within(pager()).getByRole("button", { name: /go to page 5/i })
       );
@@ -1003,23 +1003,23 @@ describe("RelatedResearch", () => {
         "External paper 23",
       ]);
       expect(
-        screen.getByText("Showing 21-23 of 23 recommended external papers")
+        screen.getByText("Showing 21-23 of 23 related external papers")
       ).toBeInTheDocument();
     });
 
     it("issues no request at all when a page changes", async () => {
       renderSection(paged(23));
-      await sectionFor(/recommended external papers/i);
+      await sectionFor(/related external papers/i);
       expect(axios.get).toHaveBeenCalledTimes(1);
 
       await userEvent.click(
         within(pager()).getByRole("button", { name: /go to page 3/i })
       );
-      await screen.findByText("Showing 11-15 of 23 recommended external papers");
+      await screen.findByText("Showing 11-15 of 23 related external papers");
       await userEvent.click(
         within(pager()).getByRole("button", { name: /go to page 1/i })
       );
-      await screen.findByText("Showing 1-5 of 23 recommended external papers");
+      await screen.findByText("Showing 1-5 of 23 related external papers");
 
       // The whole list was already in the one response. Paging must not
       // re-ask this endpoint, and therefore cannot reach Semantic Scholar.
@@ -1028,7 +1028,7 @@ describe("RelatedResearch", () => {
 
     it("announces which page is current, and is operable by keyboard alone", async () => {
       renderSection(paged(23));
-      await sectionFor(/recommended external papers/i);
+      await sectionFor(/related external papers/i);
       expect(
         within(pager()).getByRole("button", { name: /^page 1$/i })
       ).toHaveAttribute("aria-current", "page");
@@ -1041,7 +1041,7 @@ describe("RelatedResearch", () => {
       expect(target).toHaveFocus();
       await userEvent.keyboard("{Enter}");
 
-      await screen.findByText("Showing 6-10 of 23 recommended external papers");
+      await screen.findByText("Showing 6-10 of 23 related external papers");
       expect(
         within(pager()).getByRole("button", { name: /^page 2$/i })
       ).toHaveAttribute("aria-current", "page");
@@ -1049,11 +1049,11 @@ describe("RelatedResearch", () => {
 
     it("renders no pagination when everything fits on one page", async () => {
       renderSection(paged(5));
-      const section = await sectionFor(/recommended external papers/i);
+      const section = await sectionFor(/related external papers/i);
       expect(within(section).getAllByTestId("related-result")).toHaveLength(5);
       expect(
         screen.queryByRole("navigation", {
-          name: /recommended external papers pages/i,
+          name: /related external papers pages/i,
         })
       ).not.toBeInTheDocument();
       // No pager, and therefore no range announcement either: "Showing 1-5 of
@@ -1061,7 +1061,7 @@ describe("RelatedResearch", () => {
       // has its own status region, so this asks about the RANGE, not about
       // whether any status exists.)
       expect(
-        screen.queryByText(/recommended external papers$/i, { selector: "p" })
+        screen.queryByText(/related external papers$/i, { selector: "p" })
       ).not.toBeInTheDocument();
       expect(screen.queryByText(/^Showing /)).not.toBeInTheDocument();
     });
@@ -1098,7 +1098,7 @@ describe("RelatedResearch", () => {
       ).not.toBeInTheDocument();
       expect(
         screen.getAllByRole("navigation", {
-          name: /recommended external papers pages/i,
+          name: /related external papers pages/i,
         })
       ).toHaveLength(1);
     });
@@ -1108,18 +1108,18 @@ describe("RelatedResearch", () => {
       const { rerender } = render(
         <RelatedResearch paperId="paper-a" server="https://localhost:8443" />
       );
-      await sectionFor(/recommended external papers/i);
+      await sectionFor(/related external papers/i);
       await userEvent.click(
         within(pager()).getByRole("button", { name: /go to page 4/i })
       );
-      await screen.findByText("Showing 16-20 of 23 recommended external papers");
+      await screen.findByText("Showing 16-20 of 23 related external papers");
 
       rerender(
         <RelatedResearch paperId="paper-b" server="https://localhost:8443" />
       );
       await waitFor(() => expect(axios.get).toHaveBeenCalledTimes(2));
       // Page 4 of the previous record's list says nothing about this one.
-      await screen.findByText("Showing 1-5 of 23 recommended external papers");
+      await screen.findByText("Showing 1-5 of 23 related external papers");
     });
 
     it("resets to page 1 when only the source server changes", async () => {
@@ -1127,17 +1127,17 @@ describe("RelatedResearch", () => {
       const { rerender } = render(
         <RelatedResearch paperId="shared-id" server="https://first.example.org" />
       );
-      await sectionFor(/recommended external papers/i);
+      await sectionFor(/related external papers/i);
       await userEvent.click(
         within(pager()).getByRole("button", { name: /go to page 3/i })
       );
-      await screen.findByText("Showing 11-15 of 23 recommended external papers");
+      await screen.findByText("Showing 11-15 of 23 related external papers");
 
       rerender(
         <RelatedResearch paperId="shared-id" server="https://second.example.org" />
       );
       await waitFor(() => expect(axios.get).toHaveBeenCalledTimes(2));
-      await screen.findByText("Showing 1-5 of 23 recommended external papers");
+      await screen.findByText("Showing 1-5 of 23 related external papers");
     });
 
     it("does not strand the reader on a page the new list does not have", async () => {
@@ -1150,16 +1150,16 @@ describe("RelatedResearch", () => {
       const { rerender } = render(
         <RelatedResearch paperId="paper-a" server="https://localhost:8443" />
       );
-      await sectionFor(/recommended external papers/i);
+      await sectionFor(/related external papers/i);
       await userEvent.click(
         within(pager()).getByRole("button", { name: /go to page 5/i })
       );
-      await screen.findByText("Showing 21-23 of 23 recommended external papers");
+      await screen.findByText("Showing 21-23 of 23 related external papers");
 
       rerender(
         <RelatedResearch paperId="paper-b" server="https://localhost:8443" />
       );
-      await screen.findByText("Showing 1-5 of 6 recommended external papers");
+      await screen.findByText("Showing 1-5 of 6 related external papers");
       expect(await externalTitles()).toEqual([
         "External paper 1",
         "External paper 2",
@@ -1171,7 +1171,7 @@ describe("RelatedResearch", () => {
 
     it("shows no invented relation score", async () => {
       const { container } = renderSection(paged(23));
-      await sectionFor(/recommended external papers/i);
+      await sectionFor(/related external papers/i);
       expect(container.textContent).not.toMatch(/relation score/i);
       expect(container.textContent).not.toMatch(/relevance score/i);
       expect(container.textContent).not.toMatch(/\b\d{1,3}\s*% match\b/i);
@@ -1183,7 +1183,7 @@ describe("RelatedResearch", () => {
     it("heads an external result's evidence Qresp ranking signals, not Why related", async () => {
       renderSection(paged(23));
       const internal = await sectionFor(/related qresp records/i);
-      const external = await sectionFor(/recommended external papers/i);
+      const external = await sectionFor(/related external papers/i);
       expect(within(internal).getByText(/why related/i)).toBeInTheDocument();
       expect(
         within(external).getAllByText(/qresp ranking signals/i).length
@@ -1204,7 +1204,7 @@ describe("RelatedResearch", () => {
           },
         })
       );
-      const external = await sectionFor(/recommended external papers/i);
+      const external = await sectionFor(/related external papers/i);
       expect(
         within(external).queryByText(/qresp ranking signals/i)
       ).not.toBeInTheDocument();
@@ -1215,19 +1215,24 @@ describe("RelatedResearch", () => {
   // The renamed section, its once-only disclaimer, and the language it must
   // never use now that a candidate can appear with no Qresp evidence at all.
   describe("the external section's new framing", () => {
-    it("is headed Recommended External Papers, not Related External Papers", async () => {
+    it("is headed Related External Papers, never Recommended", async () => {
+      // The list has two sources and only one of them recommends anything:
+      // the citations fallback returns papers that CITE this one. A heading
+      // saying "Recommended" is false for half the cases it must cover, so
+      // the heading states what both sources share, and each RESULT carries
+      // its own precise provenance badge.
       renderSection(payload());
       expect(
-        await screen.findByRole("heading", { name: /recommended external papers/i })
+        await screen.findByRole("heading", { name: /^related external papers$/i })
       ).toBeInTheDocument();
       expect(
-        screen.queryByRole("heading", { name: /^related external papers$/i })
+        screen.queryByRole("heading", { name: /recommended/i })
       ).not.toBeInTheDocument();
     });
 
     it("shows the Semantic Scholar re-ranking disclaimer exactly once", async () => {
       renderSection(payload());
-      await screen.findByRole("heading", { name: /recommended external papers/i });
+      await screen.findByRole("heading", { name: /related external papers/i });
       const matches = screen.getAllByText(
         /suggestions from semantic scholar, ordered using qresp/i
       );
@@ -1236,7 +1241,7 @@ describe("RelatedResearch", () => {
 
     it("never calls an external result verified related or gate-checked", async () => {
       const { container } = renderSection(payload());
-      await screen.findByRole("heading", { name: /recommended external papers/i });
+      await screen.findByRole("heading", { name: /related external papers/i });
       expect(container.textContent).not.toMatch(/verified related/i);
       expect(container.textContent).not.toMatch(
         /shown only when qresp found evidence/i
@@ -1263,7 +1268,7 @@ describe("RelatedResearch", () => {
 
       it("labels each result by what it actually is", async () => {
         renderSection(citing());
-        const external = await sectionFor(/recommended external papers/i);
+        const external = await sectionFor(/related external papers/i);
         expect(
           within(external).getByText(/cites this paper/i)
         ).toBeInTheDocument();
@@ -1274,7 +1279,7 @@ describe("RelatedResearch", () => {
 
       it("says why the list is citations rather than recommendations", async () => {
         renderSection(citing());
-        await sectionFor(/recommended external papers/i);
+        await sectionFor(/related external papers/i);
         expect(
           screen.getByText(/had no recommendations for this paper/i)
         ).toBeInTheDocument();
@@ -1282,7 +1287,7 @@ describe("RelatedResearch", () => {
 
       it("keeps the Qresp ranking signals heading", async () => {
         renderSection(citing());
-        const external = await sectionFor(/recommended external papers/i);
+        const external = await sectionFor(/related external papers/i);
         expect(
           within(external).getByText(/qresp ranking signals/i)
         ).toBeInTheDocument();
@@ -1292,7 +1297,7 @@ describe("RelatedResearch", () => {
         // A backend that predates `source_kind` sends none. Its results ARE
         // recommendations, so that is what they are called.
         renderSection(payload());
-        const external = await sectionFor(/recommended external papers/i);
+        const external = await sectionFor(/related external papers/i);
         expect(
           within(external).getByText(/recommended by semantic scholar/i)
         ).toBeInTheDocument();
@@ -1304,7 +1309,7 @@ describe("RelatedResearch", () => {
 
     it("still shows the Semantic Scholar badge on every external result", async () => {
       renderSection(payload());
-      const external = await sectionFor(/recommended external papers/i);
+      const external = await sectionFor(/related external papers/i);
       expect(
         within(external).getByText(/recommended by semantic scholar/i)
       ).toBeInTheDocument();
