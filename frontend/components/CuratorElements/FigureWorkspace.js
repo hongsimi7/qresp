@@ -3,13 +3,14 @@ import { Fragment, useContext, useEffect, useMemo, useRef, useState } from "reac
 import {
   Alert,
   Box,
+  Button,
   Chip,
   Collapse,
   Typography,
 } from "@mui/material";
 
 import Drawer from "../drawer";
-import { RegularStyledButton, SmallStyledButton } from "../button";
+import { RegularStyledButton } from "../button";
 import ChartsInfoForm from "../CuratorForms/ChartsInfoForm";
 import ScriptsInfoForm from "../CuratorForms/ScriptsInfoForm";
 import DatasetsInfoForm from "../CuratorForms/DatasetsInfoForm";
@@ -91,6 +92,19 @@ export const rowLabel = (artifact, id) => {
   if (text) return text.length > 60 ? `${text.slice(0, 59)}…` : text;
   return `Untitled ${KIND_LABEL[prefixOf(id)] || "item"} (${id})`;
 };
+
+// Row-level actions are TEXT, not filled buttons.
+//
+// A figure with a script, two inputs and a tool carries eight or nine
+// actions; rendered as filled buttons they become a wall of maroon that
+// hides the thing the curator came to read -- the names of their own
+// artifacts. Text keeps the tree scannable and the actions still one tap
+// away. The one filled button on the page is the primary way in.
+const RowAction = ({ children, ...rest }) => (
+  <Button size="small" variant="text" sx={{ minWidth: 0, px: 0.75 }} {...rest}>
+    {children}
+  </Button>
+);
 
 const FigureWorkspace = () => {
   const {
@@ -222,20 +236,20 @@ const FigureWorkspace = () => {
   const AddButtons = ({ id, kinds }) => (
     <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
       {kinds.map((kind) => (
-        <SmallStyledButton
+        <RowAction
           key={kind}
           onClick={() => createAttachedTo(TYPE_BY_PREFIX[kind], id)}
           data-testid={`fw-add-${TYPE_BY_PREFIX[kind]}-for-${id}`}
         >
           {`+ ${KIND_LABEL[kind]}`}
-        </SmallStyledButton>
+        </RowAction>
       ))}
-      <SmallStyledButton
+      <RowAction
         onClick={() => setAttachFor(attachFor === id ? "" : id)}
         data-testid={`fw-attach-toggle-${id}`}
       >
         Attach existing
-      </SmallStyledButton>
+      </RowAction>
     </Box>
   );
 
@@ -253,9 +267,9 @@ const FigureWorkspace = () => {
         <Typography variant="body2" component="span" sx={{ overflowWrap: "anywhere" }}>
           {rowLabel(byId[id], id)}
         </Typography>
-        <SmallStyledButton onClick={() => editArtifact(id)} data-testid={`fw-edit-${id}`}>
+        <RowAction onClick={() => editArtifact(id)} data-testid={`fw-edit-${id}`}>
           Edit
-        </SmallStyledButton>
+        </RowAction>
       </Box>
       {prefixOf(id) === EXTERNAL ? (
         <Box sx={{ pl: 1, minWidth: 0 }}>
@@ -368,12 +382,12 @@ const FigureWorkspace = () => {
                 <Typography variant="subtitle2" sx={{ overflowWrap: "anywhere" }}>
                   {rowLabel(byId[id], id)}
                 </Typography>
-                <SmallStyledButton onClick={() => editArtifact(id)} data-testid={`fw-edit-${id}`}>
+                <RowAction onClick={() => editArtifact(id)} data-testid={`fw-edit-${id}`}>
                   Edit
-                </SmallStyledButton>
-                <SmallStyledButton onClick={() => removeArtifact(id)} data-testid={`fw-remove-${id}`}>
+                </RowAction>
+                <RowAction onClick={() => removeArtifact(id)} data-testid={`fw-remove-${id}`}>
                   Remove
-                </SmallStyledButton>
+                </RowAction>
               </Box>
 
               <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
@@ -397,13 +411,13 @@ const FigureWorkspace = () => {
               {/* The unusual cases, and unlinking. The normal path never
                   needs this, so it is closed. */}
               <Box sx={{ pl: 1.5, mt: 0.5 }}>
-                <SmallStyledButton
+                <RowAction
                   onClick={() => setAdvancedFor(advancedFor === id ? "" : id)}
                   aria-expanded={advancedFor === id}
                   data-testid={`fw-advanced-toggle-${id}`}
                 >
                   Advanced connections
-                </SmallStyledButton>
+                </RowAction>
                 <Collapse in={advancedFor === id} unmountOnExit>
                   <Box sx={{ mt: 0.5 }} data-testid={`fw-advanced-${id}`}>
                     {incoming(id).length ? (
@@ -414,12 +428,12 @@ const FigureWorkspace = () => {
                               {`${rowLabel(byId[edge.from], edge.from)} → ${rowLabel(byId[id], id)}`}
                               {edge.type ? ` (${edge.type.replace("_", " ")})` : ""}
                             </Typography>{" "}
-                            <SmallStyledButton
+                            <RowAction
                               onClick={() => unlink(edge.from, edge.to)}
                               data-testid={`fw-unlink-${edge.from}-${edge.to}`}
                             >
                               Unlink
-                            </SmallStyledButton>
+                            </RowAction>
                           </Box>
                         ))}
                       </Box>
