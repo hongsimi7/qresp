@@ -6,6 +6,7 @@ import Drawer from "../drawer";
 import Graph from "../Workflow/Graph";
 import Legend from "../Workflow/Legend";
 import { formatData, formatWorkflow } from "../Workflow/util";
+import WorkflowSummary from "./WorkflowSummary";
 
 import { Box, Grid, useTheme } from "@mui/material";
 
@@ -19,6 +20,18 @@ const Workflow = ({ workflow, charts, tools, scripts, datasets, external }) => {
 
   return (
     <Drawer heading="Workflow">
+      {/* The workflow in words, first. The graph below is a picture -- good
+          for seeing shape, poor to read on a phone and impossible with a
+          screen reader -- so the same thing is said as a short list, which
+          is what most readers of a published record actually want. */}
+      <WorkflowSummary
+        workflow={workflow}
+        charts={charts}
+        datasets={datasets}
+        scripts={scripts}
+        tools={tools}
+        external={external}
+      />
       <Box sx={{ mt: 1 }}>
         <Grid container direction="row">
           <Grid size={{ xs: 12, md: 10 }}>
