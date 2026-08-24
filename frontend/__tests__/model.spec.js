@@ -1,6 +1,7 @@
 import {
   convertReqSchematoState,
   convertStateToUpdatePayload,
+  convertStatetoReqSchema,
 } from "../Utils/model";
 
 import paperDoc from "./fixtures/paperDoc.json";
@@ -36,11 +37,57 @@ describe("convertReqSchematoState", () => {
     expect(state.datasets).toHaveLength(paperDoc.datasets.length);
     expect(state.tools).toHaveLength(paperDoc.tools.length);
     expect(state.scripts).toHaveLength(paperDoc.scripts.length);
+    // A legacy pair reads as an edge with NO type. Nothing infers one --
+    // guessing what an old curator meant is not something this can do.
     expect(state.workflow.edges[0]).toEqual({
       from: paperDoc.workflow.edges[0][0],
       to: paperDoc.workflow.edges[0][1],
+      type: "",
     });
     expect(state.license).toBe("cc");
+  });
+
+  // Workflow V1 gives an edge a meaning. Both shapes have to survive a full
+  // trip in either direction, and a legacy record must come back out in the
+  // shape it went in.
+  describe("workflow edges round-trip in both shapes", () => {
+    const roundTrip = (edges) =>
+      convertStatetoReqSchema(
+        convertReqSchematoState({
+          reference: { title: "t" },
+          workflow: { nodes: [], edges },
+        })
+      ).workflow.edges;
+
+    it("keeps a typed edge typed", () => {
+      expect(roundTrip([{ from: "s0", to: "c0", type: "generates" }])).toEqual([
+        { from: "s0", to: "c0", type: "generates" },
+      ]);
+    });
+
+    it("writes a legacy pair back as the pair it arrived as", () => {
+      // Opening an old record and saving it must not rewrite its graph into
+      // a shape it never had.
+      expect(roundTrip([["s0", "c0"]])).toEqual([["s0", "c0"]]);
+    });
+
+    it("keeps a mixed graph mixed", () => {
+      // What a curator who edits half an old graph actually produces.
+      expect(
+        roundTrip([["d0", "s0"], { from: "s0", to: "c0", type: "generates" }])
+      ).toEqual([["d0", "s0"], { from: "s0", to: "c0", type: "generates" }]);
+    });
+
+    it("does not turn a typed edge into two undefineds", () => {
+      // The bug this replaces: the reader assumed an array, so a typed edge
+      // came back as {from: undefined, to: undefined}.
+      const state = convertReqSchematoState({
+        reference: { title: "t" },
+        workflow: { nodes: [], edges: [{ from: "d0", to: "s0", type: "consumes" }] },
+      });
+      expect(state.workflow.edges[0].from).toBe("d0");
+      expect(state.workflow.edges[0].to).toBe("s0");
+    });
   });
 
   it("tolerates legacy records with missing sections", () => {

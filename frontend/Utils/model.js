@@ -1,4 +1,5 @@
 import { getServer, namesUtil, referenceUtil } from "./utils";
+import { fromStoredEdge, toStoredEdge } from "./workflowGraph";
 
 const convertStateToViewSchema = (state, serverInformation) => {
   const schema = {
@@ -69,7 +70,10 @@ const convertStatetoReqSchema = (state, servers) => {
     documentation: { readme: state.documentation },
     workflow: {
       ...state.workflow,
-      edges: state.workflow.edges.map((edge) => [edge.from, edge.to]),
+      // A TYPED edge is written as an object; an untyped one is written back
+      // as the pair it arrived as. Opening a legacy record and saving it must
+      // not silently rewrite its graph into a shape it never had.
+      edges: state.workflow.edges.map(toStoredEdge),
     },
     charts: state.charts.map((chart) => {
       chart.number = chart.number.toString();
@@ -152,10 +156,9 @@ const convertReqSchematoState = (req) => {
     heads: req.heads || [],
     workflow: {
       nodes: workflow.nodes || [],
-      edges: (workflow.edges || []).map((edge) => ({
-        from: edge[0],
-        to: edge[1],
-      })),
+      // Reads BOTH shapes. Reading only the array form is what would turn a
+      // typed edge into two undefineds on the way back in.
+      edges: (workflow.edges || []).map(fromStoredEdge),
     },
     license: req.license || "",
   };
