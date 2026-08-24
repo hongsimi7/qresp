@@ -34,6 +34,11 @@ import {
   inferEdgeType,
   prefixOf,
 } from "../../Utils/workflowGraph";
+import {
+  describeSuggestion,
+  suggestConnections,
+  suggestionKey,
+} from "../../Utils/workflowSuggestions";
 
 // ONE place to organise a paper's figures and the resources behind them.
 //
@@ -118,6 +123,13 @@ const FigureWorkspace = () => {
   const [notice, setNotice] = useState("");
   const [advancedFor, setAdvancedFor] = useState("");
   const [attachFor, setAttachFor] = useState("");
+  const [suggestFor, setSuggestFor] = useState("");
+
+  // Suggestions the curator has waved away THIS SESSION. Local state, keyed
+  // by what the suggestion is about rather than by the ids involved -- see
+  // `suggestionKey`. Nothing here is saved, sent, or remembered past this
+  // editing session, because "not now" is not a fact about the paper.
+  const [dismissed, setDismissed] = useState({});
 
   // What the next saved artifact should be attached to. Set before the form
   // opens; consumed when the artifact actually appears.
@@ -198,6 +210,36 @@ const FigureWorkspace = () => {
   const removeArtifact = (id) => {
     if (del) del(TYPE_BY_PREFIX[prefixOf(id)], id);
   };
+
+  // Recomputed from the CURRENT artifacts every time they change. Holding a
+  // suggestion across an edit would let it keep naming an id whose artifact
+  // has since been deleted or renumbered.
+  const suggestions = useMemo(
+    () =>
+      suggestConnections({ charts, scripts, datasets, tools, heads }, edges),
+    [charts, scripts, datasets, tools, heads, edges]
+  );
+
+  const suggestionsFor = (id) =>
+    suggestions.filter(
+      (item) => item.to === id && !dismissed[suggestionKey(item)]
+    );
+
+  /**
+   * Accept one suggestion.
+   *
+   * It goes through the same guard the manual paths use rather than trusting
+   * the suggestion it was handed: between rendering and clicking, the curator
+   * may have made this very connection by hand.
+   */
+  const acceptSuggestion = (item) => {
+    setNotice("");
+    if (hasEdge(edges, item.from, item.to)) return;
+    addEdge({ from: item.from, to: item.to, type: item.type });
+  };
+
+  const dismissSuggestion = (item) =>
+    setDismissed((was) => ({ ...was, [suggestionKey(item)]: true }));
 
   const incoming = (id) =>
     edges.map(fromStoredEdge).filter((edge) => edge.to === id);
@@ -336,6 +378,64 @@ const FigureWorkspace = () => {
       </Box>
     ) : null;
 
+  /**
+   * Connections this paper's own saved fields already prove.
+   *
+   * Closed, and absent entirely when there is nothing to show -- an empty
+   * "Suggested connections" row on every figure would be four words of
+   * furniture per figure saying nothing.
+   *
+   * Nothing here is applied. Each row states the one fact behind it and waits
+   * to be accepted.
+   */
+  const SuggestionPanel = ({ id }) => {
+    const items = suggestionsFor(id);
+    if (!items.length) return null;
+    const open = suggestFor === id;
+    return (
+      <Box sx={{ pl: 1.5, mt: 0.5 }} data-testid={`fw-suggestions-${id}`}>
+        <RowAction
+          onClick={() => setSuggestFor(open ? "" : id)}
+          aria-expanded={open}
+          data-testid={`fw-suggest-toggle-${id}`}
+        >
+          {`Suggested connections (${items.length})`}
+        </RowAction>
+        <Collapse in={open} unmountOnExit>
+          <Box component="ul" sx={{ listStyle: "none", m: 0, mt: 0.5, p: 0 }}>
+            {items.map((item) => (
+              <Box
+                component="li"
+                key={suggestionKey(item)}
+                sx={{ mb: 0.5, minWidth: 0 }}
+              >
+                <Typography
+                  variant="caption"
+                  component="span"
+                  sx={{ overflowWrap: "anywhere" }}
+                >
+                  {describeSuggestion(item, (who) => rowLabel(byId[who], who))}
+                </Typography>{" "}
+                <RowAction
+                  onClick={() => acceptSuggestion(item)}
+                  data-testid={`fw-suggest-connect-${item.from}-${item.to}`}
+                >
+                  Connect
+                </RowAction>
+                <RowAction
+                  onClick={() => dismissSuggestion(item)}
+                  data-testid={`fw-suggest-dismiss-${item.from}-${item.to}`}
+                >
+                  Not now
+                </RowAction>
+              </Box>
+            ))}
+          </Box>
+        </Collapse>
+      </Box>
+    );
+  };
+
   const figureIds = knownIds.filter((id) => prefixOf(id) === CHART).sort();
 
   // Anything with no connection at all. Not hidden: a dataset nobody has
@@ -407,6 +507,8 @@ const FigureWorkspace = () => {
                 <AddButtons id={id} kinds={[SCRIPT, DATASET, EXTERNAL]} />
                 <AttachPanel id={id} />
               </Box>
+
+              <SuggestionPanel id={id} />
 
               {/* The unusual cases, and unlinking. The normal path never
                   needs this, so it is closed. */}
