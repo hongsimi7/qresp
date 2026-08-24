@@ -19,7 +19,6 @@ import { RegularStyledButton } from "../button";
 import { TextInputField } from "../Form/InputFields";
 
 import Graph from "../Workflow/Graph";
-import WorkflowBoard from "../CuratorElements/WorkflowBoard";
 import Legend from "../Workflow/Legend";
 import { formatData } from "../Workflow/util";
 import { isGraph } from "../../Utils/graph";
@@ -228,14 +227,16 @@ const WorkflowInfoForm = () => {
   return (
     <Fragment>
       <Drawer heading="Build your workflow" defaultOpen={true}>
-        {/* The ordinary path: buttons and lanes, no drawing. The graph below
-            stays for the exceptional cases and for reading the result. */}
-        <WorkflowBoard />
-        <Box sx={{ mt: 3, mb: 1 }}>
-          <Typography variant="subtitle2">Graph</Typography>
+        {/* The ordinary path is "Organize figures and resources" above: the
+            figure is the root and the connections are made for you. This is
+            the picture of the result, and the place to draw a connection that
+            section cannot express. Layout is presentation only, never saved.
+            The board that used to live here moved into that section -- two
+            button-driven editors side by side were two ways to do one thing. */}
+        <Box sx={{ mb: 1 }}>
           <Typography variant="caption" color="text.secondary">
-            Drag to rearrange, or draw a connection the buttons above cannot
-            express. Layout is presentation only and is not saved.
+            A picture of the workflow you built above. Drag to rearrange, or
+            draw an unusual connection. Positions are not saved.
           </Typography>
         </Box>
         <Grid container direction="row" spacing={1}>

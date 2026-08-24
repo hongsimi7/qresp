@@ -151,7 +151,11 @@ const Experiment = ({ errors, register, unregister, def }) => {
   );
 };
 
-const ToolsInfoForm = () => {
+// `hideTrigger` hides this form's own "Add" button while keeping the
+// dialog it opens. The figure workspace mounts the form for the dialog
+// and supplies its own contextual trigger, so showing both would put two
+// ways to do one thing side by side.
+const ToolsInfoForm = ({ hideTrigger = false }) => {
   const { tools, add, edit } = useContext(CuratorContext);
 
   const { toolsHelper, openForm, closeForm, setDefault } = useContext(
@@ -279,6 +283,7 @@ const ToolsInfoForm = () => {
 
   return (
     <Fragment>
+      {hideTrigger ? null : (
       <StyledTooltip title="Add a new tool" arrow>
         <RegularStyledButton
           fullWidth
@@ -291,6 +296,7 @@ const ToolsInfoForm = () => {
           Add a Tool
         </RegularStyledButton>
       </StyledTooltip>
+      )}
       <Dialog
         open={open}
         onClose={() => {

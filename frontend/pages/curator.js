@@ -21,10 +21,7 @@ import CuratorElement from "../components/CuratorElements/CuratorElement";
 import FileServerElement from "../components/CuratorElements/FileServerElement";
 import PaperInfoElement from "../components/CuratorElements/PaperInfoElement";
 import ReferenceInfoElement from "../components/CuratorElements/ReferenceElement";
-import ChartsInfoElement from "../components/CuratorElements/ChartsElement";
-import ToolsInfoElement from "../components/CuratorElements/ToolsElement";
-import DatasetsInfoElement from "../components/CuratorElements/DatasetsElement";
-import ScriptsInfoElement from "../components/CuratorElements/ScriptsElement";
+import FigureWorkspace from "../components/CuratorElements/FigureWorkspace";
 import DocumentationInfoElement from "../components/CuratorElements/DocumentationElement";
 import WorkflowInfoElement from "../components/CuratorElements/WorkflowElement";
 import LicenseInfoElement from "../components/CuratorElements/LicenseElement";
@@ -367,10 +364,13 @@ const curator = () => {
                     <FileServerElement />
                     <PaperInfoElement />
                     <ReferenceInfoElement />
-                    <ChartsInfoElement />
-                    <ToolsInfoElement />
-                    <DatasetsInfoElement />
-                    <ScriptsInfoElement />
+                    {/* ONE section, replacing four. Add Charts / Tools /
+                        Datasets / Scripts asked a curator to think in Qresp's
+                        storage categories and then connect them separately;
+                        nobody curating a paper thinks that way. The figure is
+                        the root and the rest hangs off it. Same models, same
+                        forms, same validation -- only the way in changed. */}
+                    <FigureWorkspace />
                     <DocumentationInfoElement />
                     <WorkflowInfoElement />
                     <LicenseInfoElement />

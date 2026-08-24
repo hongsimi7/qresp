@@ -36,7 +36,11 @@ const splitList = (value) =>
     .map((el) => el.trim())
     .filter(Boolean);
 
-const DatasetsInfoForm = () => {
+// `hideTrigger` hides this form's own "Add" button while keeping the
+// dialog it opens. The figure workspace mounts the form for the dialog
+// and supplies its own contextual trigger, so showing both would put two
+// ways to do one thing side by side.
+const DatasetsInfoForm = ({ hideTrigger = false }) => {
   const { datasets, add, edit } = useContext(CuratorContext);
 
   const { datasetsHelper, openForm, closeForm, setDefault } = useContext(
@@ -122,6 +126,7 @@ const DatasetsInfoForm = () => {
 
   return (
     <Fragment>
+{hideTrigger ? null : (
       <Tooltip
         title={<Typography variant="subtitle2">Add a new dataset</Typography>}
         arrow
@@ -137,6 +142,7 @@ const DatasetsInfoForm = () => {
           Add a Dataset
         </RegularStyledButton>
       </Tooltip>
+      )}
       <Dialog
         open={open}
         onClose={() => closeForm("dataset")}

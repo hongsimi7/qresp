@@ -28,7 +28,11 @@ import CuratorContext from "../../Context/Curator/curatorContext";
 import SourceTreeContext from "../../Context/SourceTree/SourceTreeContext";
 import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperContext";
 
-const ChartsInfoForm = () => {
+// `hideTrigger` hides this form's own "Add" button while keeping the
+// dialog it opens. The figure workspace mounts the form for the dialog
+// and supplies its own contextual trigger, so showing both would put two
+// ways to do one thing side by side.
+const ChartsInfoForm = ({ hideTrigger = false }) => {
   const { charts, add, edit } = useContext(CuratorContext);
 
   const { chartsHelper, openForm, closeForm, setDefault } = useContext(
@@ -117,6 +121,7 @@ const ChartsInfoForm = () => {
 
   return (
     <Fragment>
+{hideTrigger ? null : (
       <Tooltip
         title={<Typography variant="subtitle2">Add a new chart</Typography>}
         arrow
@@ -132,6 +137,7 @@ const ChartsInfoForm = () => {
           Add a Chart
         </RegularStyledButton>
       </Tooltip>
+      )}
       <Dialog
         open={open}
         onClose={() => closeForm("chart")}
