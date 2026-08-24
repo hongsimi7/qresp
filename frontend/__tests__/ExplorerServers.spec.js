@@ -18,7 +18,9 @@ jest.mock("../Context/axios", () => ({
 }));
 import apiEndpoint from "../Context/axios";
 
-jest.mock("next/router", () => ({ useRouter: () => ({ push: jest.fn() }) }));
+// A STABLE push, so what the picker would navigate to can be asserted.
+const push = jest.fn();
+jest.mock("next/router", () => ({ useRouter: () => ({ push }) }));
 
 import AlertContext from "../Context/Alert/alertContext";
 import Explorer from "../pages/explorer";
@@ -33,8 +35,82 @@ const renderExplorer = () =>
     </AlertContext.Provider>
   );
 
+// jsdom serves the test page from http://localhost, which is exactly the
+// staging shape: a LOCAL origin that the federation registry does not list.
+const LOCAL_ORIGIN = "http://localhost";
+
+const pushedServers = () =>
+  String((push.mock.calls[0] || [{}])[0].query.servers || "").split(",");
+
 describe("Explorer federation list", () => {
   afterEach(() => jest.resetAllMocks());
+
+  // The node the reader is ON must survive the federation fetch landing.
+  // It used to be prepended by a second mount effect, and the fetch's
+  // `setServers(published)` replaced the whole list afterwards -- so the
+  // origin was dropped the moment the request came back, not merely read
+  // too early.
+  describe("the same-origin node", () => {
+    it("survives the federation answer arriving after mount", async () => {
+      const user = userEvent.setup();
+      apiEndpoint.get.mockResolvedValue({
+        data: {
+          servers: [
+            { qresp_server_url: "https://alpha.example.org", isActive: "Yes" },
+          ],
+        },
+      });
+      renderExplorer();
+      // Wait for the fetch to land -- this is the moment that used to lose it.
+      await waitFor(() => expect(apiEndpoint.get).toHaveBeenCalled());
+
+      await user.click(screen.getByRole("button", { name: /search all/i }));
+      const servers = pushedServers();
+      expect(servers).toContain(LOCAL_ORIGIN);
+      expect(servers).toContain("https://alpha.example.org");
+    });
+
+    it("is offered as a choice, not only searched by Search All", async () => {
+      apiEndpoint.get.mockResolvedValue({
+        data: {
+          servers: [
+            { qresp_server_url: "https://alpha.example.org", isActive: "Yes" },
+          ],
+        },
+      });
+      const { container } = renderExplorer();
+      await waitFor(() => expect(apiEndpoint.get).toHaveBeenCalled());
+      // The Autocomplete reads the same derived list, so the reader can pick
+      // their own node deliberately. It only renders options once opened.
+      await userEvent.click(container.querySelector("input"));
+      expect(await screen.findByText(LOCAL_ORIGIN)).toBeInTheDocument();
+    });
+
+    it("is still there when the backend cannot be reached at all", async () => {
+      const user = userEvent.setup();
+      apiEndpoint.get.mockRejectedValue(new Error("no endpoint"));
+      renderExplorer();
+      await waitFor(() => expect(apiEndpoint.get).toHaveBeenCalled());
+
+      await user.click(screen.getByRole("button", { name: /search all/i }));
+      expect(pushedServers()).toContain(LOCAL_ORIGIN);
+    });
+
+    it("is not added twice when the registry already lists it", async () => {
+      const user = userEvent.setup();
+      apiEndpoint.get.mockResolvedValue({
+        data: {
+          servers: [{ qresp_server_url: LOCAL_ORIGIN, isActive: "Yes" }],
+        },
+      });
+      renderExplorer();
+      await waitFor(() => expect(apiEndpoint.get).toHaveBeenCalled());
+
+      await user.click(screen.getByRole("button", { name: /search all/i }));
+      const servers = pushedServers();
+      expect(servers.filter((o) => o === LOCAL_ORIGIN)).toHaveLength(1);
+    });
+  });
 
   it("asks the backend which servers this deployment federates with", async () => {
     apiEndpoint.get.mockResolvedValue({ data: { servers: [] } });

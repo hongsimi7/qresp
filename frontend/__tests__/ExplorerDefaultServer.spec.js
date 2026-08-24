@@ -34,8 +34,111 @@ const ctx = (query = {}) => ({
   req: { headers: { host: "qresp.example.org" } },
 });
 
+// A staging tunnel serves Qresp at https://localhost:8443. That node is NOT in
+// the federation registry -- the registry names the public peers -- so the
+// default Explorer redirect, which is built server-side where `window` does
+// not exist, left it out. A record published there was in /api/search and in
+// My published records, and missing from the Explorer's own default results.
+const localCtx = (query = {}, headers = {}) => ({
+  query,
+  req: {
+    headers: { host: "localhost:8443", "x-forwarded-proto": "https",
+               ...headers },
+    socket: {},
+  },
+});
+
+const serversIn = (result) =>
+  decodeURIComponent(
+    result.redirect.destination.split("servers=")[1]
+  ).split(",");
+
 describe("explorer getServerSideProps", () => {
   afterEach(() => jest.resetAllMocks());
+
+  describe("opened from a localhost staging tunnel", () => {
+    it("searches the node the reader is on, plus the configured peers", async () => {
+      axios.get.mockResolvedValue({ data: FEDERATION });
+      const result = await getServerSideProps(localCtx());
+      expect(serversIn(result)).toEqual([
+        "https://localhost:8443",
+        "https://alpha.example.org",
+        "https://beta.example.org",
+      ]);
+    });
+
+    it("puts the reader's own node first, ahead of default_server", async () => {
+      // default_server still orders the REGISTRY, but the node being looked
+      // at leads its own search -- that is where a just-published record is.
+      axios.get.mockResolvedValue({ data: FEDERATION });
+      const [first, second] = serversIn(await getServerSideProps(localCtx()));
+      expect(first).toBe("https://localhost:8443");
+      expect(second).toBe("https://alpha.example.org");
+    });
+
+    it("uses the forwarded protocol rather than assuming one", async () => {
+      axios.get.mockResolvedValue({ data: FEDERATION });
+      const plain = await getServerSideProps(
+        localCtx({}, { "x-forwarded-proto": "http" })
+      );
+      expect(serversIn(plain)[0]).toBe("http://localhost:8443");
+    });
+
+    it("adds nothing when the request carries no host at all", async () => {
+      axios.get.mockResolvedValue({ data: FEDERATION });
+      const result = await getServerSideProps({ query: {}, req: { headers: {} } });
+      expect(serversIn(result)).toEqual([
+        "https://alpha.example.org",
+        "https://beta.example.org",
+      ]);
+    });
+
+    it("does not add the node twice when the registry already lists it", async () => {
+      axios.get.mockResolvedValue({
+        data: {
+          servers: [
+            { qresp_server_url: "https://localhost:8443", isActive: "Yes" },
+            { qresp_server_url: "https://alpha.example.org", isActive: "Yes" },
+          ],
+          default_server: "https://alpha.example.org",
+        },
+      });
+      const listed = serversIn(await getServerSideProps(localCtx()));
+      expect(listed.filter((o) => o === "https://localhost:8443")).toHaveLength(1);
+    });
+  });
+
+  describe("opened from a production origin", () => {
+    it("adds no self-node, because the registry already has it", async () => {
+      // `buildQrespServerList` adds an origin only when it is LOCAL. A public
+      // deployment must not gain a duplicate search node from its own host
+      // header.
+      axios.get.mockResolvedValue({
+        data: {
+          servers: [
+            { qresp_server_url: "https://qresp.example.org", isActive: "Yes" },
+            { qresp_server_url: "https://alpha.example.org", isActive: "Yes" },
+          ],
+          default_server: "https://qresp.example.org",
+        },
+      });
+      const listed = serversIn(await getServerSideProps(ctx()));
+      expect(listed).toEqual([
+        "https://qresp.example.org",
+        "https://alpha.example.org",
+      ]);
+    });
+
+    it("adds no self-node even when its origin is absent from the registry", async () => {
+      axios.get.mockResolvedValue({ data: FEDERATION });
+      const listed = serversIn(await getServerSideProps(ctx()));
+      expect(listed).not.toContain("https://qresp.example.org");
+      expect(listed).toEqual([
+        "https://alpha.example.org",
+        "https://beta.example.org",
+      ]);
+    });
+  });
 
   it("redirects to every federated node at once", async () => {
     axios.get.mockResolvedValue({ data: FEDERATION });

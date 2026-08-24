@@ -15,7 +15,7 @@ import AlertContext from "../Context/Alert/alertContext";
 
 import allServers from "../data/qresp_servers";
 import { buildQrespServerList } from "../Utils/qrespServers";
-import { resolveServerSideApiBase } from "../Utils/serverSideApi";
+import { requestOrigin, resolveServerSideApiBase } from "../Utils/serverSideApi";
 
 const explorerDescription =
   "The explorer provides a portal for the scientific community to access datasets, explore workflows and download curated data, published in scientific papers.";
@@ -51,7 +51,36 @@ export async function getServerSideProps(ctx) {
     const { data } = await axios.get(
       `${base || ""}/api/federation/servers`
     );
-    const listed = (data && Array.isArray(data.servers) ? data.servers : [])
+    const registry = data && Array.isArray(data.servers) ? data.servers : [];
+    // `default_server` decides ORDER within the registry, so it is applied
+    // BEFORE the same-origin node is prepended -- the node the reader is
+    // actually on should lead its own search.
+    const published = (data || {}).default_server;
+    const orderedRegistry =
+      published &&
+      registry.some((entry) => (entry || {}).qresp_server_url === published)
+        ? [
+            ...registry.filter(
+              (entry) => (entry || {}).qresp_server_url === published
+            ),
+            ...registry.filter(
+              (entry) => (entry || {}).qresp_server_url !== published
+            ),
+          ]
+        : registry;
+    // THE SAME-ORIGIN NODE.
+    //
+    // `getServerSideProps` has no `window`, so this redirect used to be built
+    // from the registry alone. On a staging tunnel that registry names the
+    // public peers and NOT the node the reader is looking at, so a record
+    // just published there was absent from the Explorer's own default results
+    // while `/api/search` and My published records both showed it.
+    //
+    // `buildQrespServerList` is the one place that decides this, and it adds
+    // the origin only when the origin is LOCAL -- so a production deployment,
+    // whose own origin is already in the registry, gains no duplicate node.
+    // Nothing here names localhost; the policy lives in that helper.
+    const listed = buildQrespServerList(orderedRegistry, requestOrigin(ctx))
       .map((entry) => (entry || {}).qresp_server_url)
       .filter(Boolean);
     // EVERY federated node, not just the default one.
@@ -66,13 +95,7 @@ export async function getServerSideProps(ctx) {
     // independently and renders a notice beside the results it did get. That
     // behaviour already existed; this change is what makes it matter.
     //
-    // `default_server` is still honoured for ORDER: it goes first, so the
-    // deployment's own node leads the list. It no longer decides who is in it.
-    const published = (data || {}).default_server;
-    const ordered =
-      published && listed.includes(published)
-        ? [published, ...listed.filter((origin) => origin !== published)]
-        : listed;
+    const ordered = listed;
 
     if (ordered.length) {
       return {
@@ -133,13 +156,23 @@ const explorer = ({ choose = false, unavailable = false }) => {
     };
   }, []);
 
+  // The origin is REMEMBERED, and the searchable list is DERIVED from it --
+  // it is never merged into `servers`.
+  //
+  // It used to be prepended by a second mount effect. The federation fetch
+  // above resolves after both effects have run, and its `setServers(published)`
+  // replaces the whole list -- so the same-origin node was silently dropped the
+  // moment the request came back, not merely read too early. Deriving removes
+  // the ordering question instead of answering it: whenever `servers` changes,
+  // the origin is still applied.
+  const [origin, setOrigin] = useState("");
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      setServers((current) =>
-        buildQrespServerList(current, window.location.origin)
-      );
-    }
+    if (typeof window !== "undefined") setOrigin(window.location.origin);
   }, []);
+
+  // What every control on this page reads. `buildQrespServerList` is the only
+  // thing that decides whether the origin belongs in it.
+  const searchableServers = buildQrespServerList(servers, origin);
 
   const [selectedServers, setSelectedServers] = useState("");
 
@@ -151,7 +184,9 @@ const explorer = ({ choose = false, unavailable = false }) => {
 
   const searchAll = () => {
     if (unsetAlert) unsetAlert();
-    const params = servers.map((option) => option.qresp_server_url).join(",");
+    const params = searchableServers
+      .map((option) => option.qresp_server_url)
+      .join(",");
     router.push({ pathname: "/search", query: { servers: params } });
   };
 
@@ -201,7 +236,7 @@ const explorer = ({ choose = false, unavailable = false }) => {
           </Box>
           <Autocomplete
             multiple
-            options={servers}
+            options={searchableServers}
             getOptionLabel={(option) => option.qresp_server_url}
             filterSelectedOptions
             renderInput={(params) => (

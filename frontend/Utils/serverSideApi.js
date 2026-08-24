@@ -63,4 +63,41 @@ const resolveServerSideApiBase = (ctx, serverParam) => {
   return stripTrailingSlash(raw);
 };
 
-export { resolveServerSideApiBase };
+/**
+ * SERVER-SIDE ONLY: the public origin this request arrived on, e.g.
+ * "https://localhost:8443".
+ *
+ * `getServerSideProps` runs before any browser code, so `window.location`
+ * does not exist there -- which is why the Explorer's default redirect used
+ * to be built from the federation registry alone and could never include the
+ * node the reader was actually on.
+ *
+ * Reads the same headers `resolveServerSideApiBase` already trusts. They are
+ * settable by a proxy, and that is the point: nginx is what knows the public
+ * origin. A forged value cannot do much here -- the only use is deciding
+ * whether to add a SAME-ORIGIN node to a search list, and
+ * `buildQrespServerList` adds one only when the origin is local, so a forged
+ * remote host adds nothing and a forged local one names the reader's own
+ * machine.
+ *
+ * Returns "" when the host header is missing, which callers treat as "no
+ * origin to add" rather than guessing one.
+ */
+const requestOrigin = (ctx) => {
+  const headers = (ctx && ctx.req && ctx.req.headers) || {};
+  const host = String(
+    headers["x-forwarded-host"] || headers.host || ""
+  ).trim();
+  if (!host) return "";
+  // A proxy may send a list; the first entry is the client-facing one.
+  const forwardedProto = String(headers["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  const socket = (ctx && ctx.req && (ctx.req.socket || ctx.req.connection)) || {};
+  const proto =
+    forwardedProto || (socket.encrypted ? "https" : "http");
+  return stripTrailingSlash(`${proto}://${host}`);
+};
+
+export { resolveServerSideApiBase, requestOrigin };

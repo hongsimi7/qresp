@@ -182,6 +182,64 @@ describe("one list across two repositories", () => {
   });
 });
 
+// The staging regression, at the merge step. A record published on the
+// localhost node has to survive into the rows /search renders -- it was
+// missing from the Explorer only because that node was never in the search
+// list, not because merging dropped it.
+describe("a record published on the reader's own node", () => {
+  const LOCAL = "https://localhost:8443";
+
+  it("appears in the merged rows alongside the remote corpus", () => {
+    const rows = mergeRecordsByServer(
+      {
+        [LOCAL]: [record("local-1", { _Search__title: "test1" })],
+        [UCHICAGO]: [record("remote-1", { _Search__title: "Testing" })],
+      },
+      NAMES,
+      [LOCAL, UCHICAGO]
+    );
+    const titles = rows.map((row) => row.paper._Search__title);
+    expect(titles).toContain("test1");
+    expect(titles).toContain("Testing");
+  });
+
+  it("keeps its own node, so its detail link resolves", () => {
+    // A record's id resolves only on the server that holds it.
+    const rows = mergeRecordsByServer(
+      { [LOCAL]: [record("local-1", { _Search__title: "test1" })] },
+      NAMES,
+      [LOCAL]
+    );
+    expect(rows[0].paper._Search__server).toBe(LOCAL);
+  });
+
+  it("leads the list when its node was searched first", () => {
+    // The Explorer puts the reader's own node first, so a record just
+    // published there is on the first page rather than after 65 remote ones.
+    const rows = mergeRecordsByServer(
+      {
+        [UCHICAGO]: [record("remote-1", { _Search__title: "Testing" })],
+        [LOCAL]: [record("local-1", { _Search__title: "test1" })],
+      },
+      NAMES,
+      [LOCAL, UCHICAGO]
+    );
+    expect(rows[0].paper._Search__title).toBe("test1");
+  });
+
+  it("is still de-duplicated against a remote copy of the same paper", () => {
+    // Merging is unchanged: same DOI on two nodes is still one row.
+    const shared = record("shared", { _Search__doi: "10.1000/shared" });
+    const rows = mergeRecordsByServer(
+      { [LOCAL]: [shared], [UCHICAGO]: [{ ...shared }] },
+      NAMES,
+      [LOCAL, UCHICAGO]
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].paper._Search__sources).toHaveLength(2);
+  });
+});
+
 // A Qresp node is shared federation and search infrastructure. Which node
 // served a copy says nothing about who wrote the paper, so the public card
 // makes exactly one institutional claim -- the curator's own -- and never
