@@ -133,12 +133,26 @@ PROVIDER_HEADERS = {"User-Agent": "Qresp/2.0 (research data curation)"}
 # copied out, so it never reaches a profile, the cache, or the response.)
 RECOMMENDATION_FIELDS = "title,abstract,year,authors.name,externalIds,fieldsOfStudy"
 # The citations endpoint nests each candidate under `citingPaper`, so every
-# field has to be asked for with that prefix. The SET is identical to
-# RECOMMENDATION_FIELDS -- the scorer needs exactly the same inputs whichever
-# endpoint supplied the candidate, and asking for more would widen what is
-# cached for no gain.
-CITATION_FIELDS = ",".join(
-    "citingPaper." + field for field in RECOMMENDATION_FIELDS.split(","))
+# field is asked for with that prefix.
+#
+# WRITTEN OUT, not derived from RECOMMENDATION_FIELDS by prefixing it. The two
+# endpoints do not accept the same selectors, and deriving one list from the
+# other hid that: `authors.name` is valid on recommendations and is REFUSED by
+# citations, which answered
+#
+#     HTTP 400  {"error":"Unrecognized or unsupported fields: [authors.name]"}
+#
+# and took the whole fallback down with it. `authors` is the selector citations
+# supports; it returns [{authorId, name}], which is the shape
+# `_normalize_candidate` already reads, so nothing downstream changes.
+#
+# The SET is otherwise deliberately the same as RECOMMENDATION_FIELDS: the
+# scorer needs identical inputs whichever endpoint supplied a candidate, and
+# asking for more would widen what is cached for no gain. If a field is added
+# to one list, check it against BOTH endpoints before adding it to the other.
+CITATION_FIELDS = (
+    "citingPaper.title,citingPaper.abstract,citingPaper.year,"
+    "citingPaper.authors,citingPaper.externalIds,citingPaper.fieldsOfStudy")
 # Resolution asks for the paper's identity and nothing else.
 #
 # It deliberately does NOT ask for `references.externalIds`. A live check
@@ -999,16 +1013,42 @@ def _external_section(status, results, stale=False, updated_at=None,
 def _fallback_status(outcome):
     """How the citations request went, as one short code.
 
-    Four values, not three: "the provider has no record of this paper" and
-    "the provider did not answer" are different facts, and collapsing them
-    would put the diagnostic back in the state this whole change is fixing.
+    Six values, because they call for different responses and collapsing them
+    is what let a real defect hide for a release:
+
+      ok               candidates came back (possibly zero of them)
+      not_found        the provider has no record of this paper
+      invalid_request  QRESP SENT A BAD REQUEST -- a 4xx that is not 404 and
+                       not 429. Nothing about the paper, the network or the
+                       provider's health; a bug here. This is the one that
+                       was being reported as "unavailable", which reads as
+                       "the provider is having trouble" and sent the first
+                       look in the wrong direction entirely.
+      rate_limited     429, ours to back off from
+      malformed        a 200 this code cannot read
+      unavailable      a timeout, a connection failure, or a 5xx
+
+    A code, never the provider's message: the body may quote the request and
+    is not shown to a browser or written to a log.
     """
     if outcome == FOUND:
         return "ok"
     if outcome == NOT_FOUND:
         return "not_found"
-    if outcome_detail(outcome) in ("unexpected_shape", "unreadable_body"):
+    detail = outcome_detail(outcome)
+    if detail in ("unexpected_shape", "unreadable_body"):
         return "malformed"
+    if detail == "rate_limited":
+        return "rate_limited"
+    if detail.startswith("http_"):
+        try:
+            status = int(detail.split("_", 1)[1])
+        except (IndexError, ValueError):
+            return "unavailable"
+        # 4xx is Qresp's fault, 5xx is the provider's. Telling them apart is
+        # the difference between "read our request" and "wait and retry".
+        if 400 <= status < 500:
+            return "invalid_request"
     return "unavailable"
 
 

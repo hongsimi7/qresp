@@ -193,6 +193,13 @@ def _failure_response(mode):
                              "message": "quota exceeded"}, 429)
     if mode == "server_error":
         return FakeResponse({"error": "upstream exploded"}, 500)
+    if mode == "bad_request":
+        # What the provider ACTUALLY answered when the citations request
+        # asked for a field that endpoint does not support. The body names
+        # the field; it must never reach a browser or a log.
+        return FakeResponse(
+            {"error": "Unrecognized or unsupported fields: [authors.name]"},
+            400)
     if mode == "malformed":
         return FakeResponse(None)                    # body is not JSON
     if mode == "unexpected_shape":
@@ -535,7 +542,11 @@ class TestCitationFallback(RelatedTestCase):
         self.assertEqual(related.EXTERNAL_CITATION_LIMIT,
                          call["params"]["limit"])
         # Every field is asked for under the nesting the endpoint uses.
-        for field in related.RECOMMENDATION_FIELDS.split(","):
+        # NOT derived by prefixing RECOMMENDATION_FIELDS: the two endpoints
+        # do not accept the same selectors, and assuming they did is what
+        # produced a 400 for the whole request. See the dedicated test below.
+        for field in ("title", "abstract", "year", "authors", "externalIds",
+                      "fieldsOfStudy"):
             self.assertIn("citingPaper." + field, call["params"]["fields"])
 
     def test_a_short_citation_list_is_short_not_padded(self):
@@ -593,7 +604,7 @@ class TestCitationFallback(RelatedTestCase):
                          pipeline["source_kind"])
 
     def test_a_failed_fallback_records_how_it_failed(self):
-        cases = {"timeout": "unavailable", "rate_limited": "unavailable",
+        cases = {"timeout": "unavailable", "rate_limited": "rate_limited",
                  "server_error": "unavailable", "not_found": "not_found"}
         for mode, expected in cases.items():
             provider = ProviderStub(recommendations=[], citation_mode=mode)
@@ -645,6 +656,70 @@ class TestCitationFallback(RelatedTestCase):
         pipeline = response.json()["external"]["pipeline"]
         self.assertNotIn("fallback", pipeline)
         self.assertIsNone(stub.citation_call)
+
+    def test_the_citation_request_asks_only_for_fields_that_endpoint_accepts(self):
+        # THE BUG, pinned at the request. The citations endpoint refuses the
+        # `authors.name` sub-selector that recommendations accepts, and
+        # answered 400 for the whole request -- so the fallback never ran at
+        # all. Deriving one field list from the other by prefixing is exactly
+        # what hid that, so the two are compared here on purpose.
+        provider = ProviderStub(recommendations=[], citations=clones(3))
+        _, stub = self.fetch(provider=provider)
+        fields = stub.citation_call["params"]["fields"]
+        self.assertNotIn("authors.name", fields)
+        self.assertIn("citingPaper.authors", fields)
+        # Everything else the scorer needs is still asked for, under the
+        # nesting this endpoint uses.
+        for field in ("title", "abstract", "year", "externalIds",
+                      "fieldsOfStudy"):
+            self.assertIn("citingPaper." + field, fields)
+        # The recommendations request is unchanged -- `authors.name` is valid
+        # there, and narrowing it would cost data for no reason.
+        self.assertIn("authors.name",
+                      stub.recommendation_call["params"]["fields"])
+
+    def test_a_provider_400_is_reported_as_our_bad_request_not_an_outage(self):
+        # "unavailable" reads as "the provider is having trouble" and sent
+        # the first investigation in the wrong direction. A 4xx is Qresp's
+        # own request being wrong, and says so.
+        provider = ProviderStub(recommendations=[], citation_mode="bad_request")
+        response, _ = self.fetch(provider=provider)
+        external = response.json()["external"]
+        fallback = external["pipeline"]["fallback"]
+        self.assertTrue(fallback["attempted"])
+        self.assertEqual("invalid_request", fallback["status"])
+        self.assertEqual(0, fallback["raw_candidates"])
+        self.assertEqual(0, fallback["shown"])
+        # ...and it still does not turn the recommendations ANSWER into a
+        # retryable failure.
+        self.assertEqual("ok", external["status"])
+        self.assertEqual(related.REASON_PROVIDER_EMPTY, external["reason"])
+
+    def test_each_failure_kind_is_told_apart(self):
+        for mode, expected in (("bad_request", "invalid_request"),
+                               ("rate_limited", "rate_limited"),
+                               ("timeout", "unavailable"),
+                               ("connection", "unavailable"),
+                               ("server_error", "unavailable"),
+                               ("malformed", "malformed"),
+                               ("unexpected_shape", "malformed"),
+                               ("not_found", "not_found")):
+            provider = ProviderStub(recommendations=[], citation_mode=mode)
+            response, _ = self.fetch(provider=provider)
+            fallback = response.json()["external"]["pipeline"]["fallback"]
+            self.assertEqual(expected, fallback["status"], mode)
+            RelatedResearchCache.drop_collection()
+            related.reset_caches()
+
+    def test_a_provider_error_body_never_reaches_the_response(self):
+        # The 400 body quotes the field list back. It is a diagnostic for an
+        # operator reading a status code, not something to show a reader.
+        provider = ProviderStub(recommendations=[], citation_mode="bad_request")
+        response, _ = self.fetch(provider=provider)
+        body = json.dumps(response.json())
+        self.assertNotIn("Unrecognized", body)
+        self.assertNotIn("authors.name", body)
+        self.assertNotIn("x-api-key", body.lower())
 
     def test_a_second_request_is_served_from_cache_without_asking_again(self):
         provider = ProviderStub(recommendations=[], citations=clones(30))
