@@ -673,7 +673,10 @@ describe("Analyze RCC Folder", () => {
       },
     };
     axios.post.mockResolvedValue({ data: many });
-    const user = userEvent.setup();
+    // 40 candidate cards rendered, then re-rendered by Show all (~0.8s for
+    // that click alone). Measured: the artificial inter-event delay is what
+    // pushed this past the 5s budget under a full run.
+    const user = noDelayUser();
     renderWith();
     await user.click(analyzeButton());
     await screen.findByRole("tab", { name: /charts \(40\)/i });
