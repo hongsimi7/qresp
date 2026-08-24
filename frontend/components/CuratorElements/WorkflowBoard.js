@@ -4,6 +4,8 @@ import { Alert, Box, Chip, Grid, Typography } from "@mui/material";
 
 import { RegularStyledButton, SmallStyledButton } from "../button";
 import CuratorContext from "../../Context/Curator/curatorContext";
+import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperContext";
+import { displayUrl, externalLabel, noteFor } from "../../Utils/externalData";
 import {
   CHART,
   DATASET,
@@ -101,6 +103,7 @@ const ADD_BUTTONS = [
  * than rendering an empty chip.
  */
 export const labelFor = (artifact, id) => {
+  if (prefixOf(id) === EXTERNAL) return externalLabel(artifact, id);
   const named =
     (artifact &&
       (artifact.label ||
@@ -123,6 +126,14 @@ const WorkflowBoard = () => {
     charts, scripts, datasets, tools, heads,
     workflow, addMany, addEdge, unlink,
   } = useContext(CuratorContext);
+
+  // The EXISTING Curator forms, opened on an existing artifact. Editing a
+  // node is not a new surface: `setDefault` seeds the real form with the real
+  // record and `openForm` shows it, so the fields, the validation and the
+  // save path are the ones the rest of the Curator already uses. Cancelling
+  // closes that form and changes nothing, here or in the record.
+  const { openForm, setDefault, setExternalNodeFormOpen } =
+    useContext(CuratorHelperContext) || {};
 
   // The node the next Add button will attach to. Selection is the whole
   // interaction model: it is what turns "+ Script" into "a script that made
@@ -156,6 +167,29 @@ const WorkflowBoard = () => {
         return from === id || to === id;
       })
   );
+
+  /**
+   * Open the artifact's own Curator form.
+   *
+   * External data is the one that does not have a section form of its own --
+   * it is a `heads` record, and the workflow section's dialog is where it is
+   * written -- so that dialog is what opens for it. Same record, same model.
+   */
+  const editNode = (id) => {
+    const artifact = byId[id];
+    if (!artifact) return;
+    const kind = TYPE_BY_PREFIX[prefixOf(id)];
+    if (!setDefault) return;
+    // Same call for every type. External data has no section form, so its
+    // dialog is opened instead of a section form -- but the record is seeded
+    // through the one `setDefault` path either way.
+    setDefault(kind, artifact);
+    if (kind === "head") {
+      if (setExternalNodeFormOpen) setExternalNodeFormOpen(true);
+      return;
+    }
+    if (openForm) openForm(kind);
+  };
 
   const connectionsFor = (id) =>
     edges
@@ -247,6 +281,23 @@ const WorkflowBoard = () => {
     addEdge(candidate);
   };
 
+  /**
+   * Existing artifacts the selection can be joined to, and is not already.
+   *
+   * This is what "Attach existing" offers. It never creates anything -- the
+   * whole point is to reuse the Chart, Script, Dataset, Tool or external
+   * record that is already in the paper instead of adding a second one that
+   * means the same thing. Opening the list creates nothing either.
+   */
+  const attachCandidates = () =>
+    knownIds.filter((id) => {
+      if (!selected || id === selected) return false;
+      const type =
+        inferEdgeType(selected, id) || inferEdgeType(id, selected);
+      if (!type) return false;
+      return !hasEdge(edges, selected, id) && !hasEdge(edges, id, selected);
+    });
+
   const laneNodes = (lane) =>
     knownIds
       .filter((id) => lane.prefixes.includes(prefixOf(id)))
@@ -321,6 +372,14 @@ const WorkflowBoard = () => {
                       aria-pressed={selected === id}
                       sx={{ maxWidth: "100%" }}
                     />
+                    {/* The artifact's OWN Curator form -- same fields, same
+                        validation, same save. Cancel changes nothing. */}
+                    <SmallStyledButton
+                      onClick={() => editNode(id)}
+                      data-testid={`workflow-edit-${id}`}
+                    >
+                      Edit
+                    </SmallStyledButton>
                     {selected && selected !== id ? (
                       <SmallStyledButton
                         onClick={() => connectTo(id)}
@@ -328,6 +387,37 @@ const WorkflowBoard = () => {
                       >
                         Connect
                       </SmallStyledButton>
+                    ) : null}
+                    {/* External data says what it references, briefly. It is
+                        a reference to data held elsewhere, never a local
+                        Dataset, and only an http(s) link is ever shown. */}
+                    {prefixOf(id) === EXTERNAL ? (
+                      <Box sx={{ mt: 0.5, minWidth: 0 }}>
+                        {displayUrl(byId[id]) ? (
+                          <Typography
+                            variant="caption"
+                            component="a"
+                            href={displayUrl(byId[id])}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            data-testid={`workflow-external-url-${id}`}
+                            sx={{ display: "block", overflowWrap: "anywhere" }}
+                          >
+                            {displayUrl(byId[id])}
+                          </Typography>
+                        ) : null}
+                        {noteFor(byId[id]) ? (
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            display="block"
+                            data-testid={`workflow-external-note-${id}`}
+                            sx={{ overflowWrap: "anywhere" }}
+                          >
+                            {noteFor(byId[id])}
+                          </Typography>
+                        ) : null}
+                      </Box>
                     ) : null}
                   </Box>
                 ))}
@@ -341,6 +431,32 @@ const WorkflowBoard = () => {
           </Grid>
         ))}
       </Grid>
+
+      {/* ATTACH EXISTING. One Dataset, Script or Tool often serves several
+          figures, and the right move is to connect the one that is already
+          in the paper rather than add a second that means the same thing.
+          Nothing here creates a record -- not opening the list, not any of
+          its buttons. */}
+      {selected && attachCandidates().length ? (
+        <Box sx={{ mt: 2 }} data-testid="workflow-attach">
+          <Typography variant="subtitle2" gutterBottom>
+            Attach existing to {labelFor(byId[selected], selected)}
+          </Typography>
+          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+            {attachCandidates().map((id) => (
+              <Chip
+                key={id}
+                size="small"
+                variant="outlined"
+                label={labelFor(byId[id], id)}
+                onClick={() => connectTo(id)}
+                data-testid={`workflow-attach-${id}`}
+                sx={{ maxWidth: "100%" }}
+              />
+            ))}
+          </Box>
+        </Box>
+      ) : null}
 
       {/* The selected node's connections, each removable on its own. */}
       {selected ? (

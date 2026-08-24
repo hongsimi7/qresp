@@ -21,7 +21,11 @@ const CuratorHelperState = (props) => {
       dataset: false,
       script: false,
     },
-    def: { chart: null, tool: null, dataset: null, script: null },
+    // `head` is external data. It has no section form of its own -- the
+    // workflow section's dialog is where it is written -- but it uses the
+    // SAME def slot as every other artifact, so "open this record for
+    // editing" works the one way everywhere.
+    def: { chart: null, tool: null, dataset: null, script: null, head: null },
     // To manage workflows
     workflow: { open: false, fit: false, showLabels: false, onClick: true },
     editing: {
@@ -62,6 +66,7 @@ const CuratorHelperState = (props) => {
         datasetsHelper: { open: state.open.dataset, def: state.def.dataset },
         scriptsHelper: { open: state.open.script, def: state.def.script },
         workflowHelper: state.workflow,
+        externalHelper: { open: state.workflow.open, def: state.def.head },
         editing: state.editing,
         openForm,
         closeForm,

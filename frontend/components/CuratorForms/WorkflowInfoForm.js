@@ -1,4 +1,4 @@
-import { useEffect, useContext, Fragment } from "react";
+import { useEffect, useContext, useState, Fragment } from "react";
 
 import {
   Box,
@@ -23,6 +23,7 @@ import WorkflowBoard from "../CuratorElements/WorkflowBoard";
 import Legend from "../Workflow/Legend";
 import { formatData } from "../Workflow/util";
 import { isGraph } from "../../Utils/graph";
+import { changedUrlProblem } from "../../Utils/externalData";
 
 import AlertContext from "../../Context/Alert/alertContext";
 import CuratorContext from "../../Context/Curator/curatorContext";
@@ -41,6 +42,7 @@ const WorkflowInfoForm = () => {
     addEdge,
     deleteEdge,
     add,
+    edit,
     del,
     setEdges,
   } = useContext(CuratorContext);
@@ -48,12 +50,17 @@ const WorkflowInfoForm = () => {
   const {
     workflowHelper: { open, fit, showLabels },
     setExternalNodeFormOpen,
+    setDefault,
+    externalHelper,
     setShowLabels,
     setWorkflowFit,
     setWorkflowOnClick,
     setEditing,
     editing,
   } = useContext(CuratorHelperContext);
+
+  // Which external record the dialog is editing, or null when creating one.
+  const editingHead = (externalHelper && externalHelper.def) || null;
 
   const theme = useTheme();
   const direction = useMediaQuery(theme.breakpoints.down("sm"))
@@ -127,13 +134,66 @@ const WorkflowInfoForm = () => {
 
   const data = formatData(charts, tools, heads, datasets, scripts);
 
-  const { register, handleSubmit, formState: { errors } } = useForm();
+  // Which external node the dialog is editing, or null when it is creating
+  // one. `heads` stays the only model -- editing reuses the same record and
+  // the same dialog rather than a second shape for "an external node that
+  // already exists".
+
+  const headDefaults = (head) => ({
+    label: (head && head.label) || "",
+    readme: (head && head.readme) || "",
+    URLs: (head && (head.URLs || []).join(", ")) || "",
+  });
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm({ defaultValues: headDefaults(null) });
+
+  // Re-seed on every open: this form outlives the dialog, and RHF only knows
+  // values it was given or the user touched.
+  useEffect(() => {
+    if (open) reset(headDefaults(editingHead));
+  }, [open, editingHead]);
+
+  const openExternalNode = () => {
+    setDefault("head", null);   // creating, not editing
+    setExternalNodeFormOpen(true);
+  };
+
+  const closeExternalNode = () => {
+    setDefault("head", null);
+    setExternalNodeFormOpen(false);
+  };
 
   const onSubmit = (values) => {
-    values["id"] = `h${heads.length}`;
-    values.URLs = values.URLs.split(",").map((el) => el.trim());
-    add("head", values);
-    setExternalNodeFormOpen(false);
+    const urls = String(values.URLs || "")
+      .split(",")
+      .map((el) => el.trim())
+      .filter(Boolean);
+    const previous = (editingHead && editingHead.URLs) || [];
+    // HTTPS is required only for a URL that is NEW or CHANGED. A legacy
+    // record may hold an http:// link or none at all, and refusing to let a
+    // curator fix its LABEL because of a URL somebody else typed years ago
+    // would make old records uneditable -- see `changedUrlProblem`.
+    const problem = changedUrlProblem(urls, previous);
+    if (problem) {
+      setAlert("External data", problem, null);
+      return;
+    }
+    const payload = {
+      label: String(values.label || "").trim(),
+      readme: values.readme,
+      URLs: urls,
+    };
+    if (editingHead) {
+      edit("head", { ...editingHead, ...payload });
+    } else {
+      add("head", { ...payload, id: `h${heads.length}` });
+    }
+    closeExternalNode();
     setWorkflowFit(!fit);
   };
 
@@ -181,7 +241,7 @@ const WorkflowInfoForm = () => {
         <Grid container direction="row" spacing={1}>
           <Grid size={{ xs: 12, sm: 4 }}>
             <RegularStyledButton
-              onClick={() => setExternalNodeFormOpen(true)}
+              onClick={() => openExternalNode()}
               fullWidth
             >
               Add an External Node
@@ -223,15 +283,28 @@ const WorkflowInfoForm = () => {
           </RegularStyledButton>
         </Box>
       </Drawer>
-      <Dialog open={open} onClose={() => setExternalNodeFormOpen(false)}>
+      <Dialog open={open} onClose={closeExternalNode}>
         <form onSubmit={handleSubmit(onSubmit)}>
           <DialogTitle>
             <Typography variant="h6" component="div">
-              Add an External Node
+              {editingHead ? "Edit External Data" : "Add an External Node"}
             </Typography>
           </DialogTitle>
           <DialogContent dividers>
             <Grid container direction="column" spacing={1}>
+              <Grid>
+                {/* A short name, so a graph can be read without expanding
+                    every description. Optional: legacy records have none and
+                    fall back to their note. */}
+                <TextInputField
+                  id="headLabel"
+                  register={register}
+                  error={errors && errors.label}
+                  label="Label"
+                  name="label"
+                  placeholder="e.g. Materials Project mp-21276"
+                />
+              </Grid>
               <Grid>
                 <TextInputField
                   id="headDescription"
@@ -251,7 +324,7 @@ const WorkflowInfoForm = () => {
                   error={errors && errors.URLs}
                   label="URLs"
                   name="URLs"
-                  placeholder="Enter links to the external resource"
+                  placeholder="https://… (optional)"
                 />
               </Grid>
             </Grid>
@@ -261,7 +334,7 @@ const WorkflowInfoForm = () => {
               Save
             </RegularStyledButton>
             <RegularStyledButton
-              onClick={() => setExternalNodeFormOpen(false)}
+              onClick={closeExternalNode}
               fullWidth
             >
               Close

@@ -13,6 +13,7 @@ jest.mock("axios");
 import axios from "axios";
 
 import CuratorContext from "../Context/Curator/curatorContext";
+import CuratorHelperContext from "../Context/CuratorHelpers/curatorHelperContext";
 import WorkflowBoard from "../components/CuratorElements/WorkflowBoard";
 
 const noop = () => {};
@@ -34,14 +35,25 @@ const build = (overrides = {}) => ({
   ...overrides,
 });
 
-const renderBoard = (overrides = {}) => {
+// The helper context is how the EXISTING Curator forms are opened. Spying on
+// it is how "clicking Edit opens the artifact's real form" is checked without
+// mounting the whole Curator.
+const buildHelpers = () => ({
+  openForm: jest.fn(),
+  setDefault: jest.fn(),
+  setExternalNodeFormOpen: jest.fn(),
+});
+
+const renderBoard = (overrides = {}, helpers = buildHelpers()) => {
   const value = build(overrides);
   render(
-    <CuratorContext.Provider value={value}>
-      <WorkflowBoard />
-    </CuratorContext.Provider>
+    <CuratorHelperContext.Provider value={helpers}>
+      <CuratorContext.Provider value={value}>
+        <WorkflowBoard />
+      </CuratorContext.Provider>
+    </CuratorHelperContext.Provider>
   );
-  return value;
+  return { ...value, helpers };
 };
 
 const user = () => userEvent.setup({ delay: null });
@@ -277,6 +289,201 @@ describe("connecting and unlinking existing nodes", () => {
     const list = screen.getByTestId("workflow-connections");
     expect(within(list).getByTestId("workflow-unlink-s0-c0")).toBeInTheDocument();
     expect(within(list).getByTestId("workflow-unlink-s0-c1")).toBeInTheDocument();
+  });
+});
+
+// Editing a node is not a new surface. It opens the artifact's OWN Curator
+// form, with the fields and validation the rest of the Curator already uses.
+describe("editing a node", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  it.each([
+    ["c0", "chart", "charts", { charts: [{ id: "c0", caption: "Figure one" }] }],
+    ["s0", "script", "scripts", { scripts: [{ id: "s0", readme: "plot.py" }] }],
+    ["d0", "dataset", "datasets", { datasets: [{ id: "d0", readme: "traj" }] }],
+    ["t0", "tool", "tools", { tools: [{ id: "t0", packageName: "numpy" }] }],
+  ])("opens the real %s form seeded with the record", async (id, kind, list, state) => {
+    const helpers = buildHelpers();
+    renderBoard(state, helpers);
+    await user().click(screen.getByTestId(`workflow-edit-${id}`));
+
+    // Seeded with the ACTUAL artifact, so the form edits it rather than
+    // creating a second one.
+    expect(helpers.setDefault).toHaveBeenCalledWith(kind, state[list][0]);
+    expect(helpers.openForm).toHaveBeenCalledWith(kind);
+  });
+
+  it("opens the external-data dialog for a head, through the same def slot", async () => {
+    const helpers = buildHelpers();
+    const head = { id: "h0", label: "Materials Project" };
+    renderBoard({ heads: [head] }, helpers);
+    await user().click(screen.getByTestId("workflow-edit-h0"));
+
+    expect(helpers.setDefault).toHaveBeenCalledWith("head", head);
+    expect(helpers.setExternalNodeFormOpen).toHaveBeenCalledWith(true);
+    // External data has no SECTION form -- it must not try to open one.
+    expect(helpers.openForm).not.toHaveBeenCalled();
+  });
+
+  it("creates nothing by opening an edit form", async () => {
+    const helpers = buildHelpers();
+    const ctx = renderBoard(
+      { charts: [{ id: "c0", caption: "Figure one" }] },
+      helpers
+    );
+    await user().click(screen.getByTestId("workflow-edit-c0"));
+    expect(ctx.addMany).not.toHaveBeenCalled();
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+    expect(axios.post).not.toHaveBeenCalled();
+    expect(axios.put).not.toHaveBeenCalled();
+  });
+});
+
+// One Dataset, Script or Tool often serves several figures. The right move is
+// to connect the one already in the paper, not to add a second that means the
+// same thing.
+describe("attach existing", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  const paper = {
+    charts: [{ id: "c0", caption: "Figure one" }],
+    scripts: [{ id: "s0", readme: "plot.py" }],
+    datasets: [{ id: "d0", readme: "trajectory" }],
+  };
+
+  it("offers only artifacts the selection can lawfully join", async () => {
+    renderBoard(paper);
+    await user().click(screen.getByTestId("workflow-node-s0"));
+    const panel = screen.getByTestId("workflow-attach");
+    // A script can take a dataset and can produce a chart...
+    expect(within(panel).getByTestId("workflow-attach-d0")).toBeInTheDocument();
+    expect(within(panel).getByTestId("workflow-attach-c0")).toBeInTheDocument();
+    // ...and never itself.
+    expect(
+      within(panel).queryByTestId("workflow-attach-s0")
+    ).not.toBeInTheDocument();
+  });
+
+  it("connects the existing artifact instead of duplicating it", async () => {
+    const ctx = renderBoard(paper);
+    await user().click(screen.getByTestId("workflow-node-s0"));
+    await user().click(screen.getByTestId("workflow-attach-d0"));
+
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "d0",
+      to: "s0",
+      type: "consumes",
+    });
+    // THE POINT: no second dataset was created.
+    expect(ctx.addMany).not.toHaveBeenCalled();
+  });
+
+  it("creates nothing merely by showing the list", async () => {
+    const ctx = renderBoard(paper);
+    await user().click(screen.getByTestId("workflow-node-s0"));
+    expect(screen.getByTestId("workflow-attach")).toBeInTheDocument();
+    expect(ctx.addMany).not.toHaveBeenCalled();
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it("stops offering an artifact once it is attached", async () => {
+    renderBoard({
+      ...paper,
+      workflow: {
+        nodes: [],
+        edges: [{ from: "d0", to: "s0", type: "consumes" }],
+      },
+    });
+    await user().click(screen.getByTestId("workflow-node-s0"));
+    const panel = screen.getByTestId("workflow-attach");
+    expect(
+      within(panel).queryByTestId("workflow-attach-d0")
+    ).not.toBeInTheDocument();
+    expect(within(panel).getByTestId("workflow-attach-c0")).toBeInTheDocument();
+  });
+
+  it("lets one dataset serve a second script without copying it", async () => {
+    const ctx = renderBoard({
+      scripts: [
+        { id: "s0", readme: "plot.py" },
+        { id: "s1", readme: "fit.py" },
+      ],
+      datasets: [{ id: "d0", readme: "trajectory" }],
+      workflow: {
+        nodes: [],
+        edges: [{ from: "d0", to: "s0", type: "consumes" }],
+      },
+    });
+    await user().click(screen.getByTestId("workflow-node-s1"));
+    await user().click(screen.getByTestId("workflow-attach-d0"));
+
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "d0",
+      to: "s1",
+      type: "consumes",
+    });
+    expect(ctx.addMany).not.toHaveBeenCalled();
+  });
+});
+
+// An external node references data held somewhere else. It must say what it
+// points at, and must never look like a local Dataset.
+describe("what an external data node shows", () => {
+  it("shows its label, link and short note", () => {
+    renderBoard({
+      heads: [{
+        id: "h0",
+        label: "Materials Project mp-21276",
+        readme: "Band structure used as the reference calculation.",
+        URLs: ["https://materialsproject.org/materials/mp-21276"],
+      }],
+    });
+    expect(screen.getByTestId("workflow-node-h0")).toHaveTextContent(
+      "Materials Project mp-21276"
+    );
+    expect(screen.getByTestId("workflow-external-url-h0")).toHaveAttribute(
+      "href",
+      "https://materialsproject.org/materials/mp-21276"
+    );
+    expect(screen.getByTestId("workflow-external-note-h0")).toHaveTextContent(
+      /band structure used as the reference/i
+    );
+  });
+
+  it("still shows a legacy head that has no label and an http link", () => {
+    // Old records are valid. They fall back to their note for a name, and
+    // their link is displayed as stored.
+    renderBoard({
+      heads: [{ id: "h0", readme: "Reference data from a collaborator",
+                URLs: ["http://example.org/data"] }],
+    });
+    expect(screen.getByTestId("workflow-node-h0")).toHaveTextContent(
+      /reference data from a collaborator/i
+    );
+    expect(screen.getByTestId("workflow-external-url-h0")).toHaveAttribute(
+      "href",
+      "http://example.org/data"
+    );
+  });
+
+  it("shows no link at all for a stored local path", () => {
+    // Publishing a path from somebody's machine is not a reference anybody
+    // can follow, and says more about their filesystem than they meant.
+    renderBoard({
+      heads: [{ id: "h0", label: "Local copy",
+                URLs: ["/home/curator/private/data.h5"] }],
+    });
+    expect(screen.getByTestId("workflow-node-h0")).toHaveTextContent("Local copy");
+    expect(
+      screen.queryByTestId("workflow-external-url-h0")
+    ).not.toBeInTheDocument();
+  });
+
+  it("names an external node with no label and no note by what it is", () => {
+    renderBoard({ heads: [{ id: "h0", URLs: [] }] });
+    expect(screen.getByTestId("workflow-node-h0")).toHaveTextContent(
+      /external data \(h0\)/i
+    );
   });
 });
 
