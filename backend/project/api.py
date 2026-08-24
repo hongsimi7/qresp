@@ -13,6 +13,7 @@ from project.auth import (can_edit_paper, can_manage_paper, csrf_protect,
 from project.models import CuratorDraft
 from project.paperdao import *
 from project.util import Dtree
+from project.workflow import WorkflowError, validate_workflow
 
 from project.controllers.preview import Preview
 from project.controllers.publish import Publish
@@ -252,6 +253,15 @@ def publish(paper):
     # The owner always comes from the SESSION; a client-provided value is
     # discarded before stamping. The stamped payload is what gets stored and
     # later inserted on /verify.
+    # A graph that cannot be stored is refused HERE, while the curator is
+    # still looking at it, rather than at /verify where the only thing left
+    # to do is fail an email link. Legacy shapes and papers with no workflow
+    # pass through untouched -- see project/workflow.py.
+    try:
+        validate_workflow(paper)
+    except WorkflowError as e:
+        return {"error": str(e)}, 400
+
     paper.pop("owner_email", None)
     stamp_owner(paper)
     origin = (request.headers.get('origin') or request.host_url or "").strip()
@@ -320,6 +330,13 @@ def update_paper(id, paper):
         # and force the verified owner + current activation/editor state from
         # the stored record so editing preserves them.
         data = {k: v for k, v in data.items() if k in Paper._fields}
+        # Validated on the MERGED document: a payload may submit a workflow
+        # whose artifacts come from the stored record, so neither half is
+        # checkable on its own. Only when the PAYLOAD actually carries a
+        # workflow -- editing a title must not be refused because a record
+        # written years ago holds an edge V1 would not accept today.
+        if "workflow" in paper:
+            validate_workflow(data)
         data["owner_email"] = existing.owner_email
         data["is_active"] = existing.is_active
         data["editor_emails"] = list(existing.editor_emails or [])

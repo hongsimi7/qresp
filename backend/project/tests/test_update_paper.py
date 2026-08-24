@@ -1,5 +1,6 @@
 import unittest
 
+from project.models import Workflow
 from project.paperdao import Paper
 from project.tests.test_permissions import (
     ADMIN,
@@ -19,6 +20,61 @@ class TestUpdatePaper(PermissionTestBase):
         return self.client.put(
             f"/api/paper/{paper_id}", json=payload, headers=headers
         )
+
+    # ---------------------------------------------------- Workflow V1 graph
+
+    def test_owner_can_store_a_typed_workflow_graph(self):
+        self.login(OWNER)
+        paper = Paper.objects.get(id=self.owned_id)
+        chart_id = (paper.charts[0].id if paper.charts else None)
+        if not chart_id:
+            self.skipTest("fixture paper has no chart to connect")
+        response = self.update(self.owned_id, {
+            "workflow": {"nodes": [chart_id],
+                         "edges": [{"from": chart_id, "to": chart_id,
+                                    "type": "generates"}]},
+        })
+        # Self-link: refused, and the record is untouched.
+        self.assertEqual(400, response.status_code)
+        self.assertIn("itself", response.json()["error"])
+
+    def test_a_workflow_naming_an_unknown_artifact_is_refused(self):
+        self.login(OWNER)
+        response = self.update(self.owned_id, {
+            "workflow": {"nodes": [], "edges": [
+                {"from": "s0", "to": "c999", "type": "generates"}]},
+        })
+        self.assertEqual(400, response.status_code)
+        self.assertIn("not part of this paper", response.json()["error"])
+
+    def test_a_metadata_edit_is_not_refused_by_a_legacy_graph(self):
+        # The regression this guards: a record written years ago may hold an
+        # edge V1 would not accept. Editing its TITLE must still work --
+        # validation runs only when the payload itself carries a workflow.
+        paper = Paper.objects.get(id=self.owned_id)
+        paper.workflow = Workflow(nodes=[], edges=[["gone-1", "gone-2"]])
+        paper.save()
+
+        self.login(OWNER)
+        response = self.update(self.owned_id, {"tags": ["still-editable"]})
+        self.assertEqual(200, response.status_code)
+        stored = Paper.objects.get(id=self.owned_id)
+        self.assertIn("still-editable", stored.tags)
+        # ...and the old graph is preserved exactly, not rewritten.
+        self.assertEqual([["gone-1", "gone-2"]], list(stored.workflow.edges))
+
+    def test_a_non_owner_cannot_store_a_workflow(self):
+        # The graph is metadata like any other: the same owner gate applies.
+        self.login(OTHER)
+        response = self.update(self.owned_id, {
+            "workflow": {"nodes": [], "edges": []}})
+        self.assertEqual(403, response.status_code)
+
+    def test_an_admin_may_store_a_workflow(self):
+        self.login(ADMIN)
+        response = self.update(self.owned_id, {
+            "workflow": {"nodes": [], "edges": []}})
+        self.assertEqual(200, response.status_code)
 
     def test_update_without_csrf_token_denied(self):
         self.login(OWNER)

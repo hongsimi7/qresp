@@ -135,7 +135,15 @@ class Documentation(DynamicEmbeddedDocument):
 
 class Heads(DynamicEmbeddedDocument):
     """ Class mapping Heads section of paper to mongo database
+
+    An "external node" in the workflow: a reference to data that lives
+    outside this paper. Deliberately NOT a Dataset -- Qresp does not hold the
+    files, cannot check them, and must not present one as if it did.
     """
+    # A short name for the node, so a graph can be read without expanding
+    # every description. Optional: records written before V1 have none, and
+    # the UI falls back to the description rather than inventing a label.
+    label = StringField(max_length=200)
     readme = StringField()
     files = ListField()
     URLs = ListField()
@@ -147,7 +155,18 @@ class Heads(DynamicEmbeddedDocument):
 class Workflow(DynamicEmbeddedDocument):
     """ Class mapping Workflow section of paper to mongo database
     """
-    edges = ListField(ListField())
+    # Edges hold BOTH shapes, which is why this is an untyped ListField and
+    # not ListField(ListField()):
+    #
+    #   {"from": "s0", "to": "c0", "type": "generates"}   Workflow V1
+    #   ["s0", "c0"]                                      every earlier record
+    #
+    # The typed form says what a connection MEANS; the pair form says only
+    # that somebody drew a line. Legacy pairs are read, stored and rendered
+    # exactly as they are -- nothing infers a type for one, because guessing
+    # what an old curator intended is not something this code can do
+    # honestly. `project/workflow.py` validates whichever shape arrives.
+    edges = ListField()
     nodes = ListField()
     meta = {'strict': False}
 
