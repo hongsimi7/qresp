@@ -62,13 +62,31 @@ class WorkflowError(ValueError):
     """A workflow that cannot be stored, with a reason fit to show a curator."""
 
 
-def artifact_ids(paper):
-    """Every artifact id this paper holds, whatever shape it arrived in.
+# Which list an id prefix must be found in. An id's prefix is a CLAIM about
+# what kind of artifact it is, and `artifact_types` is what checks the claim
+# against the paper rather than trusting the letter.
+LIST_BY_PREFIX = {
+    CHART: "charts",
+    SCRIPT: "scripts",
+    DATASET: "datasets",
+    TOOL: "tools",
+    EXTERNAL: "heads",
+}
+
+
+def artifact_types(paper):
+    """{id: list it was found in} for every artifact this paper holds.
 
     Reads the same five lists the Curator derives workflow nodes from. A
     missing list is an empty one -- a paper with no tools is not malformed.
+
+    The VALUE matters as much as the key. An id carries its type in its first
+    letter, and an edge that says `t0 -> c0` is asserting that `t0` is a tool.
+    Keeping what each id actually is lets that assertion be checked instead of
+    assumed: a `c` id sitting in `datasets` is a corrupt reference even though
+    the letter looks right.
     """
-    ids = set()
+    found = {}
     for key in ("charts", "scripts", "datasets", "tools", "heads"):
         for item in (paper.get(key) or []):
             if isinstance(item, dict):
@@ -76,8 +94,13 @@ def artifact_ids(paper):
             else:
                 value = str(getattr(item, "id", "") or "").strip()
             if value:
-                ids.add(value)
-    return ids
+                found[value] = key
+    return found
+
+
+def artifact_ids(paper):
+    """Every artifact id this paper holds. See `artifact_types`."""
+    return set(artifact_types(paper))
 
 
 def normalize_edge(edge):
@@ -155,7 +178,7 @@ def validate_workflow(paper):
     if not isinstance(raw_edges, (list, tuple)):
         raise WorkflowError("Workflow edges must be a list.")
 
-    known = artifact_ids(paper)
+    known = artifact_types(paper)
     edges = []
     for raw in raw_edges:
         edge = normalize_edge(raw)
@@ -175,6 +198,21 @@ def validate_workflow(paper):
                 raise WorkflowError(
                     "Workflow connection refers to %s, which is not part of "
                     "this paper." % endpoint)
+            # ...and the id's prefix is a CLAIM about what kind of artifact it
+            # is. Check it rather than trust it: a `c` id stored among the
+            # datasets is a corrupt reference, and an edge built on it would
+            # describe a relationship between things that are not what the
+            # graph says they are.
+            expected = LIST_BY_PREFIX.get(endpoint[:1])
+            if expected is None:
+                raise WorkflowError(
+                    "Workflow connection refers to %s, which is not a kind of "
+                    "artifact Qresp knows." % endpoint)
+            if known[endpoint] != expected:
+                raise WorkflowError(
+                    "Workflow connection refers to %s as a %s, but this paper "
+                    "holds it in %s."
+                    % (endpoint, expected, known[endpoint]))
 
         if kind is not None:
             if kind not in EDGE_TYPES:

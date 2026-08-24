@@ -14,6 +14,7 @@ from project.workflow import (
     USES_TOOL,
     WorkflowError,
     artifact_ids,
+    artifact_types,
     normalize_edge,
     validate_workflow,
 )
@@ -126,6 +127,31 @@ class TestRefusedGraphs(unittest.TestCase):
         self.refuses([edge("c0", "s0", CONSUMES)], "cannot be connected")
         self.refuses([edge("d0", "c0", USES_TOOL)], "cannot be connected")
 
+    def test_an_id_whose_prefix_lies_about_its_type(self):
+        # A `c` id stored among the datasets is a corrupt reference. The edge
+        # would describe a relationship between things that are not what the
+        # graph says they are, so the prefix is CHECKED rather than trusted.
+        data = {
+            "charts": [],
+            "scripts": [{"id": "s0"}],
+            "datasets": [{"id": "c0"}],       # a chart id, in the wrong list
+            "workflow": {"nodes": [], "edges": [
+                {"from": "s0", "to": "c0", "type": GENERATES}]},
+        }
+        with self.assertRaises(WorkflowError) as caught:
+            validate_workflow(data)
+        self.assertIn("holds it in datasets", str(caught.exception))
+
+    def test_an_id_with_a_prefix_qresp_does_not_use(self):
+        data = {
+            "charts": [{"id": "c0"}],
+            "scripts": [{"id": "x9"}],        # not one of c/s/d/t/h
+            "workflow": {"nodes": [], "edges": [["x9", "c0"]]},
+        }
+        with self.assertRaises(WorkflowError) as caught:
+            validate_workflow(data)
+        self.assertIn("not a kind of artifact", str(caught.exception))
+
     def test_a_relationship_name_v1_does_not_know(self):
         self.refuses([edge("s0", "c0", "produces")], "unknown workflow")
 
@@ -144,6 +170,12 @@ class TestRefusedGraphs(unittest.TestCase):
 
 
 class TestHelpers(unittest.TestCase):
+    def test_artifact_types_says_where_each_id_was_found(self):
+        types = artifact_types(paper())
+        self.assertEqual("charts", types["c0"])
+        self.assertEqual("heads", types["h0"])
+        self.assertEqual("tools", types["t0"])
+
     def test_artifact_ids_reads_all_five_lists(self):
         self.assertEqual({"c0", "s0", "d0", "t0", "h0"},
                          artifact_ids(paper()))
