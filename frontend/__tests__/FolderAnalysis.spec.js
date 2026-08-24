@@ -370,7 +370,7 @@ describe("Analyze RCC Folder", () => {
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     ).not.toBeChecked();
     expect(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     ).toBeDisabled();
   });
 
@@ -632,7 +632,7 @@ describe("Analyze RCC Folder", () => {
       screen.getByRole("checkbox", { name: /select short_traj/i })
     );
     await user.click(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     );
     const [[, records]] = addMany.mock.calls;
     expect(records).toHaveLength(1);
@@ -648,7 +648,7 @@ describe("Analyze RCC Folder", () => {
       expect(box).not.toBeChecked();
     });
     expect(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     ).toBeDisabled();
     expect(addMany).not.toHaveBeenCalled();
   });
@@ -903,7 +903,7 @@ describe("Analyze RCC Folder", () => {
     });
     expect(box).not.toBeChecked();
     const apply = screen.getByRole("button", {
-      name: /add selected items to curator/i,
+      name: /add selected items/i,
     });
     expect(apply).toBeDisabled();
     expect(addMany).not.toHaveBeenCalled();
@@ -920,7 +920,7 @@ describe("Analyze RCC Folder", () => {
     );
     await fill(user, screen.getByLabelText(/^figure caption ?\*?$/i), "Density of states");
     await user.click(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     );
 
     expect(addMany).toHaveBeenCalledTimes(1);
@@ -956,7 +956,7 @@ describe("Analyze RCC Folder", () => {
       screen.getByRole("checkbox", { name: /select numpy 1\.26\.4/i })
     );
     await user.click(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     );
     const kinds = addMany.mock.calls.map((call) => call[0]);
     expect(kinds).toEqual(["tool"]);
@@ -971,7 +971,7 @@ describe("Analyze RCC Folder", () => {
       screen.getByRole("checkbox", { name: /select numpy 1\.26\.4/i })
     );
     await user.click(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     );
 
     expect(addMany).toHaveBeenCalledWith("tool", [
@@ -997,7 +997,7 @@ describe("Analyze RCC Folder", () => {
       screen.getByRole("checkbox", { name: /select short_traj/i })
     );
     await user.click(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     );
 
     const [[, records]] = addMany.mock.calls;
@@ -1019,7 +1019,7 @@ describe("Analyze RCC Folder", () => {
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
     await user.click(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     );
 
     const posted = axios.post.mock.calls.map((call) => call[0]);
@@ -1056,7 +1056,7 @@ describe("Analyze RCC Folder", () => {
       await screen.findByText(/outside the file server roots/i)
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     ).toBeDisabled();
     expect(addMany).not.toHaveBeenCalled();
   });
@@ -1596,7 +1596,7 @@ describe("Analyze RCC Folder — needs reorganization", () => {
 
     // No candidate can be added while the layout cannot be read.
     expect(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     ).toBeDisabled();
     expect(addMany).not.toHaveBeenCalled();
 
@@ -2232,7 +2232,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     ]);
   });
 
-  it("Add selected items to Curator still works after an AI review", async () => {
+  it("Add selected items still works after an AI review", async () => {
     const user = userEvent.setup();
     const { addMany } = renderWith();
     await openAnalysis(user);
@@ -2254,7 +2254,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
     await user.click(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     );
     expect(addMany).toHaveBeenCalledWith("chart", [
       expect.objectContaining({
@@ -2348,7 +2348,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
     expect(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     ).toBeEnabled();
   });
 });
@@ -2441,7 +2441,7 @@ describe("Analyze RCC Folder applied into real Curator state", () => {
       screen.getByRole("checkbox", { name: /select figure2\.png/i })
     );
     await user.click(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     );
 
     await waitFor(() =>
@@ -2570,7 +2570,7 @@ describe("Folder Analysis field contract", () => {
     );
 
     await user.click(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     );
     expect(addMany).toHaveBeenCalledTimes(1);
   });
@@ -2667,7 +2667,7 @@ describe("Folder Analysis field contract", () => {
 
     // The description is required and deliberately left blank.
     await user.click(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     );
 
     expect(addMany).toHaveBeenCalledTimes(1);
@@ -2754,7 +2754,7 @@ describe("AI proposals land only where the record can hold them", () => {
 
     await user.click(screen.getByRole("button", { name: /use as keywords/i }));
     await user.click(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     );
 
     const [kind, records] = addMany.mock.calls[0];
@@ -3338,7 +3338,7 @@ describe("Charts in the record boundary panel", () => {
       screen.getByRole("checkbox", { name: /select figure_S1\.png/i })
     );
     await user.click(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     );
 
     const [kind, records] = addMany.mock.calls[0];
@@ -3394,7 +3394,7 @@ describe("Charts in the record boundary panel", () => {
       screen.getByRole("checkbox", { name: /select figure_S1\.png/i })
     );
     await user.click(
-      screen.getByRole("button", { name: /add selected items to curator/i })
+      screen.getByRole("button", { name: /add selected items/i })
     );
     const [, records] = addMany.mock.calls[0];
     expect(records).toHaveLength(1);
@@ -3615,6 +3615,94 @@ describe("typed import dialog ??readable by default", () => {
     return screen.findByRole("dialog", { name: /import charts from rcc/i });
   };
 
+  // The figure-first Curator calls an image candidate a FIGURE everywhere
+  // else, so the import that creates one says the same word. Wording only:
+  // the selection, the validation and the add path are untouched.
+  it("calls the action Add selected figures", async () => {
+    const user = userEvent.setup();
+    await openChartImport(user);
+
+    expect(
+      screen.getByRole("button", { name: /add selected figures/i })
+    ).toBeInTheDocument();
+    // The generic wording is gone from this action.
+    expect(
+      screen.queryByRole("button", { name: /add selected items to curator/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /add selected charts to curator/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("counts proposed figures, agreeing with the number", async () => {
+    const user = userEvent.setup();
+    await openChartImport(user);
+    // "1 proposed figures" would tell a curator nobody read this line.
+    expect(screen.getByTestId("candidate-count")).toHaveTextContent(
+      /\d+ proposed figures? · \d+ selected/
+    );
+  });
+
+  it("adds exactly what it added before the rename", async () => {
+    // The whole point of a wording change is that nothing else moves.
+    const user = userEvent.setup();
+    const added = [];
+    render(
+      <AlertContext.Provider value={{ setAlert: jest.fn() }}>
+        <CuratorContext.Provider
+          value={{
+            fileServerPath: FOLDER,
+            addMany: (kind, records) => added.push([kind, records]),
+          }}
+        >
+          <FolderAnalysis artifactType="chart" />
+        </CuratorContext.Provider>
+      </AlertContext.Provider>
+    );
+    await user.click(
+      screen.getByRole("button", { name: /import charts from rcc/i })
+    );
+    await screen.findByRole("dialog", { name: /import charts from rcc/i });
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /add selected figures/i })
+    );
+
+    expect(added).toHaveLength(1);
+    expect(added[0][0]).toBe("chart");
+    expect(added[0][1]).toHaveLength(1);
+  });
+
+  it("says figures, not items, in the success message", async () => {
+    const user = userEvent.setup();
+    const setAlert = jest.fn();
+    render(
+      <AlertContext.Provider value={{ setAlert }}>
+        <CuratorContext.Provider
+          value={{ fileServerPath: FOLDER, addMany: jest.fn() }}
+        >
+          <FolderAnalysis artifactType="chart" />
+        </CuratorContext.Provider>
+      </AlertContext.Provider>
+    );
+    await user.click(
+      screen.getByRole("button", { name: /import charts from rcc/i })
+    );
+    await screen.findByRole("dialog", { name: /import charts from rcc/i });
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /add selected figures/i })
+    );
+
+    const body = setAlert.mock.calls[0][1];
+    expect(body).toMatch(/figure was added/i);
+    expect(body).not.toMatch(/item\(s\)/i);
+  });
+
   it("names the type once ??no second Charts (N) heading inside", async () => {
     const user = userEvent.setup();
     const dialog = await openChartImport(user);
@@ -3630,7 +3718,7 @@ describe("typed import dialog ??readable by default", () => {
     expect(within(dialog).queryByRole("tab")).toBeNull();
     // The count itself is kept, as a count of what is on screen.
     expect(screen.getByTestId("candidate-count")).toHaveTextContent(
-      "1 proposal · 0 selected"
+      "1 proposed figure · 0 selected"
     );
   });
 
@@ -3824,7 +3912,7 @@ describe("typed import dialog ??readable by default", () => {
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
     await user.click(
-      screen.getByRole("button", { name: /add selected charts to curator/i })
+      screen.getByRole("button", { name: /add selected figures/i })
     );
 
     expect(addMany).toHaveBeenCalledTimes(1);
@@ -3924,7 +4012,7 @@ describe("removing a candidate clears its selection", () => {
   };
 
   const addButton = () =>
-    screen.getByRole("button", { name: /add selected charts to curator/i });
+    screen.getByRole("button", { name: /add selected figures/i });
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -3937,12 +4025,12 @@ describe("removing a candidate clears its selection", () => {
     await openTyped(user);
 
     expect(screen.getByTestId("candidate-count")).toHaveTextContent(
-      "3 proposals · 0 selected"
+      "3 proposed figures · 0 selected"
     );
 
     await pick(user, "figure1.png");
     expect(screen.getByTestId("candidate-count")).toHaveTextContent(
-      "3 proposals · 1 selected"
+      "3 proposed figures · 1 selected"
     );
     expect(addButton()).toBeEnabled();
 
@@ -3951,7 +4039,7 @@ describe("removing a candidate clears its selection", () => {
     // The card is gone, and so is everything it was counted in.
     expect(screen.queryByText("figure1.png")).toBeNull();
     expect(screen.getByTestId("candidate-count")).toHaveTextContent(
-      "2 proposals · 0 selected"
+      "2 proposed figures · 0 selected"
     );
     expect(addButton()).toBeDisabled();
   });
@@ -3983,12 +4071,12 @@ describe("removing a candidate clears its selection", () => {
     await pick(user, "figure2.png");
     await pick(user, "figure3.png");
     expect(screen.getByTestId("candidate-count")).toHaveTextContent(
-      "3 proposals · 3 selected"
+      "3 proposed figures · 3 selected"
     );
 
     await removeCard(user, "figure2.png");
     expect(screen.getByTestId("candidate-count")).toHaveTextContent(
-      "2 proposals · 2 selected"
+      "2 proposed figures · 2 selected"
     );
 
     await user.click(addButton());
@@ -4012,7 +4100,7 @@ describe("removing a candidate clears its selection", () => {
     await removeCard(user, "figure2.png");
 
     expect(screen.getByTestId("candidate-count")).toHaveTextContent(
-      "2 proposals · 2 selected"
+      "2 proposed figures · 2 selected"
     );
     expect(
       screen.getByRole("checkbox", { name: "Select figure1.png" })
@@ -4061,7 +4149,7 @@ describe("removing a candidate clears its selection", () => {
     await screen.findByRole("tab", { name: /charts \(3\)/i });
 
     const apply = screen.getByRole("button", {
-      name: /add selected items to curator/i,
+      name: /add selected items/i,
     });
     await pick(user, "figure1.png");
     expect(apply).toBeEnabled();
@@ -4223,10 +4311,10 @@ describe("a card's expanded areas share one centred axis", () => {
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
     expect(screen.getByTestId("candidate-count")).toHaveTextContent(
-      "1 proposal · 1 selected"
+      "1 proposed figure · 1 selected"
     );
     await user.click(
-      screen.getByRole("button", { name: /add selected charts to curator/i })
+      screen.getByRole("button", { name: /add selected figures/i })
     );
 
     expect(addMany).toHaveBeenCalledTimes(1);

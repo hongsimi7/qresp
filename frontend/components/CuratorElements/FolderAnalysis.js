@@ -51,12 +51,34 @@ import {
 // state only: it never saves a draft, publishes, or edits existing records.
 
 const GROUPS = [
-  { key: "charts", type: "chart", label: "Charts" },
-  { key: "datasets", type: "dataset", label: "Datasets" },
-  { key: "scripts", type: "script", label: "Scripts" },
-  { key: "tools", type: "tool", label: "Tools" },
+  { key: "charts", type: "chart", label: "Charts", noun: "figures" },
+  { key: "datasets", type: "dataset", label: "Datasets", noun: "datasets" },
+  { key: "scripts", type: "script", label: "Scripts", noun: "scripts" },
+  { key: "tools", type: "tool", label: "Tools", noun: "tools" },
   { key: "unclassified", type: null, label: "Unclassified", secondary: true },
 ];
+
+// What to call the things on screen.
+//
+// A Chart IS a figure to the curator, so the import that creates one says
+// "figures". "1 proposed figures" would tell them nobody read this line, so
+// the count and the noun are decided in one place.
+const countedNoun = (total, group) => {
+  const noun = (group && group.noun) || "items";
+  return total === 1 ? noun.replace(/s$/, "") : noun;
+};
+
+// The same word in the past tense, for the success message. An untyped
+// import can add several kinds at once and there is no honest single noun
+// for that, so it keeps the generic one.
+const addedNoun = (total, group) => {
+  const plural = total === 1 ? "was" : "were";
+  if (group && group.noun) {
+    const noun = total === 1 ? group.noun.replace(/s$/, "") : group.noun;
+    return `${noun} ${plural}`;
+  }
+  return `item${total === 1 ? "" : "s"} ${plural}`;
+};
 
 const GROUP_BY_TYPE = GROUPS.reduce((groups, group) => {
   if (group.type) groups[group.type] = group;
@@ -731,7 +753,8 @@ const FolderAnalysis = ({ path, artifactType }) => {
           : "";
       setAlert(
         "Added to the form",
-        `${total} item(s) were added to this curation form. Nothing has been ` +
+        `${total} ${addedNoun(total, typedGroup)} added to this curation ` +
+          "form. Nothing has been " +
           "saved or published — review each one and use Save when you are " +
           "ready." +
           mismatch,
@@ -1882,16 +1905,18 @@ const FolderAnalysis = ({ path, artifactType }) => {
                   sx={{ mb: 1.5 }}
                   data-testid="candidate-count"
                 >
-                  {`${candidatesFor(typedGroup.key).length} proposal${
-                    candidatesFor(typedGroup.key).length === 1 ? "" : "s"
-                  } · ${selectedCount} selected`}
+                  {`${candidatesFor(typedGroup.key).length} proposed ${countedNoun(
+                    candidatesFor(typedGroup.key).length,
+                    typedGroup
+                  )} · ${selectedCount} selected`}
                 </Typography>
               ) : null}
               {activeGroup.type ? (
                 <Fragment>
                   {candidatesFor(activeGroup.key).length === 0 && (
                     <Typography variant="body2">
-                      No {activeGroup.label.toLowerCase()} were proposed.
+                      No {activeGroup.noun || activeGroup.label.toLowerCase()}{" "}
+                      were proposed.
                     </Typography>
                   )}
                   {visibleCandidatesFor(activeGroup.key).map(renderCandidate)}
@@ -2053,8 +2078,8 @@ const FolderAnalysis = ({ path, artifactType }) => {
             onClick={apply}
           >
             {typedGroup
-              ? `Add selected ${typedGroup.label} to Curator`
-              : "Add selected items to Curator"}
+              ? `Add selected ${typedGroup.noun || typedGroup.label}`
+              : "Add selected items"}
           </Button>
         </DialogActions>
       </Dialog>
