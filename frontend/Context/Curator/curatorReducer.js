@@ -13,6 +13,7 @@ import {
   DELETE,
   ADD_EDGE,
   DELETE_EDGE,
+  UNLINK,
   SET_NODES,
   SET_EDGES,
   SET_DOCUMENTATION,
@@ -139,6 +140,26 @@ export default (state, action) => {
           ),
         },
       };
+    // Remove exactly ONE connection, named by its endpoints.
+    //
+    // Only that edge goes. The two artifacts stay, and so does every other
+    // connection either of them has -- a script feeding two figures keeps
+    // feeding the other one when it is unlinked from the first.
+    case UNLINK: {
+      const { from, to } = action.payload || {};
+      return {
+        ...state,
+        workflow: {
+          ...state.workflow,
+          edges: state.workflow.edges.filter((edge) => {
+            const source = Array.isArray(edge) ? edge[0] : edge.from;
+            const target = Array.isArray(edge) ? edge[1] : edge.to;
+            return !(source === from && target === to);
+          }),
+        },
+      };
+    }
+
     default:
       return state;
   }

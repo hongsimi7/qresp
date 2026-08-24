@@ -22,6 +22,7 @@ import {
   DELETE,
   ADD_EDGE,
   DELETE_EDGE,
+  UNLINK,
   SET_NODES,
   SET_EDGES,
 } from "../types";
@@ -417,6 +418,10 @@ const CuratorState = (props) => {
   const setEdges = (edges) => dispatch({ type: SET_EDGES, payload: edges });
   const addEdge = (edge) => dispatch({ type: ADD_EDGE, payload: edge });
   const deleteEdge = (edge) => dispatch({ type: DELETE_EDGE, payload: edge });
+  // Remove one connection by its endpoints, leaving both artifacts and all
+  // their other connections alone.
+  const unlink = (from, to) =>
+    dispatch({ type: UNLINK, payload: { from, to } });
 
   return (
     <CuratorContext.Provider
@@ -472,6 +477,7 @@ const CuratorState = (props) => {
         setEdges,
         addEdge,
         deleteEdge,
+        unlink,
         setLicense,
       }}
     >

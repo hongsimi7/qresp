@@ -55,6 +55,13 @@ export const ADD_NODE = "ADD_NODE";
 export const ADD_EDGE = "ADD_EDGE";
 export const DELETE_NODE = "DELETE_NODE";
 export const DELETE_EDGE = "DELETE_EDGE";
+// Remove ONE connection, named by its endpoints.
+//
+// DELETE_EDGE removes by the vis-network edge id the manual drawing surface
+// works in. The board's Unlink needs the other question answered -- "remove
+// the connection between these two" -- and must touch nothing else: not the
+// artifacts, not their other connections.
+export const UNLINK = "UNLINK";
 
 //Curator Helpers
 export const OPEN_FORM = "OPEN_FORM";

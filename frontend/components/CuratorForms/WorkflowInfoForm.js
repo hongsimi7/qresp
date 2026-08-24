@@ -19,6 +19,7 @@ import { RegularStyledButton } from "../button";
 import { TextInputField } from "../Form/InputFields";
 
 import Graph from "../Workflow/Graph";
+import WorkflowBoard from "../CuratorElements/WorkflowBoard";
 import Legend from "../Workflow/Legend";
 import { formatData } from "../Workflow/util";
 import { isGraph } from "../../Utils/graph";
@@ -167,6 +168,16 @@ const WorkflowInfoForm = () => {
   return (
     <Fragment>
       <Drawer heading="Build your workflow" defaultOpen={true}>
+        {/* The ordinary path: buttons and lanes, no drawing. The graph below
+            stays for the exceptional cases and for reading the result. */}
+        <WorkflowBoard />
+        <Box sx={{ mt: 3, mb: 1 }}>
+          <Typography variant="subtitle2">Graph</Typography>
+          <Typography variant="caption" color="text.secondary">
+            Drag to rearrange, or draw a connection the buttons above cannot
+            express. Layout is presentation only and is not saved.
+          </Typography>
+        </Box>
         <Grid container direction="row" spacing={1}>
           <Grid size={{ xs: 12, sm: 4 }}>
             <RegularStyledButton
