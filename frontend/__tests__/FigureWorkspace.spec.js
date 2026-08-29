@@ -309,7 +309,7 @@ describe("contextual creation", () => {
   });
 });
 
-describe("attach existing", () => {
+describe("connect existing", () => {
   afterEach(() => jest.resetAllMocks());
 
   const paper = {
@@ -318,20 +318,47 @@ describe("attach existing", () => {
     datasets: [{ id: "d0", readme: "spectra" }],
   };
 
-  it("offers only legal, not-yet-connected resources", async () => {
+  const openConnect = async (u, id) => {
+    await u.click(screen.getByTestId(`fw-connect-${id}`));
+    return screen.findByTestId("fw-connect-dialog");
+  };
+
+  const tick = async (u, id) => u.click(screen.getByTestId(`fw-connect-option-${id}`));
+
+  it("offers only legal targets, never an illegal pair", async () => {
+    const u = user();
     renderWorkspace(paper);
-    await user().click(screen.getByTestId("fw-attach-toggle-c0"));
-    const panel = screen.getByTestId("fw-attach-c0");
-    expect(within(panel).getByTestId("fw-attach-c0-s0")).toBeInTheDocument();
-    expect(within(panel).getByTestId("fw-attach-c0-d0")).toBeInTheDocument();
-    expect(within(panel).queryByTestId("fw-attach-c0-c0")).not.toBeInTheDocument();
+    await openConnect(u, "c0");
+
+    // A script generates a figure and a dataset feeds one.
+    expect(screen.getByTestId("fw-connect-option-s0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-connect-option-d0")).toBeInTheDocument();
+    // Never itself.
+    expect(screen.queryByTestId("fw-connect-option-c0")).not.toBeInTheDocument();
   });
 
-  it("connects without duplicating the artifact", async () => {
-    const ctx = renderWorkspace(paper);
-    await user().click(screen.getByTestId("fw-attach-toggle-c0"));
-    await user().click(screen.getByTestId("fw-attach-c0-s0"));
+  it("never offers a Tool to a Figure", async () => {
+    // A Tool joins a Script by uses_tool and joins a figure not at all.
+    const u = user();
+    renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT],
+      tools: [{ id: "t0", packageName: "numpy" }],
+    });
+    await openConnect(u, "c0");
 
+    expect(screen.queryByTestId("fw-connect-option-t0")).not.toBeInTheDocument();
+    expect(screen.getByTestId("fw-connect-option-s0")).toBeInTheDocument();
+  });
+
+  it("connects one target without duplicating the artifact", async () => {
+    const u = user();
+    const ctx = renderWorkspace(paper);
+    await openConnect(u, "c0");
+    await tick(u, "s0");
+    await u.click(screen.getByTestId("fw-connect-apply"));
+
+    expect(ctx.addEdge).toHaveBeenCalledTimes(1);
     expect(ctx.addEdge).toHaveBeenCalledWith({
       from: "s0",
       to: "c0",
@@ -341,32 +368,213 @@ describe("attach existing", () => {
     expect(ctx.helpers.openForm).not.toHaveBeenCalled();
   });
 
-  it("lets one dataset serve a second script", async () => {
+  it("connects one Script to several Figures at once", async () => {
+    const u = user();
+    const ctx = renderWorkspace({
+      charts: [
+        FIGURE,
+        { id: "c1", caption: "Band structure" },
+        { id: "c2", caption: "Phonon spectrum" },
+      ],
+      scripts: [SCRIPT],
+    });
+    await openConnect(u, "s0");
+    await tick(u, "c0");
+    await tick(u, "c2");
+    await u.click(screen.getByTestId("fw-connect-apply"));
+
+    // Exactly the two ticked, and ONE script -- nothing was copied.
+    expect(ctx.addEdge).toHaveBeenCalledTimes(2);
+    expect(ctx.addEdge).toHaveBeenCalledWith({ from: "s0", to: "c0", type: "generates" });
+    expect(ctx.addEdge).toHaveBeenCalledWith({ from: "s0", to: "c2", type: "generates" });
+    expect(ctx.addEdge).not.toHaveBeenCalledWith(
+      expect.objectContaining({ to: "c1" })
+    );
+    expect(ctx.helpers.openForm).not.toHaveBeenCalled();
+    expect(ctx.helpers.setDefault).not.toHaveBeenCalled();
+  });
+
+  it("connects one Dataset to several Scripts and Figures at once", async () => {
+    const u = user();
     const ctx = renderWorkspace({
       charts: [FIGURE],
       scripts: [SCRIPT, { id: "s1", readme: "fit.py" }],
       datasets: [{ id: "d0", readme: "spectra" }],
-      workflow: { nodes: [], edges: [{ from: "d0", to: "s0", type: "consumes" }] },
     });
-    await user().click(screen.getByTestId("fw-attach-toggle-s1"));
-    await user().click(screen.getByTestId("fw-attach-s1-d0"));
+    await openConnect(u, "d0");
+    await tick(u, "s0");
+    await tick(u, "s1");
+    await tick(u, "c0");
+    await u.click(screen.getByTestId("fw-connect-apply"));
 
-    expect(ctx.addEdge).toHaveBeenCalledWith({
-      from: "d0",
-      to: "s1",
-      type: "consumes",
-    });
+    expect(ctx.addEdge).toHaveBeenCalledTimes(3);
+    ["s0", "s1", "c0"].forEach((target) =>
+      expect(ctx.addEdge).toHaveBeenCalledWith({
+        from: "d0",
+        to: target,
+        type: "consumes",
+      })
+    );
+    // One dataset, three relationships. No clone.
     expect(ctx.helpers.openForm).not.toHaveBeenCalled();
   });
 
-  it("stops offering a resource once it is attached", async () => {
-    renderWorkspace({
+  it("connects one Tool to several Scripts, and offers no Figure", async () => {
+    const u = user();
+    const ctx = renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT, { id: "s1", readme: "fit.py" }],
+      tools: [{ id: "t0", packageName: "numpy" }],
+    });
+    await openConnect(u, "t0");
+
+    expect(screen.queryByTestId("fw-connect-option-c0")).not.toBeInTheDocument();
+    await tick(u, "s0");
+    await tick(u, "s1");
+    await u.click(screen.getByTestId("fw-connect-apply"));
+
+    expect(ctx.addEdge).toHaveBeenCalledTimes(2);
+    ["s0", "s1"].forEach((target) =>
+      expect(ctx.addEdge).toHaveBeenCalledWith({
+        from: "t0",
+        to: target,
+        type: "uses_tool",
+      })
+    );
+  });
+
+  it("connects External Data to both a Script and a Figure", async () => {
+    const u = user();
+    const ctx = renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT],
+      heads: [{ id: "h0", URLs: ["https://example.org/set"] }],
+    });
+    await openConnect(u, "h0");
+    await tick(u, "s0");
+    await tick(u, "c0");
+    await u.click(screen.getByTestId("fw-connect-apply"));
+
+    expect(ctx.addEdge).toHaveBeenCalledTimes(2);
+    ["s0", "c0"].forEach((target) =>
+      expect(ctx.addEdge).toHaveBeenCalledWith({
+        from: "h0",
+        to: target,
+        type: "consumes",
+      })
+    );
+  });
+
+  it("shows an existing connection as made, and will not remake it", async () => {
+    const u = user();
+    const ctx = renderWorkspace({
       ...paper,
       workflow: { nodes: [], edges: [{ from: "s0", to: "c0", type: "generates" }] },
     });
-    await user().click(screen.getByTestId("fw-attach-toggle-c0"));
-    const panel = screen.getByTestId("fw-attach-c0");
-    expect(within(panel).queryByTestId("fw-attach-c0-s0")).not.toBeInTheDocument();
+    await openConnect(u, "c0");
+
+    const already = screen.getByTestId("fw-connect-option-s0");
+    expect(already).toBeChecked();
+    expect(already).toBeDisabled();
+    expect(screen.getByTestId("fw-connect-sense-s0")).toHaveTextContent(
+      /already connected/i
+    );
+
+    // The dataset is still open business, so Connect still works -- and only
+    // the dataset edge is made.
+    await tick(u, "d0");
+    await u.click(screen.getByTestId("fw-connect-apply"));
+    expect(ctx.addEdge).toHaveBeenCalledTimes(1);
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "d0",
+      to: "c0",
+      type: "consumes",
+    });
+  });
+
+  it("treats a legacy untyped pair as already connected", async () => {
+    const u = user();
+    renderWorkspace({ ...paper, workflow: { nodes: [], edges: [["s0", "c0"]] } });
+    await openConnect(u, "c0");
+
+    expect(screen.getByTestId("fw-connect-option-s0")).toBeDisabled();
+  });
+
+  it("makes nothing when the dialog is cancelled", async () => {
+    const u = user();
+    const ctx = renderWorkspace(paper);
+    await openConnect(u, "c0");
+    await tick(u, "s0");
+    await u.click(screen.getByTestId("fw-connect-cancel"));
+
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+    expect(ctx.helpers.openForm).not.toHaveBeenCalled();
+    expect(ctx.helpers.setDefault).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("fw-connect-dialog")).not.toBeInTheDocument();
+  });
+
+  it("is offered on every row, not only under a figure", () => {
+    // An independent dataset or tool used to have no way to join anything.
+    renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT],
+      datasets: [{ id: "d0", readme: "spectra" }],
+      tools: [{ id: "t0", packageName: "numpy" }],
+      heads: [{ id: "h0", URLs: ["https://example.org/set"] }],
+    });
+    ["c0", "s0", "d0", "t0", "h0"].forEach((id) => {
+      expect(screen.getByTestId(`fw-connect-${id}`)).toBeInTheDocument();
+    });
+  });
+
+  it("says so when there is genuinely nothing to connect to", async () => {
+    const u = user();
+    renderWorkspace({ charts: [FIGURE] });
+    await openConnect(u, "c0");
+
+    expect(screen.getByTestId("fw-connect-apply")).toBeDisabled();
+    expect(screen.getByTestId("fw-connect-dialog")).toHaveTextContent(
+      /nothing in this paper can be connected to this yet/i
+    );
+  });
+});
+
+describe("the local draft between the two saves", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  it("keeps a saved artifact visible and connectable before the paper is saved", async () => {
+    // Saving the FORM puts an artifact in the draft. Saving the PAPER is a
+    // separate, later boundary -- a curator must be able to keep working.
+    const u = user();
+    const ctx = renderWorkspace({ charts: [FIGURE] });
+
+    // The script form has just been submitted; the draft now holds it.
+    ctx.rerenderWith({ charts: [FIGURE], scripts: [SCRIPT] });
+    expect(screen.getByTestId("fw-row-s0")).toBeInTheDocument();
+
+    await u.click(screen.getByTestId("fw-connect-s0"));
+    await screen.findByTestId("fw-connect-dialog");
+    await u.click(screen.getByTestId("fw-connect-option-c0"));
+    await u.click(screen.getByTestId("fw-connect-apply"));
+
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "s0",
+      to: "c0",
+      type: "generates",
+    });
+  });
+
+  it("does not discard an existing artifact when another is added", () => {
+    const ctx = renderWorkspace({ charts: [FIGURE], scripts: [SCRIPT] });
+    ctx.rerenderWith({
+      charts: [FIGURE],
+      scripts: [SCRIPT],
+      datasets: [{ id: "d0", readme: "spectra" }],
+    });
+
+    expect(screen.getByTestId("fw-figure-c0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-row-s0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-row-d0")).toBeInTheDocument();
   });
 });
 
@@ -467,13 +675,17 @@ describe("independent resources", () => {
     expect(text).not.toMatch(/unlinked|orphan|missing|error|not connected/i);
   });
 
-  it("can attach an unlinked resource later", async () => {
+  it("can connect an independent resource later, from its own row", async () => {
+    const u = user();
     const ctx = renderWorkspace({
       charts: [FIGURE],
       datasets: [{ id: "d0", readme: "orphan data" }],
     });
-    await user().click(screen.getByTestId("fw-attach-toggle-c0"));
-    await user().click(screen.getByTestId("fw-attach-c0-d0"));
+    await u.click(screen.getByTestId("fw-connect-d0"));
+    await screen.findByTestId("fw-connect-dialog");
+    await u.click(screen.getByTestId("fw-connect-option-c0"));
+    await u.click(screen.getByTestId("fw-connect-apply"));
+
     expect(ctx.addEdge).toHaveBeenCalledWith({
       from: "d0",
       to: "c0",
@@ -802,7 +1014,7 @@ describe("suggested connections", () => {
     renderWorkspace(PROVEN);
     const figure = within(screen.getByTestId("fw-figure-c0"));
     // Attach existing, edit, remove and advanced all survive.
-    expect(figure.getByTestId("fw-attach-toggle-c0")).toBeInTheDocument();
+    expect(figure.getByTestId("fw-connect-c0")).toBeInTheDocument();
     expect(figure.getByTestId("fw-edit-c0")).toBeInTheDocument();
     expect(figure.getByTestId("fw-remove-c0")).toBeInTheDocument();
     expect(figure.getByTestId("fw-advanced-toggle-c0")).toBeInTheDocument();
@@ -911,5 +1123,100 @@ describe("importing from RCC", () => {
     const second = screen.getByTestId("stub-folder-analysis").dataset.instance;
 
     expect(second).not.toBe(first);
+  });
+});
+
+describe("the RCC import entry point", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  const openMenu = async (u) => {
+    await u.click(screen.getByTestId("fw-rcc-import"));
+    return screen.findByTestId("fw-rcc-menu");
+  };
+
+  it("offers exactly the four types Folder Analysis can propose", async () => {
+    const u = user();
+    renderWorkspace({ fileServerPath: "/proj" });
+    await openMenu(u);
+
+    const items = screen.getAllByRole("menuitem").map((el) => el.textContent.trim());
+    expect(items).toEqual(["Figures", "Datasets", "Scripts", "Tools"]);
+  });
+
+  it("opens the existing typed flow for the chosen type", async () => {
+    const u = user();
+    renderWorkspace({ fileServerPath: "/proj" });
+
+    for (const [choice, type] of [
+      ["fw-rcc-script", "script"],
+      ["fw-rcc-tool", "tool"],
+    ]) {
+      await openMenu(u);
+      await u.click(screen.getByTestId(choice));
+      const importer = screen.getByTestId("stub-folder-analysis");
+      // The SAME importer, typed -- not a second one built for this menu.
+      expect(importer).toHaveAttribute("data-type", type);
+      expect(importer).toHaveAttribute("data-hidden", "true");
+      expect(importer).toHaveAttribute("data-auto", "true");
+    }
+  });
+
+  it("explains itself when no folder has been chosen", () => {
+    renderWorkspace({ fileServerPath: "" });
+
+    expect(screen.getByTestId("fw-rcc-import")).toBeDisabled();
+    expect(screen.getByTestId("fw-rcc-hint")).toHaveTextContent(
+      "Choose a File Server Path above to import from RCC."
+    );
+  });
+
+  it("drops the explanation once a folder is chosen", () => {
+    renderWorkspace({ fileServerPath: "/proj" });
+
+    expect(screen.getByTestId("fw-rcc-import")).toBeEnabled();
+    expect(screen.queryByTestId("fw-rcc-hint")).not.toBeInTheDocument();
+  });
+
+  it("asks the network nothing while rendering", async () => {
+    const u = user();
+    renderWorkspace({ fileServerPath: "/proj" });
+    await openMenu(u);
+
+    expect(axios.get).not.toHaveBeenCalled();
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it("puts imported figures in the tree and the rest among independent resources", async () => {
+    // What an import DOES once the curator accepts it: the artifacts land in
+    // the same draft lists a form would have filled, so they are ordinary
+    // rows the moment they arrive.
+    const u = user();
+    const ctx = renderWorkspace({ fileServerPath: "/proj" });
+
+    ctx.rerenderWith({
+      fileServerPath: "/proj",
+      charts: [{ id: "c0", caption: "Imported figure" }],
+      scripts: [{ id: "s0", readme: "imported.py" }],
+      datasets: [{ id: "d0", readme: "imported data" }],
+      tools: [{ id: "t0", packageName: "numpy" }],
+    });
+
+    expect(screen.getByTestId("fw-figure-c0")).toBeInTheDocument();
+    const independent = within(screen.getByTestId("fw-unlinked"));
+    ["s0", "d0", "t0"].forEach((id) => {
+      expect(independent.getByTestId(`fw-row-${id}`)).toBeInTheDocument();
+    });
+
+    // And connectable at once, with no metadata retyped.
+    await u.click(screen.getByTestId("fw-connect-s0"));
+    await screen.findByTestId("fw-connect-dialog");
+    await u.click(screen.getByTestId("fw-connect-option-c0"));
+    await u.click(screen.getByTestId("fw-connect-apply"));
+
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "s0",
+      to: "c0",
+      type: "generates",
+    });
   });
 });

@@ -5,7 +5,13 @@ import {
   Box,
   Button,
   Chip,
+  Checkbox,
   Collapse,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  FormControlLabel,
   Menu,
   MenuItem,
   Typography,
@@ -33,6 +39,7 @@ import {
   TOOL,
   USES_TOOL,
   fromStoredEdge,
+  edgeProblem,
   hasEdge,
   inferEdgeType,
   prefixOf,
@@ -124,6 +131,27 @@ const IMPORTABLE = [
   { type: "tool", label: "Tools" },
 ];
 
+// What kind of thing a row is, said once, quietly.
+//
+// Every row used to be the same maroon text at the same size, so a Script, a
+// Dataset and a Tool were told apart only by reading their names. A small
+// neutral marker in a fixed column makes the kinds scannable without adding
+// another colour to the page.
+const KindChip = ({ id }) => (
+  <Chip
+    label={KIND_LABEL[prefixOf(id)] || "Item"}
+    size="small"
+    variant="outlined"
+    sx={{
+      height: 20,
+      flexShrink: 0,
+      borderColor: "divider",
+      color: "text.secondary",
+      "& .MuiChip-label": { px: 0.75, fontSize: 11 },
+    }}
+  />
+);
+
 // Row-level actions are TEXT, not filled buttons.
 //
 // A figure with a script, two inputs and a tool carries eight or nine
@@ -148,7 +176,9 @@ const FigureWorkspace = () => {
 
   const [notice, setNotice] = useState("");
   const [advancedFor, setAdvancedFor] = useState("");
-  const [attachFor, setAttachFor] = useState("");
+  // Which artifact's connection dialog is open, and what is ticked in it.
+  const [connectFor, setConnectFor] = useState("");
+  const [picked, setPicked] = useState({});
   const [suggestFor, setSuggestFor] = useState("");
 
   // The RCC import menu, and which typed importer it opened. `nonce` remounts
@@ -156,6 +186,7 @@ const FigureWorkspace = () => {
   // doing nothing the second time.
   const [rccAnchor, setRccAnchor] = useState(null);
   const [rccImport, setRccImport] = useState({ type: "", nonce: 0 });
+  const canImport = Boolean(String(fileServerPath || "").trim());
 
   // Suggestions the curator has waved away THIS SESSION. Local state, keyed
   // by what the suggestion is about rather than by the ids involved -- see
@@ -284,27 +315,76 @@ const FigureWorkspace = () => {
       .filter((edge) => kinds.includes(prefixOf(edge.from)))
       .map((edge) => edge.from);
 
-  /** Existing artifacts that may legally join `id` and are not joined yet. */
-  const attachable = (id) =>
-    knownIds.filter((other) => {
-      if (other === id) return false;
-      if (!inferEdgeType(id, other) && !inferEdgeType(other, id)) return false;
-      return !hasEdge(edges, id, other) && !hasEdge(edges, other, id);
-    });
+  /**
+   * Everything in this paper that `id` could legally be connected to.
+   *
+   * The DIRECTION is not the curator's to choose. A pair of artifact types
+   * can hold exactly one relationship or none -- a Tool joins a Script by
+   * `uses_tool` and joins a figure not at all -- so the edge is derived from
+   * what the two things ARE, and a pair that holds no relationship never
+   * reaches the dialog at all.
+   *
+   * Already-connected pairs are kept and marked. Dropping them would leave a
+   * curator wondering where a resource went; showing them as available is how
+   * a duplicate edge gets made.
+   */
+  const connectionOptions = (id) =>
+    knownIds
+      .filter((other) => other !== id)
+      .map((other) => {
+        const forward = inferEdgeType(id, other);
+        const backward = inferEdgeType(other, id);
+        if (!forward && !backward) return null;
+        const edge = forward
+          ? { from: id, to: other, type: forward }
+          : { from: other, to: id, type: backward };
+        const connected =
+          hasEdge(edges, edge.from, edge.to) || hasEdge(edges, edge.to, edge.from);
+        return {
+          other,
+          edge,
+          connected,
+          problem: connected ? "" : edgeProblem(edge, knownIds, edges),
+        };
+      })
+      .filter(Boolean);
 
-  const attachExisting = (id, otherId) => {
+  const openConnect = (id) => {
     setNotice("");
-    const forward = inferEdgeType(id, otherId);
-    const backward = inferEdgeType(otherId, id);
-    const edge = forward
-      ? { from: id, to: otherId, type: forward }
-      : { from: otherId, to: id, type: backward };
-    if (!edge.type) {
-      setNotice("Those two cannot be connected directly.");
-      return;
-    }
-    addEdge(edge);
-    setAttachFor("");
+    setPicked({});
+    setConnectFor(id);
+  };
+
+  const closeConnect = () => {
+    setConnectFor("");
+    setPicked({});
+  };
+
+  /**
+   * Make every ticked connection, in one go.
+   *
+   * One resource legitimately serves many others -- a dataset feeds several
+   * scripts, a tool serves several scripts, a script generates several
+   * figures -- and NOTHING IS COPIED to do it. Each tick adds an edge to the
+   * one artifact that is already there.
+   *
+   * Each edge is validated against the edges accepted so far in this batch,
+   * not just against the state this render saw, so two ticks cannot combine
+   * into a loop.
+   */
+  const connectSelected = () => {
+    const running = edges.slice();
+    let made = 0;
+    connectionOptions(connectFor).forEach((option) => {
+      if (!picked[option.other] || option.connected) return;
+      if (hasEdge(running, option.edge.from, option.edge.to)) return;
+      if (edgeProblem(option.edge, knownIds, running)) return;
+      addEdge(option.edge);
+      running.push(option.edge);
+      made += 1;
+    });
+    if (!made) setNotice("Nothing was selected, so nothing was connected.");
+    closeConnect();
   };
 
   const AddButtons = ({ id, kinds }) => (
@@ -318,13 +398,20 @@ const FigureWorkspace = () => {
           {`+ ${KIND_LABEL[kind]}`}
         </RowAction>
       ))}
-      <RowAction
-        onClick={() => setAttachFor(attachFor === id ? "" : id)}
-        data-testid={`fw-attach-toggle-${id}`}
-      >
-        Attach existing
-      </RowAction>
     </Box>
+  );
+
+  /**
+   * The one connection action, identical on every row.
+   *
+   * It used to live only under a figure and under a script, so an
+   * independent dataset or tool -- a row with no figure above it -- had no
+   * way to be joined to anything at all except by editing the other side.
+   */
+  const ConnectAction = ({ id }) => (
+    <RowAction onClick={() => openConnect(id)} data-testid={`fw-connect-${id}`}>
+      Connect existing…
+    </RowAction>
   );
 
   /** One resource line: what it is, what it is called, and how to change it. */
@@ -332,18 +419,52 @@ const FigureWorkspace = () => {
     <Box
       component="li"
       data-testid={`fw-row-${id}`}
-      sx={{ pl: depth * 1.5, mt: 0.5, minWidth: 0 }}
+      sx={{ mt: 0.5, minWidth: 0 }}
     >
-      <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.5, minWidth: 0 }}>
-        <Typography variant="caption" color="text.secondary" component="span">
-          {relation}
-        </Typography>
-        <Typography variant="body2" component="span" sx={{ overflowWrap: "anywhere" }}>
-          {rowLabel(byId[id], id)}
-        </Typography>
-        <RowAction onClick={() => editArtifact(id)} data-testid={`fw-edit-${id}`}>
-          Edit
-        </RowAction>
+      {/* Name on the left, actions gathered on the right. They used to run
+          inline after the name, so where a row's actions began depended on
+          how long its title was and nothing lined up down the page. */}
+      <Box
+        sx={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 0.75,
+          minWidth: 0,
+          py: 0.25,
+        }}
+      >
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 0.75,
+            minWidth: 0,
+            // Narrow: the name owns its line and every row's actions start
+            // in the same place underneath. Wide: all on one line.
+            flex: { xs: "1 1 100%", sm: "1 1 auto" },
+          }}
+        >
+          <KindChip id={id} />
+          {relation ? (
+            <Typography variant="caption" color="text.secondary" component="span">
+              {relation}
+            </Typography>
+          ) : null}
+          <Typography
+            variant="body2"
+            component="span"
+            sx={{ overflowWrap: "anywhere", minWidth: 0 }}
+          >
+            {rowLabel(byId[id], id)}
+          </Typography>
+        </Box>
+        <Box sx={{ display: "flex", flexShrink: 0, alignItems: "center" }}>
+          <RowAction onClick={() => editArtifact(id)} data-testid={`fw-edit-${id}`}>
+            Edit
+          </RowAction>
+          <ConnectAction id={id} />
+        </Box>
       </Box>
       {prefixOf(id) === EXTERNAL ? (
         <Box sx={{ pl: 1, minWidth: 0 }}>
@@ -369,46 +490,140 @@ const FigureWorkspace = () => {
         </Box>
       ) : null}
       {prefixOf(id) === SCRIPT ? (
-        <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+        <Box
+          component="ul"
+          sx={{
+            listStyle: "none",
+            m: 0,
+            mt: 0.25,
+            p: 0,
+            ml: 1,
+            pl: 1.5,
+            borderLeft: 2,
+            borderColor: "divider",
+          }}
+        >
           {sourcesOf(id, [TOOL], USES_TOOL).map((toolId) => (
             <ResourceRow key={toolId} id={toolId} relation="uses tool:" depth={depth + 1} />
           ))}
           {sourcesOf(id, [DATASET, EXTERNAL], CONSUMES).map((dataId) => (
             <ResourceRow key={dataId} id={dataId} relation="uses:" depth={depth + 1} />
           ))}
-          <Box component="li" sx={{ pl: (depth + 1) * 1.5 }}>
+          <Box component="li">
             <AddButtons id={id} kinds={[TOOL, DATASET, EXTERNAL]} />
-            <AttachPanel id={id} />
           </Box>
         </Box>
       ) : null}
     </Box>
   );
 
-  const AttachPanel = ({ id }) =>
-    attachFor === id ? (
-      <Box sx={{ mt: 0.5 }} data-testid={`fw-attach-${id}`}>
-        {attachable(id).length ? (
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-            {attachable(id).map((other) => (
-              <Chip
-                key={other}
-                size="small"
-                variant="outlined"
-                label={rowLabel(byId[other], other)}
-                onClick={() => attachExisting(id, other)}
-                data-testid={`fw-attach-${id}-${other}`}
-                sx={{ maxWidth: "100%" }}
-              />
-            ))}
-          </Box>
-        ) : (
-          <Typography variant="caption" color="text.secondary">
-            Nothing else can be attached here yet.
-          </Typography>
-        )}
-      </Box>
-    ) : null;
+  const RELATION_WORDS = {
+    [GENERATES]: "generates",
+    [CONSUMES]: "is used by",
+    [USES_TOOL]: "is used by",
+  };
+
+  /** How this connection would read, from the open artifact's side. */
+  const optionSense = (id, option) => {
+    const { edge } = option;
+    if (edge.from === id) {
+      return `${RELATION_WORDS[edge.type] || "connects to"} this`;
+    }
+    if (edge.type === GENERATES) return "generates this figure";
+    if (edge.type === USES_TOOL) return "is a tool this uses";
+    return "is an input to this";
+  };
+
+  const ConnectDialog = () => {
+    const id = connectFor;
+    if (!id) return null;
+    const options = connectionOptions(id);
+    const open = options.filter((option) => !option.connected && !option.problem);
+
+    return (
+      <Dialog
+        open
+        onClose={closeConnect}
+        fullWidth
+        maxWidth="sm"
+        data-testid="fw-connect-dialog"
+      >
+        <DialogTitle sx={{ overflowWrap: "anywhere" }}>
+          {`Connect ${rowLabel(byId[id], id)}`}
+        </DialogTitle>
+        <DialogContent dividers>
+          {options.length ? (
+            <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+              {options.map((option) => (
+                <Box component="li" key={option.other} sx={{ minWidth: 0 }}>
+                  <FormControlLabel
+                    sx={{ alignItems: "flex-start", m: 0, py: 0.25 }}
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={
+                          option.connected || Boolean(picked[option.other])
+                        }
+                        disabled={option.connected || Boolean(option.problem)}
+                        onChange={(event) =>
+                          setPicked((was) => ({
+                            ...was,
+                            [option.other]: event.target.checked,
+                          }))
+                        }
+                        slotProps={{
+                          input: {
+                            "data-testid": `fw-connect-option-${option.other}`,
+                          },
+                        }}
+                      />
+                    }
+                    label={
+                      <Box sx={{ minWidth: 0, py: 0.5 }}>
+                        <Typography
+                          variant="body2"
+                          sx={{ overflowWrap: "anywhere" }}
+                        >
+                          {rowLabel(byId[option.other], option.other)}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          display="block"
+                          data-testid={`fw-connect-sense-${option.other}`}
+                        >
+                          {option.connected
+                            ? "Already connected"
+                            : option.problem || optionSense(id, option)}
+                        </Typography>
+                      </Box>
+                    }
+                  />
+                </Box>
+              ))}
+            </Box>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              Nothing in this paper can be connected to this yet. Add a
+              resource first, then connect it here.
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeConnect} data-testid="fw-connect-cancel">
+            Cancel
+          </Button>
+          <RegularStyledButton
+            onClick={connectSelected}
+            disabled={!open.length}
+            data-testid="fw-connect-apply"
+          >
+            Connect selected
+          </RegularStyledButton>
+        </DialogActions>
+      </Dialog>
+    );
+  };
 
   /**
    * Connections this paper's own saved fields already prove.
@@ -505,7 +720,7 @@ const FigureWorkspace = () => {
             size="small"
             color="inherit"
             endIcon={<ExpandMore />}
-            disabled={!String(fileServerPath || "").trim()}
+            disabled={!canImport}
             onClick={(event) => setRccAnchor(event.currentTarget)}
             data-testid="fw-rcc-import"
             aria-haspopup="menu"
@@ -513,6 +728,20 @@ const FigureWorkspace = () => {
             Import from RCC
           </Button>
         </Box>
+
+        {/* A grey button with no explanation is a dead end. One line, and
+            only when it applies -- this is not a place for help text. */}
+        {canImport ? null : (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            display="block"
+            sx={{ mt: 0.5 }}
+            data-testid="fw-rcc-hint"
+          >
+            Choose a File Server Path above to import from RCC.
+          </Typography>
+        )}
 
         <Box sx={{ mt: 1, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.5 }}>
           <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
@@ -574,21 +803,67 @@ const FigureWorkspace = () => {
               component="li"
               key={id}
               data-testid={`fw-figure-${id}`}
-              sx={{ mb: 2, pb: 1.5, borderBottom: 1, borderColor: "divider", minWidth: 0 }}
+              sx={{
+                mb: 1.5,
+                p: 1.5,
+                border: 1,
+                borderColor: "divider",
+                borderRadius: 1,
+                minWidth: 0,
+              }}
             >
-              <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.5, minWidth: 0 }}>
-                <Typography variant="subtitle2" sx={{ overflowWrap: "anywhere" }}>
-                  {rowLabel(byId[id], id)}
-                </Typography>
-                <RowAction onClick={() => editArtifact(id)} data-testid={`fw-edit-${id}`}>
-                  Edit
-                </RowAction>
-                <RowAction onClick={() => removeArtifact(id)} data-testid={`fw-remove-${id}`}>
-                  Remove
-                </RowAction>
+              {/* One figure, one card. A bottom rule alone left every figure
+                  running into the next. */}
+              <Box
+                sx={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  gap: 0.75,
+                  minWidth: 0,
+                }}
+              >
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 0.75,
+                    minWidth: 0,
+                    flex: { xs: "1 1 100%", sm: "1 1 auto" },
+                  }}
+                >
+                  <KindChip id={id} />
+                  <Typography
+                    variant="subtitle2"
+                    sx={{ overflowWrap: "anywhere", minWidth: 0 }}
+                  >
+                    {rowLabel(byId[id], id)}
+                  </Typography>
+                </Box>
+                <Box sx={{ display: "flex", flexShrink: 0, alignItems: "center" }}>
+                  <RowAction onClick={() => editArtifact(id)} data-testid={`fw-edit-${id}`}>
+                    Edit
+                  </RowAction>
+                  <ConnectAction id={id} />
+                  <RowAction onClick={() => removeArtifact(id)} data-testid={`fw-remove-${id}`}>
+                    Remove
+                  </RowAction>
+                </Box>
               </Box>
 
-              <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+              <Box
+                component="ul"
+                sx={{
+                  listStyle: "none",
+                  m: 0,
+                  mt: 0.5,
+                  p: 0,
+                  ml: 1,
+                  pl: 1.5,
+                  borderLeft: 2,
+                  borderColor: "divider",
+                }}
+              >
                 {sourcesOf(id, [SCRIPT], GENERATES).map((scriptId) => (
                   <ResourceRow key={scriptId} id={scriptId} relation="generated by:" />
                 ))}
@@ -603,7 +878,6 @@ const FigureWorkspace = () => {
 
               <Box sx={{ pl: 1.5 }}>
                 <AddButtons id={id} kinds={[SCRIPT, DATASET, EXTERNAL]} />
-                <AttachPanel id={id} />
               </Box>
 
               <SuggestionPanel id={id} />
@@ -660,7 +934,17 @@ const FigureWorkspace = () => {
           before its figure exists -- was filed under something that reads
           like a list of defects to go and fix. Standing on its own is a
           valid state for a resource, and the heading now says that. */}
-      <Box sx={{ mt: 2 }} data-testid="fw-unlinked">
+      <Box
+        sx={{
+          mt: 2,
+          p: 1.5,
+          border: 1,
+          borderColor: "divider",
+          borderRadius: 1,
+          bgcolor: "action.hover",
+        }}
+        data-testid="fw-unlinked"
+      >
         <Typography variant="subtitle2" gutterBottom>
           Independent resources
         </Typography>
@@ -685,6 +969,8 @@ const FigureWorkspace = () => {
           </Typography>
         ) : null}
       </Box>
+
+      <ConnectDialog />
 
       {/* The real forms. Mounted for their dialogs, with their own Add
           buttons hidden -- this section supplies the contextual ones. */}
