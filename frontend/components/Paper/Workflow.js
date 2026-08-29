@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import PropTypes from "prop-types";
 
 import useMediaQuery from "@mui/material/useMediaQuery";
@@ -8,7 +10,7 @@ import Legend from "../Workflow/Legend";
 import { formatData, formatWorkflow } from "../Workflow/util";
 import WorkflowSummary from "./WorkflowSummary";
 
-import { Box, Grid, useTheme } from "@mui/material";
+import { Box, Button, Collapse, Grid, useTheme } from "@mui/material";
 
 const Workflow = ({ workflow, charts, tools, scripts, datasets, external }) => {
   const theme = useTheme();
@@ -17,22 +19,15 @@ const Workflow = ({ workflow, charts, tools, scripts, datasets, external }) => {
     : "column";
 
   const data = formatData(charts, tools, external, datasets, scripts);
+  const [wordsOpen, setWordsOpen] = useState(false);
 
   return (
     <Drawer heading="Workflow">
-      {/* The workflow in words, first. The graph below is a picture -- good
-          for seeing shape, poor to read on a phone and impossible with a
-          screen reader -- so the same thing is said as a short list, which
-          is what most readers of a published record actually want. */}
-      <WorkflowSummary
-        workflow={workflow}
-        charts={charts}
-        datasets={datasets}
-        scripts={scripts}
-        tools={tools}
-        external={external}
-      />
-      <Box sx={{ mt: 1 }}>
+      {/* THE PICTURE FIRST.
+          A workflow of any size printed as a nested "connected to:" list runs
+          for screens before the graph is even reached, and the shape of the
+          thing -- which is what the graph is for -- was arriving second. */}
+      <Box>
         <Grid container direction="row">
           <Grid size={{ xs: 12, md: 10 }}>
             <Graph workflow={workflow} data={data} />
@@ -41,6 +36,35 @@ const Workflow = ({ workflow, charts, tools, scripts, datasets, external }) => {
             <Legend direction={direction} />
           </Grid>
         </Grid>
+      </Box>
+
+      {/* THE SAME THING IN WORDS, one tap away.
+          Not deleted: the graph is a canvas, so it is unreadable with a
+          screen reader and poor on a phone. This is the only form of a
+          published workflow some readers can get at, so it stays -- closed,
+          announced, and out of the way of everyone else. */}
+      <Box sx={{ mt: 1 }}>
+        <Button
+          size="small"
+          variant="text"
+          onClick={() => setWordsOpen((was) => !was)}
+          aria-expanded={wordsOpen}
+          data-testid="workflow-words-toggle"
+        >
+          Workflow in words
+        </Button>
+        <Collapse in={wordsOpen} unmountOnExit>
+          <Box sx={{ mt: 0.5 }} data-testid="workflow-words">
+            <WorkflowSummary
+              workflow={workflow}
+              charts={charts}
+              datasets={datasets}
+              scripts={scripts}
+              tools={tools}
+              external={external}
+            />
+          </Box>
+        </Collapse>
       </Box>
     </Drawer>
   );
