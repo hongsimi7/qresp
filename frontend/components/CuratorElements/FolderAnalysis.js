@@ -1,4 +1,4 @@
-import { Fragment, useContext, useMemo, useState } from "react";
+import { Fragment, useContext, useEffect, useMemo, useState } from "react";
 import PropTypes from "prop-types";
 
 import axios from "axios";
@@ -346,7 +346,15 @@ const chartPlanProblems = (groups, overrides, applied) =>
   }, []);
 
 
-const FolderAnalysis = ({ path, artifactType }) => {
+const FolderAnalysis = ({
+  path,
+  artifactType,
+  // Let a caller supply its own way in. The workspace offers ONE
+  // "Import from RCC" menu covering all four types; four separate
+  // full-width buttons stacked down the page is what that replaces.
+  hideTrigger = false,
+  autoOpen = false,
+}) => {
   const {
     fileServerPath,
     addMany,
@@ -449,6 +457,12 @@ const FolderAnalysis = ({ path, artifactType }) => {
     }));
 
   const ready = Boolean(target.trim());
+
+  useEffect(() => {
+    if (autoOpen && ready) analyze();
+    // Mount-only: the caller remounts this with a new key to open it again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const close = () => {
     setOpen(false);
@@ -1460,6 +1474,7 @@ const FolderAnalysis = ({ path, artifactType }) => {
     <Fragment>
       {/* Trigger only — the surrounding form owns the explanatory copy so the
           button can sit in a tight action row. */}
+      {hideTrigger ? null : (
       <Tooltip
         title={
           ready
@@ -1485,6 +1500,7 @@ const FolderAnalysis = ({ path, artifactType }) => {
           </RegularStyledButton>
         </Box>
       </Tooltip>
+      )}
 
       <Dialog
         open={open}
@@ -2183,6 +2199,9 @@ FolderAnalysis.propTypes = {
   // for compatible embedders; production artifact actions omit it.
   path: PropTypes.string,
   artifactType: PropTypes.oneOf(["chart", "dataset", "script", "tool"]),
+  // Hide the built-in button and drive the dialog from outside.
+  hideTrigger: PropTypes.bool,
+  autoOpen: PropTypes.bool,
 };
 
 export default FolderAnalysis;

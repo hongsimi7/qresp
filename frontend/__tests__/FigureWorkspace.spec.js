@@ -35,7 +35,20 @@ jest.mock("../components/CuratorForms/ToolsInfoForm", () => {
   return Stub;
 });
 jest.mock("../components/CuratorElements/FolderAnalysis", () => {
-  const Stub = () => <button type="button">Analyze RCC Folder</button>;
+  const { useMemo } = jest.requireActual("react");
+  let mounted = 0;
+  const Stub = (props) => {
+    const instance = useMemo(() => String((mounted += 1)), []);
+    return (
+      <div
+        data-testid="stub-folder-analysis"
+        data-type={props.artifactType || ""}
+        data-hidden={String(!!props.hideTrigger)}
+        data-auto={String(!!props.autoOpen)}
+        data-instance={instance}
+      />
+    );
+  };
   return Stub;
 });
 
@@ -131,10 +144,8 @@ describe("the section that replaced four", () => {
   });
 
   it("keeps RCC import reachable from the same place", () => {
-    renderWorkspace();
-    expect(
-      screen.getByRole("button", { name: /analyze rcc folder/i })
-    ).toBeInTheDocument();
+    renderWorkspace({ fileServerPath: "/proj" });
+    expect(screen.getByTestId("fw-rcc-import")).toBeInTheDocument();
   });
 });
 
@@ -407,7 +418,7 @@ describe("independent resources", () => {
   it("offers adding a resource with no figure relationship", async () => {
     const helpers = buildHelpers();
     renderWorkspace({}, helpers);
-    await user().click(screen.getByTestId("fw-add-dataset-for-"));
+    await user().click(screen.getByTestId("fw-start-dataset"));
     expect(helpers.setDefault).toHaveBeenCalledWith("dataset", null);
   });
 
@@ -761,5 +772,108 @@ describe("suggested connections", () => {
     expect(figure.getByTestId("fw-edit-c0")).toBeInTheDocument();
     expect(figure.getByTestId("fw-remove-c0")).toBeInTheDocument();
     expect(figure.getByTestId("fw-advanced-toggle-c0")).toBeInTheDocument();
+  });
+});
+
+// STARTING SOMETHING THAT IS NOT A FIGURE.
+//
+// The record is organised by figures, but plenty of papers hold a dataset or
+// a tool that produced none. Those used to be reachable only from a row at
+// the very bottom of the page, under a heading that reads like a problem.
+
+describe("one place to start anything", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  it("keeps the figure primary and the rest visible beside it", () => {
+    renderWorkspace();
+    // The one filled button on the page.
+    expect(screen.getByTestId("fw-add-figure")).toHaveTextContent(/add figure/i);
+    // And every other kind, on the first screen, without scrolling to a
+    // section about what is broken.
+    ["script", "dataset", "tool", "head"].forEach((type) => {
+      expect(screen.getByTestId(`fw-start-${type}`)).toBeInTheDocument();
+    });
+  });
+
+  it("opens the real form for each kind it offers", async () => {
+    const u = user();
+    const helpers = buildHelpers();
+    renderWorkspace({}, helpers);
+
+    await u.click(screen.getByTestId("fw-start-script"));
+    expect(helpers.openForm).toHaveBeenCalledWith("script");
+    await u.click(screen.getByTestId("fw-start-tool"));
+    expect(helpers.openForm).toHaveBeenCalledWith("tool");
+  });
+
+  it("sends External data to its own form, not to openForm", async () => {
+    const helpers = buildHelpers();
+    renderWorkspace({}, helpers);
+    await user().click(screen.getByTestId("fw-start-head"));
+
+    expect(helpers.setExternalNodeFormOpen).toHaveBeenCalledWith(true);
+    expect(helpers.openForm).not.toHaveBeenCalledWith("head");
+  });
+
+  it("stops claiming everything is connected when nothing exists", () => {
+    // "No figures yet" and "Everything is connected to a figure" are not
+    // both true of the same paper.
+    renderWorkspace();
+    expect(screen.getByTestId("fw-unlinked")).not.toHaveTextContent(
+      /everything is connected to a figure/i
+    );
+    expect(screen.getByTestId("fw-unlinked")).toHaveTextContent(/nothing here yet/i);
+  });
+});
+
+describe("importing from RCC", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  it("offers all four types the importer can propose", async () => {
+    const u = user();
+    renderWorkspace({ fileServerPath: "/proj" });
+    await u.click(screen.getByTestId("fw-rcc-import"));
+
+    // Charts were the only one ever mounted; the other three existed in
+    // FolderAnalysis and were unreachable.
+    ["chart", "dataset", "script", "tool"].forEach((type) => {
+      expect(screen.getByTestId(`fw-rcc-${type}`)).toBeInTheDocument();
+    });
+  });
+
+  it("cannot be opened before a folder is chosen", () => {
+    renderWorkspace({ fileServerPath: "" });
+    expect(screen.getByTestId("fw-rcc-import")).toBeDisabled();
+  });
+
+  it("mounts the importer only once a type is picked, typed to it", async () => {
+    const u = user();
+    renderWorkspace({ fileServerPath: "/proj" });
+    expect(screen.queryByTestId("stub-folder-analysis")).not.toBeInTheDocument();
+
+    await u.click(screen.getByTestId("fw-rcc-import"));
+    await u.click(screen.getByTestId("fw-rcc-dataset"));
+
+    const importer = screen.getByTestId("stub-folder-analysis");
+    expect(importer).toHaveAttribute("data-type", "dataset");
+    // Driven from outside: no second button of its own, and it opens itself.
+    expect(importer).toHaveAttribute("data-hidden", "true");
+    expect(importer).toHaveAttribute("data-auto", "true");
+  });
+
+  it("reopens when the same type is picked again", async () => {
+    // A remount is what makes the second choice do anything at all.
+    const u = user();
+    renderWorkspace({ fileServerPath: "/proj" });
+
+    await u.click(screen.getByTestId("fw-rcc-import"));
+    await u.click(screen.getByTestId("fw-rcc-chart"));
+    const first = screen.getByTestId("stub-folder-analysis").dataset.instance;
+
+    await u.click(screen.getByTestId("fw-rcc-import"));
+    await u.click(screen.getByTestId("fw-rcc-chart"));
+    const second = screen.getByTestId("stub-folder-analysis").dataset.instance;
+
+    expect(second).not.toBe(first);
   });
 });

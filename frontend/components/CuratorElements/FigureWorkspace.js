@@ -6,8 +6,11 @@ import {
   Button,
   Chip,
   Collapse,
+  Menu,
+  MenuItem,
   Typography,
 } from "@mui/material";
+import { ExpandMore } from "@mui/icons-material";
 
 import Drawer from "../drawer";
 import { RegularStyledButton } from "../button";
@@ -98,6 +101,30 @@ export const rowLabel = (artifact, id) => {
   return `Untitled ${KIND_LABEL[prefixOf(id)] || "item"} (${id})`;
 };
 
+// The kinds a curator can start from, in the order the page offers them.
+//
+// A figure is FIRST and stays visually primary, because a Qresp record is
+// organised by its figures. But it is not the only way in: plenty of papers
+// hold a dataset or a tool that produced no figure, and the previous layout
+// left those reachable only through a row at the very bottom of the page,
+// under a heading that reads like a problem ("Unlinked resources").
+const STARTABLE = [
+  { type: "script", label: "Script" },
+  { type: "dataset", label: "Dataset" },
+  { type: "tool", label: "Tool" },
+  { type: "head", label: "External data" },
+];
+
+// The four types the RCC importer can actually propose. It always could --
+// `FolderAnalysis` has had a typed mode for each of them -- but only the
+// chart one was ever mounted, so three of the four were unreachable.
+const IMPORTABLE = [
+  { type: "chart", label: "Figures" },
+  { type: "dataset", label: "Datasets" },
+  { type: "script", label: "Scripts" },
+  { type: "tool", label: "Tools" },
+];
+
 // Row-level actions are TEXT, not filled buttons.
 //
 // A figure with a script, two inputs and a tool carries eight or nine
@@ -114,7 +141,7 @@ const RowAction = ({ children, ...rest }) => (
 const FigureWorkspace = () => {
   const {
     charts, scripts, datasets, tools, heads,
-    workflow, addEdge, unlink, del,
+    fileServerPath, workflow, addEdge, unlink, del,
   } = useContext(CuratorContext);
   const {
     openForm, setDefault, setExternalNodeFormOpen,
@@ -124,6 +151,12 @@ const FigureWorkspace = () => {
   const [advancedFor, setAdvancedFor] = useState("");
   const [attachFor, setAttachFor] = useState("");
   const [suggestFor, setSuggestFor] = useState("");
+
+  // The RCC import menu, and which typed importer it opened. `nonce` remounts
+  // the importer so choosing the same type twice opens it again rather than
+  // doing nothing the second time.
+  const [rccAnchor, setRccAnchor] = useState(null);
+  const [rccImport, setRccImport] = useState({ type: "", nonce: 0 });
 
   // Suggestions the curator has waved away THIS SESSION. Local state, keyed
   // by what the suggestion is about rather than by the ids involved -- see
@@ -447,20 +480,84 @@ const FigureWorkspace = () => {
   return (
     <Drawer heading="Organize figures and resources" defaultOpen={true}>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        Start from a figure, then add what produced it. Nothing is saved until
-        you save the record.
+        Start from a figure and add what produced it — or add any resource on
+        its own. Nothing is saved until you save the record.
       </Typography>
 
-      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, mb: 2 }}>
-        <RegularStyledButton
-          onClick={() => createAttachedTo("chart", "")}
-          data-testid="fw-add-figure"
+      {/* ONE place to start anything.
+
+          A figure is the primary action and looks it. The other four sit
+          under it as quiet text, so they are visible from the first screen
+          without competing with the thing most curators want first. */}
+      <Box sx={{ mb: 2 }}>
+        <Box
+          sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}
         >
-          + Add Figure
-        </RegularStyledButton>
-        {/* RCC import stays exactly what it was; it just leads here now. */}
-        <FolderAnalysis artifactType="chart" />
+          <RegularStyledButton
+            onClick={() => createAttachedTo("chart", "")}
+            data-testid="fw-add-figure"
+          >
+            + Add figure
+          </RegularStyledButton>
+          <Button
+            variant="outlined"
+            size="small"
+            color="inherit"
+            endIcon={<ExpandMore />}
+            disabled={!String(fileServerPath || "").trim()}
+            onClick={(event) => setRccAnchor(event.currentTarget)}
+            data-testid="fw-rcc-import"
+            aria-haspopup="menu"
+          >
+            Import from RCC
+          </Button>
+        </Box>
+
+        <Box sx={{ mt: 1, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.5 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
+            Add a resource
+          </Typography>
+          {STARTABLE.map(({ type, label }) => (
+            <RowAction
+              key={type}
+              onClick={() => createAttachedTo(type, "")}
+              data-testid={`fw-start-${type}`}
+            >
+              {`+ ${label}`}
+            </RowAction>
+          ))}
+        </Box>
       </Box>
+
+      {/* One menu, four typed importers. Mounted only once a type is chosen,
+          and remounted per choice so it opens every time. */}
+      <Menu
+        open={Boolean(rccAnchor)}
+        anchorEl={rccAnchor}
+        onClose={() => setRccAnchor(null)}
+        data-testid="fw-rcc-menu"
+      >
+        {IMPORTABLE.map(({ type, label }) => (
+          <MenuItem
+            key={type}
+            data-testid={`fw-rcc-${type}`}
+            onClick={() => {
+              setRccAnchor(null);
+              setRccImport((was) => ({ type, nonce: was.nonce + 1 }));
+            }}
+          >
+            {label}
+          </MenuItem>
+        ))}
+      </Menu>
+      {rccImport.type ? (
+        <FolderAnalysis
+          key={`${rccImport.type}-${rccImport.nonce}`}
+          artifactType={rccImport.type}
+          hideTrigger
+          autoOpen
+        />
+      ) : null}
 
       {notice ? (
         <Alert severity="info" sx={{ mb: 2 }} data-testid="fw-notice">
@@ -567,12 +664,16 @@ const FigureWorkspace = () => {
             <ResourceRow key={id} id={id} relation="" depth={0} />
           ))}
         </Box>
+        {/* Only true when there IS something. An empty record used to be
+            told "Everything is connected to a figure" directly under "No
+            figures yet", which are not both true of the same paper. */}
         {unlinked.length === 0 ? (
           <Typography variant="caption" color="text.secondary" display="block">
-            Everything is connected to a figure.
+            {knownIds.length
+              ? "Everything is connected to a figure."
+              : "Nothing here yet. Add a figure or a resource above."}
           </Typography>
         ) : null}
-        <AddButtons id="" kinds={[SCRIPT, DATASET, TOOL, EXTERNAL]} />
       </Box>
 
       {/* The real forms. Mounted for their dialogs, with their own Add
