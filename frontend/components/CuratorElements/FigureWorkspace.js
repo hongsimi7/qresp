@@ -106,8 +106,7 @@ export const rowLabel = (artifact, id) => {
 // A figure is FIRST and stays visually primary, because a Qresp record is
 // organised by its figures. But it is not the only way in: plenty of papers
 // hold a dataset or a tool that produced no figure, and the previous layout
-// left those reachable only through a row at the very bottom of the page,
-// under a heading that reads like a problem ("Unlinked resources").
+// left those reachable only through a row at the very bottom of the page.
 const STARTABLE = [
   { type: "script", label: "Script" },
   { type: "dataset", label: "Dataset" },
@@ -471,8 +470,10 @@ const FigureWorkspace = () => {
 
   const figureIds = knownIds.filter((id) => prefixOf(id) === CHART).sort();
 
-  // Anything with no connection at all. Not hidden: a dataset nobody has
-  // wired up yet is a normal mid-curation state.
+  // Anything with no connection at all. Not hidden and not flagged: a
+  // dataset that produced no figure is a normal thing for a paper to hold,
+  // and a resource entered before the figure it belongs to is a normal way
+  // to work.
   const unlinked = knownIds.filter(
     (id) => !incoming(id).length && !outgoing(id).length && prefixOf(id) !== CHART
   );
@@ -653,25 +654,34 @@ const FigureWorkspace = () => {
         </Typography>
       )}
 
-      {/* Resources that do not belong to a figure yet. Adding one here is a
-          normal thing to do -- not everything in a paper produced a figure. */}
+      {/* "INDEPENDENT", not "unlinked".
+          The old heading named these by what they LACK, so a perfectly
+          ordinary dataset -- one that produced no figure, or one entered
+          before its figure exists -- was filed under something that reads
+          like a list of defects to go and fix. Standing on its own is a
+          valid state for a resource, and the heading now says that. */}
       <Box sx={{ mt: 2 }} data-testid="fw-unlinked">
         <Typography variant="subtitle2" gutterBottom>
-          Unlinked resources
+          Independent resources
         </Typography>
-        <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+        <Box
+          component="ul"
+          sx={{ listStyle: "none", m: 0, p: 0 }}
+          aria-label="Independent resources"
+        >
           {unlinked.map((id) => (
             <ResourceRow key={id} id={id} relation="" depth={0} />
           ))}
         </Box>
-        {/* Only true when there IS something. An empty record used to be
-            told "Everything is connected to a figure" directly under "No
-            figures yet", which are not both true of the same paper. */}
+        {/* Neither line is a nudge to go and connect something. The first
+            reports where this paper's resources happen to sit; the second
+            says out loud that standing alone is allowed. */}
         {unlinked.length === 0 ? (
           <Typography variant="caption" color="text.secondary" display="block">
             {knownIds.length
-              ? "Everything is connected to a figure."
-              : "Nothing here yet. Add a figure or a resource above."}
+              ? "No independent resources — every resource here belongs to a figure."
+              : "No independent resources yet. A script, dataset, tool or " +
+                "external data item can stand on its own here, with no figure."}
           </Typography>
         ) : null}
       </Box>

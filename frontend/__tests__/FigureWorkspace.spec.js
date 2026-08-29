@@ -422,15 +422,49 @@ describe("independent resources", () => {
     expect(helpers.setDefault).toHaveBeenCalledWith("dataset", null);
   });
 
-  it("says so when everything is connected", () => {
+  it("calls them independent, never unlinked", () => {
+    // Named by what they LACK, an ordinary dataset that produced no figure
+    // read as a defect to go and fix.
+    renderWorkspace({
+      charts: [FIGURE],
+      datasets: [{ id: "d0", readme: "orphan data" }],
+    });
+    const section = within(screen.getByTestId("fw-unlinked"));
+    expect(
+      section.getAllByText(/independent resources/i).length
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText(/unlinked/i)).not.toBeInTheDocument();
+  });
+
+  it("names the list for a screen reader too", () => {
+    renderWorkspace({
+      charts: [FIGURE],
+      datasets: [{ id: "d0", readme: "orphan data" }],
+    });
+    expect(
+      screen.getByRole("list", { name: /independent resources/i })
+    ).toBeInTheDocument();
+  });
+
+  it("says where things stand when nothing is independent", () => {
     renderWorkspace({
       charts: [FIGURE],
       scripts: [SCRIPT],
       workflow: { nodes: [], edges: [{ from: "s0", to: "c0", type: "generates" }] },
     });
     expect(screen.getByTestId("fw-unlinked")).toHaveTextContent(
-      /everything is connected to a figure/i
+      /no independent resources — every resource here belongs to a figure/i
     );
+  });
+
+  it("tells an empty record that standing alone is allowed", () => {
+    // The point of the rename: this is an invitation, not a warning.
+    renderWorkspace();
+    const text = screen.getByTestId("fw-unlinked").textContent;
+    expect(text).toMatch(/no independent resources yet/i);
+    expect(text).toMatch(/can stand on its own/i);
+    // Nothing here should read as a fault to correct.
+    expect(text).not.toMatch(/unlinked|orphan|missing|error|not connected/i);
   });
 
   it("can attach an unlinked resource later", async () => {
@@ -816,13 +850,15 @@ describe("one place to start anything", () => {
   });
 
   it("stops claiming everything is connected when nothing exists", () => {
-    // "No figures yet" and "Everything is connected to a figure" are not
-    // both true of the same paper.
+    // "No figures yet" and "every resource here belongs to a figure" are
+    // not both true of the same paper.
     renderWorkspace();
     expect(screen.getByTestId("fw-unlinked")).not.toHaveTextContent(
-      /everything is connected to a figure/i
+      /every resource here belongs to a figure/i
     );
-    expect(screen.getByTestId("fw-unlinked")).toHaveTextContent(/nothing here yet/i);
+    expect(screen.getByTestId("fw-unlinked")).toHaveTextContent(
+      /no independent resources yet/i
+    );
   });
 });
 
