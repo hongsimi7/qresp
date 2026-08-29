@@ -362,15 +362,20 @@ const curator = () => {
                   <CuratorFormsRemounter>
                     <CuratorElement />
                     <FileServerElement />
-                    <PaperInfoElement />
-                    <ReferenceInfoElement />
                     {/* ONE section, replacing four. Add Charts / Tools /
                         Datasets / Scripts asked a curator to think in Qresp's
                         storage categories and then connect them separately;
                         nobody curating a paper thinks that way. The figure is
                         the root and the rest hangs off it. Same models, same
-                        forms, same validation -- only the way in changed. */}
+                        forms, same validation -- only the way in changed.
+
+                        It sits DIRECTLY under the file server path because
+                        that path is what "Import from RCC" reads, and above
+                        the optional README because the work of curating a
+                        record is not optional. */}
                     <FigureWorkspace />
+                    <PaperInfoElement />
+                    <ReferenceInfoElement />
                     <DocumentationInfoElement />
                     <WorkflowInfoElement />
                     <LicenseInfoElement />
