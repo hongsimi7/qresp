@@ -2175,3 +2175,214 @@ describe("the workflow is readable without the drawing", () => {
     expect(ctx.helpers.openForm).toHaveBeenCalledWith("script");
   });
 });
+
+// WHO OWNS THE FEEDBACK MARK.
+//
+// Confirming a loop is an answer about ONE connection -- the one the curator
+// was asked about. The edge that was already there was not part of the
+// question, and marking it too would put a claim in the record that nobody
+// made. These run against real edge state, because the mistake this guards
+// against is a mutation, and a jest.fn() cannot show one.
+
+describe("the feedback mark belongs to the edge that was confirmed", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  // A -> B already exists. The curator is about to add B -> A, which closes
+  // the loop.
+  const A_TO_B = { from: "s1", to: "s0", type: "feeds_into" };
+
+  const LiveLoop = ({ start = [A_TO_B], onEdges = () => {} }) => {
+    const [edges, setEdges] = useState(start);
+    onEdges(edges);
+    return (
+      <CuratorHelperContext.Provider value={buildHelpers()}>
+        <CuratorContext.Provider
+          value={{
+            charts: [FIGURE],
+            scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
+            datasets: [],
+            tools: [],
+            heads: [],
+            workflow: { nodes: [], edges },
+            addEdge: (edge) => setEdges((was) => [...was, edge]),
+            unlink: (from, to) =>
+              setEdges((was) =>
+                was.filter((edge) => !(edge.from === from && edge.to === to))
+              ),
+            del: jest.fn(),
+          }}
+        >
+          <FigureWorkspace />
+        </CuratorContext.Provider>
+      </CuratorHelperContext.Provider>
+    );
+  };
+
+  /** Add B -> A and say yes to the question. */
+  const confirmTheLoop = async (u) => {
+    await u.click(screen.getByTestId("fw-addlink-s0"));
+    await u.click(screen.getByTestId("fw-link-s0"));
+    await screen.findByTestId("fw-link-dialog");
+    await u.click(screen.getByTestId("fw-link-option-s0-s1-feeds_into"));
+    await u.click(screen.getByTestId("fw-link-apply"));
+    await screen.findByTestId("fw-loop-dialog");
+    await u.click(screen.getByTestId("fw-loop-confirm"));
+  };
+
+  it("marks only the edge that was confirmed", async () => {
+    const u = user();
+    let edges = [];
+    render(<LiveLoop onEdges={(next) => { edges = next; }} />);
+    await confirmTheLoop(u);
+
+    expect(edges).toHaveLength(2);
+    const [existing, confirmed] = edges;
+    // The one that was already there is byte-for-byte what it was.
+    expect(existing).toEqual(A_TO_B);
+    expect(existing.feedback).toBeUndefined();
+    // The one the curator answered about carries the answer.
+    expect(confirmed).toEqual({
+      from: "s0",
+      to: "s1",
+      type: "feeds_into",
+      feedback: true,
+    });
+  });
+
+  it("shows the mark on that edge and on no other", async () => {
+    const u = user();
+    render(<LiveLoop />);
+    await confirmTheLoop(u);
+
+    expect(screen.getByTestId("fw-lane-edge-s0-s1")).toHaveAttribute(
+      "data-loop",
+      "true"
+    );
+    expect(screen.getByTestId("fw-lane-edge-s1-s0")).toHaveAttribute(
+      "data-loop",
+      "false"
+    );
+    expect(screen.getByTestId("fw-feedback-s0-s1")).toBeInTheDocument();
+    expect(screen.queryByTestId("fw-feedback-s1-s0")).not.toBeInTheDocument();
+  });
+
+  it("still marks only that edge on a fresh load", () => {
+    // What storage would hand back.
+    renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
+      workflow: {
+        nodes: [],
+        edges: [A_TO_B, { from: "s0", to: "s1", type: "feeds_into", feedback: true }],
+      },
+    });
+
+    expect(screen.getByTestId("fw-lane-edge-s0-s1")).toHaveAttribute(
+      "data-loop",
+      "true"
+    );
+    expect(screen.getByTestId("fw-lane-edge-s1-s0")).toHaveAttribute(
+      "data-loop",
+      "false"
+    );
+    expect(screen.getByTestId("fw-feedback-s0-s1")).toBeInTheDocument();
+    expect(screen.queryByTestId("fw-feedback-s1-s0")).not.toBeInTheDocument();
+  });
+
+  it("keeps the mark when the OTHER edge of the loop is removed", async () => {
+    // With A -> B gone there is no cycle left to detect. The answer stands
+    // because it was recorded, not calculated.
+    const u = user();
+    render(<LiveLoop />);
+    await confirmTheLoop(u);
+
+    await u.click(screen.getByTestId("fw-more-s1"));
+    await u.click(screen.getByTestId("fw-unlink-s1-s0"));
+
+    expect(screen.queryByTestId("fw-lane-edge-s1-s0")).not.toBeInTheDocument();
+    expect(screen.getByTestId("fw-lane-edge-s0-s1")).toHaveAttribute(
+      "data-loop",
+      "true"
+    );
+    expect(screen.getByTestId("fw-feedback-s0-s1")).toBeInTheDocument();
+  });
+
+  it("loses the mark when the feedback edge itself is removed", () => {
+    // The mark lives ON the edge, so removing the edge takes it with it.
+    // Driven through state rather than a row action: which rows offer an
+    // unlink is a separate question from who owns the mark.
+    const ctx = renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
+      workflow: {
+        nodes: [],
+        edges: [A_TO_B, { from: "s0", to: "s1", type: "feeds_into", feedback: true }],
+      },
+    });
+    expect(screen.getByTestId("fw-feedback-s0-s1")).toBeInTheDocument();
+
+    ctx.rerenderWith({ workflow: { nodes: [], edges: [A_TO_B] } });
+
+    expect(screen.queryByTestId(/^fw-feedback-/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("fw-lane-edge-s0-s1")).not.toBeInTheDocument();
+    // And the edge that was never part of the answer is still there, plain.
+    expect(screen.getByTestId("fw-lane-edge-s1-s0")).toHaveAttribute(
+      "data-loop",
+      "false"
+    );
+  });
+
+  it("adds no mark to a cycle nobody was asked about", () => {
+    // Both directions present, neither confirmed -- as an older record or an
+    // externally written payload would arrive.
+    renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
+      workflow: {
+        nodes: [],
+        edges: [A_TO_B, { from: "s0", to: "s1", type: "feeds_into" }],
+      },
+    });
+
+    ["s0-s1", "s1-s0"].forEach((pair) =>
+      expect(screen.getByTestId(`fw-lane-edge-${pair}`)).toHaveAttribute(
+        "data-loop",
+        "false"
+      )
+    );
+    expect(screen.queryByTestId(/^fw-feedback-/)).not.toBeInTheDocument();
+  });
+
+  it("adds no mark to a legacy untyped loop", () => {
+    renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
+      workflow: { nodes: [], edges: [["s1", "s0"], ["s0", "s1"]] },
+    });
+
+    ["s0-s1", "s1-s0"].forEach((pair) =>
+      expect(screen.getByTestId(`fw-lane-edge-${pair}`)).toHaveAttribute(
+        "data-loop",
+        "false"
+      )
+    );
+    expect(screen.queryByTestId(/^fw-feedback-/)).not.toBeInTheDocument();
+  });
+
+  it("declining the question marks nothing at all", async () => {
+    const u = user();
+    let edges = [];
+    render(<LiveLoop onEdges={(next) => { edges = next; }} />);
+
+    await u.click(screen.getByTestId("fw-addlink-s0"));
+    await u.click(screen.getByTestId("fw-link-s0"));
+    await screen.findByTestId("fw-link-dialog");
+    await u.click(screen.getByTestId("fw-link-option-s0-s1-feeds_into"));
+    await u.click(screen.getByTestId("fw-link-apply"));
+    await screen.findByTestId("fw-loop-dialog");
+    await u.click(screen.getByTestId("fw-loop-cancel"));
+
+    expect(edges).toEqual([A_TO_B]);
+    expect(screen.queryByTestId(/^fw-feedback-/)).not.toBeInTheDocument();
+  });
+});
