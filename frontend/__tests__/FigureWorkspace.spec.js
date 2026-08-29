@@ -113,9 +113,11 @@ describe("the section that replaced four", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("offers Add Figure as the way in", () => {
+  it("offers one way in", () => {
     renderWorkspace();
-    expect(screen.getByTestId("fw-add-figure")).toHaveTextContent(/add figure/i);
+    expect(screen.getByTestId("fw-addlink")).toHaveTextContent(
+      /add or link resource/i
+    );
   });
 
   it("shows none of the old per-type top-level Add sections", () => {
@@ -143,9 +145,11 @@ describe("the section that replaced four", () => {
     );
   });
 
-  it("keeps RCC import reachable from the same place", () => {
+  it("keeps RCC import reachable from the same place", async () => {
+    const u = user();
     renderWorkspace({ fileServerPath: "/proj" });
-    expect(screen.getByTestId("fw-rcc-import")).toBeInTheDocument();
+    await openRccFor(u);
+    expect(screen.getByTestId("fw-source-rcc")).toBeInTheDocument();
   });
 });
 
@@ -153,9 +157,11 @@ describe("Add Figure reuses the existing Chart model", () => {
   afterEach(() => jest.resetAllMocks());
 
   it("opens the real Chart form for a NEW chart", async () => {
+    const u = user();
     const helpers = buildHelpers();
     renderWorkspace({}, helpers);
-    await user().click(screen.getByTestId("fw-add-figure"));
+    await openAddFor(u, "");
+    await u.click(screen.getByTestId("fw-add--chart"));
 
     expect(helpers.setDefault).toHaveBeenCalledWith("chart", null);
     expect(helpers.openForm).toHaveBeenCalledWith("chart");
@@ -163,8 +169,10 @@ describe("Add Figure reuses the existing Chart model", () => {
 
   it("creates no artifact and no edge merely by opening the form", async () => {
     // Cancel is the common case, and it must leave nothing behind.
+    const u = user();
     const ctx = renderWorkspace();
-    await user().click(screen.getByTestId("fw-add-figure"));
+    await openAddFor(u, "");
+    await u.click(screen.getByTestId("fw-add--chart"));
     expect(ctx.addEdge).not.toHaveBeenCalled();
     expect(axios.post).not.toHaveBeenCalled();
     expect(axios.put).not.toHaveBeenCalled();
@@ -172,13 +180,26 @@ describe("Add Figure reuses the existing Chart model", () => {
 });
 
 // ---- shared helpers for the outline UI ---------------------------------
+// One control, asked one question at a time: these walk it.
+const openFlowFor = async (u, id) => {
+  await u.click(screen.getByTestId(id ? `fw-addlink-${id}` : "fw-addlink"));
+  return screen.findByTestId("fw-flow-menu");
+};
 const openLinkFor = async (u, id) => {
+  await openFlowFor(u, id);
   await u.click(screen.getByTestId(`fw-link-${id}`));
   return screen.findByTestId("fw-link-dialog");
 };
 const openAddFor = async (u, id) => {
-  await u.click(screen.getByTestId(`fw-add-${id}`));
-  return screen.findByTestId("fw-add-menu");
+  await openFlowFor(u, id);
+  await u.click(screen.getByTestId("fw-flow-new"));
+  await u.click(screen.getByTestId("fw-source-manual"));
+  return screen.findByTestId("fw-flow-menu");
+};
+const openRccFor = async (u) => {
+  await openFlowFor(u, "");
+  await u.click(screen.getByTestId("fw-flow-new"));
+  return screen.findByTestId("fw-flow-menu");
 };
 const openMoreFor = async (u, id) => {
   await u.click(screen.getByTestId(`fw-more-${id}`));
@@ -205,7 +226,7 @@ describe("the figure is the root", () => {
 
   it("reads as one outline, result first and inputs beneath", () => {
     renderWorkspace(paper);
-    const figure = within(screen.getByTestId("fw-figure-c0"));
+    const figure = within(screen.getByTestId("fw-group-c0"));
 
     expect(figure.getByTestId("fw-node-s0")).toBeInTheDocument();
     expect(figure.getByTestId("fw-node-d0")).toBeInTheDocument();
@@ -236,20 +257,27 @@ describe("the figure is the root", () => {
     expect(screen.getByTestId("fw-empty-c0")).toHaveTextContent(
       /no connected resources yet/i
     );
-    expect(screen.getByTestId("fw-link-c0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-addlink-c0")).toBeInTheDocument();
   });
 
-  it("says so plainly when there are no figures yet", () => {
+  it("says so plainly when there is nothing yet", () => {
     renderWorkspace();
-    expect(screen.getByText(/no figures yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no workflow yet/i)).toBeInTheDocument();
   });
 
-  it("keeps the two everyday actions on the row and the rest behind ⋮", async () => {
+  it("tells a curator with resources but no links what to do", () => {
+    // Artifacts exist; none is joined to anything. That is not "no figures".
+    renderWorkspace({ charts: [FIGURE], scripts: [SCRIPT] });
+    expect(screen.getByText(/nothing is connected yet/i)).toBeInTheDocument();
+  });
+
+  it("keeps one action on the row and the rest behind ⋮", async () => {
     const u = user();
     renderWorkspace({ charts: [FIGURE] });
 
-    expect(screen.getByTestId("fw-link-c0")).toHaveTextContent(/link existing/i);
-    expect(screen.getByTestId("fw-add-c0")).toHaveTextContent(/add new/i);
+    expect(screen.getByTestId("fw-addlink-c0")).toHaveTextContent(
+      /add or link/i
+    );
     // Edit and Remove are not competing with the name.
     expect(screen.queryByTestId("fw-edit-c0")).not.toBeInTheDocument();
     expect(screen.queryByTestId("fw-remove-c0")).not.toBeInTheDocument();
@@ -326,18 +354,16 @@ describe("a script chain", () => {
     expect(screen.queryByTestId("fw-link-option-s0-s0-feeds_into")).not.toBeInTheDocument();
   });
 
-  it("does not offer the reverse once one direction exists", async () => {
-    // s1 already feeds s0, so s0 feeding s1 would close a loop. The dialog
-    // never offers a candidate the server would refuse.
+  it("shows the direction already recorded as made", async () => {
     const u = user();
     renderWorkspace(chain);
     await openLinkFor(u, "s0");
-
     expect(screen.getByTestId("fw-link-option-s1-s0-feeds_into")).toBeDisabled();
-    expect(screen.queryByTestId("fw-link-option-s0-s1-feeds_into")).not.toBeInTheDocument();
   });
 
-  it("does not offer a candidate that would close a longer loop", async () => {
+  it("offers a candidate that would close a loop, to be confirmed", async () => {
+    // Refinement is real work, so the connection is offered -- and asked
+    // about before it is made. See "feedback loops".
     const u = user();
     renderWorkspace({
       charts: [FIGURE],
@@ -355,7 +381,7 @@ describe("a script chain", () => {
       },
     });
     await openLinkFor(u, "s0");
-    expect(screen.queryByTestId("fw-link-option-s2-s0-feeds_into")).not.toBeInTheDocument();
+    expect(screen.getByTestId("fw-link-option-s2-s0-feeds_into")).toBeEnabled();
   });
 
   it("terminates on a graph that should never have been stored", () => {
@@ -749,7 +775,7 @@ describe("link existing", () => {
       heads: [{ id: "h0", URLs: ["https://example.org/set"] }],
     });
     ["c0", "s0", "d0", "t0", "h0"].forEach((id) =>
-      expect(screen.getByTestId(`fw-link-${id}`)).toBeInTheDocument()
+      expect(screen.getByTestId(`fw-addlink-${id}`)).toBeInTheDocument()
     );
   });
 
@@ -787,15 +813,21 @@ describe("the local draft between the two saves", () => {
   });
 
   it("does not discard an existing artifact when another is added", () => {
-    const ctx = renderWorkspace({ charts: [FIGURE], scripts: [SCRIPT] });
+    const ctx = renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT],
+      workflow: { nodes: [], edges: [{ from: "s0", to: "c0", type: "generates" }] },
+    });
     ctx.rerenderWith({
       charts: [FIGURE],
       scripts: [SCRIPT],
       datasets: [{ id: "d0", readme: "spectra" }],
+      workflow: { nodes: [], edges: [{ from: "s0", to: "c0", type: "generates" }] },
     });
 
-    expect(screen.getByTestId("fw-figure-c0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-group-c0")).toBeInTheDocument();
     expect(screen.getByTestId("fw-node-s0")).toBeInTheDocument();
+    // The new one stands on its own until it is linked.
     expect(screen.getByTestId("fw-node-d0")).toBeInTheDocument();
   });
 });
@@ -864,9 +896,11 @@ describe("independent resources", () => {
   });
 
   it("offers adding a resource with no figure relationship", async () => {
+    const u = user();
     const helpers = buildHelpers();
     renderWorkspace({}, helpers);
-    await user().click(screen.getByTestId("fw-start-dataset"));
+    await openAddFor(u, "");
+    await u.click(screen.getByTestId("fw-add--dataset"));
     expect(helpers.setDefault).toHaveBeenCalledWith("dataset", null);
   });
 
@@ -983,7 +1017,7 @@ describe("external data and legacy graphs", () => {
       scripts: [SCRIPT],
       workflow: { nodes: [], edges: [["s0", "c0"]] },
     });
-    const figure = screen.getByTestId("fw-figure-c0");
+    const figure = screen.getByTestId("fw-group-c0");
     // Neither the heading nor the sentence claims a relationship type.
     expect(figure).toHaveTextContent(/Connected to/i);
     expect(figure).toHaveTextContent(/plot_dos\.py → connects to → Density of states/);
@@ -992,9 +1026,13 @@ describe("external data and legacy graphs", () => {
   });
 
   it("works on a paper with no workflow at all", () => {
+    // No edges means no workflow group: every artifact stands on its own,
+    // which is a normal state and not an empty page.
     renderWorkspace({ charts: [FIGURE], scripts: [SCRIPT] });
-    expect(screen.getByTestId("fw-figure-c0")).toBeInTheDocument();
-    expect(screen.getByTestId("fw-unlinked")).toHaveTextContent("plot_dos.py");
+    const independent = within(screen.getByTestId("fw-unlinked"));
+    expect(independent.getByTestId("fw-node-c0")).toBeInTheDocument();
+    expect(independent.getByTestId("fw-node-s0")).toBeInTheDocument();
+    expect(screen.queryByTestId("fw-group-c0")).not.toBeInTheDocument();
   });
 });
 
@@ -1087,7 +1125,7 @@ describe("suggested connections", () => {
     expect(screen.queryByTestId("fw-suggestions-c0")).not.toBeInTheDocument();
     // And the connection now shows as an ordinary part of the figure.
     expect(
-      within(screen.getByTestId("fw-figure-c0")).getByText("Generated by")
+      within(screen.getByTestId("fw-group-c0")).getByText("Generated by")
     ).toBeInTheDocument();
   });
 
@@ -1219,12 +1257,11 @@ describe("suggested connections", () => {
   });
 
   it("leaves the manual paths exactly as they were", () => {
+    // PROVEN holds no edges yet, so the figure stands on its own -- and its
+    // actions must be there just the same.
     renderWorkspace(PROVEN);
-    const figure = within(screen.getByTestId("fw-figure-c0"));
-    // The everyday actions and the overflow all survive.
-    expect(figure.getByTestId("fw-link-c0")).toBeInTheDocument();
-    expect(figure.getByTestId("fw-add-c0")).toBeInTheDocument();
-    expect(figure.getByTestId("fw-more-c0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-addlink-c0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-more-c0")).toBeInTheDocument();
   });
 });
 
@@ -1234,117 +1271,113 @@ describe("suggested connections", () => {
 // a tool that produced none. Those used to be reachable only from a row at
 // the very bottom of the page, under a heading that reads like a problem.
 
-describe("one place to start anything", () => {
+// ONE WAY IN, asking one question at a time.
+//
+// The page carried a primary Add figure, a separate Import from RCC, a row of
+// four "+ Type" links and a per-row Add new -- four controls for one
+// intention. These pin the one that replaced them.
+
+describe("add or link resource", () => {
   afterEach(() => jest.resetAllMocks());
 
-  it("keeps the figure primary and the rest visible beside it", () => {
+  it("is a single control at the top of the section", async () => {
+    const u = user();
     renderWorkspace();
-    // The one filled button on the page.
-    expect(screen.getByTestId("fw-add-figure")).toHaveTextContent(/add figure/i);
-    // And every other kind, on the first screen, without scrolling to a
-    // section about what is broken.
-    ["script", "dataset", "tool", "head"].forEach((type) => {
-      expect(screen.getByTestId(`fw-start-${type}`)).toBeInTheDocument();
-    });
+    expect(screen.getByTestId("fw-addlink")).toHaveTextContent(
+      /add or link resource/i
+    );
+    // And none of the four it replaced.
+    expect(screen.queryByTestId("fw-add-figure")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("fw-rcc-import")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("fw-start-script")).not.toBeInTheDocument();
+
+    await openFlowFor(u, "");
+    expect(screen.getByTestId("fw-flow-new")).toHaveTextContent(/add new/i);
   });
 
-  it("opens the real form for each kind it offers", async () => {
+  it("offers nothing to link from the top, where there is nothing to link to", async () => {
     const u = user();
-    const helpers = buildHelpers();
-    renderWorkspace({}, helpers);
+    renderWorkspace({ charts: [FIGURE] });
+    await openFlowFor(u, "");
+    expect(screen.queryByTestId("fw-link-")).not.toBeInTheDocument();
+  });
 
-    await u.click(screen.getByTestId("fw-start-script"));
-    expect(helpers.openForm).toHaveBeenCalledWith("script");
-    await u.click(screen.getByTestId("fw-start-tool"));
-    expect(helpers.openForm).toHaveBeenCalledWith("tool");
+  it("offers linking first on a row, because that is the common act", async () => {
+    const u = user();
+    renderWorkspace({ charts: [FIGURE], scripts: [SCRIPT] });
+    await openFlowFor(u, "c0");
+
+    const items = screen.getAllByRole("menuitem").map((el) => el.textContent.trim());
+    expect(items[0]).toMatch(/link existing/i);
+    expect(items).toContain("Add new…");
+  });
+
+  it("asks where a new resource comes from before asking what it is", async () => {
+    const u = user();
+    renderWorkspace({ fileServerPath: "/proj" });
+    await openFlowFor(u, "");
+    await u.click(screen.getByTestId("fw-flow-new"));
+
+    expect(screen.getByTestId("fw-source-rcc")).toHaveTextContent(/from rcc/i);
+    expect(screen.getByTestId("fw-source-manual")).toHaveTextContent(
+      /enter manually/i
+    );
+    // The types come only after that choice.
+    expect(screen.queryByTestId("fw-add--chart")).not.toBeInTheDocument();
+  });
+
+  it("opens the real form for a manually entered figure", async () => {
+    const u = user();
+    const ctx = renderWorkspace();
+    await openAddFor(u, "");
+    await u.click(screen.getByTestId("fw-add--chart"));
+
+    expect(ctx.helpers.setDefault).toHaveBeenCalledWith("chart", null);
+    expect(ctx.helpers.openForm).toHaveBeenCalledWith("chart");
+    // Opening a form creates nothing.
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+  });
+
+  it("offers every kind by hand at the top of the section", async () => {
+    const u = user();
+    renderWorkspace();
+    await openAddFor(u, "");
+    ["chart", "script", "dataset", "tool", "head"].forEach((type) =>
+      expect(screen.getByTestId(`fw-add--${type}`)).toBeInTheDocument()
+    );
   });
 
   it("sends External data to its own form, not to openForm", async () => {
-    const helpers = buildHelpers();
-    renderWorkspace({}, helpers);
-    await user().click(screen.getByTestId("fw-start-head"));
+    const u = user();
+    const ctx = renderWorkspace();
+    await openAddFor(u, "");
+    await u.click(screen.getByTestId("fw-add--head"));
 
-    expect(helpers.setExternalNodeFormOpen).toHaveBeenCalledWith(true);
-    expect(helpers.openForm).not.toHaveBeenCalledWith("head");
+    expect(ctx.helpers.setExternalNodeFormOpen).toHaveBeenCalledWith(true);
+    expect(ctx.helpers.openForm).not.toHaveBeenCalledWith("head");
   });
 
-  it("stops claiming everything is connected when nothing exists", () => {
-    // "No figures yet" and "every resource here belongs to a figure" are
-    // not both true of the same paper.
-    renderWorkspace();
-    expect(screen.getByTestId("fw-unlinked")).not.toHaveTextContent(
-      /every resource here belongs to a figure/i
+  it("offers only the kinds that can legally join a row", async () => {
+    const u = user();
+    renderWorkspace({ charts: [FIGURE], tools: [{ id: "t0", packageName: "numpy" }] });
+    await openAddFor(u, "c0");
+
+    ["script", "dataset", "head"].forEach((type) =>
+      expect(screen.getByTestId(`fw-add-c0-${type}`)).toBeInTheDocument()
     );
-    expect(screen.getByTestId("fw-unlinked")).toHaveTextContent(
-      /no independent resources yet/i
-    );
+    // A tool cannot join a figure.
+    expect(screen.queryByTestId("fw-add-c0-tool")).not.toBeInTheDocument();
   });
 });
 
 describe("importing from RCC", () => {
   afterEach(() => jest.resetAllMocks());
 
-  it("offers all four types the importer can propose", async () => {
-    const u = user();
-    renderWorkspace({ fileServerPath: "/proj" });
-    await u.click(screen.getByTestId("fw-rcc-import"));
-
-    // Charts were the only one ever mounted; the other three existed in
-    // FolderAnalysis and were unreachable.
-    ["chart", "dataset", "script", "tool"].forEach((type) => {
-      expect(screen.getByTestId(`fw-rcc-${type}`)).toBeInTheDocument();
-    });
-  });
-
-  it("cannot be opened before a folder is chosen", () => {
-    renderWorkspace({ fileServerPath: "" });
-    expect(screen.getByTestId("fw-rcc-import")).toBeDisabled();
-  });
-
-  it("mounts the importer only once a type is picked, typed to it", async () => {
-    const u = user();
-    renderWorkspace({ fileServerPath: "/proj" });
-    expect(screen.queryByTestId("stub-folder-analysis")).not.toBeInTheDocument();
-
-    await u.click(screen.getByTestId("fw-rcc-import"));
-    await u.click(screen.getByTestId("fw-rcc-dataset"));
-
-    const importer = screen.getByTestId("stub-folder-analysis");
-    expect(importer).toHaveAttribute("data-type", "dataset");
-    // Driven from outside: no second button of its own, and it opens itself.
-    expect(importer).toHaveAttribute("data-hidden", "true");
-    expect(importer).toHaveAttribute("data-auto", "true");
-  });
-
-  it("reopens when the same type is picked again", async () => {
-    // A remount is what makes the second choice do anything at all.
-    const u = user();
-    renderWorkspace({ fileServerPath: "/proj" });
-
-    await u.click(screen.getByTestId("fw-rcc-import"));
-    await u.click(screen.getByTestId("fw-rcc-chart"));
-    const first = screen.getByTestId("stub-folder-analysis").dataset.instance;
-
-    await u.click(screen.getByTestId("fw-rcc-import"));
-    await u.click(screen.getByTestId("fw-rcc-chart"));
-    const second = screen.getByTestId("stub-folder-analysis").dataset.instance;
-
-    expect(second).not.toBe(first);
-  });
-});
-
-describe("the RCC import entry point", () => {
-  afterEach(() => jest.resetAllMocks());
-
-  const openMenu = async (u) => {
-    await u.click(screen.getByTestId("fw-rcc-import"));
-    return screen.findByTestId("fw-rcc-menu");
-  };
-
   it("offers exactly the four types Folder Analysis can propose", async () => {
     const u = user();
     renderWorkspace({ fileServerPath: "/proj" });
-    await openMenu(u);
+    await openRccFor(u);
+    await u.click(screen.getByTestId("fw-source-rcc"));
 
     const items = screen.getAllByRole("menuitem").map((el) => el.textContent.trim());
     expect(items).toEqual(["Figures", "Datasets", "Scripts", "Tools"]);
@@ -1358,7 +1391,8 @@ describe("the RCC import entry point", () => {
       ["fw-rcc-script", "script"],
       ["fw-rcc-tool", "tool"],
     ]) {
-      await openMenu(u);
+      await openRccFor(u);
+      await u.click(screen.getByTestId("fw-source-rcc"));
       await u.click(screen.getByTestId(choice));
       const importer = screen.getByTestId("stub-folder-analysis");
       // The SAME importer, typed -- not a second one built for this menu.
@@ -1368,35 +1402,64 @@ describe("the RCC import entry point", () => {
     }
   });
 
-  it("explains itself when no folder has been chosen", () => {
+  it("explains itself when no folder has been chosen", async () => {
+    const u = user();
     renderWorkspace({ fileServerPath: "" });
+    await openRccFor(u);
 
-    expect(screen.getByTestId("fw-rcc-import")).toBeDisabled();
+    expect(screen.getByTestId("fw-source-rcc")).toHaveAttribute(
+      "aria-disabled",
+      "true"
+    );
     expect(screen.getByTestId("fw-rcc-hint")).toHaveTextContent(
       "Choose a File Server Path above to import from RCC."
     );
+    // Entering by hand is unaffected.
+    expect(screen.getByTestId("fw-source-manual")).not.toHaveAttribute(
+      "aria-disabled",
+      "true"
+    );
   });
 
-  it("drops the explanation once a folder is chosen", () => {
+  it("drops the explanation once a folder is chosen", async () => {
+    const u = user();
+    renderWorkspace({ fileServerPath: "/proj" });
+    await openRccFor(u);
+
+    expect(screen.queryByTestId("fw-rcc-hint")).not.toBeInTheDocument();
+    expect(screen.getByTestId("fw-source-rcc")).not.toHaveAttribute(
+      "aria-disabled",
+      "true"
+    );
+  });
+
+  it("reopens when the same type is picked again", async () => {
+    const u = user();
     renderWorkspace({ fileServerPath: "/proj" });
 
-    expect(screen.getByTestId("fw-rcc-import")).toBeEnabled();
-    expect(screen.queryByTestId("fw-rcc-hint")).not.toBeInTheDocument();
+    await openRccFor(u);
+    await u.click(screen.getByTestId("fw-source-rcc"));
+    await u.click(screen.getByTestId("fw-rcc-chart"));
+    const first = screen.getByTestId("stub-folder-analysis").dataset.instance;
+
+    await openRccFor(u);
+    await u.click(screen.getByTestId("fw-source-rcc"));
+    await u.click(screen.getByTestId("fw-rcc-chart"));
+    const second = screen.getByTestId("stub-folder-analysis").dataset.instance;
+
+    expect(second).not.toBe(first);
   });
 
   it("asks the network nothing while rendering", async () => {
     const u = user();
     renderWorkspace({ fileServerPath: "/proj" });
-    await openMenu(u);
+    await openRccFor(u);
 
     expect(axios.get).not.toHaveBeenCalled();
     expect(axios.post).not.toHaveBeenCalled();
   });
 
-  it("puts imported figures in the tree and the rest among independent resources", async () => {
-    // What an import DOES once the curator accepts it: the artifacts land in
-    // the same draft lists a form would have filled, so they are ordinary
-    // rows the moment they arrive.
+  it("puts imported artifacts in the draft, linkable at once", async () => {
     const u = user();
     const ctx = renderWorkspace({ fileServerPath: "/proj" });
 
@@ -1408,13 +1471,13 @@ describe("the RCC import entry point", () => {
       tools: [{ id: "t0", packageName: "numpy" }],
     });
 
-    expect(screen.getByTestId("fw-figure-c0")).toBeInTheDocument();
+    // Imported and unlinked, so each stands on its own until it is joined.
     const independent = within(screen.getByTestId("fw-unlinked"));
-    ["s0", "d0", "t0"].forEach((id) => {
-      expect(independent.getByTestId(`fw-node-${id}`)).toBeInTheDocument();
-    });
+    ["c0", "s0", "d0", "t0"].forEach((id) =>
+      expect(independent.getByTestId(`fw-node-${id}`)).toBeInTheDocument()
+    );
 
-    // And connectable at once, with no metadata retyped.
+    // And linkable with no metadata retyped.
     await openLinkFor(u, "s0");
     await u.click(screen.getByTestId("fw-link-option-s0-c0-generates"));
     await u.click(screen.getByTestId("fw-link-apply"));
@@ -1426,12 +1489,6 @@ describe("the RCC import entry point", () => {
     });
   });
 });
-
-// TWO CLASSES OF EDGE, kept apart.
-//
-// A workflow edge says what produced what and reads in a direction. A
-// related_to says only that two things belong together. The tests that matter
-// most are the ones proving the second never becomes the first.
 
 describe("related resources", () => {
   afterEach(() => jest.resetAllMocks());
@@ -1461,8 +1518,7 @@ describe("related resources", () => {
     async (prefix, plural) => {
       const u = user();
       renderWorkspace(pairFor(prefix));
-      await u.click(screen.getByTestId(`fw-link-${prefix}0`));
-      await screen.findByTestId("fw-link-dialog");
+      await openLinkFor(u, `${prefix}0`);
 
       expect(screen.getByTestId("fw-link-group-related")).toHaveTextContent(
         `Related ${plural}`
@@ -1476,8 +1532,7 @@ describe("related resources", () => {
   it.each(KINDS.map(([p]) => p))("links a same-kind pair for %s", async (prefix) => {
     const u = user();
     const ctx = renderWorkspace(pairFor(prefix));
-    await u.click(screen.getByTestId(`fw-link-${prefix}0`));
-    await screen.findByTestId("fw-link-dialog");
+    await openLinkFor(u, `${prefix}0`);
     await u.click(
       screen.getByTestId(`fw-link-option-${prefix}0-${prefix}1-related_to`)
     );
@@ -1497,8 +1552,7 @@ describe("related resources", () => {
   it("reads without a direction, because neither end came first", async () => {
     const u = user();
     renderWorkspace(pairFor("d"));
-    await u.click(screen.getByTestId("fw-link-d0"));
-    await screen.findByTestId("fw-link-dialog");
+    await openLinkFor(u, "d0");
 
     const sentence = screen.getByTestId("fw-link-sentence-d0-d1-related_to");
     expect(sentence).toHaveTextContent(
@@ -1515,8 +1569,7 @@ describe("related resources", () => {
       scripts: [SCRIPT],
       datasets: [{ id: "d0", readme: "spectra" }],
     });
-    await u.click(screen.getByTestId("fw-link-c0"));
-    await screen.findByTestId("fw-link-dialog");
+    await openLinkFor(u, "c0");
 
     expect(
       screen.queryByTestId("fw-link-option-c0-s0-related_to")
@@ -1536,8 +1589,7 @@ describe("related resources", () => {
       charts: [FIGURE, { id: "c1", caption: "Second figure" }],
       scripts: [SCRIPT],
     });
-    await u.click(screen.getByTestId("fw-link-c0"));
-    await screen.findByTestId("fw-link-dialog");
+    await openLinkFor(u, "c0");
 
     expect(screen.getByTestId("fw-link-group-workflow")).toHaveTextContent(
       "Workflow connection"
@@ -1554,8 +1606,7 @@ describe("related resources", () => {
       // Stored c1 -> c0; the dialog is opened from c0.
       workflow: { nodes: [], edges: [{ from: "c1", to: "c0", type: "related_to" }] },
     });
-    await u.click(screen.getByTestId("fw-link-c0"));
-    await screen.findByTestId("fw-link-dialog");
+    await openLinkFor(u, "c0");
 
     const option = screen.getByTestId("fw-link-option-c0-c1-related_to");
     expect(option).toBeChecked();
@@ -1565,8 +1616,7 @@ describe("related resources", () => {
   it("never offers an artifact itself", async () => {
     const u = user();
     renderWorkspace(pairFor("t"));
-    await u.click(screen.getByTestId("fw-link-t0"));
-    await screen.findByTestId("fw-link-dialog");
+    await openLinkFor(u, "t0");
     expect(
       screen.queryByTestId("fw-link-option-t0-t0-related_to")
     ).not.toBeInTheDocument();
@@ -1581,8 +1631,7 @@ describe("related resources", () => {
         { id: "c2", caption: "Third" },
       ],
     });
-    await u.click(screen.getByTestId("fw-link-c0"));
-    await screen.findByTestId("fw-link-dialog");
+    await openLinkFor(u, "c0");
     await u.click(screen.getByTestId("fw-link-option-c0-c1-related_to"));
     await u.click(screen.getByTestId("fw-link-option-c0-c2-related_to"));
     await u.click(screen.getByTestId("fw-link-apply"));
@@ -1645,8 +1694,7 @@ describe("related resources", () => {
     // Two scripts can hold BOTH: one feeds the other, and they are related.
     const u = user();
     const ctx = renderWorkspace({ charts: [FIGURE], scripts: [SCRIPT, { id: "s1", readme: "other.py" }] });
-    await u.click(screen.getByTestId("fw-link-s0"));
-    await screen.findByTestId("fw-link-dialog");
+    await openLinkFor(u, "s0");
 
     expect(
       screen.getByTestId("fw-link-option-s1-s0-feeds_into")
@@ -1662,5 +1710,312 @@ describe("related resources", () => {
     expect(ctx.addEdge).toHaveBeenCalledTimes(2);
     expect(ctx.addEdge).toHaveBeenCalledWith({ from: "s1", to: "s0", type: "feeds_into" });
     expect(ctx.addEdge).toHaveBeenCalledWith({ from: "s0", to: "s1", type: "related_to" });
+  });
+});
+
+// WHAT A CURATOR CALLS "ONE WORKFLOW" is a connected component of the graph,
+// derived on every render. There is no group model to keep in step.
+
+describe("workflow groups", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  const twoGroups = {
+    charts: [FIGURE, { id: "c1", caption: "Band structure" }],
+    scripts: [SCRIPT, { id: "s1", readme: "bands.py" }],
+    workflow: {
+      nodes: [],
+      edges: [
+        { from: "s0", to: "c0", type: "generates" },
+        { from: "s1", to: "c1", type: "generates" },
+      ],
+    },
+  };
+
+  it("gathers everything joined into one group", () => {
+    renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT],
+      datasets: [{ id: "d0", readme: "spectra" }],
+      workflow: {
+        nodes: [],
+        edges: [
+          { from: "s0", to: "c0", type: "generates" },
+          { from: "d0", to: "s0", type: "consumes" },
+        ],
+      },
+    });
+    const group = within(screen.getByTestId("fw-group-c0"));
+    ["c0", "s0", "d0"].forEach((id) =>
+      expect(group.getByTestId(`fw-node-${id}`)).toBeInTheDocument()
+    );
+  });
+
+  it("keeps two unconnected pieces of work apart", () => {
+    renderWorkspace(twoGroups);
+    expect(screen.getByTestId("fw-group-c0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-group-c1")).toBeInTheDocument();
+  });
+
+  it("merges them the moment they are joined", () => {
+    const ctx = renderWorkspace(twoGroups);
+    ctx.rerenderWith({
+      workflow: {
+        nodes: [],
+        edges: [
+          ...twoGroups.workflow.edges,
+          { from: "s0", to: "s1", type: "feeds_into" },
+        ],
+      },
+    });
+
+    expect(screen.getByTestId("fw-group-c0")).toBeInTheDocument();
+    expect(screen.queryByTestId("fw-group-c1")).not.toBeInTheDocument();
+    const group = within(screen.getByTestId("fw-group-c0"));
+    ["c0", "c1", "s0", "s1"].forEach((id) =>
+      expect(group.getByTestId(`fw-node-${id}`)).toBeInTheDocument()
+    );
+  });
+
+  it("splits them again when the joining edge goes", () => {
+    const ctx = renderWorkspace({
+      ...twoGroups,
+      workflow: {
+        nodes: [],
+        edges: [
+          ...twoGroups.workflow.edges,
+          { from: "s0", to: "s1", type: "feeds_into" },
+        ],
+      },
+    });
+    expect(screen.queryByTestId("fw-group-c1")).not.toBeInTheDocument();
+
+    ctx.rerenderWith({ workflow: { nodes: [], edges: twoGroups.workflow.edges } });
+    expect(screen.getByTestId("fw-group-c0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-group-c1")).toBeInTheDocument();
+  });
+
+  it("leaves an artifact with no edge standing on its own", () => {
+    renderWorkspace({
+      ...twoGroups,
+      tools: [{ id: "t0", packageName: "numpy" }],
+    });
+    const independent = within(screen.getByTestId("fw-unlinked"));
+    expect(independent.getByTestId("fw-node-t0")).toBeInTheDocument();
+    expect(screen.queryByTestId("fw-group-t0")).not.toBeInTheDocument();
+  });
+
+  it("says a group with no figure is independent, not broken", () => {
+    renderWorkspace({
+      scripts: [SCRIPT, { id: "s1", readme: "pre.py" }],
+      workflow: { nodes: [], edges: [{ from: "s1", to: "s0", type: "feeds_into" }] },
+    });
+    expect(screen.getByTestId("fw-stranded-s0")).toHaveTextContent(
+      /independent workflow/i
+    );
+  });
+});
+
+describe("the workflow drawing", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  const paper = {
+    charts: [FIGURE],
+    scripts: [SCRIPT],
+    datasets: [{ id: "d0", readme: "spectra" }],
+    tools: [{ id: "t0", packageName: "numpy" }],
+    workflow: {
+      nodes: [],
+      edges: [
+        { from: "s0", to: "c0", type: "generates" },
+        { from: "d0", to: "s0", type: "consumes" },
+        { from: "t0", to: "s0", type: "uses_tool" },
+      ],
+    },
+  };
+
+  it("draws every artifact in the group once", () => {
+    renderWorkspace(paper);
+    ["c0", "s0", "d0", "t0"].forEach((id) =>
+      expect(screen.getAllByTestId(`fw-lane-node-${id}`)).toHaveLength(1)
+    );
+  });
+
+  it("reads inputs to figures, left to right", () => {
+    renderWorkspace(paper);
+    const lanes = within(screen.getByTestId("fw-lanes"));
+    ["Inputs", "Process", "Figures"].forEach((lane) =>
+      expect(lanes.getByText(lane)).toBeInTheDocument()
+    );
+  });
+
+  it("draws an edge for every connection in the group", () => {
+    renderWorkspace(paper);
+    ["s0-c0", "d0-s0", "t0-s0"].forEach((pair) =>
+      expect(screen.getByTestId(`fw-lane-edge-${pair}`)).toBeInTheDocument()
+    );
+  });
+
+  it("draws a feedback loop differently from ordinary flow", () => {
+    renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
+      workflow: {
+        nodes: [],
+        edges: [
+          { from: "s0", to: "c0", type: "generates" },
+          { from: "s1", to: "s0", type: "feeds_into" },
+          { from: "s0", to: "s1", type: "feeds_into" },
+        ],
+      },
+    });
+    expect(screen.getByTestId("fw-lane-edge-s0-s1")).toHaveAttribute(
+      "data-loop",
+      "true"
+    );
+    expect(screen.getByTestId("fw-lane-edge-s0-c0")).toHaveAttribute(
+      "data-loop",
+      "false"
+    );
+    expect(screen.getByTestId("fw-lanes")).toHaveTextContent(
+      /dashed line is a feedback loop/i
+    );
+  });
+
+  it("marks an association as having no direction", () => {
+    renderWorkspace({
+      charts: [FIGURE, { id: "c1", caption: "Second" }],
+      workflow: { nodes: [], edges: [{ from: "c0", to: "c1", type: "related_to" }] },
+    });
+    const edge = screen.getByTestId("fw-lane-edge-c0-c1");
+    expect(edge).toHaveAttribute("data-undirected", "true");
+    expect(edge).toHaveAttribute("data-loop", "false");
+  });
+});
+
+describe("feedback loops", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  // preprocess.py already feeds plot_dos.py. Recording that plot_dos.py also
+  // feeds preprocess.py closes the loop.
+  const closing = {
+    charts: [FIGURE],
+    scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
+    workflow: { nodes: [], edges: [{ from: "s1", to: "s0", type: "feeds_into" }] },
+  };
+
+  const pickLoop = async (u) => {
+    await openLinkFor(u, "s0");
+    await u.click(screen.getByTestId("fw-link-option-s0-s1-feeds_into"));
+    await u.click(screen.getByTestId("fw-link-apply"));
+    return screen.findByTestId("fw-loop-dialog");
+  };
+
+  it("asks before making one, and makes nothing yet", async () => {
+    const u = user();
+    const ctx = renderWorkspace(closing);
+    await pickLoop(u);
+
+    expect(screen.getByTestId("fw-loop-dialog")).toHaveTextContent(
+      /make a feedback loop/i
+    );
+    expect(screen.getByTestId("fw-loop-s0-s1")).toBeInTheDocument();
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+  });
+
+  it("makes it once the curator says so", async () => {
+    const u = user();
+    const ctx = renderWorkspace(closing);
+    await pickLoop(u);
+    await u.click(screen.getByTestId("fw-loop-confirm"));
+
+    expect(ctx.addEdge).toHaveBeenCalledTimes(1);
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "s0",
+      to: "s1",
+      type: "feeds_into",
+    });
+  });
+
+  it("makes nothing when the curator declines", async () => {
+    const u = user();
+    const ctx = renderWorkspace(closing);
+    await pickLoop(u);
+    await u.click(screen.getByTestId("fw-loop-cancel"));
+
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+  });
+
+  it("keeps the other choices when the loop is declined", async () => {
+    // Refusing one connection is not a reason to discard the rest.
+    const u = user();
+    const ctx = renderWorkspace({
+      ...closing,
+      datasets: [{ id: "d0", readme: "spectra" }],
+    });
+    await openLinkFor(u, "s0");
+    await u.click(screen.getByTestId("fw-link-option-s0-s1-feeds_into"));
+    await u.click(screen.getByTestId("fw-link-option-d0-s0-consumes"));
+    await u.click(screen.getByTestId("fw-link-apply"));
+    await screen.findByTestId("fw-loop-dialog");
+
+    expect(screen.getByTestId("fw-loop-rest")).toHaveTextContent(
+      /1 selection will be linked either way/i
+    );
+    await u.click(screen.getByTestId("fw-loop-cancel"));
+
+    expect(ctx.addEdge).toHaveBeenCalledTimes(1);
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "d0",
+      to: "s0",
+      type: "consumes",
+    });
+  });
+
+  it("never asks about an association", async () => {
+    // There is no direction to loop.
+    const u = user();
+    const ctx = renderWorkspace({
+      charts: [FIGURE, { id: "c1", caption: "Second" }],
+      workflow: { nodes: [], edges: [{ from: "c1", to: "c0", type: "related_to" }] },
+      scripts: [],
+    });
+    await openLinkFor(u, "c0");
+    // The only remaining candidate for this pair is the directed one.
+    await u.click(screen.getByTestId("fw-link-option-c0-c1-feeds_into"));
+    await u.click(screen.getByTestId("fw-link-apply"));
+
+    expect(screen.queryByTestId("fw-loop-dialog")).not.toBeInTheDocument();
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "c0",
+      to: "c1",
+      type: "feeds_into",
+    });
+  });
+
+  it("still refuses an artifact joined to itself", async () => {
+    const u = user();
+    renderWorkspace({ charts: [FIGURE], scripts: [SCRIPT] });
+    await openLinkFor(u, "s0");
+    expect(
+      screen.queryByTestId("fw-link-option-s0-s0-feeds_into")
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders a stored loop without recursing forever", () => {
+    renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
+      workflow: {
+        nodes: [],
+        edges: [
+          { from: "s0", to: "c0", type: "generates" },
+          { from: "s1", to: "s0", type: "feeds_into" },
+          { from: "s0", to: "s1", type: "feeds_into" },
+        ],
+      },
+    });
+    // Each artifact is one editable node; the second arrival is a reference.
+    expect(screen.getAllByTestId("fw-node-s0")).toHaveLength(1);
+    expect(screen.getAllByTestId("fw-node-s1")).toHaveLength(1);
   });
 });

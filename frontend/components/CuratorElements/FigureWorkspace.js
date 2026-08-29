@@ -5,6 +5,8 @@ import {
   Box,
   Button,
   Chip,
+  useMediaQuery,
+  useTheme,
   Checkbox,
   Collapse,
   Dialog,
@@ -16,7 +18,6 @@ import {
   MenuItem,
   Typography,
 } from "@mui/material";
-import { ExpandMore } from "@mui/icons-material";
 
 import Drawer from "../drawer";
 import { RegularStyledButton } from "../button";
@@ -25,6 +26,7 @@ import ScriptsInfoForm from "../CuratorForms/ScriptsInfoForm";
 import DatasetsInfoForm from "../CuratorForms/DatasetsInfoForm";
 import ToolsInfoForm from "../CuratorForms/ToolsInfoForm";
 import FolderAnalysis from "./FolderAnalysis";
+import WorkflowLanes from "./WorkflowLanes";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
 import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperContext";
@@ -41,6 +43,9 @@ import {
   fromStoredEdge,
   DIRECTED,
   EDGE_GROUP,
+  closesLoop,
+  componentsOf,
+  loopEdgeKeys,
   EDGE_VERB,
   FEEDS_INTO,
   RELATED_TO,
@@ -125,19 +130,6 @@ export const rowLabel = (artifact, id) => {
   return `Untitled ${KIND_LABEL[prefixOf(id)] || "item"} (${id})`;
 };
 
-// The kinds a curator can start from, in the order the page offers them.
-//
-// A figure is FIRST and stays visually primary, because a Qresp record is
-// organised by its figures. But it is not the only way in: plenty of papers
-// hold a dataset or a tool that produced no figure, and the previous layout
-// left those reachable only through a row at the very bottom of the page.
-const STARTABLE = [
-  { type: "script", label: "Script" },
-  { type: "dataset", label: "Dataset" },
-  { type: "tool", label: "Tool" },
-  { type: "head", label: "External data" },
-];
-
 // The four types the RCC importer can actually propose. It always could --
 // `FolderAnalysis` has had a typed mode for each of them -- but only the
 // chart one was ever mounted, so three of the four were unreachable.
@@ -194,9 +186,23 @@ const FigureWorkspace = () => {
   const [notice, setNotice] = useState("");
   // Which row's "Add new" / overflow menu is open, and which shared node was
   // last jumped to from a reference row.
-  const [addAnchor, setAddAnchor] = useState({ id: "", el: null });
+  // ONE WAY IN, asking one question at a time.
+  //
+  // The page carried a primary Add figure, a separate Import from RCC, a row
+  // of four "+ Type" links and a per-row Add new -- four controls for one
+  // intention. This is that intention: link something that already exists,
+  // or make something new; and if new, from the RCC folder or by hand.
+  //
+  // `id` is the row it was opened from, or "" at the top of the section,
+  // where there is nothing yet to link TO.
+  const [flow, setFlow] = useState({ id: "", el: null, step: "root", source: "" });
+  const closeFlow = () =>
+    setFlow({ id: "", el: null, step: "root", source: "" });
   const [moreAnchor, setMoreAnchor] = useState({ id: "", parentId: "", el: null });
   const [highlight, setHighlight] = useState("");
+  // Links the curator picked that would close a feedback loop, held until
+  // they say yes. Nothing is added while this is set.
+  const [loopAsk, setLoopAsk] = useState(null);
   // Which artifact's connection dialog is open, and what is ticked in it.
   const [connectFor, setConnectFor] = useState("");
   const [picked, setPicked] = useState({});
@@ -205,9 +211,14 @@ const FigureWorkspace = () => {
   // The RCC import menu, and which typed importer it opened. `nonce` remounts
   // the importer so choosing the same type twice opens it again rather than
   // doing nothing the second time.
-  const [rccAnchor, setRccAnchor] = useState(null);
   const [rccImport, setRccImport] = useState({ type: "", nonce: 0 });
   const canImport = Boolean(String(fileServerPath || "").trim());
+
+  const theme = useTheme();
+  // The same graph, two readings. A drawing is the clearest way to see the
+  // shape of the work and the worst way to read it on a phone or with a
+  // screen reader, so the narrow view gets the outline instead.
+  const narrow = useMediaQuery(theme.breakpoints.down("md"));
 
   // Suggestions the curator has waved away THIS SESSION. Local state, keyed
   // by what the suggestion is about rather than by the ids involved -- see
@@ -383,7 +394,7 @@ const FigureWorkspace = () => {
    * reaches it, and every later arrival is a reference back to that one.
    * Nothing is duplicated in the data, and nothing is duplicated on screen.
    */
-  const buildOutline = () => {
+  const buildOutline = (scope) => {
     const placed = new Set();
     const build = (id, parentId, type) => {
       const first = !placed.has(id);
@@ -398,7 +409,10 @@ const FigureWorkspace = () => {
       });
       return node;
     };
-    const roots = figureIds.map((id) => build(id, "", ""));
+    const roots = (scope || figureIds)
+      .filter((id) => prefixOf(id) === CHART)
+      .sort()
+      .map((id) => build(id, "", ""));
 
     // A workflow does not have to end at a figure yet. Two scripts joined to
     // each other, or a dataset feeding a script, are real work in progress
@@ -406,7 +420,9 @@ const FigureWorkspace = () => {
     // trees made them vanish from the page while still being in the record.
     const stranded = [];
     const connected = (id) => incoming(id).length || outgoing(id).length;
-    let left = knownIds.filter((id) => !placed.has(id) && connected(id));
+    let left = (scope || knownIds).filter(
+      (id) => !placed.has(id) && connected(id)
+    );
     while (left.length) {
       // Prefer a node nothing else here feeds into, so the subgraph reads
       // downstream-first like the figures do. A cycle has no such node, and
@@ -421,7 +437,13 @@ const FigureWorkspace = () => {
     return { roots, stranded };
   };
 
-  const { roots: outline, stranded } = buildOutline();
+  // WHAT A CURATOR CALLS "ONE WORKFLOW" is a connected component of the
+  // graph. It is DERIVED here on every render from the artifacts and edges
+  // that exist -- there is no group model and nothing to migrate. Joining two
+  // groups merges them because they become one component; removing the last
+  // edge between them splits them again for the same reason.
+  const { connected: components, alone } = componentsOf(knownIds, edges);
+  const loopKeys = loopEdgeKeys(edges);
 
   /** Everything this artifact feeds, so a shared one can say so. */
   const servesOf = (id) => outgoing(id).map((edge) => edge.to);
@@ -504,18 +526,67 @@ const FigureWorkspace = () => {
    * Each is re-checked against the links accepted earlier in this same
    * batch, so two ticks cannot combine into a loop.
    */
-  const linkSelected = () => {
+  /** Add these edges, in order, skipping any that has become impossible. */
+  const applyEdges = (chosen) => {
     const running = edges.slice();
-    const { workflow, related } = linkCandidates(connectFor);
     let made = 0;
-    [...workflow, ...related].forEach((option) => {
-      if (!picked[option.key] || option.linked) return;
-      if (edgeProblem(option.edge, knownIds, running)) return;
-      addEdge(option.edge);
-      running.push(option.edge);
+    chosen.forEach((edge) => {
+      if (edgeProblem(edge, knownIds, running)) return;
+      addEdge(edge);
+      running.push(edge);
       made += 1;
     });
-    if (!made) setNotice("Nothing was selected, so nothing was linked.");
+    return made;
+  };
+
+  /**
+   * Link what was ticked -- and ASK FIRST about anything that closes a loop.
+   *
+   * A feedback loop is real work (fit, adjust, fit again) and also the shape
+   * a mistake takes, and the two are indistinguishable from the graph alone.
+   * Only the curator can tell them apart, so they are asked, once, with the
+   * loop written out.
+   */
+  const linkSelected = () => {
+    const { workflow, related } = linkCandidates(connectFor);
+    const chosen = [...workflow, ...related]
+      .filter((option) => picked[option.key] && !option.linked)
+      .map((option) => option.edge);
+
+    if (!chosen.length) {
+      setNotice("Nothing was selected, so nothing was linked.");
+      closeLink();
+      return;
+    }
+
+    const running = edges.slice();
+    const safe = [];
+    const loops = [];
+    chosen.forEach((edge) => {
+      if (closesLoop(running, edge)) loops.push(edge);
+      else safe.push(edge);
+      running.push(edge);
+    });
+
+    if (loops.length) {
+      setLoopAsk({ safe, loops });
+      return;
+    }
+    applyEdges(safe);
+    closeLink();
+  };
+
+  const confirmLoops = () => {
+    if (loopAsk) applyEdges([...loopAsk.safe, ...loopAsk.loops]);
+    setLoopAsk(null);
+    closeLink();
+  };
+
+  const declineLoops = () => {
+    // Everything that was NOT a loop still goes in: refusing the loop is not
+    // a reason to throw away the other choices.
+    if (loopAsk) applyEdges(loopAsk.safe);
+    setLoopAsk(null);
     closeLink();
   };
 
@@ -555,21 +626,17 @@ const FigureWorkspace = () => {
    */
   const RowActions = ({ node }) => {
     const { id, parentId } = node;
-    const addable = addableTo(id);
     return (
       <Box sx={{ display: "flex", flexShrink: 0, alignItems: "center" }}>
-        <RowAction onClick={() => openLink(id)} data-testid={`fw-link-${id}`}>
-          Link existing
+        <RowAction
+          onClick={(event) =>
+            setFlow({ id, el: event.currentTarget, step: "root", source: "" })
+          }
+          aria-haspopup="menu"
+          data-testid={`fw-addlink-${id}`}
+        >
+          Add or link
         </RowAction>
-        {addable.length ? (
-          <RowAction
-            onClick={(event) => setAddAnchor({ id, el: event.currentTarget })}
-            aria-haspopup="menu"
-            data-testid={`fw-add-${id}`}
-          >
-            Add new
-          </RowAction>
-        ) : null}
         <RowAction
           onClick={(event) => setMoreAnchor({ id, parentId, el: event.currentTarget })}
           aria-haspopup="menu"
@@ -1001,9 +1068,10 @@ const FigureWorkspace = () => {
   // dataset that produced no figure is a normal thing for a paper to hold,
   // and a resource entered before the figure it belongs to is a normal way
   // to work.
-  const unlinked = knownIds.filter(
-    (id) => !incoming(id).length && !outgoing(id).length && prefixOf(id) !== CHART
-  );
+  // An artifact with no edge at all stands on its own. That is exactly a
+  // one-member component, so it comes from the same derivation as the groups
+  // rather than a second rule that could disagree with it.
+  const unlinked = alone;
 
   return (
     <Drawer heading="Organize figures and resources" defaultOpen={true}>
@@ -1018,80 +1086,124 @@ const FigureWorkspace = () => {
           under it as quiet text, so they are visible from the first screen
           without competing with the thing most curators want first. */}
       <Box sx={{ mb: 2 }}>
-        <Box
-          sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}
+        <RegularStyledButton
+          onClick={(event) =>
+            setFlow({ id: "", el: event.currentTarget, step: "root", source: "" })
+          }
+          aria-haspopup="menu"
+          data-testid="fw-addlink"
         >
-          <RegularStyledButton
-            onClick={() => createAttachedTo("chart", "")}
-            data-testid="fw-add-figure"
-          >
-            + Add figure
-          </RegularStyledButton>
-          <Button
-            variant="outlined"
-            size="small"
-            color="inherit"
-            endIcon={<ExpandMore />}
-            disabled={!canImport}
-            onClick={(event) => setRccAnchor(event.currentTarget)}
-            data-testid="fw-rcc-import"
-            aria-haspopup="menu"
-          >
-            Import from RCC
-          </Button>
-        </Box>
-
-        {/* A grey button with no explanation is a dead end. One line, and
-            only when it applies -- this is not a place for help text. */}
-        {canImport ? null : (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            display="block"
-            sx={{ mt: 0.5 }}
-            data-testid="fw-rcc-hint"
-          >
-            Choose a File Server Path above to import from RCC.
-          </Typography>
-        )}
-
-        <Box sx={{ mt: 1, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 0.5 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
-            Add a resource
-          </Typography>
-          {STARTABLE.map(({ type, label: text }) => (
-            <RowAction
-              key={type}
-              onClick={() => createAttachedTo(type, "")}
-              data-testid={`fw-start-${type}`}
-            >
-              {`+ ${text}`}
-            </RowAction>
-          ))}
-        </Box>
+          Add or link resource
+        </RegularStyledButton>
       </Box>
 
-      {/* One menu, four typed importers. Mounted only once a type is chosen,
-          and remounted per choice so it opens every time. */}
+      {/* THE ONE MENU, in up to three steps.
+          Link what exists, or make something new; and if new, from the RCC
+          folder or by hand. Each step asks one thing. */}
       <Menu
-        open={Boolean(rccAnchor)}
-        anchorEl={rccAnchor}
-        onClose={() => setRccAnchor(null)}
-        data-testid="fw-rcc-menu"
+        open={Boolean(flow.el)}
+        anchorEl={flow.el}
+        onClose={closeFlow}
+        data-testid="fw-flow-menu"
       >
-        {IMPORTABLE.map(({ type, label: text }) => (
-          <MenuItem
-            key={type}
-            data-testid={`fw-rcc-${type}`}
-            onClick={() => {
-              setRccAnchor(null);
-              setRccImport((was) => ({ type, nonce: was.nonce + 1 }));
-            }}
-          >
-            {text}
-          </MenuItem>
-        ))}
+        {flow.step === "root"
+          ? [
+              // Nothing to link TO from the top of the section.
+              flow.id ? (
+                <MenuItem
+                  key="link"
+                  data-testid={`fw-link-${flow.id}`}
+                  onClick={() => {
+                    const target = flow.id;
+                    closeFlow();
+                    openLink(target);
+                  }}
+                >
+                  Link existing…
+                </MenuItem>
+              ) : null,
+              <MenuItem
+                key="new"
+                data-testid="fw-flow-new"
+                onClick={() => setFlow((was) => ({ ...was, step: "source" }))}
+              >
+                Add new…
+              </MenuItem>,
+            ].filter(Boolean)
+          : null}
+
+        {flow.step === "source"
+          ? [
+              <MenuItem
+                key="rcc"
+                data-testid="fw-source-rcc"
+                disabled={!canImport}
+                onClick={() =>
+                  setFlow((was) => ({ ...was, step: "type", source: "rcc" }))
+                }
+              >
+                From RCC
+              </MenuItem>,
+              // A greyed row with no explanation is a dead end. One line,
+              // and only when it applies.
+              canImport ? null : (
+                <MenuItem
+                  key="hint"
+                  disabled
+                  data-testid="fw-rcc-hint"
+                  sx={{ whiteSpace: "normal", maxWidth: 260 }}
+                >
+                  <Typography variant="caption">
+                    Choose a File Server Path above to import from RCC.
+                  </Typography>
+                </MenuItem>
+              ),
+              <MenuItem
+                key="manual"
+                data-testid="fw-source-manual"
+                onClick={() =>
+                  setFlow((was) => ({ ...was, step: "type", source: "manual" }))
+                }
+              >
+                Enter manually
+              </MenuItem>,
+            ].filter(Boolean)
+          : null}
+
+        {flow.step === "type" && flow.source === "rcc"
+          ? IMPORTABLE.map(({ type, label: text }) => (
+              <MenuItem
+                key={type}
+                data-testid={`fw-rcc-${type}`}
+                onClick={() => {
+                  closeFlow();
+                  setRccImport((was) => ({ type, nonce: was.nonce + 1 }));
+                }}
+              >
+                {text}
+              </MenuItem>
+            ))
+          : null}
+
+        {flow.step === "type" && flow.source === "manual"
+          ? (flow.id ? addableTo(flow.id) : NEW_TYPES).map(
+              ({ type, label: text }) => (
+                <MenuItem
+                  key={type}
+                  data-testid={`fw-add-${flow.id}-${type}`}
+                  onClick={() => {
+                    const target = flow.id;
+                    closeFlow();
+                    createAttachedTo(type, target);
+                  }}
+                >
+                  {text}
+                </MenuItem>
+              )
+            )
+          : null}
       </Menu>
+
       {rccImport.type ? (
         <FolderAnalysis
           key={`${rccImport.type}-${rccImport.nonce}`}
@@ -1100,28 +1212,6 @@ const FigureWorkspace = () => {
           autoOpen
         />
       ) : null}
-
-      {/* Add new: only the kinds that can legally join this row. */}
-      <Menu
-        open={Boolean(addAnchor.el)}
-        anchorEl={addAnchor.el}
-        onClose={() => setAddAnchor({ id: "", el: null })}
-        data-testid="fw-add-menu"
-      >
-        {(addAnchor.id ? addableTo(addAnchor.id) : []).map(({ type, label: text }) => (
-          <MenuItem
-            key={type}
-            data-testid={`fw-add-${addAnchor.id}-${type}`}
-            onClick={() => {
-              const target = addAnchor.id;
-              setAddAnchor({ id: "", el: null });
-              createAttachedTo(type, target);
-            }}
-          >
-            {text}
-          </MenuItem>
-        ))}
-      </Menu>
 
       {/* The rarer actions, off the line the outline is there to show. */}
       <Menu
@@ -1173,46 +1263,73 @@ const FigureWorkspace = () => {
       <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
         Workflow
       </Typography>
-      {figureIds.length || stranded.length ? (
+      {components.length ? (
         <Box
           component="ul"
           sx={{ listStyle: "none", m: 0, p: 0 }}
           data-testid="fw-figures"
-          aria-label="Workflow outline"
+          aria-label="Workflow"
         >
-          {[...outline, ...stranded].map((node) => (
-            <Box
-              component="li"
-              key={node.id}
-              sx={{
-                mb: 1.5,
-                p: 1.5,
-                border: 1,
-                borderColor: "divider",
-                borderRadius: 1,
-                minWidth: 0,
-              }}
-              data-testid={`fw-figure-${node.id}`}
-            >
-              {prefixOf(node.id) === CHART ? null : (
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  display="block"
-                  data-testid={`fw-stranded-${node.id}`}
-                >
-                  Independent workflow
-                </Typography>
-              )}
-              <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
-                <OutlineNode node={node} />
+          {components.map((members) => {
+            const { roots, stranded } = buildOutline(members);
+            const figures = members.filter((id) => prefixOf(id) === CHART);
+            return (
+              <Box
+                component="li"
+                key={members[0]}
+                sx={{
+                  mb: 1.5,
+                  p: 1.5,
+                  border: 1,
+                  borderColor: "divider",
+                  borderRadius: 1,
+                  minWidth: 0,
+                }}
+                data-testid={`fw-group-${members[0]}`}
+              >
+                {figures.length ? null : (
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    display="block"
+                    data-testid={`fw-stranded-${members[0]}`}
+                  >
+                    Independent workflow
+                  </Typography>
+                )}
+
+                {/* The SAME graph, twice over. Wide: a drawing, because the
+                    shape of the work is what a picture is for. Narrow: the
+                    outline, because a drawing is the worst thing to read on
+                    a phone or with a screen reader. */}
+                {narrow ? null : (
+                  <WorkflowLanes
+                    ids={members}
+                    byId={byId}
+                    edges={edges}
+                    loopKeys={loopKeys}
+                    name={label}
+                    onPick={(id) => setHighlight(id)}
+                    active={highlight}
+                  />
+                )}
+
+                <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+                  {[...roots, ...stranded].map((node) => (
+                    <OutlineNode key={node.id} node={node} />
+                  ))}
+                </Box>
               </Box>
-            </Box>
-          ))}
+            );
+          })}
         </Box>
       ) : (
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          No figures yet. Add one to start, or import from an RCC folder.
+          {knownIds.length
+            ? "Nothing is connected yet. Link two resources below and they " +
+              "become a workflow here."
+            : "No workflow yet. Add a figure or a resource to start, or " +
+              "import from an RCC folder."}
         </Typography>
       )}
 
@@ -1262,6 +1379,69 @@ const FigureWorkspace = () => {
       </Box>
 
       <LinkDialog />
+
+      {/* ASKED, NOT REFUSED, AND NOT ASSUMED.
+          A loop is both a real way of working and the shape a mistake takes,
+          and the graph cannot tell them apart. So the curator is shown the
+          exact connection and asked once. Saying no keeps everything else
+          they picked -- declining the loop is not a reason to discard the
+          rest. */}
+      <Dialog
+        open={Boolean(loopAsk)}
+        onClose={declineLoops}
+        fullWidth
+        maxWidth="sm"
+        data-testid="fw-loop-dialog"
+      >
+        <DialogTitle sx={{ pb: 0.5 }}>
+          Make a feedback loop?
+          <Typography variant="body2" color="text.secondary">
+            This connection sends the workflow back to something earlier in
+            it. That is a real way to work — fit, adjust, fit again — so Qresp
+            will keep it and mark it as a feedback loop.
+          </Typography>
+        </DialogTitle>
+        <DialogContent dividers>
+          <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+            {(loopAsk ? loopAsk.loops : []).map((edge) => (
+              <Box
+                component="li"
+                key={`${edge.from}-${edge.to}-${edge.type}`}
+                sx={{ minWidth: 0 }}
+              >
+                <Typography
+                  variant="body2"
+                  sx={{ overflowWrap: "anywhere" }}
+                  data-testid={`fw-loop-${edge.from}-${edge.to}`}
+                >
+                  {namedSentence(edge)}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+          {loopAsk && loopAsk.safe.length ? (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              display="block"
+              sx={{ mt: 1 }}
+              data-testid="fw-loop-rest"
+            >
+              {`Your other ${loopAsk.safe.length} selection${
+                loopAsk.safe.length === 1 ? "" : "s"
+              } will be linked either way.`}
+            </Typography>
+          ) : null}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={declineLoops} data-testid="fw-loop-cancel">
+            Don't make the loop
+          </Button>
+          <RegularStyledButton onClick={confirmLoops} data-testid="fw-loop-confirm">
+            Make feedback loop
+          </RegularStyledButton>
+        </DialogActions>
+      </Dialog>
 
       {/* The real forms. Mounted for their dialogs, with their own Add
           buttons hidden -- this section supplies the contextual ones. */}
