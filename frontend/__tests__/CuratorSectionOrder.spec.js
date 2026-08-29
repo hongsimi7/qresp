@@ -22,19 +22,33 @@ const at = (tag) => {
 };
 
 describe("where the curation workspace sits", () => {
+  it("comes after the metadata a record cannot do without", () => {
+    // A record needs its title and its reference whatever else is done to it.
+    expect(at("FigureWorkspace")).toBeGreaterThan(at("PaperInfoElement"));
+    expect(at("FigureWorkspace")).toBeGreaterThan(at("ReferenceInfoElement"));
+  });
+
   it("comes after the file server path it imports from", () => {
-    // "Import from RCC" reads that path, so being asked for the folder after
-    // the section that uses it is backwards.
+    // "Import from RCC" reads that path, so the two belong in view together.
     expect(at("FigureWorkspace")).toBeGreaterThan(at("FileServerElement"));
   });
 
-  it("comes before the optional documentation", () => {
+  it("comes immediately before the optional documentation", () => {
     // Curating the record is the work; a README is an extra.
-    expect(at("FigureWorkspace")).toBeLessThan(at("DocumentationInfoElement"));
+    const between = source.slice(
+      at("FigureWorkspace"),
+      at("DocumentationInfoElement")
+    );
+    expect(between).toContain("<FigureWorkspace />");
+    // Nothing is allowed to slip in between the two.
+    expect(between.match(/<[A-Z]\w+ \/>/g)).toEqual(["<FigureWorkspace />"]);
   });
 
-  it("is the first thing after the folder, ahead of the metadata forms", () => {
-    expect(at("FigureWorkspace")).toBeLessThan(at("PaperInfoElement"));
-    expect(at("FigureWorkspace")).toBeLessThan(at("ReferenceInfoElement"));
+  it("keeps the file server path directly ahead of it", () => {
+    const between = source.slice(
+      at("FileServerElement"),
+      at("FigureWorkspace")
+    );
+    expect(between.match(/<[A-Z]\w+ \/>/g)).toEqual(["<FileServerElement />"]);
   });
 });

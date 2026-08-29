@@ -361,6 +361,8 @@ const curator = () => {
                   )}
                   <CuratorFormsRemounter>
                     <CuratorElement />
+                    <PaperInfoElement />
+                    <ReferenceInfoElement />
                     <FileServerElement />
                     {/* ONE section, replacing four. Add Charts / Tools /
                         Datasets / Scripts asked a curator to think in Qresp's
@@ -369,13 +371,14 @@ const curator = () => {
                         the root and the rest hangs off it. Same models, same
                         forms, same validation -- only the way in changed.
 
-                        It sits DIRECTLY under the file server path because
-                        that path is what "Import from RCC" reads, and above
-                        the optional README because the work of curating a
-                        record is not optional. */}
+                        WHERE IT SITS. After the required metadata, because a
+                        record needs its title and reference whatever else is
+                        done to it. Immediately after the file server path,
+                        because that path is what "Import from RCC" reads and
+                        a curator should be able to see both at once. And
+                        before the optional README, because curating the
+                        record is the work and a README is an extra. */}
                     <FigureWorkspace />
-                    <PaperInfoElement />
-                    <ReferenceInfoElement />
                     <DocumentationInfoElement />
                     <WorkflowInfoElement />
                     <LicenseInfoElement />
