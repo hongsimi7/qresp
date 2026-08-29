@@ -321,24 +321,8 @@ const FigureWorkspace = () => {
   // What hangs under a node, and in what order. A figure is a result, so
   // everything below it is what went into it.
   const CHILD_RULES = {
-    [CHART]: [GENERATES, CONSUMES, FEEDS_INTO],
+    [CHART]: [GENERATES, CONSUMES],
     [SCRIPT]: [USES_TOOL, CONSUMES, FEEDS_INTO],
-    // Every kind can be built from an earlier one of its own kind, so every
-    // kind can have children. Without this a derived dataset was reachable
-    // from nothing and fell out of the outline entirely.
-    [DATASET]: [FEEDS_INTO],
-    [TOOL]: [FEEDS_INTO],
-    [EXTERNAL]: [FEEDS_INTO],
-  };
-
-  // `feeds_into` means one thing, but a heading reads better in the words of
-  // the kind it sits above.
-  const SAME_KIND_GROUP = {
-    [SCRIPT]: "Receives from script",
-    [CHART]: "Built from figure",
-    [DATASET]: "Derived from dataset",
-    [TOOL]: "Built on tool",
-    [EXTERNAL]: "Derived from external data",
   };
 
   const NEW_TYPES = [
@@ -694,9 +678,7 @@ const FigureWorkspace = () => {
             display="block"
             sx={{ mt: 0.25 }}
           >
-            {(group.type === FEEDS_INTO
-              ? SAME_KIND_GROUP[prefixOf(node.id)]
-              : EDGE_GROUP[group.type]) || "Connected to"}
+            {EDGE_GROUP[group.type] || "Connected to"}
           </Typography>
           <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
             {group.nodes.map((child) => (
@@ -1075,7 +1057,7 @@ const FigureWorkspace = () => {
                   display="block"
                   data-testid={`fw-stranded-${node.id}`}
                 >
-                  Not connected to a figure yet
+                  Independent workflow
                 </Typography>
               )}
               <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>

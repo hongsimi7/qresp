@@ -207,14 +207,11 @@ describe("connecting and unlinking existing nodes", () => {
   });
 
   it("refuses to connect a pair that has no relationship", async () => {
-    // Two figures now hold `feeds_into` -- one panel becoming part of a
-    // composite is a real thing. A tool and a figure still hold nothing.
     const ctx = renderBoard({
-      charts: [{ id: "c0", caption: "One" }],
-      tools: [{ id: "t0", packageName: "numpy" }],
+      charts: [{ id: "c0", caption: "One" }, { id: "c1", caption: "Two" }],
     });
     await user().click(screen.getByTestId("workflow-node-c0"));
-    await user().click(screen.getByTestId("workflow-connect-t0"));
+    await user().click(screen.getByTestId("workflow-connect-c1"));
 
     expect(ctx.addEdge).not.toHaveBeenCalled();
     expect(screen.getByTestId("workflow-notice")).toHaveTextContent(

@@ -17,34 +17,29 @@ export const EXTERNAL = "h";
 export const CONSUMES = "consumes";
 export const USES_TOOL = "uses_tool";
 export const GENERATES = "generates";
-// Same kind to same kind, in that direction. Research is done in stages at
-// every level: one script prepares what the next one plots, one dataset is
-// derived from another, one panel becomes part of a composite figure. The
-// rule is the same each time, so it is one relationship rather than five.
+// The ONLY relationship joining two artifacts of the same kind, and it
+// exists for one reason: analysis is written in stages, and one script
+// prepares what the next one plots. Upstream -> downstream.
 //
-// SAME-KIND ONLY. A dataset reaching a script is already `consumes`; saying
-// it again here would leave the graph with two names for one fact.
+// NOT a general same-kind rule. A derived dataset, a tool built on another
+// tool and a figure composed of panels each need a model that says what they
+// actually mean; admitting them here because the ids share a first letter
+// would file four different claims under one name.
 export const FEEDS_INTO = "feeds_into";
 
 // Which endpoints each relationship may join, by id prefix.
-const KINDS = [CHART, SCRIPT, DATASET, TOOL, EXTERNAL];
-
 export const EDGE_RULES = {
   [CONSUMES]: { from: [DATASET, EXTERNAL], to: [SCRIPT, CHART] },
   [USES_TOOL]: { from: [TOOL], to: [SCRIPT] },
   [GENERATES]: { from: [SCRIPT], to: [CHART] },
-  [FEEDS_INTO]: { from: KINDS, to: KINDS },
+  [FEEDS_INTO]: { from: [SCRIPT], to: [SCRIPT] },
 };
-
-/** Relationships that additionally require both ends to be the same kind. */
-export const SAME_KIND = [FEEDS_INTO];
 
 /** True when this relationship may join these two id prefixes. */
 export const edgeFits = (type, from, to) => {
   const rule = EDGE_RULES[type];
   if (!rule) return false;
-  if (!rule.from.includes(from) || !rule.to.includes(to)) return false;
-  return !SAME_KIND.includes(type) || from === to;
+  return rule.from.includes(from) && rule.to.includes(to);
 };
 
 /**
@@ -160,10 +155,9 @@ export const edgeProblem = (edge, knownIds, existingEdges = []) => {
       return "Those two cannot be connected that way.";
     }
   }
-  // A cycle is NOT a problem. Refinement loops back, and a curator recording
-  // that is describing their work. `wouldCycle` stays exported for callers
-  // that want to warn about one -- the Workflow board already does, with a
-  // "save anyway" -- but it no longer refuses the edge.
+  if (wouldCycle(existingEdges, { from, to })) {
+    return "That would loop the workflow back on itself.";
+  }
   return "";
 };
 

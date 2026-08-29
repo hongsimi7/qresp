@@ -58,8 +58,7 @@ describe("inferring a relationship", () => {
     // curator connects them explicitly or not at all.
     expect(inferEdgeType("c0", "s0")).toBe("");
     expect(inferEdgeType("t0", "c0")).toBe("");
-    // Same-kind pairs DO hold one now -- `feeds_into`, covered below. What
-    // still holds nothing is a pair of different kinds with no rule for it.
+    expect(inferEdgeType("c0", "c1")).toBe("");
     expect(inferEdgeType("c0", "d0")).toBe("");
     expect(inferEdgeType("t0", "h0")).toBe("");
   });
@@ -170,11 +169,9 @@ describe("why an edge cannot be added", () => {
     );
   });
 
-  it("no longer refuses a connection that closes a loop", () => {
-    // Refinement loops back. `wouldCycle` still REPORTS one -- the Workflow
-    // board warns with a "save anyway" -- but storage no longer refuses it.
+  it("refuses a connection that would close a loop", () => {
     const closing = [{ from: "s0", to: "c0", type: GENERATES }];
-    expect(problem({ from: "c0", to: "s0" }, closing)).toBe("");
+    expect(problem({ from: "c0", to: "s0" }, closing)).toMatch(/loop/i);
     expect(wouldCycle(closing, { from: "c0", to: "s0" })).toBe(true);
   });
 
@@ -201,17 +198,18 @@ describe("finding an existing connection", () => {
 // backend/project/workflow.py exactly; if the two ever disagree the server
 // wins and this file is the one that is wrong.
 describe("feeds_into", () => {
-  it("is what any two of a kind hold", () => {
-    // One rule at every level: what came first feeds what came after.
+  it("is what two SCRIPTS hold, and nothing else", () => {
     expect(inferEdgeType("s0", "s1")).toBe(FEEDS_INTO);
-    expect(inferEdgeType("c0", "c1")).toBe(FEEDS_INTO);
-    expect(inferEdgeType("d0", "d1")).toBe(FEEDS_INTO);
-    expect(inferEdgeType("t0", "t1")).toBe(FEEDS_INTO);
-    expect(inferEdgeType("h0", "h1")).toBe(FEEDS_INTO);
+    // A derived dataset, a tool built on a tool and a figure composed of
+    // panels each need a model of their own. Sharing a first letter is not
+    // a reason to file them under this one.
+    expect(edgeFits(FEEDS_INTO, "c", "c")).toBe(false);
+    expect(edgeFits(FEEDS_INTO, "d", "d")).toBe(false);
+    expect(edgeFits(FEEDS_INTO, "t", "t")).toBe(false);
+    expect(edgeFits(FEEDS_INTO, "h", "h")).toBe(false);
   });
 
   it("refuses two different kinds, so it cannot shadow consumes", () => {
-    // A dataset reaching a script is `consumes`, and stays only that.
     expect(edgeFits(FEEDS_INTO, "d", "s")).toBe(false);
     expect(inferEdgeType("d0", "s0")).toBe(CONSUMES);
     expect(
@@ -231,13 +229,14 @@ describe("feeds_into", () => {
     ).toBeTruthy();
   });
 
-  it("allows a pair of scripts feeding each other", () => {
-    // A refinement loop is work being described, not a mistake.
+  it("refuses a pair of scripts feeding each other", () => {
+    // An experiment repeated until it converged belongs in the script's own
+    // README, not drawn as a loop in the provenance graph.
     expect(
       edgeProblem({ from: "s1", to: "s0", type: FEEDS_INTO }, ["s0", "s1"], [
         { from: "s0", to: "s1", type: FEEDS_INTO },
       ])
-    ).toBe("");
+    ).toMatch(/loop/i);
   });
 
   it("still refuses an artifact joined to itself", () => {

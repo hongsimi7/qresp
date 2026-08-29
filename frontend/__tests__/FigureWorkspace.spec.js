@@ -326,20 +326,20 @@ describe("a script chain", () => {
     expect(screen.queryByTestId("fw-link-option-s0-s0")).not.toBeInTheDocument();
   });
 
-  it("still offers the reverse once one direction exists", async () => {
-    // s1 already feeds s0. Recording that s0 also feeds s1 is a refinement
-    // loop, which is work being described rather than a mistake.
+  it("does not offer the reverse once one direction exists", async () => {
+    // s1 already feeds s0, so s0 feeding s1 would close a loop. The dialog
+    // never offers a candidate the server would refuse.
     const u = user();
     renderWorkspace(chain);
     await openLinkFor(u, "s0");
 
     expect(screen.getByTestId("fw-link-option-s1-s0")).toBeDisabled();
-    expect(screen.getByTestId("fw-link-option-s0-s1")).toBeEnabled();
+    expect(screen.queryByTestId("fw-link-option-s0-s1")).not.toBeInTheDocument();
   });
 
-  it("closes a longer loop when asked to", async () => {
+  it("does not offer a candidate that would close a longer loop", async () => {
     const u = user();
-    const ctx = renderWorkspace({
+    renderWorkspace({
       charts: [FIGURE],
       scripts: [
         { id: "s0", readme: "a.py" },
@@ -355,19 +355,13 @@ describe("a script chain", () => {
       },
     });
     await openLinkFor(u, "s0");
-    await u.click(screen.getByTestId("fw-link-option-s2-s0"));
-    await u.click(screen.getByTestId("fw-link-apply"));
-
-    expect(ctx.addEdge).toHaveBeenCalledWith({
-      from: "s2",
-      to: "s0",
-      type: "feeds_into",
-    });
+    expect(screen.queryByTestId("fw-link-option-s2-s0")).not.toBeInTheDocument();
   });
 
-  it("keeps a cyclic subgraph on screen instead of losing it", () => {
-    // The outline marks a node before descending, so a loop terminates --
-    // and nothing in the record may become invisible.
+  it("terminates on a graph that should never have been stored", () => {
+    // The server refuses a cycle, so one can only arrive from outside the
+    // product. The outline marks a node before descending into it, so it
+    // renders rather than hanging.
     renderWorkspace({
       charts: [],
       scripts: [
@@ -386,7 +380,7 @@ describe("a script chain", () => {
     expect(screen.getByTestId("fw-node-s1")).toBeInTheDocument();
   });
 
-  it("joins any two of a kind, and never two different kinds", async () => {
+  it("joins two scripts and no other same-kind pair", async () => {
     const u = user();
     renderWorkspace({
       charts: [FIGURE, { id: "c1", caption: "Second figure" }],
@@ -397,16 +391,13 @@ describe("a script chain", () => {
     });
     await openLinkFor(u, "d0");
 
-    // Same kind: offered, in both readings.
-    expect(screen.getByTestId("fw-link-option-d0-d1")).toBeInTheDocument();
-    expect(screen.getByTestId("fw-link-option-d1-d0")).toBeInTheDocument();
-    expect(screen.getByTestId("fw-link-sentence-d0-d1")).toHaveTextContent(
-      "Dataset: one → feeds into → Dataset: two"
-    );
-    // A figure pair too.
+    // A derived dataset is a real relationship that needs a model of its
+    // own; it is not this one.
+    expect(screen.queryByTestId("fw-link-option-d0-d1")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("fw-link-option-d1-d0")).not.toBeInTheDocument();
     await u.click(screen.getByTestId("fw-link-cancel"));
     await openLinkFor(u, "c0");
-    expect(screen.getByTestId("fw-link-option-c0-c1")).toBeInTheDocument();
+    expect(screen.queryByTestId("fw-link-option-c0-c1")).not.toBeInTheDocument();
   });
 });
 
