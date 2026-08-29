@@ -12,6 +12,7 @@ from project.workflow import (
     CONSUMES,
     FEEDS_INTO,
     GENERATES,
+    RELATED_TO,
     USES_TOOL,
     WorkflowError,
     artifact_ids,
@@ -290,6 +291,91 @@ class FeedsIntoTest(unittest.TestCase):
                                      ("c0", "s0", GENERATES)):
             with self.assertRaises(WorkflowError):
                 validate_workflow(paper([edge(source, target, kind)]))
+
+
+class RelatedToTest(unittest.TestCase):
+    """The undirected half of the vocabulary.
+
+    `related_to` says two artifacts belong together and nothing else -- no
+    order, no data flow. So it joins only same-kind pairs, it cannot be said
+    twice about one pair, and it takes no part in the cycle check.
+    """
+
+    def pair(self, key, first, second, edges=None):
+        return paper(edges, **{key: [{"id": first}, {"id": second}]})
+
+    def test_every_kind_may_relate_to_its_own_kind(self):
+        pairs = (
+            ("charts", "c0", "c1"),
+            ("scripts", "s0", "s1"),
+            ("datasets", "d0", "d1"),
+            ("tools", "t0", "t1"),
+            ("heads", "h0", "h1"),
+        )
+        for key, first, second in pairs:
+            validate_workflow(
+                self.pair(key, first, second,
+                          [edge(first, second, RELATED_TO)]))
+
+    def test_it_refuses_two_different_kinds(self):
+        # A cross-kind relationship already has a directed name. Offering a
+        # vaguer second one would let the same fact be recorded two ways.
+        for source, target in (("c0", "s0"), ("d0", "s0"), ("t0", "c0"),
+                               ("h0", "d0"), ("s0", "c0")):
+            with self.assertRaises(WorkflowError) as caught:
+                validate_workflow(paper([edge(source, target, RELATED_TO)]))
+            self.assertIn("same kind", str(caught.exception))
+
+    def test_an_artifact_may_not_relate_to_itself(self):
+        with self.assertRaises(WorkflowError) as caught:
+            validate_workflow(paper([edge("c0", "c0", RELATED_TO)]))
+        self.assertIn("itself", str(caught.exception))
+
+    def test_the_same_pair_may_not_be_related_twice(self):
+        with self.assertRaises(WorkflowError):
+            validate_workflow(self.pair("charts", "c0", "c1", [
+                edge("c0", "c1", RELATED_TO),
+                edge("c0", "c1", RELATED_TO),
+            ]))
+
+    def test_nor_twice_in_the_other_order(self):
+        # `a related_to b` and `b related_to a` are one fact.
+        with self.assertRaises(WorkflowError) as caught:
+            validate_workflow(self.pair("charts", "c0", "c1", [
+                edge("c0", "c1", RELATED_TO),
+                edge("c1", "c0", RELATED_TO),
+            ]))
+        self.assertIn("already related", str(caught.exception))
+
+    def test_it_takes_no_part_in_the_cycle_check(self):
+        # Two figures related to each other is not a loop in any sense worth
+        # refusing -- there is no direction to loop.
+        validate_workflow(self.pair("charts", "c0", "c1", [
+            edge("s0", "c0", GENERATES),
+            edge("c0", "c1", RELATED_TO),
+        ]))
+
+    def test_it_does_not_hide_a_real_cycle(self):
+        # A directed loop is still refused with an association alongside it.
+        with self.assertRaises(WorkflowError):
+            validate_workflow(self.pair("charts", "c0", "c1", [
+                edge("c0", "c1", RELATED_TO),
+                edge("s0", "c0", GENERATES),
+                {"from": "c0", "to": "s0"},
+            ]))
+
+    def test_the_directed_relationships_are_unchanged(self):
+        validate_workflow(paper([edge("d0", "s0", CONSUMES)]))
+        validate_workflow(paper([edge("t0", "s0", USES_TOOL)]))
+        validate_workflow(paper([edge("s0", "c0", GENERATES)]))
+        validate_workflow(paper([edge("s0", "s1", FEEDS_INTO)],
+                                scripts=[{"id": "s0"}, {"id": "s1"}]))
+
+    def test_a_legacy_untyped_edge_is_still_read_as_a_flow(self):
+        # Nothing infers `related_to` for an old pair, and an untyped edge
+        # still counts when looking for a cycle.
+        with self.assertRaises(WorkflowError):
+            validate_workflow(paper([["s0", "c0"], ["c0", "s0"]]))
 
 
 if __name__ == "__main__":

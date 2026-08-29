@@ -9,26 +9,36 @@ WHAT AN EDGE MEANS
 V1 gives edges a semantic type, so a graph states a relationship rather than
 just a line between two boxes:
 
+TWO CLASSES OF EDGE
+===================
+They answer different questions and are validated differently.
+
+DIRECTED (provenance): what produced what.
+
     consumes    Dataset or External Data  ->  Script or Chart
     uses_tool   Tool                      ->  Script
     generates   Script                    ->  Chart
     feeds_into  Script                    ->  Script
 
-`feeds_into` is the ONLY relationship joining two artifacts of the same kind,
-and it exists for one reason: analysis is written in stages, and one script
-prepares what the next one plots. It is directed upstream to downstream --
-`preprocess.py feeds into plot.py`.
+These describe a flow, so they read one way only and a cycle among them is
+refused: a figure cannot help produce the thing that produced it. An
+experiment repeated until it converged is described in the script's own
+README, not drawn as a loop here.
 
-It is NOT a general same-kind rule. A derived dataset, a tool built on another
-tool and a figure composed of panels are all real relationships, and each needs
-a model of its own that says what it actually means. Letting them in here
-because the ids share a first letter would record four different claims under
-one name.
+UNDIRECTED (association): these two belong together.
 
-A script feeding itself is refused as a self-edge, and a chain that closes is
-refused as a cycle, by the same two checks that guard every other edge. An
-experiment repeated until it converged is described in the script's own README,
-not drawn as a loop in the provenance graph.
+    related_to  any kind                  <-> the SAME kind
+
+`related_to` states no order and no data flow. Two figures showing the same
+system, two datasets from one run, two tools that go together -- a curator can
+say they are related without claiming one produced the other. It joins ONLY
+two artifacts of the same kind, because a relationship across kinds already
+has a directed name and offering a vaguer second one would let the same fact
+be recorded two ways.
+
+Because it asserts no direction, it takes no part in the cycle check. What it
+does refuse is an artifact related to itself, and the same pair recorded twice
+-- in either order, since `a related_to b` and `b related_to a` are one fact.
 
 An edge with no type is a LEGACY edge. It is accepted and preserved exactly as
 stored; nothing here rewrites one, because guessing what an old curator meant
@@ -65,14 +75,30 @@ CONSUMES = "consumes"
 USES_TOOL = "uses_tool"
 GENERATES = "generates"
 FEEDS_INTO = "feeds_into"
+RELATED_TO = "related_to"
 
 # Which endpoints each relationship is allowed to join, by id prefix.
+KINDS = {CHART, SCRIPT, DATASET, TOOL, EXTERNAL}
+
 EDGE_RULES = {
     CONSUMES: ({DATASET, EXTERNAL}, {SCRIPT, CHART}),
     USES_TOOL: ({TOOL}, {SCRIPT}),
     GENERATES: ({SCRIPT}, {CHART}),
     FEEDS_INTO: ({SCRIPT}, {SCRIPT}),
+    RELATED_TO: (KINDS, KINDS),
 }
+
+# Relationships that additionally require both ends to be the same kind. Only
+# the undirected one: `feeds_into` gets there through its own endpoint rule.
+SAME_KIND = frozenset({RELATED_TO})
+
+# Relationships that state no direction. They are excluded from the cycle
+# check, and the same pair may only be recorded once however it is ordered.
+UNDIRECTED = frozenset({RELATED_TO})
+
+# The edges that describe a flow. A legacy untyped pair counts as one: it was
+# drawn as an arrow, and nothing here reinterprets it.
+DIRECTED = frozenset(set(EDGE_RULES) - UNDIRECTED)
 
 EDGE_TYPES = frozenset(EDGE_RULES)
 
@@ -199,6 +225,7 @@ def validate_workflow(paper):
 
     known = artifact_types(paper)
     edges = []
+    undirected_pairs = set()
     for raw in raw_edges:
         edge = normalize_edge(raw)
         if edge is None:
@@ -242,9 +269,24 @@ def validate_workflow(paper):
                 raise WorkflowError(
                     "%s cannot be connected to %s as '%s'."
                     % (source, target, kind))
+            if kind in SAME_KIND and source[:1] != target[:1]:
+                raise WorkflowError(
+                    "'%s' joins two artifacts of the same kind, and %s and %s "
+                    "are not." % (kind, source, target))
+            if kind in UNDIRECTED:
+                # One fact, however it is ordered.
+                pair = frozenset((source, target))
+                if pair in undirected_pairs:
+                    raise WorkflowError(
+                        "%s and %s are already related to each other."
+                        % (source, target))
+                undirected_pairs.add(pair)
         edges.append((source, target, kind))
 
-    if _has_cycle(edges):
+    # Only the edges that claim a direction can contradict each other by
+    # closing a loop. An undirected association says nothing about order, so
+    # a pair of them is not a cycle in any sense worth refusing.
+    if _has_cycle([e for e in edges if e[2] not in UNDIRECTED]):
         raise WorkflowError(
             "This workflow loops back on itself. A figure cannot help produce "
             "the thing that produced it.")

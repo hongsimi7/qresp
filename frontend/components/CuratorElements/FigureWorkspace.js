@@ -39,11 +39,16 @@ import {
   TOOL,
   USES_TOOL,
   fromStoredEdge,
+  DIRECTED,
   EDGE_GROUP,
   EDGE_VERB,
   FEEDS_INTO,
+  RELATED_TO,
+  edgeFits,
   edgeProblem,
+  edgeSentence,
   hasEdge,
+  hasRelation,
   inferEdgeType,
   prefixOf,
 } from "../../Utils/workflowGraph";
@@ -70,6 +75,15 @@ import {
 // attached to, then opens the real form. When the form saves and the artifact
 // appears, the edge is created from what the two things ARE -- see
 // `inferEdgeType`. Cancel saves nothing, so nothing is attached to nothing.
+
+// What a group of a kind is called, for the "Related …" heading.
+const KIND_PLURAL = {
+  c: "Figures",
+  s: "Scripts",
+  d: "Datasets",
+  t: "Tools",
+  h: "External data",
+};
 
 const KIND_LABEL = {
   [CHART]: "Figure",
@@ -344,11 +358,15 @@ const FigureWorkspace = () => {
   const label = (id) => rowLabel(byId[id], id);
   const named = (id) => `${KIND_LABEL[prefixOf(id)] || "Item"}: ${label(id)}`;
 
-  /** `A → verb → B`, so the direction is in the sentence, not the indent. */
-  const sentence = (edge) =>
-    `${label(edge.from)} → ${EDGE_VERB[edge.type] || "connects to"} → ${label(
-      edge.to
-    )}`;
+  /**
+   * How a relationship reads.
+   *
+   * A directed one gets arrows and a subject, so the flow is in the words
+   * rather than in the indentation. An undirected one gets a double-headed
+   * connector and no subject, because neither end came first.
+   */
+  const sentence = (edge) => edgeSentence(edge, label);
+  const namedSentence = (edge) => edgeSentence(edge, named);
 
   const figureIds = knownIds.filter((id) => prefixOf(id) === CHART).sort();
 
@@ -424,27 +442,47 @@ const FigureWorkspace = () => {
    * would leave a curator hunting for a resource that is already attached.
    */
   const linkCandidates = (id) => {
+    const workflow = [];
+    const related = [];
     const seen = new Set();
-    const found = [];
+
     knownIds
       .filter((other) => other !== id)
       .forEach((other) => {
+        // FLOW. Both orderings are considered because one pair can hold a
+        // relationship each way -- `preprocess feeds into plot` and `plot
+        // feeds into preprocess` are different claims, so they are different
+        // rows and the curator picks the one they mean.
         [
           [id, other],
           [other, id],
         ].forEach(([from, to]) => {
-          const type = inferEdgeType(from, to);
-          if (!type) return;
-          const key = `${from}-${to}`;
-          if (seen.has(key)) return;
-          const edge = { from, to, type };
-          const linked = hasEdge(edges, from, to);
-          if (!linked && edgeProblem(edge, knownIds, edges)) return;
-          seen.add(key);
-          found.push({ key, edge, other, linked });
+          DIRECTED.forEach((type) => {
+            if (!edgeFits(type, prefixOf(from), prefixOf(to))) return;
+            const key = `${from}-${to}-${type}`;
+            if (seen.has(key)) return;
+            const edge = { from, to, type };
+            const linked = hasEdge(edges, from, to);
+            if (!linked && edgeProblem(edge, knownIds, edges)) return;
+            seen.add(key);
+            workflow.push({ key, edge, other, linked });
+          });
         });
+
+        // ASSOCIATION. Same kind only, one row per pair, no direction to
+        // choose -- so the pair is stored one way and read either way.
+        if (edgeFits(RELATED_TO, prefixOf(id), prefixOf(other))) {
+          const edge = { from: id, to: other, type: RELATED_TO };
+          related.push({
+            key: `${id}-${other}-${RELATED_TO}`,
+            edge,
+            other,
+            linked: hasRelation(edges, id, other, RELATED_TO),
+          });
+        }
       });
-    return found;
+
+    return { workflow, related };
   };
 
   const openLink = (id) => {
@@ -468,10 +506,10 @@ const FigureWorkspace = () => {
    */
   const linkSelected = () => {
     const running = edges.slice();
+    const { workflow, related } = linkCandidates(connectFor);
     let made = 0;
-    linkCandidates(connectFor).forEach((option) => {
+    [...workflow, ...related].forEach((option) => {
       if (!picked[option.key] || option.linked) return;
-      if (hasEdge(running, option.edge.from, option.edge.to)) return;
       if (edgeProblem(option.edge, knownIds, running)) return;
       addEdge(option.edge);
       running.push(option.edge);
@@ -480,6 +518,16 @@ const FigureWorkspace = () => {
     if (!made) setNotice("Nothing was selected, so nothing was linked.");
     closeLink();
   };
+
+  /** The artifacts this one is associated with, in either stored order. */
+  const relatedOf = (id) =>
+    edges
+      .map(fromStoredEdge)
+      .filter((edge) => edge.type === RELATED_TO)
+      .map((edge) =>
+        edge.from === id ? edge.to : edge.to === id ? edge.from : ""
+      )
+      .filter(Boolean);
 
   // ---- ROW FURNITURE -----------------------------------------------------
 
@@ -691,6 +739,66 @@ const FigureWorkspace = () => {
           </Box>
         </Box>
       ))}
+      {/* ASSOCIATIONS ARE NOT CHILDREN.
+          Indenting them under a node would say one produced the other, which
+          is the one thing `related_to` does not claim. They sit beside the
+          tree as a flat reference list instead, and never recurse. */}
+      {node.first && relatedOf(node.id).length ? (
+        <Box
+          sx={{ ml: 1, pl: 1.5, mt: 0.25 }}
+          data-testid={`fw-related-${node.id}`}
+        >
+          <Typography variant="caption" color="text.secondary" display="block">
+            Related resources
+          </Typography>
+          <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+            {relatedOf(node.id).map((other) => (
+              <Box
+                component="li"
+                key={other}
+                sx={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  gap: 0.75,
+                  minWidth: 0,
+                }}
+              >
+                <KindChip id={other} />
+                <Typography
+                  variant="body2"
+                  component="span"
+                  sx={{ overflowWrap: "anywhere", minWidth: 0 }}
+                >
+                  {label(other)}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  component="span"
+                  sx={{ overflowWrap: "anywhere" }}
+                  data-testid={`fw-relation-${node.id}-${other}`}
+                >
+                  {sentence({ from: node.id, to: other, type: RELATED_TO })}
+                </Typography>
+                <RowAction
+                  onClick={() => {
+                    const target = document.getElementById(anchorOf(other));
+                    if (target && target.scrollIntoView) {
+                      target.scrollIntoView({ block: "center" });
+                    }
+                    setHighlight(other);
+                  }}
+                  data-target={anchorOf(other)}
+                  data-testid={`fw-goto-related-${node.id}-${other}`}
+                >
+                  Go to
+                </RowAction>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      ) : null}
       {node.first && !node.groups.length && prefixOf(node.id) === CHART ? (
         <Typography
           variant="caption"
@@ -708,11 +816,56 @@ const FigureWorkspace = () => {
     </Box>
   );
 
+  /** One candidate row: a checkbox and the exact sentence it would create. */
+  const LinkOption = ({ option }) => (
+    <Box component="li" sx={{ minWidth: 0 }}>
+      <FormControlLabel
+        sx={{ alignItems: "flex-start", m: 0, py: 0.25 }}
+        control={
+          <Checkbox
+            size="small"
+            checked={option.linked || Boolean(picked[option.key])}
+            disabled={option.linked}
+            onChange={(event) =>
+              setPicked((was) => ({
+                ...was,
+                [option.key]: event.target.checked,
+              }))
+            }
+            slotProps={{
+              input: { "data-testid": `fw-link-option-${option.key}` },
+            }}
+          />
+        }
+        label={
+          <Box sx={{ minWidth: 0, py: 0.5 }}>
+            <Typography
+              variant="body2"
+              sx={{ overflowWrap: "anywhere" }}
+              data-testid={`fw-link-sentence-${option.key}`}
+            >
+              {namedSentence(option.edge)}
+            </Typography>
+            {option.linked ? (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                display="block"
+              >
+                Already linked
+              </Typography>
+            ) : null}
+          </Box>
+        }
+      />
+    </Box>
+  );
+
   const LinkDialog = () => {
     const id = connectFor;
     if (!id) return null;
-    const options = linkCandidates(id);
-    const open = options.filter((option) => !option.linked);
+    const { workflow, related } = linkCandidates(id);
+    const anything = [...workflow, ...related].some((option) => !option.linked);
 
     return (
       <Dialog
@@ -729,60 +882,51 @@ const FigureWorkspace = () => {
             color="text.secondary"
             sx={{ overflowWrap: "anywhere" }}
           >
-            {`What existing resource belongs to “${named(id)}”?`}
+            {`What existing resource belongs to \u201C${named(id)}\u201D?`}
           </Typography>
         </DialogTitle>
         <DialogContent dividers>
-          {options.length ? (
-            <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
-              {options.map((option) => (
-                <Box component="li" key={option.key} sx={{ minWidth: 0 }}>
-                  <FormControlLabel
-                    sx={{ alignItems: "flex-start", m: 0, py: 0.25 }}
-                    control={
-                      <Checkbox
-                        size="small"
-                        checked={option.linked || Boolean(picked[option.key])}
-                        disabled={option.linked}
-                        onChange={(event) =>
-                          setPicked((was) => ({
-                            ...was,
-                            [option.key]: event.target.checked,
-                          }))
-                        }
-                        slotProps={{
-                          input: { "data-testid": `fw-link-option-${option.key}` },
-                        }}
-                      />
-                    }
-                    label={
-                      <Box sx={{ minWidth: 0, py: 0.5 }}>
-                        {/* The exact sentence this tick would create. */}
-                        <Typography
-                          variant="body2"
-                          sx={{ overflowWrap: "anywhere" }}
-                          data-testid={`fw-link-sentence-${option.key}`}
-                        >
-                          {`${named(option.edge.from)} → ${
-                            EDGE_VERB[option.edge.type]
-                          } → ${named(option.edge.to)}`}
-                        </Typography>
-                        {option.linked ? (
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            display="block"
-                          >
-                            Already linked
-                          </Typography>
-                        ) : null}
-                      </Box>
-                    }
-                  />
-                </Box>
-              ))}
+          {/* TWO KINDS OF ANSWER, kept apart.
+              One says what produced what and reads in a direction; the other
+              says only that two things belong together. Mixing them in one
+              list would leave a curator unsure which claim they were making. */}
+          {workflow.length ? (
+            <Box sx={{ mb: related.length ? 1.5 : 0 }}>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                display="block"
+                data-testid="fw-link-group-workflow"
+              >
+                Workflow connection
+              </Typography>
+              <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+                {workflow.map((option) => (
+                  <LinkOption key={option.key} option={option} />
+                ))}
+              </Box>
             </Box>
-          ) : (
+          ) : null}
+
+          {related.length ? (
+            <Box>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                display="block"
+                data-testid="fw-link-group-related"
+              >
+                {`Related ${KIND_PLURAL[prefixOf(id)] || "resources"}`}
+              </Typography>
+              <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+                {related.map((option) => (
+                  <LinkOption key={option.key} option={option} />
+                ))}
+              </Box>
+            </Box>
+          ) : null}
+
+          {workflow.length || related.length ? null : (
             <Typography variant="body2" color="text.secondary">
               Nothing in this paper can be linked to this yet. Add a resource
               first, then link it here.
@@ -795,7 +939,7 @@ const FigureWorkspace = () => {
           </Button>
           <RegularStyledButton
             onClick={linkSelected}
-            disabled={!open.length}
+            disabled={!anything}
             data-testid="fw-link-apply"
           >
             Link selected

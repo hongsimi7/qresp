@@ -17,30 +17,61 @@ export const EXTERNAL = "h";
 export const CONSUMES = "consumes";
 export const USES_TOOL = "uses_tool";
 export const GENERATES = "generates";
-// The ONLY relationship joining two artifacts of the same kind, and it
-// exists for one reason: analysis is written in stages, and one script
-// prepares what the next one plots. Upstream -> downstream.
-//
-// NOT a general same-kind rule. A derived dataset, a tool built on another
-// tool and a figure composed of panels each need a model that says what they
-// actually mean; admitting them here because the ids share a first letter
-// would file four different claims under one name.
+// Analysis is written in stages, and one script prepares what the next one
+// plots. Directed, upstream -> downstream.
 export const FEEDS_INTO = "feeds_into";
 
+// THE OTHER CLASS OF EDGE: these two belong together.
+//
+// `related_to` states no order and no data flow. Two figures of the same
+// system, two datasets from one run, two tools that go together -- a curator
+// can say so without claiming one produced the other.
+//
+// Same kind only, because a relationship ACROSS kinds already has a directed
+// name, and offering a vaguer second one would let the same fact be recorded
+// two different ways.
+export const RELATED_TO = "related_to";
+
 // Which endpoints each relationship may join, by id prefix.
+const KINDS = [CHART, SCRIPT, DATASET, TOOL, EXTERNAL];
+
 export const EDGE_RULES = {
   [CONSUMES]: { from: [DATASET, EXTERNAL], to: [SCRIPT, CHART] },
   [USES_TOOL]: { from: [TOOL], to: [SCRIPT] },
   [GENERATES]: { from: [SCRIPT], to: [CHART] },
   [FEEDS_INTO]: { from: [SCRIPT], to: [SCRIPT] },
+  [RELATED_TO]: { from: KINDS, to: KINDS },
 };
+
+/** Relationships that also require both ends to be the same kind. */
+export const SAME_KIND = [RELATED_TO];
+
+/** Relationships that state no direction. */
+export const UNDIRECTED = [RELATED_TO];
+
+/** The relationships that describe a flow, and so can close a loop. */
+export const DIRECTED = Object.keys(EDGE_RULES).filter(
+  (type) => !UNDIRECTED.includes(type)
+);
 
 /** True when this relationship may join these two id prefixes. */
 export const edgeFits = (type, from, to) => {
   const rule = EDGE_RULES[type];
   if (!rule) return false;
-  return rule.from.includes(from) && rule.to.includes(to);
+  if (!rule.from.includes(from) || !rule.to.includes(to)) return false;
+  return !SAME_KIND.includes(type) || from === to;
 };
+
+/** True when these two already hold an undirected relationship, either way. */
+export const hasRelation = (edges, a, b, type) =>
+  (edges || []).some((edge) => {
+    const parsed = fromStoredEdge(edge);
+    if (parsed.type !== type) return false;
+    return (
+      (parsed.from === a && parsed.to === b) ||
+      (parsed.from === b && parsed.to === a)
+    );
+  });
 
 /**
  * How an edge READS, as a sentence: `${from} ${verb} ${to}`.
@@ -55,6 +86,7 @@ export const EDGE_VERB = {
   [CONSUMES]: "supplies input to",
   [USES_TOOL]: "is used by",
   [FEEDS_INTO]: "feeds into",
+  [RELATED_TO]: "related to",
 };
 
 /** The heading a parent puts above children joined by this relationship. */
@@ -63,7 +95,22 @@ export const EDGE_GROUP = {
   [CONSUMES]: "Uses input",
   [USES_TOOL]: "Uses tool",
   [FEEDS_INTO]: "Receives from script",
+  [RELATED_TO]: "Related resources",
 };
+
+/**
+ * How an edge reads as a sentence.
+ *
+ * A directed one is written with arrows, subject first, so the flow is in the
+ * words. An undirected one is written with a double-headed connector and no
+ * subject at all, because neither end came first.
+ */
+export const edgeSentence = (edge, name) =>
+  UNDIRECTED.includes(edge.type)
+    ? `${name(edge.from)} ↔ ${EDGE_VERB[edge.type]} ↔ ${name(edge.to)}`
+    : `${name(edge.from)} → ${EDGE_VERB[edge.type] || "connects to"} → ${name(
+        edge.to
+      )}`;
 
 // The three lanes a reader sees. A workflow reads left to right: what went
 // in, what was run, what came out.
@@ -96,9 +143,7 @@ export const laneOf = (id) => LANE_BY_PREFIX[prefixOf(id)] || "";
 export const inferEdgeType = (fromId, toId) => {
   const from = prefixOf(fromId);
   const to = prefixOf(toId);
-  const matches = Object.keys(EDGE_RULES).filter((type) =>
-    edgeFits(type, from, to)
-  );
+  const matches = DIRECTED.filter((type) => edgeFits(type, from, to));
   return matches.length === 1 ? matches[0] : "";
 };
 
@@ -155,7 +200,19 @@ export const edgeProblem = (edge, knownIds, existingEdges = []) => {
       return "Those two cannot be connected that way.";
     }
   }
-  if (wouldCycle(existingEdges, { from, to })) {
+  if (UNDIRECTED.includes(type)) {
+    // One fact, however it is ordered -- and no direction to loop.
+    if (hasRelation(existingEdges, from, to, type)) {
+      return "Those two are already related to each other.";
+    }
+    return "";
+  }
+  // Only edges that claim a direction can contradict each other by closing a
+  // loop, and only those are counted when checking for one.
+  const flowing = (existingEdges || []).filter(
+    (edge) => !UNDIRECTED.includes(fromStoredEdge(edge).type)
+  );
+  if (wouldCycle(flowing, { from, to })) {
     return "That would loop the workflow back on itself.";
   }
   return "";

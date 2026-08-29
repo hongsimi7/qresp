@@ -293,10 +293,10 @@ describe("a script chain", () => {
 
     // Which script is upstream is the curator's to say, so both readings
     // are offered and neither is guessed.
-    expect(screen.getByTestId("fw-link-sentence-s1-s0")).toHaveTextContent(
+    expect(screen.getByTestId("fw-link-sentence-s1-s0-feeds_into")).toHaveTextContent(
       "Script: preprocess.py → feeds into → Script: plot_dos.py"
     );
-    expect(screen.getByTestId("fw-link-sentence-s0-s1")).toHaveTextContent(
+    expect(screen.getByTestId("fw-link-sentence-s0-s1-feeds_into")).toHaveTextContent(
       "Script: plot_dos.py → feeds into → Script: preprocess.py"
     );
   });
@@ -308,7 +308,7 @@ describe("a script chain", () => {
       scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
     });
     await openLinkFor(u, "s0");
-    await u.click(screen.getByTestId("fw-link-option-s1-s0"));
+    await u.click(screen.getByTestId("fw-link-option-s1-s0-feeds_into"));
     await u.click(screen.getByTestId("fw-link-apply"));
 
     expect(ctx.addEdge).toHaveBeenCalledTimes(1);
@@ -323,7 +323,7 @@ describe("a script chain", () => {
     const u = user();
     renderWorkspace({ charts: [FIGURE], scripts: [SCRIPT] });
     await openLinkFor(u, "s0");
-    expect(screen.queryByTestId("fw-link-option-s0-s0")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("fw-link-option-s0-s0-feeds_into")).not.toBeInTheDocument();
   });
 
   it("does not offer the reverse once one direction exists", async () => {
@@ -333,8 +333,8 @@ describe("a script chain", () => {
     renderWorkspace(chain);
     await openLinkFor(u, "s0");
 
-    expect(screen.getByTestId("fw-link-option-s1-s0")).toBeDisabled();
-    expect(screen.queryByTestId("fw-link-option-s0-s1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("fw-link-option-s1-s0-feeds_into")).toBeDisabled();
+    expect(screen.queryByTestId("fw-link-option-s0-s1-feeds_into")).not.toBeInTheDocument();
   });
 
   it("does not offer a candidate that would close a longer loop", async () => {
@@ -355,7 +355,7 @@ describe("a script chain", () => {
       },
     });
     await openLinkFor(u, "s0");
-    expect(screen.queryByTestId("fw-link-option-s2-s0")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("fw-link-option-s2-s0-feeds_into")).not.toBeInTheDocument();
   });
 
   it("terminates on a graph that should never have been stored", () => {
@@ -583,10 +583,10 @@ describe("link existing", () => {
     renderWorkspace(paper);
     await openLinkFor(u, "c0");
 
-    expect(screen.getByTestId("fw-link-sentence-s0-c0")).toHaveTextContent(
+    expect(screen.getByTestId("fw-link-sentence-s0-c0-generates")).toHaveTextContent(
       "Script: plot_dos.py → generates → Figure: Density of states"
     );
-    expect(screen.getByTestId("fw-link-sentence-d0-c0")).toHaveTextContent(
+    expect(screen.getByTestId("fw-link-sentence-d0-c0-consumes")).toHaveTextContent(
       "Dataset: spectra → supplies input to → Figure: Density of states"
     );
   });
@@ -601,7 +601,7 @@ describe("link existing", () => {
     await openLinkFor(u, "c0");
 
     expect(screen.queryByTestId("fw-link-option-t0-c0")).not.toBeInTheDocument();
-    expect(screen.getByTestId("fw-link-option-s0-c0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-link-option-s0-c0-generates")).toBeInTheDocument();
   });
 
   it("links one Script to several Figures at once", async () => {
@@ -615,8 +615,8 @@ describe("link existing", () => {
       scripts: [SCRIPT],
     });
     await openLinkFor(u, "s0");
-    await u.click(screen.getByTestId("fw-link-option-s0-c0"));
-    await u.click(screen.getByTestId("fw-link-option-s0-c2"));
+    await u.click(screen.getByTestId("fw-link-option-s0-c0-generates"));
+    await u.click(screen.getByTestId("fw-link-option-s0-c2-generates"));
     await u.click(screen.getByTestId("fw-link-apply"));
 
     expect(ctx.addEdge).toHaveBeenCalledTimes(2);
@@ -635,9 +635,9 @@ describe("link existing", () => {
       datasets: [{ id: "d0", readme: "spectra" }],
     });
     await openLinkFor(u, "d0");
-    await u.click(screen.getByTestId("fw-link-option-d0-s0"));
-    await u.click(screen.getByTestId("fw-link-option-d0-s1"));
-    await u.click(screen.getByTestId("fw-link-option-d0-c0"));
+    await u.click(screen.getByTestId("fw-link-option-d0-s0-consumes"));
+    await u.click(screen.getByTestId("fw-link-option-d0-s1-consumes"));
+    await u.click(screen.getByTestId("fw-link-option-d0-c0-consumes"));
     await u.click(screen.getByTestId("fw-link-apply"));
 
     expect(ctx.addEdge).toHaveBeenCalledTimes(3);
@@ -661,8 +661,8 @@ describe("link existing", () => {
     await openLinkFor(u, "t0");
     expect(screen.queryByTestId("fw-link-option-t0-c0")).not.toBeInTheDocument();
 
-    await u.click(screen.getByTestId("fw-link-option-t0-s0"));
-    await u.click(screen.getByTestId("fw-link-option-t0-s1"));
+    await u.click(screen.getByTestId("fw-link-option-t0-s0-uses_tool"));
+    await u.click(screen.getByTestId("fw-link-option-t0-s1-uses_tool"));
     await u.click(screen.getByTestId("fw-link-apply"));
 
     expect(ctx.addEdge).toHaveBeenCalledTimes(2);
@@ -683,8 +683,8 @@ describe("link existing", () => {
       heads: [{ id: "h0", URLs: ["https://example.org/set"] }],
     });
     await openLinkFor(u, "h0");
-    await u.click(screen.getByTestId("fw-link-option-h0-s0"));
-    await u.click(screen.getByTestId("fw-link-option-h0-c0"));
+    await u.click(screen.getByTestId("fw-link-option-h0-s0-consumes"));
+    await u.click(screen.getByTestId("fw-link-option-h0-c0-consumes"));
     await u.click(screen.getByTestId("fw-link-apply"));
 
     expect(ctx.addEdge).toHaveBeenCalledTimes(2);
@@ -705,12 +705,12 @@ describe("link existing", () => {
     });
     await openLinkFor(u, "c0");
 
-    const already = screen.getByTestId("fw-link-option-s0-c0");
+    const already = screen.getByTestId("fw-link-option-s0-c0-generates");
     expect(already).toBeChecked();
     expect(already).toBeDisabled();
     expect(screen.getByTestId("fw-link-dialog")).toHaveTextContent(/already linked/i);
 
-    await u.click(screen.getByTestId("fw-link-option-d0-c0"));
+    await u.click(screen.getByTestId("fw-link-option-d0-c0-consumes"));
     await u.click(screen.getByTestId("fw-link-apply"));
     expect(ctx.addEdge).toHaveBeenCalledTimes(1);
     expect(ctx.addEdge).toHaveBeenCalledWith({
@@ -724,14 +724,14 @@ describe("link existing", () => {
     const u = user();
     renderWorkspace({ ...paper, workflow: { nodes: [], edges: [["s0", "c0"]] } });
     await openLinkFor(u, "c0");
-    expect(screen.getByTestId("fw-link-option-s0-c0")).toBeDisabled();
+    expect(screen.getByTestId("fw-link-option-s0-c0-generates")).toBeDisabled();
   });
 
   it("makes nothing when the dialog is cancelled", async () => {
     const u = user();
     const ctx = renderWorkspace(paper);
     await openLinkFor(u, "c0");
-    await u.click(screen.getByTestId("fw-link-option-s0-c0"));
+    await u.click(screen.getByTestId("fw-link-option-s0-c0-generates"));
     await u.click(screen.getByTestId("fw-link-cancel"));
 
     expect(ctx.addEdge).not.toHaveBeenCalled();
@@ -776,7 +776,7 @@ describe("the local draft between the two saves", () => {
     expect(screen.getByTestId("fw-node-s0")).toBeInTheDocument();
 
     await openLinkFor(u, "s0");
-    await u.click(screen.getByTestId("fw-link-option-s0-c0"));
+    await u.click(screen.getByTestId("fw-link-option-s0-c0-generates"));
     await u.click(screen.getByTestId("fw-link-apply"));
 
     expect(ctx.addEdge).toHaveBeenCalledWith({
@@ -922,7 +922,7 @@ describe("independent resources", () => {
       datasets: [{ id: "d0", readme: "orphan data" }],
     });
     await openLinkFor(u, "d0");
-    await u.click(screen.getByTestId("fw-link-option-d0-c0"));
+    await u.click(screen.getByTestId("fw-link-option-d0-c0-consumes"));
     await u.click(screen.getByTestId("fw-link-apply"));
 
     expect(ctx.addEdge).toHaveBeenCalledWith({
@@ -1416,7 +1416,7 @@ describe("the RCC import entry point", () => {
 
     // And connectable at once, with no metadata retyped.
     await openLinkFor(u, "s0");
-    await u.click(screen.getByTestId("fw-link-option-s0-c0"));
+    await u.click(screen.getByTestId("fw-link-option-s0-c0-generates"));
     await u.click(screen.getByTestId("fw-link-apply"));
 
     expect(ctx.addEdge).toHaveBeenCalledWith({
@@ -1424,5 +1424,243 @@ describe("the RCC import entry point", () => {
       to: "c0",
       type: "generates",
     });
+  });
+});
+
+// TWO CLASSES OF EDGE, kept apart.
+//
+// A workflow edge says what produced what and reads in a direction. A
+// related_to says only that two things belong together. The tests that matter
+// most are the ones proving the second never becomes the first.
+
+describe("related resources", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  const KINDS = [
+    ["c", "chart", "charts", "Figures", { id: "c1", caption: "Second figure" }],
+    ["s", "script", "scripts", "Scripts", { id: "s1", readme: "other.py" }],
+    ["d", "dataset", "datasets", "Datasets", { id: "d1", readme: "other data" }],
+    ["t", "tool", "tools", "Tools", { id: "t1", packageName: "scipy" }],
+    ["h", "head", "heads", "External data", { id: "h1", URLs: ["https://e.org/b"] }],
+  ];
+
+  const pairFor = (prefix) => {
+    const base = {
+      charts: [FIGURE],
+      scripts: [SCRIPT],
+      datasets: [{ id: "d0", readme: "spectra" }],
+      tools: [{ id: "t0", packageName: "numpy" }],
+      heads: [{ id: "h0", URLs: ["https://e.org/a"] }],
+    };
+    const row = KINDS.find(([p]) => p === prefix);
+    return { ...base, [row[2]]: [...base[row[2]], row[4]] };
+  };
+
+  it.each(KINDS.map(([p, , , plural]) => [p, plural]))(
+    "offers a same-kind partner for %s, under its own heading",
+    async (prefix, plural) => {
+      const u = user();
+      renderWorkspace(pairFor(prefix));
+      await u.click(screen.getByTestId(`fw-link-${prefix}0`));
+      await screen.findByTestId("fw-link-dialog");
+
+      expect(screen.getByTestId("fw-link-group-related")).toHaveTextContent(
+        `Related ${plural}`
+      );
+      expect(
+        screen.getByTestId(`fw-link-option-${prefix}0-${prefix}1-related_to`)
+      ).toBeInTheDocument();
+    }
+  );
+
+  it.each(KINDS.map(([p]) => p))("links a same-kind pair for %s", async (prefix) => {
+    const u = user();
+    const ctx = renderWorkspace(pairFor(prefix));
+    await u.click(screen.getByTestId(`fw-link-${prefix}0`));
+    await screen.findByTestId("fw-link-dialog");
+    await u.click(
+      screen.getByTestId(`fw-link-option-${prefix}0-${prefix}1-related_to`)
+    );
+    await u.click(screen.getByTestId("fw-link-apply"));
+
+    expect(ctx.addEdge).toHaveBeenCalledTimes(1);
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: `${prefix}0`,
+      to: `${prefix}1`,
+      type: "related_to",
+    });
+    // The pair is associated, not created: no form, no clone.
+    expect(ctx.helpers.openForm).not.toHaveBeenCalled();
+    expect(ctx.helpers.setDefault).not.toHaveBeenCalled();
+  });
+
+  it("reads without a direction, because neither end came first", async () => {
+    const u = user();
+    renderWorkspace(pairFor("d"));
+    await u.click(screen.getByTestId("fw-link-d0"));
+    await screen.findByTestId("fw-link-dialog");
+
+    const sentence = screen.getByTestId("fw-link-sentence-d0-d1-related_to");
+    expect(sentence).toHaveTextContent(
+      "Dataset: spectra ↔ related to ↔ Dataset: other data"
+    );
+    // No arrows: an arrow would claim one produced the other.
+    expect(sentence).not.toHaveTextContent("→");
+  });
+
+  it("never offers a partner of a different kind", async () => {
+    const u = user();
+    renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT],
+      datasets: [{ id: "d0", readme: "spectra" }],
+    });
+    await u.click(screen.getByTestId("fw-link-c0"));
+    await screen.findByTestId("fw-link-dialog");
+
+    expect(
+      screen.queryByTestId("fw-link-option-c0-s0-related_to")
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("fw-link-option-c0-d0-related_to")
+    ).not.toBeInTheDocument();
+    // Those two pairs still hold their directed relationships.
+    expect(
+      screen.getByTestId("fw-link-option-s0-c0-generates")
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the two classes in separate groups", async () => {
+    const u = user();
+    renderWorkspace({
+      charts: [FIGURE, { id: "c1", caption: "Second figure" }],
+      scripts: [SCRIPT],
+    });
+    await u.click(screen.getByTestId("fw-link-c0"));
+    await screen.findByTestId("fw-link-dialog");
+
+    expect(screen.getByTestId("fw-link-group-workflow")).toHaveTextContent(
+      "Workflow connection"
+    );
+    expect(screen.getByTestId("fw-link-group-related")).toHaveTextContent(
+      "Related Figures"
+    );
+  });
+
+  it("shows an existing relation as made, in either stored order", async () => {
+    const u = user();
+    renderWorkspace({
+      ...pairFor("c"),
+      // Stored c1 -> c0; the dialog is opened from c0.
+      workflow: { nodes: [], edges: [{ from: "c1", to: "c0", type: "related_to" }] },
+    });
+    await u.click(screen.getByTestId("fw-link-c0"));
+    await screen.findByTestId("fw-link-dialog");
+
+    const option = screen.getByTestId("fw-link-option-c0-c1-related_to");
+    expect(option).toBeChecked();
+    expect(option).toBeDisabled();
+  });
+
+  it("never offers an artifact itself", async () => {
+    const u = user();
+    renderWorkspace(pairFor("t"));
+    await u.click(screen.getByTestId("fw-link-t0"));
+    await screen.findByTestId("fw-link-dialog");
+    expect(
+      screen.queryByTestId("fw-link-option-t0-t0-related_to")
+    ).not.toBeInTheDocument();
+  });
+
+  it("links several partners at once, adding edges to one artifact", async () => {
+    const u = user();
+    const ctx = renderWorkspace({
+      charts: [
+        FIGURE,
+        { id: "c1", caption: "Second" },
+        { id: "c2", caption: "Third" },
+      ],
+    });
+    await u.click(screen.getByTestId("fw-link-c0"));
+    await screen.findByTestId("fw-link-dialog");
+    await u.click(screen.getByTestId("fw-link-option-c0-c1-related_to"));
+    await u.click(screen.getByTestId("fw-link-option-c0-c2-related_to"));
+    await u.click(screen.getByTestId("fw-link-apply"));
+
+    expect(ctx.addEdge).toHaveBeenCalledTimes(2);
+    ["c1", "c2"].forEach((other) =>
+      expect(ctx.addEdge).toHaveBeenCalledWith({
+        from: "c0",
+        to: other,
+        type: "related_to",
+      })
+    );
+    expect(ctx.helpers.openForm).not.toHaveBeenCalled();
+  });
+
+  it("shows relations beside the tree, never as children of it", () => {
+    renderWorkspace({
+      ...pairFor("c"),
+      scripts: [SCRIPT],
+      workflow: {
+        nodes: [],
+        edges: [
+          { from: "s0", to: "c0", type: "generates" },
+          { from: "c0", to: "c1", type: "related_to" },
+        ],
+      },
+    });
+
+    const panel = screen.getByTestId("fw-related-c0");
+    expect(panel).toHaveTextContent(/related resources/i);
+    expect(screen.getByTestId("fw-relation-c0-c1")).toHaveTextContent(
+      "Density of states ↔ related to ↔ Second figure"
+    );
+    // Not indented into the workflow tree as if it produced something.
+    expect(within(panel).queryByTestId("fw-node-c1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("fw-goto-related-c0-c1")).toHaveAttribute(
+      "data-target",
+      "fw-anchor-c1"
+    );
+  });
+
+  it("does not make the outline recurse", () => {
+    // Two figures related to each other is not a cycle and must not be
+    // walked as one.
+    renderWorkspace({
+      charts: [FIGURE, { id: "c1", caption: "Second figure" }],
+      workflow: {
+        nodes: [],
+        edges: [
+          { from: "c0", to: "c1", type: "related_to" },
+          { from: "c1", to: "c0", type: "related_to" },
+        ],
+      },
+    });
+    expect(screen.getByTestId("fw-node-c0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-node-c1")).toBeInTheDocument();
+  });
+
+  it("does not block a workflow edge that shares the pair's kinds", async () => {
+    // Two scripts can hold BOTH: one feeds the other, and they are related.
+    const u = user();
+    const ctx = renderWorkspace({ charts: [FIGURE], scripts: [SCRIPT, { id: "s1", readme: "other.py" }] });
+    await u.click(screen.getByTestId("fw-link-s0"));
+    await screen.findByTestId("fw-link-dialog");
+
+    expect(
+      screen.getByTestId("fw-link-option-s1-s0-feeds_into")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("fw-link-option-s0-s1-related_to")
+    ).toBeInTheDocument();
+
+    await u.click(screen.getByTestId("fw-link-option-s1-s0-feeds_into"));
+    await u.click(screen.getByTestId("fw-link-option-s0-s1-related_to"));
+    await u.click(screen.getByTestId("fw-link-apply"));
+
+    expect(ctx.addEdge).toHaveBeenCalledTimes(2);
+    expect(ctx.addEdge).toHaveBeenCalledWith({ from: "s1", to: "s0", type: "feeds_into" });
+    expect(ctx.addEdge).toHaveBeenCalledWith({ from: "s0", to: "s1", type: "related_to" });
   });
 });

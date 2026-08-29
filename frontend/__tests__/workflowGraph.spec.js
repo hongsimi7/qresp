@@ -7,7 +7,9 @@
  */
 import {
   CONSUMES,
+  DIRECTED,
   edgeFits,
+  edgeSentence,
   EDGE_GROUP,
   EDGE_VERB,
   FEEDS_INTO,
@@ -15,6 +17,7 @@ import {
   INPUTS,
   OUTPUTS,
   PROCESS,
+  RELATED_TO,
   USES_TOOL,
   edgeProblem,
   fromStoredEdge,
@@ -254,5 +257,74 @@ describe("feeds_into", () => {
   it("reads upstream to downstream, in one verb", () => {
     expect(EDGE_VERB[FEEDS_INTO]).toBe("feeds into");
     expect(EDGE_GROUP[FEEDS_INTO]).toBe("Receives from script");
+  });
+});
+
+// The undirected half of the vocabulary. It says two artifacts belong
+// together and nothing else -- no order, no data flow.
+describe("related_to", () => {
+  it("joins any two of a kind, and only its own kind", () => {
+    ["c", "s", "d", "t", "h"].forEach((kind) =>
+      expect(edgeFits(RELATED_TO, kind, kind)).toBe(true)
+    );
+    expect(edgeFits(RELATED_TO, "c", "s")).toBe(false);
+    expect(edgeFits(RELATED_TO, "d", "s")).toBe(false);
+  });
+
+  it("is never inferred, only chosen", () => {
+    // `inferEdgeType` answers "what does this pair PRODUCE". An association
+    // is a claim only a curator can make.
+    expect(DIRECTED).not.toContain(RELATED_TO);
+    expect(inferEdgeType("c0", "c1")).toBe("");
+    expect(inferEdgeType("s0", "s1")).toBe(FEEDS_INTO);
+  });
+
+  it("refuses an artifact related to itself", () => {
+    expect(
+      edgeProblem({ from: "c0", to: "c0", type: RELATED_TO }, ["c0"])
+    ).toBeTruthy();
+  });
+
+  it("refuses the same pair twice, in either order", () => {
+    const held = [{ from: "c0", to: "c1", type: RELATED_TO }];
+    expect(
+      edgeProblem({ from: "c0", to: "c1", type: RELATED_TO }, ["c0", "c1"], held)
+    ).toMatch(/already related/i);
+    expect(
+      edgeProblem({ from: "c1", to: "c0", type: RELATED_TO }, ["c0", "c1"], held)
+    ).toMatch(/already related/i);
+  });
+
+  it("takes no part in the cycle check", () => {
+    // There is no direction to loop.
+    const held = [{ from: "c0", to: "c1", type: RELATED_TO }];
+    expect(
+      edgeProblem({ from: "c1", to: "c0", type: GENERATES }, ["c0", "c1"], held)
+    ).not.toMatch(/loop/i);
+  });
+
+  it("does not let an association hide a real loop", () => {
+    const held = [
+      { from: "c0", to: "c1", type: RELATED_TO },
+      { from: "s0", to: "c0", type: GENERATES },
+    ];
+    expect(
+      edgeProblem({ from: "c0", to: "s0" }, ["c0", "c1", "s0"], held)
+    ).toMatch(/loop/i);
+  });
+
+  it("reads without arrows, because neither end came first", () => {
+    const name = (id) => id.toUpperCase();
+    expect(edgeSentence({ from: "c0", to: "c1", type: RELATED_TO }, name)).toBe(
+      "C0 ↔ related to ↔ C1"
+    );
+    expect(edgeSentence({ from: "s0", to: "c0", type: GENERATES }, name)).toBe(
+      "S0 → generates → C0"
+    );
+  });
+
+  it("round-trips through storage as a typed edge", () => {
+    const edge = { from: "d0", to: "d1", type: RELATED_TO };
+    expect(fromStoredEdge(toStoredEdge(edge))).toEqual(edge);
   });
 });
