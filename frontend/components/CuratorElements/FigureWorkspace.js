@@ -39,6 +39,9 @@ import {
   TOOL,
   USES_TOOL,
   fromStoredEdge,
+  EDGE_GROUP,
+  EDGE_VERB,
+  FEEDS_INTO,
   edgeProblem,
   hasEdge,
   inferEdgeType,
@@ -175,7 +178,11 @@ const FigureWorkspace = () => {
   } = useContext(CuratorHelperContext) || {};
 
   const [notice, setNotice] = useState("");
-  const [advancedFor, setAdvancedFor] = useState("");
+  // Which row's "Add new" / overflow menu is open, and which shared node was
+  // last jumped to from a reference row.
+  const [addAnchor, setAddAnchor] = useState({ id: "", el: null });
+  const [moreAnchor, setMoreAnchor] = useState({ id: "", parentId: "", el: null });
+  const [highlight, setHighlight] = useState("");
   // Which artifact's connection dialog is open, and what is ticked in it.
   const [connectFor, setConnectFor] = useState("");
   const [picked, setPicked] = useState({});
@@ -309,126 +316,250 @@ const FigureWorkspace = () => {
   const outgoing = (id) =>
     edges.map(fromStoredEdge).filter((edge) => edge.from === id);
 
-  const sourcesOf = (id, kinds, type) =>
-    incoming(id)
-      .filter((edge) => (type ? edge.type === type : true))
-      .filter((edge) => kinds.includes(prefixOf(edge.from)))
-      .map((edge) => edge.from);
+  // ---- THE OUTLINE -------------------------------------------------------
+
+  // What hangs under a node, and in what order. A figure is a result, so
+  // everything below it is what went into it.
+  const CHILD_RULES = {
+    [CHART]: [GENERATES, CONSUMES, FEEDS_INTO],
+    [SCRIPT]: [USES_TOOL, CONSUMES, FEEDS_INTO],
+    // Every kind can be built from an earlier one of its own kind, so every
+    // kind can have children. Without this a derived dataset was reachable
+    // from nothing and fell out of the outline entirely.
+    [DATASET]: [FEEDS_INTO],
+    [TOOL]: [FEEDS_INTO],
+    [EXTERNAL]: [FEEDS_INTO],
+  };
+
+  // `feeds_into` means one thing, but a heading reads better in the words of
+  // the kind it sits above.
+  const SAME_KIND_GROUP = {
+    [SCRIPT]: "Receives from script",
+    [CHART]: "Built from figure",
+    [DATASET]: "Derived from dataset",
+    [TOOL]: "Built on tool",
+    [EXTERNAL]: "Derived from external data",
+  };
+
+  const NEW_TYPES = [
+    { type: "chart", label: "Figure", probe: `${CHART}?` },
+    { type: "script", label: "Script", probe: `${SCRIPT}?` },
+    { type: "dataset", label: "Dataset", probe: `${DATASET}?` },
+    { type: "tool", label: "Tool", probe: `${TOOL}?` },
+    { type: "head", label: "External data", probe: `${EXTERNAL}?` },
+  ];
+
+  /** The kinds it would be legal to create attached to `id`. */
+  const addableTo = (id) =>
+    NEW_TYPES.filter(
+      ({ probe }) =>
+        Boolean(inferEdgeType(id, probe)) || Boolean(inferEdgeType(probe, id))
+    );
+
+  const anchorOf = (id) => `fw-anchor-${id}`;
+  const label = (id) => rowLabel(byId[id], id);
+  const named = (id) => `${KIND_LABEL[prefixOf(id)] || "Item"}: ${label(id)}`;
+
+  /** `A → verb → B`, so the direction is in the sentence, not the indent. */
+  const sentence = (edge) =>
+    `${label(edge.from)} → ${EDGE_VERB[edge.type] || "connects to"} → ${label(
+      edge.to
+    )}`;
+
+  const figureIds = knownIds.filter((id) => prefixOf(id) === CHART).sort();
 
   /**
-   * Everything in this paper that `id` could legally be connected to.
+   * The outline.
    *
-   * The DIRECTION is not the curator's to choose. A pair of artifact types
-   * can hold exactly one relationship or none -- a Tool joins a Script by
-   * `uses_tool` and joins a figure not at all -- so the edge is derived from
-   * what the two things ARE, and a pair that holds no relationship never
-   * reaches the dialog at all.
+   * A workflow is a GRAPH, not a tree: one script generates three figures,
+   * one dataset feeds five scripts. Drawing it as a tree therefore has to
+   * answer what happens when the same artifact is reached twice, and "draw
+   * it again, fully editable" is the wrong answer -- a curator editing the
+   * second copy has no way to know it is the same thing they already have.
    *
-   * Already-connected pairs are kept and marked. Dropping them would leave a
-   * curator wondering where a resource went; showing them as available is how
-   * a duplicate edge gets made.
+   * So an artifact is a REAL NODE exactly once, where the outline first
+   * reaches it, and every later arrival is a reference back to that one.
+   * Nothing is duplicated in the data, and nothing is duplicated on screen.
    */
-  const connectionOptions = (id) =>
+  const buildOutline = () => {
+    const placed = new Set();
+    const build = (id, parentId, type) => {
+      const first = !placed.has(id);
+      const node = { id, parentId, type, first, groups: [] };
+      if (!first) return node;
+      placed.add(id);
+      [...(CHILD_RULES[prefixOf(id)] || []), ""].forEach((relation) => {
+        const kids = incoming(id)
+          .filter((edge) => (relation ? edge.type === relation : !edge.type))
+          .map((edge) => build(edge.from, id, relation));
+        if (kids.length) node.groups.push({ type: relation, nodes: kids });
+      });
+      return node;
+    };
+    const roots = figureIds.map((id) => build(id, "", ""));
+
+    // A workflow does not have to end at a figure yet. Two scripts joined to
+    // each other, or a dataset feeding a script, are real work in progress
+    // and reachable from no figure at all -- rendering only figure-rooted
+    // trees made them vanish from the page while still being in the record.
+    const stranded = [];
+    const connected = (id) => incoming(id).length || outgoing(id).length;
+    let left = knownIds.filter((id) => !placed.has(id) && connected(id));
+    while (left.length) {
+      // Prefer a node nothing else here feeds into, so the subgraph reads
+      // downstream-first like the figures do. A cycle has no such node, and
+      // then any member will do -- what matters is that it gets on screen.
+      const sink =
+        left.find((id) => !outgoing(id).some((edge) => !placed.has(edge.to))) ||
+        left[0];
+      stranded.push(build(sink, "", ""));
+      left = left.filter((id) => !placed.has(id));
+    }
+
+    return { roots, stranded };
+  };
+
+  const { roots: outline, stranded } = buildOutline();
+
+  /** Everything this artifact feeds, so a shared one can say so. */
+  const servesOf = (id) => outgoing(id).map((edge) => edge.to);
+
+  // ---- LINKING -----------------------------------------------------------
+
+  /**
+   * Every link that could be made from `id`, as the EDGE it would create.
+   *
+   * Candidates are edges rather than artifacts because one pair can hold a
+   * relationship each way: `preprocess.py feeds into plot.py` and
+   * `plot.py feeds into preprocess.py` are different claims, so they are
+   * different rows and the curator picks the one they mean.
+   *
+   * A pair that can hold no relationship never appears. Neither does one
+   * that would close a loop -- that is not a choice worth offering. What
+   * IS kept is a link that already exists, shown as made, because hiding it
+   * would leave a curator hunting for a resource that is already attached.
+   */
+  const linkCandidates = (id) => {
+    const seen = new Set();
+    const found = [];
     knownIds
       .filter((other) => other !== id)
-      .map((other) => {
-        const forward = inferEdgeType(id, other);
-        const backward = inferEdgeType(other, id);
-        if (!forward && !backward) return null;
-        const edge = forward
-          ? { from: id, to: other, type: forward }
-          : { from: other, to: id, type: backward };
-        const connected =
-          hasEdge(edges, edge.from, edge.to) || hasEdge(edges, edge.to, edge.from);
-        return {
-          other,
-          edge,
-          connected,
-          problem: connected ? "" : edgeProblem(edge, knownIds, edges),
-        };
-      })
-      .filter(Boolean);
+      .forEach((other) => {
+        [
+          [id, other],
+          [other, id],
+        ].forEach(([from, to]) => {
+          const type = inferEdgeType(from, to);
+          if (!type) return;
+          const key = `${from}-${to}`;
+          if (seen.has(key)) return;
+          const edge = { from, to, type };
+          const linked = hasEdge(edges, from, to);
+          if (!linked && edgeProblem(edge, knownIds, edges)) return;
+          seen.add(key);
+          found.push({ key, edge, other, linked });
+        });
+      });
+    return found;
+  };
 
-  const openConnect = (id) => {
+  const openLink = (id) => {
     setNotice("");
     setPicked({});
     setConnectFor(id);
   };
 
-  const closeConnect = () => {
+  const closeLink = () => {
     setConnectFor("");
     setPicked({});
   };
 
   /**
-   * Make every ticked connection, in one go.
+   * Make every ticked link.
    *
-   * One resource legitimately serves many others -- a dataset feeds several
-   * scripts, a tool serves several scripts, a script generates several
-   * figures -- and NOTHING IS COPIED to do it. Each tick adds an edge to the
-   * one artifact that is already there.
-   *
-   * Each edge is validated against the edges accepted so far in this batch,
-   * not just against the state this render saw, so two ticks cannot combine
-   * into a loop.
+   * One resource legitimately serves many others, and NOTHING IS COPIED to
+   * do it: each tick adds an edge to the artifact already in the draft.
+   * Each is re-checked against the links accepted earlier in this same
+   * batch, so two ticks cannot combine into a loop.
    */
-  const connectSelected = () => {
+  const linkSelected = () => {
     const running = edges.slice();
     let made = 0;
-    connectionOptions(connectFor).forEach((option) => {
-      if (!picked[option.other] || option.connected) return;
+    linkCandidates(connectFor).forEach((option) => {
+      if (!picked[option.key] || option.linked) return;
       if (hasEdge(running, option.edge.from, option.edge.to)) return;
       if (edgeProblem(option.edge, knownIds, running)) return;
       addEdge(option.edge);
       running.push(option.edge);
       made += 1;
     });
-    if (!made) setNotice("Nothing was selected, so nothing was connected.");
-    closeConnect();
+    if (!made) setNotice("Nothing was selected, so nothing was linked.");
+    closeLink();
   };
 
-  const AddButtons = ({ id, kinds }) => (
-    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
-      {kinds.map((kind) => (
-        <RowAction
-          key={kind}
-          onClick={() => createAttachedTo(TYPE_BY_PREFIX[kind], id)}
-          data-testid={`fw-add-${TYPE_BY_PREFIX[kind]}-for-${id}`}
-        >
-          {`+ ${KIND_LABEL[kind]}`}
-        </RowAction>
-      ))}
-    </Box>
+  // ---- ROW FURNITURE -----------------------------------------------------
+
+  const KindChip = ({ id }) => (
+    <Chip
+      label={KIND_LABEL[prefixOf(id)] || "Item"}
+      size="small"
+      variant="outlined"
+      sx={{
+        height: 20,
+        flexShrink: 0,
+        borderColor: "divider",
+        color: "text.secondary",
+        "& .MuiChip-label": { px: 0.75, fontSize: 11 },
+      }}
+    />
   );
 
   /**
-   * The one connection action, identical on every row.
+   * The two things a curator does to a row, and nothing else.
    *
-   * It used to live only under a figure and under a script, so an
-   * independent dataset or tool -- a row with no figure above it -- had no
-   * way to be joined to anything at all except by editing the other side.
+   * Edit and Remove moved into the overflow because they are rarer than
+   * linking and were pushing the names and relationships -- the things the
+   * outline exists to show -- off the end of the line.
    */
-  const ConnectAction = ({ id }) => (
-    <RowAction onClick={() => openConnect(id)} data-testid={`fw-connect-${id}`}>
-      Connect existing…
-    </RowAction>
-  );
+  const RowActions = ({ node }) => {
+    const { id, parentId } = node;
+    const addable = addableTo(id);
+    return (
+      <Box sx={{ display: "flex", flexShrink: 0, alignItems: "center" }}>
+        <RowAction onClick={() => openLink(id)} data-testid={`fw-link-${id}`}>
+          Link existing
+        </RowAction>
+        {addable.length ? (
+          <RowAction
+            onClick={(event) => setAddAnchor({ id, el: event.currentTarget })}
+            aria-haspopup="menu"
+            data-testid={`fw-add-${id}`}
+          >
+            Add new
+          </RowAction>
+        ) : null}
+        <RowAction
+          onClick={(event) => setMoreAnchor({ id, parentId, el: event.currentTarget })}
+          aria-haspopup="menu"
+          aria-label={`More actions for ${label(id)}`}
+          data-testid={`fw-more-${id}`}
+        >
+          ⋮
+        </RowAction>
+      </Box>
+    );
+  };
 
-  /** One resource line: what it is, what it is called, and how to change it. */
-  const ResourceRow = ({ id, relation, depth = 1 }) => (
-    <Box
-      component="li"
-      data-testid={`fw-row-${id}`}
-      sx={{ mt: 0.5, minWidth: 0 }}
-    >
-      {/* Name on the left, actions gathered on the right. They used to run
-          inline after the name, so where a row's actions began depended on
-          how long its title was and nothing lined up down the page. */}
+  const OutlineRow = ({ node, depth }) => {
+    const { id, parentId, type, first } = node;
+    const edge = parentId ? { from: id, to: parentId, type } : null;
+    const serves = first ? servesOf(id) : [];
+    return (
       <Box
         sx={{
           display: "flex",
           flexWrap: "wrap",
-          alignItems: "center",
+          alignItems: "flex-start",
           gap: 0.75,
           minWidth: 0,
           py: 0.25,
@@ -437,165 +568,232 @@ const FigureWorkspace = () => {
         <Box
           sx={{
             display: "flex",
+            flexWrap: "wrap",
             alignItems: "center",
             gap: 0.75,
             minWidth: 0,
-            // Narrow: the name owns its line and every row's actions start
-            // in the same place underneath. Wide: all on one line.
             flex: { xs: "1 1 100%", sm: "1 1 auto" },
           }}
         >
           <KindChip id={id} />
-          {relation ? (
-            <Typography variant="caption" color="text.secondary" component="span">
-              {relation}
-            </Typography>
-          ) : null}
           <Typography
-            variant="body2"
+            variant={depth ? "body2" : "subtitle2"}
             component="span"
             sx={{ overflowWrap: "anywhere", minWidth: 0 }}
           >
-            {rowLabel(byId[id], id)}
+            {label(id)}
           </Typography>
+          {edge ? (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="span"
+              sx={{ overflowWrap: "anywhere" }}
+              data-testid={`fw-flow-${id}-${parentId}`}
+            >
+              {sentence(edge)}
+            </Typography>
+          ) : null}
+          {serves.length > 1 ? (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="span"
+              data-testid={`fw-shared-${id}`}
+            >
+              {`Also used by ${serves.length - 1} more`}
+            </Typography>
+          ) : null}
         </Box>
-        <Box sx={{ display: "flex", flexShrink: 0, alignItems: "center" }}>
-          <RowAction onClick={() => editArtifact(id)} data-testid={`fw-edit-${id}`}>
-            Edit
-          </RowAction>
-          <ConnectAction id={id} />
-        </Box>
+        {first ? (
+          <RowActions node={node} />
+        ) : (
+          <Box sx={{ display: "flex", flexShrink: 0, alignItems: "center" }}>
+            <RowAction
+              onClick={() => {
+                const target = document.getElementById(anchorOf(id));
+                if (target && target.scrollIntoView) {
+                  target.scrollIntoView({ block: "center" });
+                }
+                setHighlight(id);
+              }}
+              data-target={anchorOf(id)}
+              data-testid={`fw-goto-${id}-${parentId}`}
+            >
+              Go to
+            </RowAction>
+          </Box>
+        )}
       </Box>
-      {prefixOf(id) === EXTERNAL ? (
+    );
+  };
+
+  const OutlineNode = ({ node, depth = 0 }) => (
+    <Box
+      component="li"
+      id={node.first ? anchorOf(node.id) : undefined}
+      data-testid={
+        node.first
+          ? `fw-node-${node.id}`
+          : `fw-ref-${node.id}-${node.parentId}`
+      }
+      sx={{
+        minWidth: 0,
+        ...(highlight === node.id && node.first
+          ? { bgcolor: "action.selected", borderRadius: 1 }
+          : null),
+      }}
+    >
+      <OutlineRow node={node} depth={depth} />
+      {node.first ? null : (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          display="block"
+          sx={{ pl: 1 }}
+        >
+          Shown in full elsewhere in this outline.
+        </Typography>
+      )}
+      {node.first && prefixOf(node.id) === EXTERNAL ? (
         <Box sx={{ pl: 1, minWidth: 0 }}>
-          {displayUrl(byId[id]) ? (
+          {displayUrl(byId[node.id]) ? (
             <Typography
               variant="caption"
               component="a"
-              href={displayUrl(byId[id])}
+              href={displayUrl(byId[node.id])}
               target="_blank"
               rel="noopener noreferrer"
-              data-testid={`fw-url-${id}`}
+              data-testid={`fw-url-${node.id}`}
               sx={{ display: "block", overflowWrap: "anywhere" }}
             >
-              {displayUrl(byId[id])}
+              {displayUrl(byId[node.id])}
             </Typography>
           ) : null}
-          {noteFor(byId[id]) ? (
-            <Typography variant="caption" color="text.secondary" display="block"
-                        data-testid={`fw-note-${id}`} sx={{ overflowWrap: "anywhere" }}>
-              {noteFor(byId[id])}
+          {noteFor(byId[node.id]) ? (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              display="block"
+              data-testid={`fw-note-${node.id}`}
+              sx={{ overflowWrap: "anywhere" }}
+            >
+              {noteFor(byId[node.id])}
             </Typography>
           ) : null}
         </Box>
       ) : null}
-      {prefixOf(id) === SCRIPT ? (
+      {node.groups.map((group) => (
         <Box
-          component="ul"
-          sx={{
-            listStyle: "none",
-            m: 0,
-            mt: 0.25,
-            p: 0,
-            ml: 1,
-            pl: 1.5,
-            borderLeft: 2,
-            borderColor: "divider",
-          }}
+          key={group.type || "legacy"}
+          sx={{ ml: 1, pl: 1.5, borderLeft: 2, borderColor: "divider" }}
         >
-          {sourcesOf(id, [TOOL], USES_TOOL).map((toolId) => (
-            <ResourceRow key={toolId} id={toolId} relation="uses tool:" depth={depth + 1} />
-          ))}
-          {sourcesOf(id, [DATASET, EXTERNAL], CONSUMES).map((dataId) => (
-            <ResourceRow key={dataId} id={dataId} relation="uses:" depth={depth + 1} />
-          ))}
-          <Box component="li">
-            <AddButtons id={id} kinds={[TOOL, DATASET, EXTERNAL]} />
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            display="block"
+            sx={{ mt: 0.25 }}
+          >
+            {(group.type === FEEDS_INTO
+              ? SAME_KIND_GROUP[prefixOf(node.id)]
+              : EDGE_GROUP[group.type]) || "Connected to"}
+          </Typography>
+          <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+            {group.nodes.map((child) => (
+              <OutlineNode
+                key={`${child.id}-${child.parentId}`}
+                node={child}
+                depth={depth + 1}
+              />
+            ))}
           </Box>
         </Box>
+      ))}
+      {node.first && !node.groups.length && prefixOf(node.id) === CHART ? (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          display="block"
+          sx={{ ml: 1, pl: 1.5 }}
+          data-testid={`fw-empty-${node.id}`}
+        >
+          No connected resources yet.
+        </Typography>
+      ) : null}
+      {node.first && prefixOf(node.id) === CHART ? (
+        <SuggestionPanel id={node.id} />
       ) : null}
     </Box>
   );
 
-  const RELATION_WORDS = {
-    [GENERATES]: "generates",
-    [CONSUMES]: "is used by",
-    [USES_TOOL]: "is used by",
-  };
-
-  /** How this connection would read, from the open artifact's side. */
-  const optionSense = (id, option) => {
-    const { edge } = option;
-    if (edge.from === id) {
-      return `${RELATION_WORDS[edge.type] || "connects to"} this`;
-    }
-    if (edge.type === GENERATES) return "generates this figure";
-    if (edge.type === USES_TOOL) return "is a tool this uses";
-    return "is an input to this";
-  };
-
-  const ConnectDialog = () => {
+  const LinkDialog = () => {
     const id = connectFor;
     if (!id) return null;
-    const options = connectionOptions(id);
-    const open = options.filter((option) => !option.connected && !option.problem);
+    const options = linkCandidates(id);
+    const open = options.filter((option) => !option.linked);
 
     return (
       <Dialog
         open
-        onClose={closeConnect}
+        onClose={closeLink}
         fullWidth
         maxWidth="sm"
-        data-testid="fw-connect-dialog"
+        data-testid="fw-link-dialog"
       >
-        <DialogTitle sx={{ overflowWrap: "anywhere" }}>
-          {`Connect ${rowLabel(byId[id], id)}`}
+        <DialogTitle sx={{ overflowWrap: "anywhere", pb: 0.5 }}>
+          Link existing
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ overflowWrap: "anywhere" }}
+          >
+            {`What existing resource belongs to “${named(id)}”?`}
+          </Typography>
         </DialogTitle>
         <DialogContent dividers>
           {options.length ? (
             <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
               {options.map((option) => (
-                <Box component="li" key={option.other} sx={{ minWidth: 0 }}>
+                <Box component="li" key={option.key} sx={{ minWidth: 0 }}>
                   <FormControlLabel
                     sx={{ alignItems: "flex-start", m: 0, py: 0.25 }}
                     control={
                       <Checkbox
                         size="small"
-                        checked={
-                          option.connected || Boolean(picked[option.other])
-                        }
-                        disabled={option.connected || Boolean(option.problem)}
+                        checked={option.linked || Boolean(picked[option.key])}
+                        disabled={option.linked}
                         onChange={(event) =>
                           setPicked((was) => ({
                             ...was,
-                            [option.other]: event.target.checked,
+                            [option.key]: event.target.checked,
                           }))
                         }
                         slotProps={{
-                          input: {
-                            "data-testid": `fw-connect-option-${option.other}`,
-                          },
+                          input: { "data-testid": `fw-link-option-${option.key}` },
                         }}
                       />
                     }
                     label={
                       <Box sx={{ minWidth: 0, py: 0.5 }}>
+                        {/* The exact sentence this tick would create. */}
                         <Typography
                           variant="body2"
                           sx={{ overflowWrap: "anywhere" }}
+                          data-testid={`fw-link-sentence-${option.key}`}
                         >
-                          {rowLabel(byId[option.other], option.other)}
+                          {`${named(option.edge.from)} → ${
+                            EDGE_VERB[option.edge.type]
+                          } → ${named(option.edge.to)}`}
                         </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          display="block"
-                          data-testid={`fw-connect-sense-${option.other}`}
-                        >
-                          {option.connected
-                            ? "Already connected"
-                            : option.problem || optionSense(id, option)}
-                        </Typography>
+                        {option.linked ? (
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            display="block"
+                          >
+                            Already linked
+                          </Typography>
+                        ) : null}
                       </Box>
                     }
                   />
@@ -604,43 +802,33 @@ const FigureWorkspace = () => {
             </Box>
           ) : (
             <Typography variant="body2" color="text.secondary">
-              Nothing in this paper can be connected to this yet. Add a
-              resource first, then connect it here.
+              Nothing in this paper can be linked to this yet. Add a resource
+              first, then link it here.
             </Typography>
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={closeConnect} data-testid="fw-connect-cancel">
+          <Button onClick={closeLink} data-testid="fw-link-cancel">
             Cancel
           </Button>
           <RegularStyledButton
-            onClick={connectSelected}
+            onClick={linkSelected}
             disabled={!open.length}
-            data-testid="fw-connect-apply"
+            data-testid="fw-link-apply"
           >
-            Connect selected
+            Link selected
           </RegularStyledButton>
         </DialogActions>
       </Dialog>
     );
   };
 
-  /**
-   * Connections this paper's own saved fields already prove.
-   *
-   * Closed, and absent entirely when there is nothing to show -- an empty
-   * "Suggested connections" row on every figure would be four words of
-   * furniture per figure saying nothing.
-   *
-   * Nothing here is applied. Each row states the one fact behind it and waits
-   * to be accepted.
-   */
   const SuggestionPanel = ({ id }) => {
     const items = suggestionsFor(id);
     if (!items.length) return null;
     const open = suggestFor === id;
     return (
-      <Box sx={{ pl: 1.5, mt: 0.5 }} data-testid={`fw-suggestions-${id}`}>
+      <Box sx={{ ml: 1, pl: 1.5, mt: 0.5 }} data-testid={`fw-suggestions-${id}`}>
         <RowAction
           onClick={() => setSuggestFor(open ? "" : id)}
           aria-expanded={open}
@@ -661,7 +849,7 @@ const FigureWorkspace = () => {
                   component="span"
                   sx={{ overflowWrap: "anywhere" }}
                 >
-                  {describeSuggestion(item, (who) => rowLabel(byId[who], who))}
+                  {describeSuggestion(item, (who) => label(who))}
                 </Typography>{" "}
                 <RowAction
                   onClick={() => acceptSuggestion(item)}
@@ -683,8 +871,6 @@ const FigureWorkspace = () => {
     );
   };
 
-  const figureIds = knownIds.filter((id) => prefixOf(id) === CHART).sort();
-
   // Anything with no connection at all. Not hidden and not flagged: a
   // dataset that produced no figure is a normal thing for a paper to hold,
   // and a resource entered before the figure it belongs to is a normal way
@@ -696,8 +882,8 @@ const FigureWorkspace = () => {
   return (
     <Drawer heading="Organize figures and resources" defaultOpen={true}>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        Start from a figure and add what produced it — or add any resource on
-        its own. Nothing is saved until you save the record.
+        Each figure, and what produced it. Nothing is saved until you save the
+        record.
       </Typography>
 
       {/* ONE place to start anything.
@@ -747,13 +933,13 @@ const FigureWorkspace = () => {
           <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
             Add a resource
           </Typography>
-          {STARTABLE.map(({ type, label }) => (
+          {STARTABLE.map(({ type, label: text }) => (
             <RowAction
               key={type}
               onClick={() => createAttachedTo(type, "")}
               data-testid={`fw-start-${type}`}
             >
-              {`+ ${label}`}
+              {`+ ${text}`}
             </RowAction>
           ))}
         </Box>
@@ -767,7 +953,7 @@ const FigureWorkspace = () => {
         onClose={() => setRccAnchor(null)}
         data-testid="fw-rcc-menu"
       >
-        {IMPORTABLE.map(({ type, label }) => (
+        {IMPORTABLE.map(({ type, label: text }) => (
           <MenuItem
             key={type}
             data-testid={`fw-rcc-${type}`}
@@ -776,7 +962,7 @@ const FigureWorkspace = () => {
               setRccImport((was) => ({ type, nonce: was.nonce + 1 }));
             }}
           >
-            {label}
+            {text}
           </MenuItem>
         ))}
       </Menu>
@@ -789,20 +975,89 @@ const FigureWorkspace = () => {
         />
       ) : null}
 
+      {/* Add new: only the kinds that can legally join this row. */}
+      <Menu
+        open={Boolean(addAnchor.el)}
+        anchorEl={addAnchor.el}
+        onClose={() => setAddAnchor({ id: "", el: null })}
+        data-testid="fw-add-menu"
+      >
+        {(addAnchor.id ? addableTo(addAnchor.id) : []).map(({ type, label: text }) => (
+          <MenuItem
+            key={type}
+            data-testid={`fw-add-${addAnchor.id}-${type}`}
+            onClick={() => {
+              const target = addAnchor.id;
+              setAddAnchor({ id: "", el: null });
+              createAttachedTo(type, target);
+            }}
+          >
+            {text}
+          </MenuItem>
+        ))}
+      </Menu>
+
+      {/* The rarer actions, off the line the outline is there to show. */}
+      <Menu
+        open={Boolean(moreAnchor.el)}
+        anchorEl={moreAnchor.el}
+        onClose={() => setMoreAnchor({ id: "", parentId: "", el: null })}
+        data-testid="fw-more-menu"
+      >
+        <MenuItem
+          data-testid={`fw-edit-${moreAnchor.id}`}
+          onClick={() => {
+            const target = moreAnchor.id;
+            setMoreAnchor({ id: "", parentId: "", el: null });
+            editArtifact(target);
+          }}
+        >
+          Edit
+        </MenuItem>
+        {moreAnchor.parentId ? (
+          <MenuItem
+            data-testid={`fw-unlink-${moreAnchor.id}-${moreAnchor.parentId}`}
+            onClick={() => {
+              const { id, parentId } = moreAnchor;
+              setMoreAnchor({ id: "", parentId: "", el: null });
+              unlink(id, parentId);
+            }}
+          >
+            {`Unlink from ${label(moreAnchor.parentId)}`}
+          </MenuItem>
+        ) : null}
+        <MenuItem
+          data-testid={`fw-remove-${moreAnchor.id}`}
+          onClick={() => {
+            const target = moreAnchor.id;
+            setMoreAnchor({ id: "", parentId: "", el: null });
+            removeArtifact(target);
+          }}
+        >
+          Remove
+        </MenuItem>
+      </Menu>
+
       {notice ? (
         <Alert severity="info" sx={{ mb: 2 }} data-testid="fw-notice">
           {notice}
         </Alert>
       ) : null}
 
-      {figureIds.length ? (
-        <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}
-             data-testid="fw-figures" aria-label="Figures">
-          {figureIds.map((id) => (
+      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+        Workflow
+      </Typography>
+      {figureIds.length || stranded.length ? (
+        <Box
+          component="ul"
+          sx={{ listStyle: "none", m: 0, p: 0 }}
+          data-testid="fw-figures"
+          aria-label="Workflow outline"
+        >
+          {[...outline, ...stranded].map((node) => (
             <Box
               component="li"
-              key={id}
-              data-testid={`fw-figure-${id}`}
+              key={node.id}
               sx={{
                 mb: 1.5,
                 p: 1.5,
@@ -811,113 +1066,20 @@ const FigureWorkspace = () => {
                 borderRadius: 1,
                 minWidth: 0,
               }}
+              data-testid={`fw-figure-${node.id}`}
             >
-              {/* One figure, one card. A bottom rule alone left every figure
-                  running into the next. */}
-              <Box
-                sx={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  alignItems: "center",
-                  gap: 0.75,
-                  minWidth: 0,
-                }}
-              >
-                <Box
-                  sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 0.75,
-                    minWidth: 0,
-                    flex: { xs: "1 1 100%", sm: "1 1 auto" },
-                  }}
+              {prefixOf(node.id) === CHART ? null : (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  display="block"
+                  data-testid={`fw-stranded-${node.id}`}
                 >
-                  <KindChip id={id} />
-                  <Typography
-                    variant="subtitle2"
-                    sx={{ overflowWrap: "anywhere", minWidth: 0 }}
-                  >
-                    {rowLabel(byId[id], id)}
-                  </Typography>
-                </Box>
-                <Box sx={{ display: "flex", flexShrink: 0, alignItems: "center" }}>
-                  <RowAction onClick={() => editArtifact(id)} data-testid={`fw-edit-${id}`}>
-                    Edit
-                  </RowAction>
-                  <ConnectAction id={id} />
-                  <RowAction onClick={() => removeArtifact(id)} data-testid={`fw-remove-${id}`}>
-                    Remove
-                  </RowAction>
-                </Box>
-              </Box>
-
-              <Box
-                component="ul"
-                sx={{
-                  listStyle: "none",
-                  m: 0,
-                  mt: 0.5,
-                  p: 0,
-                  ml: 1,
-                  pl: 1.5,
-                  borderLeft: 2,
-                  borderColor: "divider",
-                }}
-              >
-                {sourcesOf(id, [SCRIPT], GENERATES).map((scriptId) => (
-                  <ResourceRow key={scriptId} id={scriptId} relation="generated by:" />
-                ))}
-                {sourcesOf(id, [DATASET, EXTERNAL], CONSUMES).map((dataId) => (
-                  <ResourceRow key={dataId} id={dataId} relation="uses:" />
-                ))}
-                {/* A legacy edge states no relationship, so neither does this. */}
-                {incoming(id).filter((edge) => !edge.type).map((edge) => (
-                  <ResourceRow key={edge.from} id={edge.from} relation="connected to:" />
-                ))}
-              </Box>
-
-              <Box sx={{ pl: 1.5 }}>
-                <AddButtons id={id} kinds={[SCRIPT, DATASET, EXTERNAL]} />
-              </Box>
-
-              <SuggestionPanel id={id} />
-
-              {/* The unusual cases, and unlinking. The normal path never
-                  needs this, so it is closed. */}
-              <Box sx={{ pl: 1.5, mt: 0.5 }}>
-                <RowAction
-                  onClick={() => setAdvancedFor(advancedFor === id ? "" : id)}
-                  aria-expanded={advancedFor === id}
-                  data-testid={`fw-advanced-toggle-${id}`}
-                >
-                  Advanced connections
-                </RowAction>
-                <Collapse in={advancedFor === id} unmountOnExit>
-                  <Box sx={{ mt: 0.5 }} data-testid={`fw-advanced-${id}`}>
-                    {incoming(id).length ? (
-                      <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
-                        {incoming(id).map((edge) => (
-                          <Box component="li" key={`${edge.from}-${edge.to}`}>
-                            <Typography variant="caption" component="span">
-                              {`${rowLabel(byId[edge.from], edge.from)} → ${rowLabel(byId[id], id)}`}
-                              {edge.type ? ` (${edge.type.replace("_", " ")})` : ""}
-                            </Typography>{" "}
-                            <RowAction
-                              onClick={() => unlink(edge.from, edge.to)}
-                              data-testid={`fw-unlink-${edge.from}-${edge.to}`}
-                            >
-                              Unlink
-                            </RowAction>
-                          </Box>
-                        ))}
-                      </Box>
-                    ) : (
-                      <Typography variant="caption" color="text.secondary">
-                        Nothing is connected to this figure yet.
-                      </Typography>
-                    )}
-                  </Box>
-                </Collapse>
+                  Not connected to a figure yet
+                </Typography>
+              )}
+              <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+                <OutlineNode node={node} />
               </Box>
             </Box>
           ))}
@@ -954,7 +1116,10 @@ const FigureWorkspace = () => {
           aria-label="Independent resources"
         >
           {unlinked.map((id) => (
-            <ResourceRow key={id} id={id} relation="" depth={0} />
+            <OutlineNode
+              key={id}
+              node={{ id, parentId: "", type: "", first: true, groups: [] }}
+            />
           ))}
         </Box>
         {/* Neither line is a nudge to go and connect something. The first
@@ -970,7 +1135,7 @@ const FigureWorkspace = () => {
         ) : null}
       </Box>
 
-      <ConnectDialog />
+      <LinkDialog />
 
       {/* The real forms. Mounted for their dialogs, with their own Add
           buttons hidden -- this section supplies the contextual ones. */}
