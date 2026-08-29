@@ -31,15 +31,9 @@ const EDGES = [
   { from: "s0", to: "c0", type: GENERATES },
 ];
 
-const draw = (ids, edges, loopKeys = new Set()) =>
+const draw = (ids, edges) =>
   render(
-    <WorkflowLanes
-      ids={ids}
-      byId={BY_ID}
-      edges={edges}
-      loopKeys={loopKeys}
-      name={NAME}
-    />
+    <WorkflowLanes ids={ids} byId={BY_ID} edges={edges} name={NAME} />
   );
 
 describe("laying out the lanes", () => {
@@ -112,20 +106,22 @@ describe("the drawing itself", () => {
     );
   });
 
-  it("marks a feedback loop and says so beneath the picture", () => {
-    draw(
-      ["s0", "c0"],
-      [
-        { from: "s0", to: "c0", type: GENERATES },
-        { from: "c0", to: "s0", type: CONSUMES },
-      ],
-      new Set(["s0->c0", "c0->s0"])
-    );
-    expect(screen.getByTestId("fw-lane-edge-s0-c0")).toHaveAttribute(
+  it("marks a feedback loop from the record, not from the shape", () => {
+    // Only the edge the curator confirmed is marked. The other one closes
+    // the same loop and is NOT marked, because nobody said it was one.
+    draw(["s0", "c0"], [
+      { from: "s0", to: "c0", type: GENERATES },
+      { from: "c0", to: "s0", type: CONSUMES, feedback: true },
+    ]);
+    expect(screen.getByTestId("fw-lane-edge-c0-s0")).toHaveAttribute(
       "data-loop",
       "true"
     );
-    expect(screen.getByTestId("fw-lane-edge-s0-c0")).toHaveTextContent(
+    expect(screen.getByTestId("fw-lane-edge-s0-c0")).toHaveAttribute(
+      "data-loop",
+      "false"
+    );
+    expect(screen.getByTestId("fw-lane-edge-c0-s0")).toHaveTextContent(
       /feedback loop/i
     );
     expect(screen.getByTestId("fw-lanes")).toHaveTextContent(

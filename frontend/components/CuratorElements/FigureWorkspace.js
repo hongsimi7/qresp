@@ -45,7 +45,6 @@ import {
   EDGE_GROUP,
   closesLoop,
   componentsOf,
-  loopEdgeKeys,
   EDGE_VERB,
   FEEDS_INTO,
   RELATED_TO,
@@ -396,15 +395,15 @@ const FigureWorkspace = () => {
    */
   const buildOutline = (scope) => {
     const placed = new Set();
-    const build = (id, parentId, type) => {
+    const build = (id, parentId, type, feedback) => {
       const first = !placed.has(id);
-      const node = { id, parentId, type, first, groups: [] };
+      const node = { id, parentId, type, feedback, first, groups: [] };
       if (!first) return node;
       placed.add(id);
       [...(CHILD_RULES[prefixOf(id)] || []), ""].forEach((relation) => {
         const kids = incoming(id)
           .filter((edge) => (relation ? edge.type === relation : !edge.type))
-          .map((edge) => build(edge.from, id, relation));
+          .map((edge) => build(edge.from, id, relation, edge.feedback));
         if (kids.length) node.groups.push({ type: relation, nodes: kids });
       });
       return node;
@@ -443,7 +442,6 @@ const FigureWorkspace = () => {
   // groups merges them because they become one component; removing the last
   // edge between them splits them again for the same reason.
   const { connected: components, alone } = componentsOf(knownIds, edges);
-  const loopKeys = loopEdgeKeys(edges);
 
   /** Everything this artifact feeds, so a shared one can say so. */
   const servesOf = (id) => outgoing(id).map((edge) => edge.to);
@@ -577,7 +575,15 @@ const FigureWorkspace = () => {
   };
 
   const confirmLoops = () => {
-    if (loopAsk) applyEdges([...loopAsk.safe, ...loopAsk.loops]);
+    if (loopAsk) {
+      applyEdges([
+        ...loopAsk.safe,
+        // Marked HERE, where the curator answered. Recomputing it later from
+        // the shape of the graph would lose the answer the moment another
+        // edge was removed.
+        ...loopAsk.loops.map((edge) => ({ ...edge, feedback: true })),
+      ]);
+    }
     setLoopAsk(null);
     closeLink();
   };
@@ -650,8 +656,10 @@ const FigureWorkspace = () => {
   };
 
   const OutlineRow = ({ node, depth }) => {
-    const { id, parentId, type, first } = node;
-    const edge = parentId ? { from: id, to: parentId, type } : null;
+    const { id, parentId, type, feedback, first } = node;
+    const edge = parentId
+      ? { from: id, to: parentId, type, feedback }
+      : null;
     const serves = first ? servesOf(id) : [];
     return (
       <Box
@@ -691,6 +699,16 @@ const FigureWorkspace = () => {
               data-testid={`fw-flow-${id}-${parentId}`}
             >
               {sentence(edge)}
+            </Typography>
+          ) : null}
+          {edge && edge.feedback ? (
+            <Typography
+              variant="caption"
+              component="span"
+              data-testid={`fw-feedback-${id}-${parentId}`}
+              sx={{ color: "warning.main" }}
+            >
+              feedback loop
             </Typography>
           ) : null}
           {serves.length > 1 ? (
@@ -1307,7 +1325,6 @@ const FigureWorkspace = () => {
                     ids={members}
                     byId={byId}
                     edges={edges}
-                    loopKeys={loopKeys}
                     name={label}
                     onPick={(id) => setHighlight(id)}
                     active={highlight}

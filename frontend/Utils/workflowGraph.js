@@ -163,11 +163,17 @@ export const fromStoredEdge = (edge) => {
     return { from: edge[0] || "", to: edge[1] || "", type: "" };
   }
   if (edge && typeof edge === "object") {
-    return {
+    const read = {
       from: edge.from || "",
       to: edge.to || "",
       type: edge.type || "",
     };
+    // `feedback` is a FACT THE CURATOR STATED, not something to recompute.
+    // Whether the graph currently contains a loop changes as other edges come
+    // and go; whether this connection was confirmed as a feedback loop does
+    // not, so it is read back rather than derived. Absent on a legacy edge,
+    // and never invented for one.
+    return edge.feedback ? { ...read, feedback: true } : read;
   }
   return { from: "", to: "", type: "" };
 };
@@ -179,9 +185,11 @@ export const fromStoredEdge = (edge) => {
  * pair it arrived as, so opening a legacy record and saving it does not
  * silently rewrite its graph into a shape it never had.
  */
-export const toStoredEdge = (edge) =>
-  edge && edge.type ? { from: edge.from, to: edge.to, type: edge.type }
-                    : [edge.from, edge.to];
+export const toStoredEdge = (edge) => {
+  if (!edge || !edge.type) return [edge.from, edge.to];
+  const stored = { from: edge.from, to: edge.to, type: edge.type };
+  return edge.feedback ? { ...stored, feedback: true } : stored;
+};
 
 /**
  * Why this edge cannot be added, or "" if it can.
@@ -259,44 +267,6 @@ export const closesLoop = (edges, candidate) => {
     }
   }
   return false;
-};
-
-/**
- * Which edges lie ON a directed loop, as `${from}->${to}` keys.
- *
- * An edge is on a loop when its target can reach its source again. The
- * Curator draws these differently, because a feedback loop that looks like
- * ordinary flow reads as a mistake in the graph rather than a claim about
- * the work.
- */
-export const loopEdgeKeys = (edges) => {
-  const flowing = flowingOnly(edges).map(fromStoredEdge);
-  const adjacency = new Map();
-  flowing.forEach(({ from, to }) => {
-    if (!adjacency.has(from)) adjacency.set(from, []);
-    adjacency.get(from).push(to);
-  });
-
-  const reaches = (start, goal) => {
-    const seen = new Set([start]);
-    const stack = [start];
-    while (stack.length) {
-      const node = stack.pop();
-      for (const next of adjacency.get(node) || []) {
-        if (next === goal) return true;
-        if (seen.has(next)) continue;
-        seen.add(next);
-        stack.push(next);
-      }
-    }
-    return false;
-  };
-
-  const keys = new Set();
-  flowing.forEach(({ from, to }) => {
-    if (reaches(to, from)) keys.add(`${from}->${to}`);
-  });
-  return keys;
 };
 
 /**

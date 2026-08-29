@@ -1855,7 +1855,7 @@ describe("the workflow drawing", () => {
     );
   });
 
-  it("draws a feedback loop differently from ordinary flow", () => {
+  it("draws a feedback loop from what was confirmed", () => {
     renderWorkspace({
       charts: [FIGURE],
       scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
@@ -1864,7 +1864,7 @@ describe("the workflow drawing", () => {
         edges: [
           { from: "s0", to: "c0", type: "generates" },
           { from: "s1", to: "s0", type: "feeds_into" },
-          { from: "s0", to: "s1", type: "feeds_into" },
+          { from: "s0", to: "s1", type: "feeds_into", feedback: true },
         ],
       },
     });
@@ -1929,10 +1929,13 @@ describe("feedback loops", () => {
     await u.click(screen.getByTestId("fw-loop-confirm"));
 
     expect(ctx.addEdge).toHaveBeenCalledTimes(1);
+    // The confirmation is WRITTEN DOWN on the edge. Recomputing it later
+    // would lose the answer the moment another edge was removed.
     expect(ctx.addEdge).toHaveBeenCalledWith({
       from: "s0",
       to: "s1",
       type: "feeds_into",
+      feedback: true,
     });
   });
 
@@ -2017,5 +2020,158 @@ describe("feedback loops", () => {
     // Each artifact is one editable node; the second arrival is a reference.
     expect(screen.getAllByTestId("fw-node-s0")).toHaveLength(1);
     expect(screen.getAllByTestId("fw-node-s1")).toHaveLength(1);
+  });
+});
+
+// STAGING GATE: the two things that have to be true before this is deployed.
+describe("a feedback loop is remembered, not recomputed", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  // As it comes back from storage on a fresh load.
+  const stored = {
+    charts: [FIGURE],
+    scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
+    workflow: {
+      nodes: [],
+      edges: [
+        { from: "s0", to: "c0", type: "generates" },
+        { from: "s1", to: "s0", type: "feeds_into" },
+        { from: "s0", to: "s1", type: "feeds_into", feedback: true },
+      ],
+    },
+  };
+
+  it("reads the mark back from the record on a fresh load", () => {
+    renderWorkspace(stored);
+    expect(screen.getByTestId("fw-lane-edge-s0-s1")).toHaveAttribute(
+      "data-loop",
+      "true"
+    );
+  });
+
+  it("keeps the mark when the edge that closed the loop is removed", () => {
+    // THE POINT. With s1 -> s0 gone there is no cycle left to detect, so a
+    // derived marker would vanish. The curator's answer does not.
+    const ctx = renderWorkspace(stored);
+    ctx.rerenderWith({
+      workflow: {
+        nodes: [],
+        edges: [
+          { from: "s0", to: "c0", type: "generates" },
+          { from: "s0", to: "s1", type: "feeds_into", feedback: true },
+        ],
+      },
+    });
+
+    expect(screen.getByTestId("fw-lane-edge-s0-s1")).toHaveAttribute(
+      "data-loop",
+      "true"
+    );
+    expect(screen.getByTestId("fw-feedback-s0-s1")).toHaveTextContent(
+      /feedback loop/i
+    );
+  });
+
+  it("never marks an edge nobody confirmed, cycle or not", () => {
+    // A graph that loops but carries no answer is left alone -- inferring
+    // one would be putting words in the curator's mouth.
+    renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
+      workflow: {
+        nodes: [],
+        edges: [
+          { from: "s1", to: "s0", type: "feeds_into" },
+          { from: "s0", to: "s1", type: "feeds_into" },
+        ],
+      },
+    });
+    expect(screen.getByTestId("fw-lane-edge-s0-s1")).toHaveAttribute(
+      "data-loop",
+      "false"
+    );
+    expect(screen.queryByTestId("fw-feedback-s0-s1")).not.toBeInTheDocument();
+  });
+});
+
+describe("the workflow is readable without the drawing", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  const paper = {
+    charts: [FIGURE, { id: "c1", caption: "Band structure" }],
+    scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
+    datasets: [{ id: "d0", readme: "spectra" }],
+    workflow: {
+      nodes: [],
+      edges: [
+        { from: "s0", to: "c0", type: "generates" },
+        { from: "d0", to: "s0", type: "consumes" },
+        { from: "s1", to: "s0", type: "feeds_into" },
+        { from: "s0", to: "s1", type: "feeds_into", feedback: true },
+        { from: "c0", to: "c1", type: "related_to" },
+      ],
+    },
+  };
+
+  it("shows the outline beside the drawing, not instead of it", () => {
+    // The wide view gets both: a picture to see the shape, and a DOM outline
+    // for a keyboard, a screen reader, and anyone who would rather read.
+    renderWorkspace(paper);
+    expect(screen.getByTestId("fw-lanes")).toBeInTheDocument();
+    ["c0", "s0", "d0", "s1"].forEach((id) =>
+      expect(screen.getByTestId(`fw-node-${id}`)).toBeInTheDocument()
+    );
+  });
+
+  it("states direction, feedback and association in words", () => {
+    renderWorkspace(paper);
+    expect(screen.getByTestId("fw-flow-s0-c0")).toHaveTextContent(
+      "plot_dos.py → generates → Density of states"
+    );
+    expect(screen.getByTestId("fw-flow-d0-s0")).toHaveTextContent(
+      "spectra → supplies input to → plot_dos.py"
+    );
+    expect(screen.getByTestId("fw-feedback-s0-s1")).toHaveTextContent(
+      /feedback loop/i
+    );
+    expect(screen.getByTestId("fw-relation-c0-c1")).toHaveTextContent(
+      "Density of states ↔ related to ↔ Band structure"
+    );
+  });
+
+  it("puts every row action on a real focusable control", () => {
+    renderWorkspace(paper);
+    ["c0", "s0", "d0", "s1"].forEach((id) => {
+      const add = screen.getByTestId(`fw-addlink-${id}`);
+      const more = screen.getByTestId(`fw-more-${id}`);
+      [add, more].forEach((el) => {
+        expect(el.tagName).toBe("BUTTON");
+        expect(el).not.toBeDisabled();
+        expect(el).not.toHaveAttribute("tabindex", "-1");
+      });
+    });
+  });
+
+  it("reaches Edit, Link existing, Add new and Remove from the keyboard", async () => {
+    const u = user();
+    const ctx = renderWorkspace(paper);
+
+    // Tab to the row control and open it with the keyboard alone.
+    screen.getByTestId("fw-addlink-s0").focus();
+    expect(screen.getByTestId("fw-addlink-s0")).toHaveFocus();
+    await u.keyboard("{Enter}");
+    await screen.findByTestId("fw-flow-menu");
+    expect(screen.getByTestId("fw-link-s0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-flow-new")).toBeInTheDocument();
+    await u.keyboard("{Escape}");
+
+    screen.getByTestId("fw-more-s0").focus();
+    await u.keyboard("{Enter}");
+    await screen.findByTestId("fw-more-menu");
+    expect(screen.getByTestId("fw-edit-s0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-remove-s0")).toBeInTheDocument();
+
+    await u.keyboard("{Enter}");
+    expect(ctx.helpers.openForm).toHaveBeenCalledWith("script");
   });
 });

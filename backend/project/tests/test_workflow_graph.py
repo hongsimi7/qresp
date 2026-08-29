@@ -378,5 +378,56 @@ class RelatedToTest(unittest.TestCase):
         validate_workflow(paper([["s0", "c0"], ["c0", "s0"]]))
 
 
+class FeedbackFlagTest(unittest.TestCase):
+    """A confirmed feedback loop is a fact the curator stated.
+
+    It rides on the edge and is read back, rather than being recomputed from
+    the shape of the graph -- which would lose the answer the moment another
+    edge was removed. This module's job is to accept it and leave it alone.
+    """
+
+    def loop(self, feedback=False):
+        edge = {"from": "s0", "to": "s1", "type": FEEDS_INTO}
+        if feedback:
+            edge["feedback"] = True
+        return edge
+
+    def paper_with(self, edges):
+        return paper(edges, scripts=[{"id": "s0"}, {"id": "s1"}])
+
+    def test_an_edge_may_carry_the_mark(self):
+        validate_workflow(self.paper_with([
+            edge("s1", "s0", FEEDS_INTO),
+            self.loop(feedback=True),
+        ]))
+
+    def test_the_mark_is_left_exactly_as_it_arrived(self):
+        # Validation reads the graph; it does not rewrite it. What the
+        # Curator sent is what gets stored.
+        data = self.paper_with([self.loop(feedback=True)])
+        before = [dict(e) for e in data["workflow"]["edges"]]
+        validate_workflow(data)
+        self.assertEqual(data["workflow"]["edges"], before)
+        self.assertTrue(data["workflow"]["edges"][0]["feedback"])
+
+    def test_the_mark_does_not_change_what_the_edge_means(self):
+        # Same endpoints, same rules. A marked edge to an impossible pair is
+        # still refused.
+        with self.assertRaises(WorkflowError):
+            validate_workflow(paper([
+                {"from": "t0", "to": "c0", "type": USES_TOOL, "feedback": True},
+            ]))
+
+    def test_an_unmarked_edge_gains_nothing(self):
+        data = self.paper_with([self.loop()])
+        validate_workflow(data)
+        self.assertNotIn("feedback", data["workflow"]["edges"][0])
+
+    def test_a_legacy_pair_is_never_marked(self):
+        data = paper([["s0", "c0"]])
+        validate_workflow(data)
+        self.assertEqual(data["workflow"]["edges"], [["s0", "c0"]])
+
+
 if __name__ == "__main__":
     unittest.main()

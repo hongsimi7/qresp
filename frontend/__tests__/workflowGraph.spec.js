@@ -22,7 +22,6 @@ import {
   closesLoop,
   componentsOf,
   edgeProblem,
-  loopEdgeKeys,
   fromStoredEdge,
   hasEdge,
   inferEdgeType,
@@ -404,37 +403,40 @@ describe("connected components", () => {
   });
 });
 
-describe("marking a feedback loop", () => {
-  it("names the edges that lie on one", () => {
-    const keys = loopEdgeKeys([
-      { from: "s0", to: "c0", type: GENERATES },
-      { from: "c0", to: "s0", type: CONSUMES },
-    ]);
-    expect(Array.from(keys).sort()).toEqual(["c0->s0", "s0->c0"]);
+describe("a confirmed feedback loop", () => {
+  // It is a FACT THE CURATOR STATED, so it is written down and read back.
+  // Deriving it from the shape of the graph would lose the answer the moment
+  // another edge was removed.
+  it("survives the round trip through storage", () => {
+    const edge = { from: "s0", to: "s1", type: FEEDS_INTO, feedback: true };
+    const stored = toStoredEdge(edge);
+    expect(stored).toEqual({
+      from: "s0",
+      to: "s1",
+      type: FEEDS_INTO,
+      feedback: true,
+    });
+    expect(fromStoredEdge(stored)).toEqual(edge);
   });
 
-  it("leaves ordinary flow unmarked", () => {
-    const keys = loopEdgeKeys([
-      { from: "d0", to: "s0", type: CONSUMES },
-      { from: "s0", to: "c0", type: GENERATES },
-    ]);
-    expect(keys.size).toBe(0);
+  it("is absent, not false, on an ordinary edge", () => {
+    const plain = { from: "s0", to: "c0", type: GENERATES };
+    expect(toStoredEdge(plain)).toEqual(plain);
+    expect(fromStoredEdge(plain).feedback).toBeUndefined();
   });
 
-  it("marks only the edges on the loop, not the whole graph", () => {
-    const keys = loopEdgeKeys([
-      { from: "d0", to: "s0", type: CONSUMES },
-      { from: "s0", to: "s1", type: FEEDS_INTO },
-      { from: "s1", to: "s0", type: FEEDS_INTO },
+  it("is never invented for a legacy untyped pair", () => {
+    expect(fromStoredEdge(["s0", "c0"]).feedback).toBeUndefined();
+    // ...and a legacy pair still stores as the pair it arrived as.
+    expect(toStoredEdge({ from: "s0", to: "c0", type: "" })).toEqual([
+      "s0",
+      "c0",
     ]);
-    expect(Array.from(keys).sort()).toEqual(["s0->s1", "s1->s0"]);
   });
 
-  it("never marks an association", () => {
-    const keys = loopEdgeKeys([
-      { from: "c0", to: "c1", type: RELATED_TO },
-      { from: "c1", to: "c0", type: RELATED_TO },
-    ]);
-    expect(keys.size).toBe(0);
+  it("does not change what the edge IS", () => {
+    // The mark rides along; it is not part of the relationship.
+    const edge = { from: "s0", to: "s1", type: FEEDS_INTO, feedback: true };
+    expect(edgeProblem(edge, ["s0", "s1"])).toBe("");
   });
 });

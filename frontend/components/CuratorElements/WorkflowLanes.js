@@ -107,7 +107,7 @@ export const edgePath = (from, to, back) => {
   return `M ${startX} ${startY} C ${mid} ${startY}, ${mid} ${endY}, ${endX} ${endY}`;
 };
 
-const WorkflowLanes = ({ ids, byId, edges, loopKeys, name, onPick, active }) => {
+const WorkflowLanes = ({ ids, byId, edges, name, onPick, active }) => {
   const { columns, nodes, width, height } = layoutLanes(ids, byId, name);
   const present = new Set(ids || []);
 
@@ -118,7 +118,9 @@ const WorkflowLanes = ({ ids, byId, edges, loopKeys, name, onPick, active }) => 
       const from = nodes[edge.from];
       const to = nodes[edge.to];
       if (!from || !to) return null;
-      const loop = loopKeys.has(`${edge.from}->${edge.to}`);
+      // The curator's own answer, read back from the edge -- not a guess
+      // from the shape of the graph as it stands right now.
+      const loop = Boolean(edge.feedback);
       const undirected = UNDIRECTED.includes(edge.type);
       return {
         ...edge,
@@ -267,7 +269,6 @@ WorkflowLanes.propTypes = {
   ids: PropTypes.array.isRequired,
   byId: PropTypes.object.isRequired,
   edges: PropTypes.array.isRequired,
-  loopKeys: PropTypes.instanceOf(Set).isRequired,
   name: PropTypes.func.isRequired,
   onPick: PropTypes.func,
   active: PropTypes.string,
