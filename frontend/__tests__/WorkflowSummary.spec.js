@@ -182,3 +182,41 @@ describe("resources that feed no figure", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+// Script -> Script reaches the published record like every other typed edge.
+describe("a script that feeds another script", () => {
+  const CHAIN = [
+    { from: "s1", to: "s0", type: "feeds_into" },
+    { from: "s0", to: "c0", type: "generates" },
+  ];
+  const TWO_SCRIPTS = {
+    scripts: [
+      { id: "s0", readme: "plot_dos.py" },
+      { id: "s1", readme: "preprocess.py" },
+    ],
+  };
+
+  it("says feeds into, in words a reader knows", () => {
+    renderSummary(CHAIN, TWO_SCRIPTS);
+    expect(screen.getByTestId("workflow-summary")).toHaveTextContent(
+      /feeds into/i
+    );
+    expect(screen.getByTestId("workflow-summary")).toHaveTextContent(
+      "preprocess.py"
+    );
+  });
+
+  it("never shows the stored key to a reader", () => {
+    renderSummary(CHAIN, TWO_SCRIPTS);
+    expect(screen.getByTestId("workflow-summary")).not.toHaveTextContent(
+      "feeds_into"
+    );
+  });
+
+  it("keeps the figure as the thing the list is about", () => {
+    renderSummary(CHAIN, TWO_SCRIPTS);
+    expect(
+      screen.getByTestId("workflow-summary-figure-c0")
+    ).toBeInTheDocument();
+  });
+});

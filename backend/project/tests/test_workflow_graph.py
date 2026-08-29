@@ -10,6 +10,7 @@ import unittest
 
 from project.workflow import (
     CONSUMES,
+    FEEDS_INTO,
     GENERATES,
     USES_TOOL,
     WorkflowError,
@@ -107,19 +108,21 @@ class TestRefusedGraphs(unittest.TestCase):
         self.refuses([edge("s0", "c0", GENERATES)], "not part of this paper",
                      charts=[])
 
-    def test_a_direct_two_node_cycle(self):
-        self.refuses([edge("s0", "c0", GENERATES), ["c0", "s0"]],
-                     "loops back")
+    def test_a_direct_two_node_cycle_is_allowed(self):
+        # Fit, adjust, fit again. Storage does not require a one-way graph.
+        validate_workflow(paper([edge("s0", "c0", GENERATES), ["c0", "s0"]]))
 
-    def test_a_longer_cycle(self):
+    def test_a_longer_cycle_is_allowed(self):
         data = paper()
         data["scripts"] = [{"id": "s0"}, {"id": "s1"}]
         data["workflow"] = {"nodes": [], "edges": [
             ["s0", "s1"], ["s1", "c0"], ["c0", "s0"],
         ]}
-        with self.assertRaises(WorkflowError) as caught:
-            validate_workflow(data)
-        self.assertIn("loops back", str(caught.exception).lower())
+        validate_workflow(data)
+
+    def test_an_artifact_still_may_not_join_itself(self):
+        # The one shape with no reading at all, cycles or not.
+        self.refuses([["s0", "s0"]], "itself")
 
     def test_a_relationship_its_endpoints_cannot_hold(self):
         # A tool does not generate a figure, and a chart does not consume.
@@ -199,6 +202,83 @@ class TestHelpers(unittest.TestCase):
         edges = [["c%d" % i, "c%d" % (i + 1)] for i in range(depth - 1)]
         validate_workflow({"charts": charts,
                            "workflow": {"nodes": [], "edges": edges}})
+
+
+class FeedsIntoTest(unittest.TestCase):
+    """Script -> Script, the one relationship joining two of a kind.
+
+    Analysis is written in stages: one script prepares what the next one
+    plots. Every OTHER same-type pair stays refused, and the two guards that
+    make this safe -- no self-edge, no cycle -- are the ones already there.
+    """
+
+    def two_scripts(self, edges=None):
+        return paper(edges, scripts=[{"id": "s0"}, {"id": "s1"}])
+
+    def test_a_script_may_feed_another(self):
+        validate_workflow(self.two_scripts([edge("s1", "s0", FEEDS_INTO)]))
+
+    def test_a_chain_of_scripts_is_fine(self):
+        data = paper([edge("s0", "s1", FEEDS_INTO),
+                      edge("s1", "s2", FEEDS_INTO),
+                      edge("s2", "c0", GENERATES)],
+                     scripts=[{"id": "s0"}, {"id": "s1"}, {"id": "s2"}])
+        validate_workflow(data)
+
+    def test_a_script_may_not_feed_itself(self):
+        with self.assertRaises(WorkflowError) as caught:
+            validate_workflow(self.two_scripts([edge("s0", "s0", FEEDS_INTO)]))
+        self.assertIn("itself", str(caught.exception))
+
+    def test_two_scripts_may_feed_each_other(self):
+        # A refinement loop between two stages is a real thing to record.
+        validate_workflow(self.two_scripts([
+            edge("s0", "s1", FEEDS_INTO),
+            edge("s1", "s0", FEEDS_INTO),
+        ]))
+
+    def test_a_longer_loop_is_allowed(self):
+        validate_workflow(paper([edge("s0", "s1", FEEDS_INTO),
+                                 edge("s1", "s2", FEEDS_INTO),
+                                 edge("s2", "s0", FEEDS_INTO)],
+                                scripts=[{"id": "s0"}, {"id": "s1"},
+                                         {"id": "s2"}]))
+
+    def test_every_kind_may_feed_its_own_kind(self):
+        # One rule at every level: what came first feeds what came after.
+        pairs = (
+            ("charts", "c0", "c1"),
+            ("scripts", "s0", "s1"),
+            ("datasets", "d0", "d1"),
+            ("tools", "t0", "t1"),
+            ("heads", "h0", "h1"),
+        )
+        for key, first, second in pairs:
+            data = paper([edge(first, second, FEEDS_INTO)],
+                         **{key: [{"id": first}, {"id": second}]})
+            validate_workflow(data)
+
+    def test_it_refuses_two_different_kinds(self):
+        # A dataset reaching a script is `consumes`. Letting `feeds_into` say
+        # it too would leave the graph with two names for one fact.
+        for source, target in (("d0", "s0"), ("t0", "s0"), ("s0", "c0"),
+                               ("h0", "s0"), ("c0", "s0")):
+            with self.assertRaises(WorkflowError) as caught:
+                validate_workflow(paper([edge(source, target, FEEDS_INTO)]))
+            self.assertIn("same kind", str(caught.exception))
+
+    def test_the_other_relationships_keep_their_own_endpoints(self):
+        # Opening feeds_into up did not loosen anything else.
+        pairs = (
+            ("charts", "c0", "c1", GENERATES),
+            ("datasets", "d0", "d1", CONSUMES),
+            ("tools", "t0", "t1", USES_TOOL),
+        )
+        for key, first, second, kind in pairs:
+            data = paper([edge(first, second, kind)],
+                         **{key: [{"id": first}, {"id": second}]})
+            with self.assertRaises(WorkflowError):
+                validate_workflow(data)
 
 
 if __name__ == "__main__":

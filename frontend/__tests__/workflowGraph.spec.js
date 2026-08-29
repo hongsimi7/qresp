@@ -7,6 +7,10 @@
  */
 import {
   CONSUMES,
+  edgeFits,
+  EDGE_GROUP,
+  EDGE_VERB,
+  FEEDS_INTO,
   GENERATES,
   INPUTS,
   OUTPUTS,
@@ -54,8 +58,10 @@ describe("inferring a relationship", () => {
     // curator connects them explicitly or not at all.
     expect(inferEdgeType("c0", "s0")).toBe("");
     expect(inferEdgeType("t0", "c0")).toBe("");
-    expect(inferEdgeType("c0", "c1")).toBe("");
-    expect(inferEdgeType("s0", "s1")).toBe("");
+    // Same-kind pairs DO hold one now -- `feeds_into`, covered below. What
+    // still holds nothing is a pair of different kinds with no rule for it.
+    expect(inferEdgeType("c0", "d0")).toBe("");
+    expect(inferEdgeType("t0", "h0")).toBe("");
   });
 
   it("is direction-sensitive", () => {
@@ -164,12 +170,12 @@ describe("why an edge cannot be added", () => {
     );
   });
 
-  it("refuses a connection that would close a loop", () => {
-    expect(
-      problem({ from: "c0", to: "s0" }, [
-        { from: "s0", to: "c0", type: GENERATES },
-      ])
-    ).toMatch(/loop/i);
+  it("no longer refuses a connection that closes a loop", () => {
+    // Refinement loops back. `wouldCycle` still REPORTS one -- the Workflow
+    // board warns with a "save anyway" -- but storage no longer refuses it.
+    const closing = [{ from: "s0", to: "c0", type: GENERATES }];
+    expect(problem({ from: "c0", to: "s0" }, closing)).toBe("");
+    expect(wouldCycle(closing, { from: "c0", to: "s0" })).toBe(true);
   });
 
   it("accepts a legacy untyped edge between real artifacts", () => {
@@ -188,5 +194,66 @@ describe("finding an existing connection", () => {
     expect(hasEdge(edges, "s0", "c0")).toBe(true);
     expect(hasEdge(edges, "c0", "s0")).toBe(false);
     expect(hasEdge([], "d0", "s0")).toBe(false);
+  });
+});
+
+// Script -> Script, the one relationship joining two of a kind. It mirrors
+// backend/project/workflow.py exactly; if the two ever disagree the server
+// wins and this file is the one that is wrong.
+describe("feeds_into", () => {
+  it("is what any two of a kind hold", () => {
+    // One rule at every level: what came first feeds what came after.
+    expect(inferEdgeType("s0", "s1")).toBe(FEEDS_INTO);
+    expect(inferEdgeType("c0", "c1")).toBe(FEEDS_INTO);
+    expect(inferEdgeType("d0", "d1")).toBe(FEEDS_INTO);
+    expect(inferEdgeType("t0", "t1")).toBe(FEEDS_INTO);
+    expect(inferEdgeType("h0", "h1")).toBe(FEEDS_INTO);
+  });
+
+  it("refuses two different kinds, so it cannot shadow consumes", () => {
+    // A dataset reaching a script is `consumes`, and stays only that.
+    expect(edgeFits(FEEDS_INTO, "d", "s")).toBe(false);
+    expect(inferEdgeType("d0", "s0")).toBe(CONSUMES);
+    expect(
+      edgeProblem({ from: "d0", to: "s0", type: FEEDS_INTO }, ["d0", "s0"])
+    ).toBeTruthy();
+  });
+
+  it("does not disturb what the other pairs already inferred", () => {
+    expect(inferEdgeType("s0", "c0")).toBe(GENERATES);
+    expect(inferEdgeType("d0", "s0")).toBe(CONSUMES);
+    expect(inferEdgeType("t0", "s0")).toBe(USES_TOOL);
+  });
+
+  it("refuses a script feeding itself", () => {
+    expect(
+      edgeProblem({ from: "s0", to: "s0", type: FEEDS_INTO }, ["s0"])
+    ).toBeTruthy();
+  });
+
+  it("allows a pair of scripts feeding each other", () => {
+    // A refinement loop is work being described, not a mistake.
+    expect(
+      edgeProblem({ from: "s1", to: "s0", type: FEEDS_INTO }, ["s0", "s1"], [
+        { from: "s0", to: "s1", type: FEEDS_INTO },
+      ])
+    ).toBe("");
+  });
+
+  it("still refuses an artifact joined to itself", () => {
+    expect(
+      edgeProblem({ from: "s0", to: "s0", type: FEEDS_INTO }, ["s0"])
+    ).toBeTruthy();
+  });
+
+  it("round-trips through storage as a typed edge", () => {
+    const edge = { from: "s1", to: "s0", type: FEEDS_INTO };
+    expect(toStoredEdge(edge)).toEqual(edge);
+    expect(fromStoredEdge(toStoredEdge(edge))).toEqual(edge);
+  });
+
+  it("reads upstream to downstream, in one verb", () => {
+    expect(EDGE_VERB[FEEDS_INTO]).toBe("feeds into");
+    expect(EDGE_GROUP[FEEDS_INTO]).toBe("Receives from script");
   });
 });

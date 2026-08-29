@@ -12,6 +12,22 @@ just a line between two boxes:
     consumes    Dataset or External Data  ->  Script or Chart
     uses_tool   Tool                      ->  Script
     generates   Script                    ->  Chart
+    feeds_into  any kind                  ->  the SAME kind
+
+`feeds_into` joins two artifacts of the same kind, in that direction. Research
+is done in stages at every level: one script prepares what the next one plots,
+one dataset is derived from another, one panel becomes part of a composite
+figure, one tool is built on another. The rule is the same each time -- what
+came first feeds what came after -- so it is one relationship, not five.
+
+It is SAME-KIND ONLY. `d0 feeds_into s0` is refused, because a dataset
+reaching a script is already `consumes` and saying it twice in two vocabularies
+would make the graph ambiguous about what it means.
+
+CYCLES ARE ALLOWED. A workflow is not always a one-way pipeline: refinement
+loops back, and a curator recording that is describing their work rather than
+making a mistake. What is still refused is an artifact joined to ITSELF, which
+has no reading at all.
 
 An edge with no type is a LEGACY edge. It is accepted and preserved exactly as
 stored; nothing here rewrites one, because guessing what an old curator meant
@@ -47,13 +63,22 @@ EXTERNAL = "h"
 CONSUMES = "consumes"
 USES_TOOL = "uses_tool"
 GENERATES = "generates"
+FEEDS_INTO = "feeds_into"
 
 # Which endpoints each relationship is allowed to join, by id prefix.
+KINDS = {CHART, SCRIPT, DATASET, TOOL, EXTERNAL}
+
 EDGE_RULES = {
     CONSUMES: ({DATASET, EXTERNAL}, {SCRIPT, CHART}),
     USES_TOOL: ({TOOL}, {SCRIPT}),
     GENERATES: ({SCRIPT}, {CHART}),
+    FEEDS_INTO: (KINDS, KINDS),
 }
+
+# Relationships that additionally require BOTH ends to be the same kind.
+# Without this, `feeds_into` would overlap `consumes` and the graph would hold
+# two different names for one fact.
+SAME_KIND = frozenset({FEEDS_INTO})
 
 EDGE_TYPES = frozenset(EDGE_RULES)
 
@@ -223,9 +248,14 @@ def validate_workflow(paper):
                 raise WorkflowError(
                     "%s cannot be connected to %s as '%s'."
                     % (source, target, kind))
+            if kind in SAME_KIND and source[:1] != target[:1]:
+                raise WorkflowError(
+                    "'%s' joins two artifacts of the same kind, and %s and %s "
+                    "are not." % (kind, source, target))
         edges.append((source, target, kind))
 
-    if _has_cycle(edges):
-        raise WorkflowError(
-            "This workflow loops back on itself. A figure cannot help produce "
-            "the thing that produced it.")
+    # A cycle is NOT refused. Refinement loops -- fit, adjust, fit again --
+    # are real work, and a curator recording one is describing what they did.
+    # `_has_cycle` stays available for callers that want to warn about one;
+    # storage does not depend on the graph being acyclic, and every traversal
+    # in this codebase marks a node before descending into it.
