@@ -20,6 +20,7 @@ from project.workflow import (
     normalize_edge,
     validate_workflow,
 )
+from project.workflow import _has_cycle
 
 
 def paper(edges=None, **overrides):
@@ -109,31 +110,29 @@ class TestRefusedGraphs(unittest.TestCase):
         self.refuses([edge("s0", "c0", GENERATES)], "not part of this paper",
                      charts=[])
 
-    def test_a_direct_two_node_cycle(self):
-        self.refuses([edge("s0", "c0", GENERATES), ["c0", "s0"]],
-                     "loops back")
+    def test_a_direct_two_node_cycle_is_kept(self):
+        # A FEEDBACK LOOP the curator confirmed. Storage keeps what they
+        # confirmed; the Curator is where it is questioned and marked.
+        validate_workflow(paper([edge("s0", "c0", GENERATES), ["c0", "s0"]]))
 
-    def test_a_longer_cycle(self):
+    def test_a_longer_cycle_is_kept(self):
         data = paper()
         data["scripts"] = [{"id": "s0"}, {"id": "s1"}]
         data["workflow"] = {"nodes": [], "edges": [
             ["s0", "s1"], ["s1", "c0"], ["c0", "s0"],
         ]}
-        with self.assertRaises(WorkflowError) as caught:
-            validate_workflow(data)
-        self.assertIn("loops back", str(caught.exception).lower())
+        validate_workflow(data)
 
     def test_an_artifact_may_not_join_itself(self):
+        # The one shape with no reading at all, loops or not.
         self.refuses([["s0", "s0"]], "itself")
 
-    def test_a_hand_written_cycle_payload_is_refused(self):
-        # The UI never offers one, so a cycle arriving here was assembled by
-        # something other than the UI. The server is the authority.
-        data = paper([edge("d0", "s0", CONSUMES),
-                      edge("s0", "c0", GENERATES),
-                      {"from": "c0", "to": "d0"}])
-        with self.assertRaises(WorkflowError):
-            validate_workflow(data)
+    def test_the_cycle_check_is_still_available_to_callers(self):
+        # It stops being a refusal, not a fact. The Curator asks with it.
+        self.assertTrue(_has_cycle([("s0", "c0", GENERATES),
+                                    ("c0", "s0", None)]))
+        self.assertFalse(_has_cycle([("d0", "s0", CONSUMES),
+                                     ("s0", "c0", GENERATES)]))
 
     def test_a_relationship_its_endpoints_cannot_hold(self):
         # A tool does not generate a figure, and a chart does not consume.
@@ -241,26 +240,23 @@ class FeedsIntoTest(unittest.TestCase):
             validate_workflow(self.two_scripts([edge("s0", "s0", FEEDS_INTO)]))
         self.assertIn("itself", str(caught.exception))
 
-    def test_two_scripts_may_not_feed_each_other(self):
-        with self.assertRaises(WorkflowError) as caught:
-            validate_workflow(self.two_scripts([
-                edge("s0", "s1", FEEDS_INTO),
-                edge("s1", "s0", FEEDS_INTO),
-            ]))
-        self.assertIn("loops", str(caught.exception))
+    def test_two_scripts_may_feed_each_other_once_confirmed(self):
+        validate_workflow(self.two_scripts([
+            edge("s0", "s1", FEEDS_INTO),
+            edge("s1", "s0", FEEDS_INTO),
+        ]))
 
-    def test_a_longer_loop_is_refused(self):
-        with self.assertRaises(WorkflowError):
-            validate_workflow(paper([edge("s0", "s1", FEEDS_INTO),
-                                     edge("s1", "s2", FEEDS_INTO),
-                                     edge("s2", "s0", FEEDS_INTO)],
-                                    scripts=[{"id": "s0"}, {"id": "s1"},
-                                             {"id": "s2"}]))
+    def test_a_longer_loop_is_kept(self):
+        validate_workflow(paper([edge("s0", "s1", FEEDS_INTO),
+                                 edge("s1", "s2", FEEDS_INTO),
+                                 edge("s2", "s0", FEEDS_INTO)],
+                                scripts=[{"id": "s0"}, {"id": "s1"},
+                                         {"id": "s2"}]))
 
-    def test_no_other_kind_may_feed_its_own_kind(self):
-        # A derived dataset, a tool built on a tool and a figure composed of
-        # panels are real relationships that need models of their own. Sharing
-        # a first letter is not a reason to file them under this one.
+    def test_every_kind_may_feed_its_own_kind(self):
+        # One stage feeding the next happens at every level. Which of the two
+        # same-kind relationships is true -- this or `related_to` -- is the
+        # curator's to say, so both are storable and neither is inferred.
         pairs = (
             ("charts", "c0", "c1"),
             ("datasets", "d0", "d1"),
@@ -270,8 +266,14 @@ class FeedsIntoTest(unittest.TestCase):
         for key, first, second in pairs:
             data = paper([edge(first, second, FEEDS_INTO)],
                          **{key: [{"id": first}, {"id": second}]})
-            with self.assertRaises(WorkflowError):
-                validate_workflow(data)
+            validate_workflow(data)
+
+    def test_a_pair_may_hold_both_readings_only_once_each(self):
+        # `feeds_into` and `related_to` are different claims, so a pair may
+        # hold both -- but `related_to` still only once.
+        validate_workflow(paper([edge("c0", "c1", FEEDS_INTO),
+                                 edge("c0", "c1", RELATED_TO)],
+                                charts=[{"id": "c0"}, {"id": "c1"}]))
 
     def test_it_refuses_two_different_kinds(self):
         for source, target in (("d0", "s0"), ("t0", "s0"), ("s0", "c0"),
@@ -355,14 +357,11 @@ class RelatedToTest(unittest.TestCase):
             edge("c0", "c1", RELATED_TO),
         ]))
 
-    def test_it_does_not_hide_a_real_cycle(self):
-        # A directed loop is still refused with an association alongside it.
-        with self.assertRaises(WorkflowError):
-            validate_workflow(self.pair("charts", "c0", "c1", [
-                edge("c0", "c1", RELATED_TO),
-                edge("s0", "c0", GENERATES),
-                {"from": "c0", "to": "s0"},
-            ]))
+    def test_it_is_not_counted_as_flow_when_a_loop_is_looked_for(self):
+        # An association joins the graph but claims no direction, so it can
+        # neither make a loop nor be part of one.
+        self.assertFalse(_has_cycle([("c0", "c1", RELATED_TO),
+                                     ("c1", "c0", RELATED_TO)]))
 
     def test_the_directed_relationships_are_unchanged(self):
         validate_workflow(paper([edge("d0", "s0", CONSUMES)]))
@@ -372,10 +371,11 @@ class RelatedToTest(unittest.TestCase):
                                 scripts=[{"id": "s0"}, {"id": "s1"}]))
 
     def test_a_legacy_untyped_edge_is_still_read_as_a_flow(self):
-        # Nothing infers `related_to` for an old pair, and an untyped edge
-        # still counts when looking for a cycle.
-        with self.assertRaises(WorkflowError):
-            validate_workflow(paper([["s0", "c0"], ["c0", "s0"]]))
+        # Nothing infers `related_to` for an old pair: it was drawn as an
+        # arrow and still counts as one when a loop is looked for.
+        self.assertTrue(_has_cycle([("s0", "c0", None), ("c0", "s0", None)]))
+        # And it stores unchanged.
+        validate_workflow(paper([["s0", "c0"], ["c0", "s0"]]))
 
 
 if __name__ == "__main__":

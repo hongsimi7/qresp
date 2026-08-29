@@ -17,8 +17,12 @@ export const EXTERNAL = "h";
 export const CONSUMES = "consumes";
 export const USES_TOOL = "uses_tool";
 export const GENERATES = "generates";
-// Analysis is written in stages, and one script prepares what the next one
-// plots. Directed, upstream -> downstream.
+// One stage of the work feeding the next: same kind to same kind, directed
+// upstream -> downstream. `preprocess.py feeds into plot.py`.
+//
+// A same-kind pair can hold this OR `related_to`, and which one is true is
+// something only the curator knows -- so it is offered as a choice and never
+// inferred for them.
 export const FEEDS_INTO = "feeds_into";
 
 // THE OTHER CLASS OF EDGE: these two belong together.
@@ -39,12 +43,12 @@ export const EDGE_RULES = {
   [CONSUMES]: { from: [DATASET, EXTERNAL], to: [SCRIPT, CHART] },
   [USES_TOOL]: { from: [TOOL], to: [SCRIPT] },
   [GENERATES]: { from: [SCRIPT], to: [CHART] },
-  [FEEDS_INTO]: { from: [SCRIPT], to: [SCRIPT] },
+  [FEEDS_INTO]: { from: KINDS, to: KINDS },
   [RELATED_TO]: { from: KINDS, to: KINDS },
 };
 
 /** Relationships that also require both ends to be the same kind. */
-export const SAME_KIND = [RELATED_TO];
+export const SAME_KIND = [FEEDS_INTO, RELATED_TO];
 
 /** Relationships that state no direction. */
 export const UNDIRECTED = [RELATED_TO];
@@ -207,15 +211,147 @@ export const edgeProblem = (edge, knownIds, existingEdges = []) => {
     }
     return "";
   }
-  // Only edges that claim a direction can contradict each other by closing a
-  // loop, and only those are counted when checking for one.
-  const flowing = (existingEdges || []).filter(
+  // A loop is NOT a problem here. It is a feedback loop the curator has to
+  // confirm first -- see `closesLoop`, which the Curator asks about before
+  // making the edge, and which marks the result so a reader can tell a
+  // deliberate loop from a mistake.
+  return "";
+};
+
+/** Only the edges that claim a direction, and so can form a loop. */
+export const flowingOnly = (edges) =>
+  (edges || []).filter(
     (edge) => !UNDIRECTED.includes(fromStoredEdge(edge).type)
   );
-  if (wouldCycle(flowing, { from, to })) {
-    return "That would loop the workflow back on itself.";
+
+/**
+ * True when this connection would close a feedback loop.
+ *
+ * Undirected associations are left out: they state no order, so a pair of
+ * them is not a loop in any sense worth asking about.
+ */
+export const closesLoop = (edges, candidate) => {
+  if (!candidate || UNDIRECTED.includes(candidate.type)) return false;
+  const { from, to } = fromStoredEdge(candidate);
+  if (!from || !to) return false;
+  if (from === to) return true;
+
+  // Whether THIS edge closes a loop, which is not the same question as
+  // whether the graph contains one. Asking the second while adding several
+  // links at once marks every edge after the first loop as a loop too.
+  const adjacency = new Map();
+  flowingOnly(edges)
+    .map(fromStoredEdge)
+    .forEach((edge) => {
+      if (!adjacency.has(edge.from)) adjacency.set(edge.from, []);
+      adjacency.get(edge.from).push(edge.to);
+    });
+
+  const seen = new Set([to]);
+  const stack = [to];
+  while (stack.length) {
+    const node = stack.pop();
+    if (node === from) return true;
+    for (const next of adjacency.get(node) || []) {
+      if (seen.has(next)) continue;
+      seen.add(next);
+      stack.push(next);
+    }
   }
-  return "";
+  return false;
+};
+
+/**
+ * Which edges lie ON a directed loop, as `${from}->${to}` keys.
+ *
+ * An edge is on a loop when its target can reach its source again. The
+ * Curator draws these differently, because a feedback loop that looks like
+ * ordinary flow reads as a mistake in the graph rather than a claim about
+ * the work.
+ */
+export const loopEdgeKeys = (edges) => {
+  const flowing = flowingOnly(edges).map(fromStoredEdge);
+  const adjacency = new Map();
+  flowing.forEach(({ from, to }) => {
+    if (!adjacency.has(from)) adjacency.set(from, []);
+    adjacency.get(from).push(to);
+  });
+
+  const reaches = (start, goal) => {
+    const seen = new Set([start]);
+    const stack = [start];
+    while (stack.length) {
+      const node = stack.pop();
+      for (const next of adjacency.get(node) || []) {
+        if (next === goal) return true;
+        if (seen.has(next)) continue;
+        seen.add(next);
+        stack.push(next);
+      }
+    }
+    return false;
+  };
+
+  const keys = new Set();
+  flowing.forEach(({ from, to }) => {
+    if (reaches(to, from)) keys.add(`${from}->${to}`);
+  });
+  return keys;
+};
+
+/**
+ * The connected components of a paper's graph, as arrays of ids.
+ *
+ * Connectivity here is UNDIRECTED and includes associations: two artifacts
+ * joined any way at all are part of the same piece of work, and that is what
+ * a curator means by "one workflow". Components are DERIVED on every render
+ * from the artifacts and edges that exist -- there is no group model, nothing
+ * to migrate, and connecting two groups merges them while removing the last
+ * edge between them splits them again, with no extra code.
+ *
+ * Returns [connected components (2+ members), lone ids], each sorted, and the
+ * components ordered by their first member so the page does not reshuffle.
+ */
+export const componentsOf = (ids, edges) => {
+  const parent = new Map((ids || []).map((id) => [id, id]));
+  const find = (id) => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root);
+    let walk = id;
+    while (parent.get(walk) !== walk) {
+      const next = parent.get(walk);
+      parent.set(walk, root);
+      walk = next;
+    }
+    return root;
+  };
+  const union = (a, b) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+
+  (edges || []).forEach((edge) => {
+    const { from, to } = fromStoredEdge(edge);
+    if (parent.has(from) && parent.has(to)) union(from, to);
+  });
+
+  const groups = new Map();
+  (ids || []).forEach((id) => {
+    const root = find(id);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(id);
+  });
+
+  const connected = [];
+  const alone = [];
+  Array.from(groups.values()).forEach((members) => {
+    const sorted = members.slice().sort();
+    if (sorted.length > 1) connected.push(sorted);
+    else alone.push(sorted[0]);
+  });
+  connected.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return { connected, alone: alone.sort() };
 };
 
 /** True when adding `candidate` to `edges` would close a cycle. */

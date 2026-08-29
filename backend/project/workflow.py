@@ -18,12 +18,18 @@ DIRECTED (provenance): what produced what.
     consumes    Dataset or External Data  ->  Script or Chart
     uses_tool   Tool                      ->  Script
     generates   Script                    ->  Chart
-    feeds_into  Script                    ->  Script
+    feeds_into  any kind                  ->  the SAME kind
 
-These describe a flow, so they read one way only and a cycle among them is
-refused: a figure cannot help produce the thing that produced it. An
-experiment repeated until it converged is described in the script's own
-README, not drawn as a loop here.
+These describe a flow, so they read one way only.
+
+A CYCLE AMONG THEM IS ACCEPTED, because refinement is real: fit, adjust, fit
+again. It is not accepted quietly -- the Curator asks before drawing one and
+then shows it as a FEEDBACK LOOP, marked differently from ordinary flow, so a
+reader can tell a deliberate loop from a mistake. Storage's job is to keep
+what the curator confirmed, so this module no longer refuses it.
+
+What is still refused is an artifact joined to ITSELF, which has no reading at
+all, and every endpoint rule above.
 
 UNDIRECTED (association): these two belong together.
 
@@ -84,13 +90,17 @@ EDGE_RULES = {
     CONSUMES: ({DATASET, EXTERNAL}, {SCRIPT, CHART}),
     USES_TOOL: ({TOOL}, {SCRIPT}),
     GENERATES: ({SCRIPT}, {CHART}),
-    FEEDS_INTO: ({SCRIPT}, {SCRIPT}),
+    FEEDS_INTO: (KINDS, KINDS),
     RELATED_TO: (KINDS, KINDS),
 }
 
-# Relationships that additionally require both ends to be the same kind. Only
-# the undirected one: `feeds_into` gets there through its own endpoint rule.
-SAME_KIND = frozenset({RELATED_TO})
+# Relationships that additionally require both ends to be the same kind.
+#
+# These two are the SAME-KIND PAIR'S CHOICE, and the curator makes it: one
+# stage feeding the next is `feeds_into`, two things that merely belong
+# together are `related_to`. Neither is ever inferred for a same-kind pair,
+# because only the curator knows which they mean.
+SAME_KIND = frozenset({FEEDS_INTO, RELATED_TO})
 
 # Relationships that state no direction. They are excluded from the cycle
 # check, and the same pair may only be recorded once however it is ordered.
@@ -177,7 +187,12 @@ def _has_cycle(edges):
     than a validation error.
     """
     adjacency = {}
-    for source, target, _kind in edges:
+    for source, target, kind in edges:
+        # An undirected association states no order, so it can neither
+        # form a loop nor be part of one. A legacy untyped pair WAS
+        # drawn as an arrow and still counts as one.
+        if kind in UNDIRECTED:
+            continue
         adjacency.setdefault(source, []).append(target)
 
     UNVISITED, IN_PROGRESS, DONE = 0, 1, 2
@@ -283,10 +298,8 @@ def validate_workflow(paper):
                 undirected_pairs.add(pair)
         edges.append((source, target, kind))
 
-    # Only the edges that claim a direction can contradict each other by
-    # closing a loop. An undirected association says nothing about order, so
-    # a pair of them is not a cycle in any sense worth refusing.
-    if _has_cycle([e for e in edges if e[2] not in UNDIRECTED]):
-        raise WorkflowError(
-            "This workflow loops back on itself. A figure cannot help produce "
-            "the thing that produced it.")
+    # A directed cycle is a FEEDBACK LOOP the curator confirmed, not an error.
+    # `_has_cycle` stays exported -- the Curator uses it to ask before making
+    # one, and the Workflow board to warn -- but it does not refuse here.
+    # Every traversal in this codebase marks a node before descending, so a
+    # loop terminates wherever it is walked.

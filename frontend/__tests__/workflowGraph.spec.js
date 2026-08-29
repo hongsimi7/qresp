@@ -19,7 +19,10 @@ import {
   PROCESS,
   RELATED_TO,
   USES_TOOL,
+  closesLoop,
+  componentsOf,
   edgeProblem,
+  loopEdgeKeys,
   fromStoredEdge,
   hasEdge,
   inferEdgeType,
@@ -61,9 +64,11 @@ describe("inferring a relationship", () => {
     // curator connects them explicitly or not at all.
     expect(inferEdgeType("c0", "s0")).toBe("");
     expect(inferEdgeType("t0", "c0")).toBe("");
-    expect(inferEdgeType("c0", "c1")).toBe("");
+    // A same-kind pair DOES hold one -- `feeds_into` -- so what holds
+    // nothing is a pair of different kinds with no rule for it.
     expect(inferEdgeType("c0", "d0")).toBe("");
     expect(inferEdgeType("t0", "h0")).toBe("");
+    expect(inferEdgeType("d0", "t0")).toBe("");
   });
 
   it("is direction-sensitive", () => {
@@ -172,10 +177,12 @@ describe("why an edge cannot be added", () => {
     );
   });
 
-  it("refuses a connection that would close a loop", () => {
+  it("does not refuse a loop, it reports one to be confirmed", () => {
+    // Refinement is real work. The Curator asks before drawing one and then
+    // marks it as a feedback loop; storage keeps what was confirmed.
     const closing = [{ from: "s0", to: "c0", type: GENERATES }];
-    expect(problem({ from: "c0", to: "s0" }, closing)).toMatch(/loop/i);
-    expect(wouldCycle(closing, { from: "c0", to: "s0" })).toBe(true);
+    expect(problem({ from: "c0", to: "s0" }, closing)).toBe("");
+    expect(closesLoop(closing, { from: "c0", to: "s0" })).toBe(true);
   });
 
   it("accepts a legacy untyped edge between real artifacts", () => {
@@ -201,15 +208,13 @@ describe("finding an existing connection", () => {
 // backend/project/workflow.py exactly; if the two ever disagree the server
 // wins and this file is the one that is wrong.
 describe("feeds_into", () => {
-  it("is what two SCRIPTS hold, and nothing else", () => {
-    expect(inferEdgeType("s0", "s1")).toBe(FEEDS_INTO);
-    // A derived dataset, a tool built on a tool and a figure composed of
-    // panels each need a model of their own. Sharing a first letter is not
-    // a reason to file them under this one.
-    expect(edgeFits(FEEDS_INTO, "c", "c")).toBe(false);
-    expect(edgeFits(FEEDS_INTO, "d", "d")).toBe(false);
-    expect(edgeFits(FEEDS_INTO, "t", "t")).toBe(false);
-    expect(edgeFits(FEEDS_INTO, "h", "h")).toBe(false);
+  it("is one stage of a kind feeding the next, at every level", () => {
+    ["c", "s", "d", "t", "h"].forEach((kind) =>
+      expect(edgeFits(FEEDS_INTO, kind, kind)).toBe(true)
+    );
+    // Still same-kind only: a dataset reaching a script is `consumes`.
+    expect(edgeFits(FEEDS_INTO, "d", "s")).toBe(false);
+    expect(inferEdgeType("d0", "s0")).toBe(CONSUMES);
   });
 
   it("refuses two different kinds, so it cannot shadow consumes", () => {
@@ -232,14 +237,12 @@ describe("feeds_into", () => {
     ).toBeTruthy();
   });
 
-  it("refuses a pair of scripts feeding each other", () => {
-    // An experiment repeated until it converged belongs in the script's own
-    // README, not drawn as a loop in the provenance graph.
+  it("reports a pair of scripts feeding each other as a loop", () => {
+    const held = [{ from: "s0", to: "s1", type: FEEDS_INTO }];
     expect(
-      edgeProblem({ from: "s1", to: "s0", type: FEEDS_INTO }, ["s0", "s1"], [
-        { from: "s0", to: "s1", type: FEEDS_INTO },
-      ])
-    ).toMatch(/loop/i);
+      edgeProblem({ from: "s1", to: "s0", type: FEEDS_INTO }, ["s0", "s1"], held)
+    ).toBe("");
+    expect(closesLoop(held, { from: "s1", to: "s0", type: FEEDS_INTO })).toBe(true);
   });
 
   it("still refuses an artifact joined to itself", () => {
@@ -273,9 +276,9 @@ describe("related_to", () => {
 
   it("is never inferred, only chosen", () => {
     // `inferEdgeType` answers "what does this pair PRODUCE". An association
-    // is a claim only a curator can make.
+    // is a claim only a curator can make, so it is never the answer.
     expect(DIRECTED).not.toContain(RELATED_TO);
-    expect(inferEdgeType("c0", "c1")).toBe("");
+    expect(inferEdgeType("c0", "c1")).toBe(FEEDS_INTO);
     expect(inferEdgeType("s0", "s1")).toBe(FEEDS_INTO);
   });
 
@@ -303,14 +306,15 @@ describe("related_to", () => {
     ).not.toMatch(/loop/i);
   });
 
-  it("does not let an association hide a real loop", () => {
+  it("does not let an association look like a loop, or hide one", () => {
     const held = [
       { from: "c0", to: "c1", type: RELATED_TO },
       { from: "s0", to: "c0", type: GENERATES },
     ];
-    expect(
-      edgeProblem({ from: "c0", to: "s0" }, ["c0", "c1", "s0"], held)
-    ).toMatch(/loop/i);
+    // The association is not a loop...
+    expect(closesLoop(held, { from: "c1", to: "c0", type: RELATED_TO })).toBe(false);
+    // ...and it does not stop a real one being seen.
+    expect(closesLoop(held, { from: "c0", to: "s0", type: GENERATES })).toBe(true);
   });
 
   it("reads without arrows, because neither end came first", () => {
@@ -326,5 +330,111 @@ describe("related_to", () => {
   it("round-trips through storage as a typed edge", () => {
     const edge = { from: "d0", to: "d1", type: RELATED_TO };
     expect(fromStoredEdge(toStoredEdge(edge))).toEqual(edge);
+  });
+});
+
+// A workflow is a GRAPH. What a curator calls "one workflow" is a connected
+// component of it, derived on every render -- there is no group model.
+describe("connected components", () => {
+  it("calls an artifact with no edges its own", () => {
+    const { connected, alone } = componentsOf(["c0", "s0"], []);
+    expect(connected).toEqual([]);
+    expect(alone).toEqual(["c0", "s0"]);
+  });
+
+  it("gathers everything joined, however it is joined", () => {
+    const { connected, alone } = componentsOf(
+      ["c0", "s0", "d0", "t0"],
+      [
+        { from: "s0", to: "c0", type: GENERATES },
+        { from: "d0", to: "s0", type: CONSUMES },
+      ]
+    );
+    expect(connected).toEqual([["c0", "d0", "s0"]]);
+    expect(alone).toEqual(["t0"]);
+  });
+
+  it("merges two groups the moment they are joined", () => {
+    const ids = ["c0", "s0", "c1", "s1"];
+    const apart = [
+      { from: "s0", to: "c0", type: GENERATES },
+      { from: "s1", to: "c1", type: GENERATES },
+    ];
+    expect(componentsOf(ids, apart).connected).toHaveLength(2);
+
+    const joined = [...apart, { from: "s0", to: "s1", type: FEEDS_INTO }];
+    expect(componentsOf(ids, joined).connected).toEqual([
+      ["c0", "c1", "s0", "s1"],
+    ]);
+  });
+
+  it("splits them again when the last edge between them goes", () => {
+    const ids = ["c0", "s0", "c1", "s1"];
+    const joined = [
+      { from: "s0", to: "c0", type: GENERATES },
+      { from: "s1", to: "c1", type: GENERATES },
+      { from: "s0", to: "s1", type: FEEDS_INTO },
+    ];
+    const cut = joined.filter((edge) => edge.type !== FEEDS_INTO);
+    expect(componentsOf(ids, cut).connected).toHaveLength(2);
+  });
+
+  it("counts an undirected association as joining too", () => {
+    // Two figures a curator says are related are one piece of work.
+    const { connected } = componentsOf(
+      ["c0", "c1"],
+      [{ from: "c0", to: "c1", type: RELATED_TO }]
+    );
+    expect(connected).toEqual([["c0", "c1"]]);
+  });
+
+  it("ignores an edge naming something the paper does not have", () => {
+    const { connected, alone } = componentsOf(
+      ["c0"],
+      [{ from: "s9", to: "c0", type: GENERATES }]
+    );
+    expect(connected).toEqual([]);
+    expect(alone).toEqual(["c0"]);
+  });
+
+  it("reads a legacy untyped pair as joining", () => {
+    expect(componentsOf(["c0", "s0"], [["s0", "c0"]]).connected).toEqual([
+      ["c0", "s0"],
+    ]);
+  });
+});
+
+describe("marking a feedback loop", () => {
+  it("names the edges that lie on one", () => {
+    const keys = loopEdgeKeys([
+      { from: "s0", to: "c0", type: GENERATES },
+      { from: "c0", to: "s0", type: CONSUMES },
+    ]);
+    expect(Array.from(keys).sort()).toEqual(["c0->s0", "s0->c0"]);
+  });
+
+  it("leaves ordinary flow unmarked", () => {
+    const keys = loopEdgeKeys([
+      { from: "d0", to: "s0", type: CONSUMES },
+      { from: "s0", to: "c0", type: GENERATES },
+    ]);
+    expect(keys.size).toBe(0);
+  });
+
+  it("marks only the edges on the loop, not the whole graph", () => {
+    const keys = loopEdgeKeys([
+      { from: "d0", to: "s0", type: CONSUMES },
+      { from: "s0", to: "s1", type: FEEDS_INTO },
+      { from: "s1", to: "s0", type: FEEDS_INTO },
+    ]);
+    expect(Array.from(keys).sort()).toEqual(["s0->s1", "s1->s0"]);
+  });
+
+  it("never marks an association", () => {
+    const keys = loopEdgeKeys([
+      { from: "c0", to: "c1", type: RELATED_TO },
+      { from: "c1", to: "c0", type: RELATED_TO },
+    ]);
+    expect(keys.size).toBe(0);
   });
 });
