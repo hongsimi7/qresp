@@ -597,13 +597,22 @@ const FigureWorkspace = () => {
   };
 
   /** The artifacts this one is associated with, in either stored order. */
+  /**
+   * The associations this artifact is part of, as {other, edge}.
+   *
+   * The EDGE comes back too, in the orientation it is stored in. An
+   * association reads the same from either end but is stored one way round,
+   * and `unlink` matches on the stored endpoints.
+   */
   const relatedOf = (id) =>
     edges
       .map(fromStoredEdge)
       .filter((edge) => edge.type === RELATED_TO)
-      .map((edge) =>
-        edge.from === id ? edge.to : edge.to === id ? edge.from : ""
-      )
+      .map((edge) => {
+        if (edge.from === id) return { other: edge.to, edge };
+        if (edge.to === id) return { other: edge.from, edge };
+        return null;
+      })
       .filter(Boolean);
 
   // ---- ROW FURNITURE -----------------------------------------------------
@@ -655,6 +664,34 @@ const FigureWorkspace = () => {
     );
   };
 
+  /**
+   * Break ONE relationship.
+   *
+   * Unlink is an EDGE action, not a node action. It used to hang off the
+   * child's overflow menu, which meant a relationship was only reachable
+   * from one of its two ends -- and an edge running from a node that happens
+   * to be the root of its outline down to a child had no row offering it at
+   * all, so it could not be broken from the screen.
+   *
+   * It goes beside the sentence instead. Wherever a relationship is written
+   * out, the way to undo that relationship is next to it.
+   *
+   * `edge` carries the STORED orientation, which is what `unlink` matches on
+   * -- passing the endpoints in reading order would silently remove nothing
+   * for an association drawn from its other end.
+   */
+  const UnlinkEdge = ({ edge }) => (
+    <RowAction
+      onClick={() => unlink(edge.from, edge.to)}
+      aria-label={`Unlink ${label(edge.from)} ${
+        EDGE_VERB[edge.type] || "connects to"
+      } ${label(edge.to)}`}
+      data-testid={`fw-unlink-${edge.from}-${edge.to}`}
+    >
+      Unlink
+    </RowAction>
+  );
+
   const OutlineRow = ({ node, depth }) => {
     const { id, parentId, type, feedback, first } = node;
     const edge = parentId
@@ -701,6 +738,7 @@ const FigureWorkspace = () => {
               {sentence(edge)}
             </Typography>
           ) : null}
+          {edge ? <UnlinkEdge edge={edge} /> : null}
           {edge && edge.feedback ? (
             <Typography
               variant="caption"
@@ -837,7 +875,7 @@ const FigureWorkspace = () => {
             Related resources
           </Typography>
           <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
-            {relatedOf(node.id).map((other) => (
+            {relatedOf(node.id).map(({ other, edge }) => (
               <Box
                 component="li"
                 key={other}
@@ -866,6 +904,7 @@ const FigureWorkspace = () => {
                 >
                   {sentence({ from: node.id, to: other, type: RELATED_TO })}
                 </Typography>
+                <UnlinkEdge edge={edge} />
                 <RowAction
                   onClick={() => {
                     const target = document.getElementById(anchorOf(other));
@@ -1248,18 +1287,6 @@ const FigureWorkspace = () => {
         >
           Edit
         </MenuItem>
-        {moreAnchor.parentId ? (
-          <MenuItem
-            data-testid={`fw-unlink-${moreAnchor.id}-${moreAnchor.parentId}`}
-            onClick={() => {
-              const { id, parentId } = moreAnchor;
-              setMoreAnchor({ id: "", parentId: "", el: null });
-              unlink(id, parentId);
-            }}
-          >
-            {`Unlink from ${label(moreAnchor.parentId)}`}
-          </MenuItem>
-        ) : null}
         <MenuItem
           data-testid={`fw-remove-${moreAnchor.id}`}
           onClick={() => {

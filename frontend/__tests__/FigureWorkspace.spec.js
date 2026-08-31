@@ -8,7 +8,7 @@
  * form on the EXISTING model.
  */
 import { useState } from "react";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 jest.mock("axios");
@@ -867,7 +867,7 @@ describe("editing and unlinking, behind the overflow", () => {
       scripts: [SCRIPT],
       workflow: { nodes: [], edges: [{ from: "s0", to: "c0", type: "generates" }] },
     });
-    await openMoreFor(u, "s0");
+    // Beside the sentence, not inside a node's menu.
     await u.click(screen.getByTestId("fw-unlink-s0-c0"));
 
     expect(ctx.unlink).toHaveBeenCalledTimes(1);
@@ -875,10 +875,22 @@ describe("editing and unlinking, behind the overflow", () => {
     expect(ctx.del).not.toHaveBeenCalled();
   });
 
-  it("offers no unlink on a row that has no parent", async () => {
+  it("keeps unlink out of the node's own menu", async () => {
+    // It is an EDGE action. A node menu can only offer the one edge that
+    // happens to run to its parent, which is how some relationships ended
+    // up with no way off the screen at all.
     const u = user();
+    renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT],
+      workflow: { nodes: [], edges: [{ from: "s0", to: "c0", type: "generates" }] },
+    });
+    const menu = within(await openMoreFor(u, "s0"));
+    expect(menu.queryByText(/unlink/i)).not.toBeInTheDocument();
+  });
+
+  it("offers no unlink where no relationship is written", () => {
     renderWorkspace({ charts: [FIGURE] });
-    await openMoreFor(u, "c0");
     expect(screen.queryByTestId(/^fw-unlink-/)).not.toBeInTheDocument();
   });
 });
@@ -2384,5 +2396,167 @@ describe("the feedback mark belongs to the edge that was confirmed", () => {
 
     expect(edges).toEqual([A_TO_B]);
     expect(screen.queryByTestId(/^fw-feedback-/)).not.toBeInTheDocument();
+  });
+});
+
+// UNLINK IS AN EDGE ACTION.
+//
+// It used to hang off a node's overflow menu, which reaches only the one
+// edge running to that node's parent. An edge leaving the ROOT of an outline
+// had no row offering it, so that relationship could not be broken from the
+// screen at all.
+
+describe("breaking one relationship", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  const scripts = [SCRIPT, { id: "s1", readme: "preprocess.py" }];
+
+  it("reaches an edge leaving the root of its outline", () => {
+    // s0 roots this outline and s1 hangs under it; the edge s0 -> s1 is
+    // written on the reference row, and that is where it can be undone.
+    const ctx = renderWorkspace({
+      charts: [FIGURE],
+      scripts,
+      workflow: {
+        nodes: [],
+        edges: [
+          { from: "s1", to: "s0", type: "feeds_into" },
+          { from: "s0", to: "s1", type: "feeds_into" },
+        ],
+      },
+    });
+
+    expect(screen.getByTestId("fw-unlink-s0-s1")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-unlink-s1-s0")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("fw-unlink-s0-s1"));
+    expect(ctx.unlink).toHaveBeenCalledTimes(1);
+    expect(ctx.unlink).toHaveBeenCalledWith("s0", "s1");
+  });
+
+  it("sits beside every relationship that is written out", () => {
+    renderWorkspace({
+      charts: [FIGURE, { id: "c1", caption: "Band structure" }],
+      scripts,
+      datasets: [{ id: "d0", readme: "spectra" }],
+      tools: [{ id: "t0", packageName: "numpy" }],
+      workflow: {
+        nodes: [],
+        edges: [
+          { from: "s0", to: "c0", type: "generates" },
+          { from: "d0", to: "s0", type: "consumes" },
+          { from: "t0", to: "s0", type: "uses_tool" },
+          { from: "s1", to: "s0", type: "feeds_into" },
+          { from: "c0", to: "c1", type: "related_to" },
+        ],
+      },
+    });
+
+    // Every directed relationship is written as a flow sentence...
+    ["s0-c0", "d0-s0", "t0-s0", "s1-s0"].forEach((pair) =>
+      expect(screen.getByTestId(`fw-flow-${pair}`)).toBeInTheDocument()
+    );
+    // ...and the association as a relation line.
+    expect(screen.getByTestId("fw-relation-c0-c1")).toBeInTheDocument();
+
+    // Each of them carries its own way to undo it.
+    ["s0-c0", "d0-s0", "t0-s0", "s1-s0", "c0-c1"].forEach((pair) =>
+      expect(screen.getAllByTestId(`fw-unlink-${pair}`).length).toBeGreaterThan(0)
+    );
+  });
+
+  it("names both ends and the relationship, for a screen reader", () => {
+    renderWorkspace({
+      charts: [FIGURE],
+      scripts,
+      workflow: { nodes: [], edges: [{ from: "s1", to: "s0", type: "feeds_into" }] },
+    });
+    expect(
+      screen.getByRole("button", { name: "Unlink preprocess.py feeds into plot_dos.py" })
+    ).toBeInTheDocument();
+  });
+
+  it("breaks an association from either end, in its stored direction", () => {
+    // Stored c0 -> c1. Read from c1 it says the same thing, and unlinking
+    // from there must still name the endpoints the record holds.
+    const ctx = renderWorkspace({
+      charts: [FIGURE, { id: "c1", caption: "Band structure" }],
+      workflow: { nodes: [], edges: [{ from: "c0", to: "c1", type: "related_to" }] },
+    });
+
+    const buttons = screen.getAllByTestId("fw-unlink-c0-c1");
+    expect(buttons.length).toBe(2);
+    fireEvent.click(buttons[1]);
+    expect(ctx.unlink).toHaveBeenCalledWith("c0", "c1");
+  });
+
+  it("breaks a feedback edge and takes its mark with it", () => {
+    const ctx = renderWorkspace({
+      charts: [FIGURE],
+      scripts,
+      workflow: {
+        nodes: [],
+        edges: [
+          { from: "s1", to: "s0", type: "feeds_into" },
+          { from: "s0", to: "s1", type: "feeds_into", feedback: true },
+        ],
+      },
+    });
+    expect(screen.getByTestId("fw-feedback-s0-s1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("fw-unlink-s0-s1"));
+    expect(ctx.unlink).toHaveBeenCalledWith("s0", "s1");
+
+    ctx.rerenderWith({
+      workflow: { nodes: [], edges: [{ from: "s1", to: "s0", type: "feeds_into" }] },
+    });
+    expect(screen.queryByTestId(/^fw-feedback-/)).not.toBeInTheDocument();
+    // The other edge is untouched and still plain.
+    expect(screen.getByTestId("fw-lane-edge-s1-s0")).toHaveAttribute(
+      "data-loop",
+      "false"
+    );
+  });
+
+  it("removes one edge of a shared artifact and keeps the rest", () => {
+    // plot_dos.py generates both figures. Breaking one must not touch the
+    // other, and must not touch the script.
+    const ctx = renderWorkspace({
+      charts: [FIGURE, { id: "c1", caption: "Band structure" }],
+      scripts: [SCRIPT],
+      workflow: {
+        nodes: [],
+        edges: [
+          { from: "s0", to: "c0", type: "generates" },
+          { from: "s0", to: "c1", type: "generates" },
+        ],
+      },
+    });
+
+    fireEvent.click(screen.getByTestId("fw-unlink-s0-c1"));
+    expect(ctx.unlink).toHaveBeenCalledTimes(1);
+    expect(ctx.unlink).toHaveBeenCalledWith("s0", "c1");
+    // No artifact was created or destroyed to do it.
+    expect(ctx.del).not.toHaveBeenCalled();
+    expect(ctx.helpers.openForm).not.toHaveBeenCalled();
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+
+    ctx.rerenderWith({
+      workflow: { nodes: [], edges: [{ from: "s0", to: "c0", type: "generates" }] },
+    });
+    expect(screen.getByTestId("fw-node-s0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-flow-s0-c0")).toBeInTheDocument();
+    expect(screen.queryByTestId("fw-flow-s0-c1")).not.toBeInTheDocument();
+  });
+
+  it("is a real button a keyboard can reach", () => {
+    renderWorkspace({
+      charts: [FIGURE],
+      scripts,
+      workflow: { nodes: [], edges: [{ from: "s1", to: "s0", type: "feeds_into" }] },
+    });
+    const button = screen.getByTestId("fw-unlink-s1-s0");
+    expect(button.tagName).toBe("BUTTON");
+    expect(button).not.toBeDisabled();
+    expect(button).not.toHaveAttribute("tabindex", "-1");
   });
 });
