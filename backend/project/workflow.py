@@ -31,6 +31,25 @@ what the curator confirmed, so this module no longer refuses it.
 What is still refused is an artifact joined to ITSELF, which has no reading at
 all, and every endpoint rule above.
 
+GENERIC (the arrow a curator draws): this led to that.
+
+    links_to    any kind                  ->  any kind
+
+The five relationships above were derived from one reading of how a paper is
+made -- data goes into a script, a script makes a figure. Real work does not
+respect it: a script WRITES a dataset, a figure is built from another figure,
+a tool is configured by a dataset. Under the old rules those arrows could not
+be drawn at all, because the endpoint rules said which kind was allowed to be
+upstream.
+
+`links_to` carries no such claim. It says only that one thing led to another,
+in that direction, and so it joins ANY two artifacts. Both `Script -> Dataset`
+and `Dataset -> Script` are storable, as separate facts.
+
+It does NOT loosen the five above. Their endpoint rules are untouched, and a
+record holding them keeps them exactly as written -- nothing here converts an
+old edge into this one.
+
 UNDIRECTED (association): these two belong together.
 
     related_to  any kind                  <-> the SAME kind
@@ -82,6 +101,7 @@ USES_TOOL = "uses_tool"
 GENERATES = "generates"
 FEEDS_INTO = "feeds_into"
 RELATED_TO = "related_to"
+LINKS_TO = "links_to"
 
 # Which endpoints each relationship is allowed to join, by id prefix.
 KINDS = {CHART, SCRIPT, DATASET, TOOL, EXTERNAL}
@@ -92,7 +112,13 @@ EDGE_RULES = {
     GENERATES: ({SCRIPT}, {CHART}),
     FEEDS_INTO: (KINDS, KINDS),
     RELATED_TO: (KINDS, KINDS),
+    LINKS_TO: (KINDS, KINDS),
 }
+
+# Relationships whose same (from, to) pair may only be recorded once. Saying
+# `a links_to b` twice is one fact written twice; saying `b links_to a` as
+# well is a different fact and is allowed.
+ONCE_PER_DIRECTION = frozenset({LINKS_TO})
 
 # Relationships that additionally require both ends to be the same kind.
 #
@@ -241,6 +267,7 @@ def validate_workflow(paper):
     known = artifact_types(paper)
     edges = []
     undirected_pairs = set()
+    directed_pairs = set()
     for raw in raw_edges:
         edge = normalize_edge(raw)
         if edge is None:
@@ -288,6 +315,13 @@ def validate_workflow(paper):
                 raise WorkflowError(
                     "'%s' joins two artifacts of the same kind, and %s and %s "
                     "are not." % (kind, source, target))
+            if kind in ONCE_PER_DIRECTION:
+                # The same arrow twice is one fact written twice. The
+                # OPPOSITE arrow is a different fact and is left alone.
+                if (source, target, kind) in directed_pairs:
+                    raise WorkflowError(
+                        "%s already links to %s." % (source, target))
+                directed_pairs.add((source, target, kind))
             if kind in UNDIRECTED:
                 # One fact, however it is ordered.
                 pair = frozenset((source, target))

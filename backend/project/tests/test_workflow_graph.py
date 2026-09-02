@@ -12,6 +12,7 @@ from project.workflow import (
     CONSUMES,
     FEEDS_INTO,
     GENERATES,
+    LINKS_TO,
     RELATED_TO,
     USES_TOOL,
     WorkflowError,
@@ -427,6 +428,84 @@ class FeedbackFlagTest(unittest.TestCase):
         data = paper([["s0", "c0"]])
         validate_workflow(data)
         self.assertEqual(data["workflow"]["edges"], [["s0", "c0"]])
+
+
+class LinksToTest(unittest.TestCase):
+    """The arrow a curator draws, between any two things.
+
+    The five older relationships came from one reading of how a paper is
+    made. Real work does not respect it -- a script writes a dataset, a
+    figure is built from another figure -- and under those endpoint rules
+    none of those arrows could be drawn. This one carries no claim beyond
+    direction, so it joins anything to anything.
+    """
+
+    KINDS = ("c0", "s0", "d0", "t0", "h0")
+
+    def arrow(self, source, target):
+        return edge(source, target, LINKS_TO)
+
+    def test_every_combination_of_two_kinds(self):
+        import itertools
+        for source, target in itertools.permutations(self.KINDS, 2):
+            validate_workflow(paper([self.arrow(source, target)]))
+
+    def test_the_pair_the_old_rules_forbade_both_ways(self):
+        # `consumes` said a dataset feeds a script and never the reverse.
+        validate_workflow(paper([self.arrow("s0", "d0")]))
+        validate_workflow(paper([self.arrow("d0", "s0")]))
+
+    def test_both_directions_at_once(self):
+        # Two different facts, not one written twice.
+        validate_workflow(paper([self.arrow("s0", "d0"),
+                                 self.arrow("d0", "s0")]))
+
+    def test_the_same_direction_twice_is_refused(self):
+        with self.assertRaises(WorkflowError) as caught:
+            validate_workflow(paper([self.arrow("s0", "d0"),
+                                     self.arrow("s0", "d0")]))
+        self.assertIn("already links", str(caught.exception))
+
+    def test_an_artifact_may_not_link_to_itself(self):
+        with self.assertRaises(WorkflowError) as caught:
+            validate_workflow(paper([self.arrow("s0", "s0")]))
+        self.assertIn("itself", str(caught.exception))
+
+    def test_a_confirmed_loop_is_kept(self):
+        # Cycles follow the existing feedback flow: the Curator asks, and
+        # storage keeps what was confirmed.
+        validate_workflow(paper([
+            self.arrow("s0", "c0"),
+            {"from": "c0", "to": "s0", "type": LINKS_TO, "feedback": True},
+        ]))
+
+    def test_the_feedback_mark_rides_along_unchanged(self):
+        data = paper([
+            {"from": "s0", "to": "d0", "type": LINKS_TO, "feedback": True},
+        ])
+        before = [dict(e) for e in data["workflow"]["edges"]]
+        validate_workflow(data)
+        self.assertEqual(data["workflow"]["edges"], before)
+
+    def test_it_does_not_loosen_the_older_relationships(self):
+        # Adding a permissive type must not make the strict ones permissive.
+        for source, target, kind in (("t0", "c0", USES_TOOL),
+                                     ("c0", "s0", GENERATES),
+                                     ("s0", "d0", CONSUMES)):
+            with self.assertRaises(WorkflowError):
+                validate_workflow(paper([edge(source, target, kind)]))
+
+    def test_it_does_not_convert_an_older_edge(self):
+        # What was written stays written. Nothing migrates.
+        data = paper([edge("s0", "c0", GENERATES), ["d0", "s0"]])
+        validate_workflow(data)
+        self.assertEqual(
+            data["workflow"]["edges"],
+            [{"from": "s0", "to": "c0", "type": GENERATES}, ["d0", "s0"]])
+
+    def test_it_still_answers_to_the_paper(self):
+        with self.assertRaises(WorkflowError):
+            validate_workflow(paper([self.arrow("s0", "s9")]))
 
 
 if __name__ == "__main__":
