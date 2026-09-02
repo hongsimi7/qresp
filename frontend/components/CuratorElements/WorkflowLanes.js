@@ -1,114 +1,137 @@
-import { Fragment } from "react";
 import PropTypes from "prop-types";
 
-import { Box, Typography } from "@mui/material";
+import { Box } from "@mui/material";
 
 import {
-  CHART,
   EDGE_VERB,
-  INPUTS,
-  OUTPUTS,
-  PROCESS,
-  RELATED_TO,
   UNDIRECTED,
   fromStoredEdge,
-  laneOf,
   prefixOf,
 } from "../../Utils/workflowGraph";
 
 // ONE PIECE OF WORK, DRAWN.
 //
-// The outline says what belongs to what; this says what the shape of the work
-// IS -- which inputs feed which steps, which steps make which figures, and
-// where the same resource serves several places at once. A tree cannot show
-// the last of those without either duplicating a node or hiding an edge.
+// The picture shows the SHAPE of the work: which things led to which, and
+// where one resource serves several places at once. A tree cannot show the
+// last of those without either duplicating a node or hiding an edge.
 //
-// WHY NOT vis-network, which the paper page already uses. Two reasons. It
-// draws to a canvas, so nothing here could be asserted in a test and a screen
-// reader gets nothing at all; and its force layout has no notion of "inputs
-// on the left, figures on the right", which is exactly the reading a curator
-// needs. This is a deterministic three-lane layout in SVG: same input, same
-// picture, every time, and every node is a real element.
+// NO TYPE LANES. An earlier version put datasets on the left, scripts in the
+// middle and figures on the right, which quietly asserted that research runs
+// one way. It does not: a script writes a dataset, a figure is built from
+// another figure. Position now comes from the ARROWS the curator drew -- how
+// far along the flow a node sits -- and from nothing else.
 //
-// The lanes are the ones the vocabulary already names -- `laneOf` maps an id
-// prefix to INPUTS, PROCESS or OUTPUTS -- so this drawing and the rest of the
-// product cannot drift apart about which side something belongs on.
+// NO RELATIONSHIP WORDS ON SCREEN. A node shows its kind and its name; an
+// edge shows an arrowhead. The words live in `aria-label` and `<title>`, for
+// readers who cannot see the arrow.
+//
+// WHY NOT vis-network, which the paper page uses: it draws to a canvas, so
+// nothing here could be asserted in a test and a screen reader gets nothing
+// at all. This is deterministic SVG -- same input, same picture, and every
+// node is a real element.
 
-const LANES = [
-  { key: INPUTS, label: "Inputs" },
-  { key: PROCESS, label: "Process" },
-  { key: OUTPUTS, label: "Figures" },
-];
-
-const NODE_W = 150;
-const NODE_H = 40;
-const GAP_X = 90;
+const NODE_W = 154;
+const NODE_H = 38;
+const GAP_X = 76;
 const GAP_Y = 14;
-const PAD = 12;
-const HEAD = 20;
+const PAD = 10;
+const CHIP_W = 52;
 
-/** Where every node sits, and how big the drawing has to be. */
-export const layoutLanes = (ids, byId, name) => {
-  const columns = LANES.map(({ key, label }) => ({
-    key,
-    label,
-    ids: (ids || []).filter((id) => laneOf(id) === key).sort(),
-  }));
+const KIND_SHORT = { c: "Figure", s: "Script", d: "Data", t: "Tool", h: "Ext" };
 
-  const tallest = Math.max(1, ...columns.map((column) => column.ids.length));
+/**
+ * Where every node sits.
+ *
+ * Depth is "how far along the arrows this node is": a node with nothing
+ * pointing at it starts at zero, and every arrow pushes its target one
+ * column further right. Relaxed a bounded number of times, so a feedback
+ * loop settles instead of running forever.
+ */
+export const layoutGraph = (ids, edges, name) => {
+  const members = (ids || []).slice().sort();
+  const present = new Set(members);
+  const flows = (edges || [])
+    .map(fromStoredEdge)
+    .filter((edge) => !UNDIRECTED.includes(edge.type))
+    .filter((edge) => present.has(edge.from) && present.has(edge.to));
+
+  const depth = {};
+  members.forEach((id) => {
+    depth[id] = 0;
+  });
+  for (let pass = 0; pass < members.length; pass += 1) {
+    let moved = false;
+    flows.forEach(({ from, to }) => {
+      if (depth[to] < depth[from] + 1) {
+        depth[to] = depth[from] + 1;
+        moved = true;
+      }
+    });
+    if (!moved) break;
+  }
+
+  const columns = [];
+  members.forEach((id) => {
+    const column = depth[id];
+    if (!columns[column]) columns[column] = [];
+    columns[column].push(id);
+  });
+
+  const filled = columns.filter(Boolean);
+  const tallest = Math.max(1, ...filled.map((column) => column.length));
   const nodes = {};
-  columns.forEach((column, index) => {
+  let index = 0;
+  columns.forEach((column) => {
+    if (!column) return;
     const x = PAD + index * (NODE_W + GAP_X);
-    // Centre a short lane against the tallest one, so the flow reads across
-    // rather than sinking to the top-left.
-    const offset = ((tallest - column.ids.length) * (NODE_H + GAP_Y)) / 2;
-    column.ids.forEach((id, row) => {
+    const offset = ((tallest - column.length) * (NODE_H + GAP_Y)) / 2;
+    column.forEach((id, row) => {
       nodes[id] = {
         id,
         x,
-        y: HEAD + PAD + offset + row * (NODE_H + GAP_Y),
+        y: PAD + offset + row * (NODE_H + GAP_Y),
         w: NODE_W,
         h: NODE_H,
         text: name(id),
+        kind: KIND_SHORT[prefixOf(id)] || "Item",
       };
     });
+    index += 1;
   });
 
+  const wide = Math.max(1, filled.length);
   return {
-    columns,
     nodes,
-    width: PAD * 2 + columns.length * NODE_W + (columns.length - 1) * GAP_X,
-    height: HEAD + PAD * 2 + tallest * (NODE_H + GAP_Y),
+    width: PAD * 2 + wide * NODE_W + (wide - 1) * GAP_X,
+    height: PAD * 2 + tallest * (NODE_H + GAP_Y),
   };
 };
 
 /**
- * The path from one node to another.
+ * The line from one node to another.
  *
- * A forward edge leaves the right side and arrives on the left. A BACK EDGE
- * -- one that returns to an earlier lane, which is what a feedback loop looks
- * like -- is routed underneath instead, so it cannot be mistaken for ordinary
- * flow simply by being drawn on top of it.
+ * THE STORED DIRECTION DECIDES THE ARROWHEAD, never the position on screen.
+ * A target that happens to sit to the LEFT still gets the arrowhead, so the
+ * picture cannot contradict the record.
  */
-export const edgePath = (from, to, back) => {
-  if (back) {
-    const startX = from.x;
-    const startY = from.y + from.h / 2;
-    const endX = to.x + to.w;
-    const endY = to.y + to.h / 2;
-    const dip = Math.max(startY, endY) + from.h;
-    return `M ${startX} ${startY} C ${startX - 40} ${dip}, ${endX + 40} ${dip}, ${endX} ${endY}`;
-  }
-  const startX = from.x + from.w;
+export const edgePath = (from, to) => {
+  const forward = to.x >= from.x;
+  const startX = forward ? from.x + from.w : from.x;
+  const endX = forward ? to.x : to.x + to.w;
   const startY = from.y + from.h / 2;
-  const endX = to.x;
   const endY = to.y + to.h / 2;
+  if (Math.abs(to.x - from.x) < 1) {
+    // Same column: bow out to the side, or the line hides behind the nodes
+    // it runs between.
+    const bulge = Math.max(startX, endX) + 46;
+    return `M ${startX} ${startY} C ${bulge} ${startY}, ${bulge} ${endY}, ${endX} ${endY}`;
+  }
   const mid = (startX + endX) / 2;
   return `M ${startX} ${startY} C ${mid} ${startY}, ${mid} ${endY}, ${endX} ${endY}`;
 };
 
-const WorkflowLanes = ({ ids, byId, edges, name, onPick, active }) => {
-  const { columns, nodes, width, height } = layoutLanes(ids, byId, name);
+const WorkflowLanes = ({ ids, edges, name, onPick, active }) => {
+  const { nodes, width, height } = layoutGraph(ids, edges, name);
   const present = new Set(ids || []);
 
   const drawn = (edges || [])
@@ -118,18 +141,14 @@ const WorkflowLanes = ({ ids, byId, edges, name, onPick, active }) => {
       const from = nodes[edge.from];
       const to = nodes[edge.to];
       if (!from || !to) return null;
-      // The curator's own answer, read back from the edge -- not a guess
-      // from the shape of the graph as it stands right now.
-      const loop = Boolean(edge.feedback);
-      const undirected = UNDIRECTED.includes(edge.type);
       return {
         ...edge,
-        from,
-        to,
-        loop,
-        undirected,
-        // A back edge is one that returns to a lane it already left.
-        back: to.x <= from.x && !undirected,
+        fromNode: from,
+        toNode: to,
+        // The curator's own answer, read back from the edge -- not a guess
+        // from the shape of the graph as it stands right now.
+        loop: Boolean(edge.feedback),
+        undirected: UNDIRECTED.includes(edge.type),
       };
     })
     .filter(Boolean);
@@ -157,53 +176,38 @@ const WorkflowLanes = ({ ids, byId, edges, name, onPick, active }) => {
           </marker>
         </defs>
 
-        {columns.map((column, index) => (
-          <text
-            key={column.key}
-            x={PAD + index * (NODE_W + GAP_X)}
-            y={HEAD - 6}
-            fontSize="11"
-            fill="currentColor"
-            opacity="0.6"
-          >
-            {column.label}
-          </text>
-        ))}
-
         {drawn.map((edge) => (
-          <Fragment key={`${edge.from.id}->${edge.to.id}-${edge.type}`}>
-            <Box
-              component="path"
-              d={edgePath(edge.from, edge.to, edge.back)}
-              fill="none"
-              markerEnd={edge.undirected ? undefined : "url(#fw-arrow)"}
-              markerStart={edge.undirected ? "url(#fw-arrow)" : undefined}
-              data-testid={`fw-lane-edge-${edge.from.id}-${edge.to.id}`}
-              data-loop={String(edge.loop)}
-              data-undirected={String(edge.undirected)}
-              sx={(theme) => ({
-                // A feedback loop is DRAWN differently, because one that looks
-                // like ordinary flow reads as a mistake in the picture rather
-                // than a claim about the work.
-                stroke: edge.loop
-                  ? theme.palette.warning.main
-                  : theme.palette.text.disabled,
-                strokeWidth: edge.loop ? 2 : 1.5,
-                strokeDasharray: edge.loop ? "5 3" : undefined,
-                color: edge.loop
-                  ? theme.palette.warning.main
-                  : theme.palette.text.disabled,
-              })}
-            >
-              <title>
-                {`${name(edge.from.id)} ${
-                  edge.undirected ? "↔" : "→"
-                } ${EDGE_VERB[edge.type] || "connects to"} ${
-                  edge.undirected ? "↔" : "→"
-                } ${name(edge.to.id)}${edge.loop ? " (feedback loop)" : ""}`}
-              </title>
-            </Box>
-          </Fragment>
+          <Box
+            component="path"
+            key={`${edge.from}->${edge.to}-${edge.type}`}
+            d={edgePath(edge.fromNode, edge.toNode)}
+            fill="none"
+            markerEnd="url(#fw-arrow)"
+            markerStart={edge.undirected ? "url(#fw-arrow)" : undefined}
+            data-testid={`fw-lane-edge-${edge.from}-${edge.to}`}
+            data-loop={String(edge.loop)}
+            data-undirected={String(edge.undirected)}
+            sx={(theme) => ({
+              // A feedback loop is DRAWN differently, because one that looks
+              // like ordinary flow reads as a mistake in the picture rather
+              // than a claim about the work.
+              stroke: edge.loop
+                ? theme.palette.warning.main
+                : theme.palette.text.disabled,
+              strokeWidth: edge.loop ? 2 : 1.5,
+              strokeDasharray: edge.loop ? "5 3" : undefined,
+              color: edge.loop
+                ? theme.palette.warning.main
+                : theme.palette.text.disabled,
+            })}
+          >
+            {/* Words for a reader who cannot see the arrow, and nowhere else. */}
+            <title>
+              {`${name(edge.from)} ${
+                EDGE_VERB[edge.type] || "connects to"
+              } ${name(edge.to)}${edge.loop ? " (feedback loop)" : ""}`}
+            </title>
+          </Box>
         ))}
 
         {Object.values(nodes).map((node) => (
@@ -212,7 +216,7 @@ const WorkflowLanes = ({ ids, byId, edges, name, onPick, active }) => {
             key={node.id}
             role="button"
             tabIndex={0}
-            aria-label={node.text}
+            aria-label={`${node.kind} ${node.text}`}
             data-testid={`fw-lane-node-${node.id}`}
             onClick={() => onPick && onPick(node.id)}
             onKeyDown={(event) => {
@@ -235,39 +239,52 @@ const WorkflowLanes = ({ ids, byId, edges, name, onPick, active }) => {
                   active === node.id
                     ? theme.palette.action.selected
                     : theme.palette.background.paper,
-                stroke:
-                  prefixOf(node.id) === CHART
-                    ? theme.palette.primary.main
-                    : theme.palette.divider,
-                strokeWidth: prefixOf(node.id) === CHART ? 2 : 1,
+                stroke: theme.palette.divider,
+                strokeWidth: 1,
+              })}
+            />
+            {/* The kind, said once, as a chip rather than a sentence. */}
+            <Box
+              component="rect"
+              x={node.x + 6}
+              y={node.y + 9}
+              width={CHIP_W}
+              height={20}
+              rx="10"
+              sx={(theme) => ({
+                fill: theme.palette.action.hover,
+                stroke: theme.palette.divider,
+                strokeWidth: 1,
               })}
             />
             <Box
               component="text"
-              x={node.x + 8}
-              y={node.y + node.h / 2 + 4}
+              x={node.x + 6 + CHIP_W / 2}
+              y={node.y + 23}
+              textAnchor="middle"
+              fontSize="10"
+              sx={(theme) => ({ fill: theme.palette.text.secondary })}
+            >
+              {node.kind}
+            </Box>
+            <Box
+              component="text"
+              x={node.x + CHIP_W + 14}
+              y={node.y + 23}
               fontSize="11"
               sx={(theme) => ({ fill: theme.palette.text.primary })}
             >
-              {node.text.length > 20 ? `${node.text.slice(0, 19)}…` : node.text}
+              {node.text.length > 14 ? `${node.text.slice(0, 13)}…` : node.text}
             </Box>
           </Box>
         ))}
       </Box>
-
-      <Typography variant="caption" color="text.secondary" display="block">
-        Inputs on the left, what was run in the middle, figures on the right.
-        {drawn.some((edge) => edge.loop)
-          ? " A dashed line is a feedback loop."
-          : ""}
-      </Typography>
     </Box>
   );
 };
 
 WorkflowLanes.propTypes = {
   ids: PropTypes.array.isRequired,
-  byId: PropTypes.object.isRequired,
   edges: PropTypes.array.isRequired,
   name: PropTypes.func.isRequired,
   onPick: PropTypes.func,

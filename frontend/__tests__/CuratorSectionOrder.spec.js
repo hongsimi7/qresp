@@ -33,15 +33,26 @@ describe("where the curation workspace sits", () => {
     expect(at("FigureWorkspace")).toBeGreaterThan(at("FileServerElement"));
   });
 
-  it("comes immediately before the optional documentation", () => {
-    // Curating the record is the work; a README is an extra.
+  it("is followed by the picture of what it produced", () => {
+    // "Build your workflow" is a read-only preview of the section above, so
+    // it belongs beside it rather than at the far end of the page.
     const between = source.slice(
       at("FigureWorkspace"),
+      at("WorkflowInfoElement")
+    );
+    expect(between.match(/<[A-Z]\w+ \/>/g)).toEqual(["<FigureWorkspace />"]);
+  });
+
+  it("comes, with its preview, before the optional documentation", () => {
+    // Curating the record is the work; a README is an extra.
+    expect(at("WorkflowInfoElement")).toBeLessThan(
       at("DocumentationInfoElement")
     );
-    expect(between).toContain("<FigureWorkspace />");
-    // Nothing is allowed to slip in between the two.
-    expect(between.match(/<[A-Z]\w+ \/>/g)).toEqual(["<FigureWorkspace />"]);
+    const between = source.slice(
+      at("WorkflowInfoElement"),
+      at("DocumentationInfoElement")
+    );
+    expect(between.match(/<[A-Z]\w+ \/>/g)).toEqual(["<WorkflowInfoElement />"]);
   });
 
   it("keeps the file server path directly ahead of it", () => {

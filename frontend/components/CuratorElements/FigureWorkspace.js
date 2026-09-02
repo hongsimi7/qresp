@@ -15,6 +15,8 @@ import {
   DialogTitle,
   FormControlLabel,
   Menu,
+  ToggleButton,
+  ToggleButtonGroup,
   MenuItem,
   Typography,
 } from "@mui/material";
@@ -25,6 +27,7 @@ import ChartsInfoForm from "../CuratorForms/ChartsInfoForm";
 import ScriptsInfoForm from "../CuratorForms/ScriptsInfoForm";
 import DatasetsInfoForm from "../CuratorForms/DatasetsInfoForm";
 import ToolsInfoForm from "../CuratorForms/ToolsInfoForm";
+import WorkflowInfoForm from "../CuratorForms/WorkflowInfoForm";
 import FolderAnalysis from "./FolderAnalysis";
 import WorkflowLanes from "./WorkflowLanes";
 
@@ -47,7 +50,9 @@ import {
   componentsOf,
   EDGE_VERB,
   FEEDS_INTO,
+  LINKS_TO,
   RELATED_TO,
+  UNDIRECTED,
   edgeFits,
   edgeProblem,
   edgeSentence,
@@ -129,6 +134,17 @@ export const rowLabel = (artifact, id) => {
   return `Untitled ${KIND_LABEL[prefixOf(id)] || "item"} (${id})`;
 };
 
+// The kinds a curator can create, in the order the menu offers them, and
+// whether the RCC importer can propose that kind at all. External data is
+// a URL somebody types; there is nothing in a folder to scan for it.
+const MENU_TYPES = [
+  { type: "chart", label: "Figure", rcc: true },
+  { type: "dataset", label: "Dataset", rcc: true },
+  { type: "script", label: "Script", rcc: true },
+  { type: "tool", label: "Tool", rcc: true },
+  { type: "head", label: "External data", rcc: false },
+];
+
 // The four types the RCC importer can actually propose. It always could --
 // `FolderAnalysis` has had a typed mode for each of them -- but only the
 // chart one was ever mounted, so three of the four were unreachable.
@@ -194,9 +210,14 @@ const FigureWorkspace = () => {
   //
   // `id` is the row it was opened from, or "" at the top of the section,
   // where there is nothing yet to link TO.
-  const [flow, setFlow] = useState({ id: "", el: null, step: "root", source: "" });
-  const closeFlow = () =>
-    setFlow({ id: "", el: null, step: "root", source: "" });
+  const [flow, setFlow] = useState({ id: "", el: null, step: "root", type: "" });
+  const [newAnchor, setNewAnchor] = useState(null);
+  const [typeAnchor, setTypeAnchor] = useState({ type: "", el: null });
+  const closeFlow = () => {
+    setFlow({ id: "", el: null, step: "root", type: "" });
+    setNewAnchor(null);
+    setTypeAnchor({ type: "", el: null });
+  };
   const [moreAnchor, setMoreAnchor] = useState({ id: "", parentId: "", el: null });
   const [highlight, setHighlight] = useState("");
   // Links the curator picked that would close a feedback loop, held until
@@ -205,6 +226,9 @@ const FigureWorkspace = () => {
   // Which artifact's connection dialog is open, and what is ticked in it.
   const [connectFor, setConnectFor] = useState("");
   const [picked, setPicked] = useState({});
+  // Which way the arrow points. Chosen once, above the list, rather than
+  // repeated as a sentence on every row.
+  const [reversed, setReversed] = useState(false);
   const [suggestFor, setSuggestFor] = useState("");
 
   // The RCC import menu, and which typed importer it opened. `nonce` remounts
@@ -344,9 +368,17 @@ const FigureWorkspace = () => {
 
   // What hangs under a node, and in what order. A figure is a result, so
   // everything below it is what went into it.
+  // What hangs under a node in the outline.
+  //
+  // `links_to` is under EVERY kind, because it joins every kind -- an arrow
+  // a curator drew has to appear in the outline whatever the two ends were.
+  // The five older types keep the shapes they were always allowed.
   const CHILD_RULES = {
-    [CHART]: [GENERATES, CONSUMES],
-    [SCRIPT]: [USES_TOOL, CONSUMES, FEEDS_INTO],
+    [CHART]: [GENERATES, CONSUMES, LINKS_TO],
+    [SCRIPT]: [USES_TOOL, CONSUMES, FEEDS_INTO, LINKS_TO],
+    [DATASET]: [LINKS_TO],
+    [TOOL]: [LINKS_TO],
+    [EXTERNAL]: [LINKS_TO],
   };
 
   const NEW_TYPES = [
@@ -461,53 +493,109 @@ const FigureWorkspace = () => {
    * IS kept is a link that already exists, shown as made, because hiding it
    * would leave a curator hunting for a resource that is already attached.
    */
-  const linkCandidates = (id) => {
-    const workflow = [];
-    const related = [];
-    const seen = new Set();
-
+  /**
+   * Everything `id` could be linked to, one row per artifact.
+   *
+   * The dialog used to list one row per RELATIONSHIP, grouped by type, each
+   * spelled out as a sentence -- so joining a script to a dataset meant
+   * reading four paragraphs of vocabulary to find the one that was allowed.
+   * The curator is not choosing a vocabulary word. They are drawing an
+   * arrow, and they have already chosen which way it points.
+   *
+   * So: one row per artifact, and the direction is a single choice above the
+   * list. `links_to` fits every pair, so no combination is missing and no
+   * combination has to be explained.
+   *
+   * An EXISTING edge in the chosen direction is shown as made -- of any
+   * type, because a second arrow the same way would say what is already
+   * said. An edge the OTHER way does not block anything: that is a different
+   * fact.
+   */
+  const linkCandidates = (id, reversed) =>
     knownIds
       .filter((other) => other !== id)
-      .forEach((other) => {
-        // FLOW. Both orderings are considered because one pair can hold a
-        // relationship each way -- `preprocess feeds into plot` and `plot
-        // feeds into preprocess` are different claims, so they are different
-        // rows and the curator picks the one they mean.
-        [
-          [id, other],
-          [other, id],
-        ].forEach(([from, to]) => {
-          DIRECTED.forEach((type) => {
-            if (!edgeFits(type, prefixOf(from), prefixOf(to))) return;
-            const key = `${from}-${to}-${type}`;
-            if (seen.has(key)) return;
-            const edge = { from, to, type };
-            const linked = hasEdge(edges, from, to);
-            if (!linked && edgeProblem(edge, knownIds, edges)) return;
-            seen.add(key);
-            workflow.push({ key, edge, other, linked });
-          });
-        });
-
-        // ASSOCIATION. Same kind only, one row per pair, no direction to
-        // choose -- so the pair is stored one way and read either way.
-        if (edgeFits(RELATED_TO, prefixOf(id), prefixOf(other))) {
-          const edge = { from: id, to: other, type: RELATED_TO };
-          related.push({
-            key: `${id}-${other}-${RELATED_TO}`,
-            edge,
-            other,
-            linked: hasRelation(edges, id, other, RELATED_TO),
-          });
-        }
+      .map((other) => {
+        const from = reversed ? other : id;
+        const to = reversed ? id : other;
+        const existing = edges
+          .map(fromStoredEdge)
+          .find(
+            (edge) =>
+              (edge.from === from && edge.to === to) ||
+              (UNDIRECTED.includes(edge.type) &&
+                edge.from === to &&
+                edge.to === from)
+          );
+        return {
+          key: `${from}-${to}`,
+          other,
+          edge: { from, to, type: LINKS_TO },
+          linked: Boolean(existing),
+          undirected: Boolean(existing && UNDIRECTED.includes(existing.type)),
+        };
       });
 
-    return { workflow, related };
+  /**
+   * The last question: by hand, or out of the RCC folder.
+   *
+   * Shared by both readings of the menu, so the wide cascade and the narrow
+   * pane cannot drift apart about what is on offer.
+   */
+  const sourcesFor = (kind) => {
+    const row = MENU_TYPES.find((entry) => entry.type === kind);
+    if (!row) return null;
+    const items = [
+      <MenuItem
+        key="manual"
+        data-testid={`fw-add-${flow.id}-${kind}`}
+        onClick={() => {
+          const target = flow.id;
+          closeFlow();
+          createAttachedTo(kind, target);
+        }}
+      >
+        Enter manually
+      </MenuItem>,
+    ];
+    if (row.rcc) {
+      items.push(
+        <MenuItem
+          key="rcc"
+          data-testid={`fw-rcc-${kind}`}
+          disabled={!canImport}
+          onClick={() => {
+            closeFlow();
+            setRccImport((was) => ({ type: kind, nonce: was.nonce + 1 }));
+          }}
+        >
+          From RCC
+        </MenuItem>
+      );
+      // A greyed row with no explanation is a dead end. One line, and only
+      // where it applies.
+      if (!canImport) {
+        items.push(
+          <MenuItem
+            key="hint"
+            disabled
+            data-testid="fw-rcc-hint"
+            sx={{ whiteSpace: "normal", maxWidth: 260 }}
+          >
+            <Typography variant="caption">
+              Choose a File Server Path above, in this page, to import from
+              RCC.
+            </Typography>
+          </MenuItem>
+        );
+      }
+    }
+    return items;
   };
 
   const openLink = (id) => {
     setNotice("");
     setPicked({});
+    setReversed(false);
     setConnectFor(id);
   };
 
@@ -546,8 +634,7 @@ const FigureWorkspace = () => {
    * loop written out.
    */
   const linkSelected = () => {
-    const { workflow, related } = linkCandidates(connectFor);
-    const chosen = [...workflow, ...related]
+    const chosen = linkCandidates(connectFor, reversed)
       .filter((option) => picked[option.key] && !option.linked)
       .map((option) => option.edge);
 
@@ -639,13 +726,31 @@ const FigureWorkspace = () => {
    * linking and were pushing the names and relationships -- the things the
    * outline exists to show -- off the end of the line.
    */
+  /**
+   * What a curator does to an artifact: three actions, in one group, always
+   * on the row.
+   *
+   * Edit and Remove used to hide behind a "⋮" that opened a menu somewhere
+   * else on the page, so the two commonest operations on a record were both
+   * invisible and, once opened, disconnected from the thing they acted on.
+   * Nothing here appears on hover either -- an action a curator cannot see
+   * is an action they do not know they have.
+   */
   const RowActions = ({ node }) => {
-    const { id, parentId } = node;
+    const { id } = node;
     return (
-      <Box sx={{ display: "flex", flexShrink: 0, alignItems: "center" }}>
+      <Box
+        sx={{
+          display: "flex",
+          flexShrink: 0,
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+        data-testid={`fw-actions-${id}`}
+      >
         <RowAction
           onClick={(event) =>
-            setFlow({ id, el: event.currentTarget, step: "root", source: "" })
+            setFlow({ id, el: event.currentTarget, step: "root", type: "" })
           }
           aria-haspopup="menu"
           data-testid={`fw-addlink-${id}`}
@@ -653,12 +758,18 @@ const FigureWorkspace = () => {
           Add or link
         </RowAction>
         <RowAction
-          onClick={(event) => setMoreAnchor({ id, parentId, el: event.currentTarget })}
-          aria-haspopup="menu"
-          aria-label={`More actions for ${label(id)}`}
-          data-testid={`fw-more-${id}`}
+          onClick={() => editArtifact(id)}
+          aria-label={`Edit ${label(id)}`}
+          data-testid={`fw-edit-${id}`}
         >
-          ⋮
+          Edit
+        </RowAction>
+        <RowAction
+          onClick={() => removeArtifact(id)}
+          aria-label={`Remove ${label(id)}`}
+          data-testid={`fw-remove-${id}`}
+        >
+          Remove
         </RowAction>
       </Box>
     );
@@ -690,6 +801,32 @@ const FigureWorkspace = () => {
     >
       Unlink
     </RowAction>
+  );
+
+  /**
+   * A relationship, shown as the ARROW it is.
+   *
+   * The words -- "generates", "supplies input to", "uses tool" -- were a
+   * vocabulary lesson printed beside every row, and they said more than the
+   * curator did: an arrow between two things is what they drew. The words
+   * survive in `aria-label`, where a reader who cannot see the arrow needs
+   * them, and nowhere else.
+   *
+   * The GLYPH comes from the stored direction, never from what is above or
+   * below it on screen.
+   */
+  const EdgeArrow = ({ edge }) => (
+    <Typography
+      variant="caption"
+      color="text.secondary"
+      component="span"
+      aria-label={`${label(edge.from)} ${
+        EDGE_VERB[edge.type] || "connects to"
+      } ${label(edge.to)}`}
+      data-testid={`fw-flow-${edge.from}-${edge.to}`}
+    >
+      {UNDIRECTED.includes(edge.type) ? "↔" : "→"}
+    </Typography>
   );
 
   const OutlineRow = ({ node, depth }) => {
@@ -727,27 +864,22 @@ const FigureWorkspace = () => {
           >
             {label(id)}
           </Typography>
-          {edge ? (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              component="span"
-              sx={{ overflowWrap: "anywhere" }}
-              data-testid={`fw-flow-${id}-${parentId}`}
-            >
-              {sentence(edge)}
-            </Typography>
-          ) : null}
+          {edge ? <EdgeArrow edge={edge} /> : null}
           {edge ? <UnlinkEdge edge={edge} /> : null}
           {edge && edge.feedback ? (
-            <Typography
-              variant="caption"
-              component="span"
+            <Chip
+              label="feedback loop"
+              size="small"
+              variant="outlined"
               data-testid={`fw-feedback-${id}-${parentId}`}
-              sx={{ color: "warning.main" }}
-            >
-              feedback loop
-            </Typography>
+              sx={{
+                height: 18,
+                flexShrink: 0,
+                borderColor: "warning.main",
+                color: "warning.main",
+                "& .MuiChip-label": { px: 0.75, fontSize: 10 },
+              }}
+            />
           ) : null}
           {serves.length > 1 ? (
             <Typography
@@ -807,7 +939,7 @@ const FigureWorkspace = () => {
           display="block"
           sx={{ pl: 1 }}
         >
-          Shown in full elsewhere in this outline.
+          Shown above
         </Typography>
       )}
       {node.first && prefixOf(node.id) === EXTERNAL ? (
@@ -843,14 +975,6 @@ const FigureWorkspace = () => {
           key={group.type || "legacy"}
           sx={{ ml: 1, pl: 1.5, borderLeft: 2, borderColor: "divider" }}
         >
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            display="block"
-            sx={{ mt: 0.25 }}
-          >
-            {EDGE_GROUP[group.type] || "Connected to"}
-          </Typography>
           <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
             {group.nodes.map((child) => (
               <OutlineNode
@@ -871,9 +995,6 @@ const FigureWorkspace = () => {
           sx={{ ml: 1, pl: 1.5, mt: 0.25 }}
           data-testid={`fw-related-${node.id}`}
         >
-          <Typography variant="caption" color="text.secondary" display="block">
-            Related resources
-          </Typography>
           <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
             {relatedOf(node.id).map(({ other, edge }) => (
               <Box
@@ -900,9 +1021,10 @@ const FigureWorkspace = () => {
                   color="text.secondary"
                   component="span"
                   sx={{ overflowWrap: "anywhere" }}
+                  aria-label={`${label(node.id)} related to ${label(other)}`}
                   data-testid={`fw-relation-${node.id}-${other}`}
                 >
-                  {sentence({ from: node.id, to: other, type: RELATED_TO })}
+                  ↔
                 </Typography>
                 <UnlinkEdge edge={edge} />
                 <RowAction
@@ -940,14 +1062,23 @@ const FigureWorkspace = () => {
     </Box>
   );
 
-  /** One candidate row: a checkbox and the exact sentence it would create. */
+  /**
+   * One candidate: a checkbox, a kind, a name. Nothing else.
+   *
+   * NO ANIMATION. MUI's checkbox ripples, and the row used to grow a second
+   * line of explanation when it changed -- so ticking four boxes was four
+   * bursts of motion and four small jumps of the list under the pointer.
+   * Ticked or not ticked is the whole state, and it shows instantly. The
+   * focus ring is kept: that one is not decoration.
+   */
   const LinkOption = ({ option }) => (
     <Box component="li" sx={{ minWidth: 0 }}>
       <FormControlLabel
-        sx={{ alignItems: "flex-start", m: 0, py: 0.25 }}
+        sx={{ m: 0, py: 0.25, width: "100%", alignItems: "center" }}
         control={
           <Checkbox
             size="small"
+            disableRipple
             checked={option.linked || Boolean(picked[option.key])}
             disabled={option.linked}
             onChange={(event) =>
@@ -959,24 +1090,33 @@ const FigureWorkspace = () => {
             slotProps={{
               input: { "data-testid": `fw-link-option-${option.key}` },
             }}
+            sx={{ transition: "none", "&:hover": { backgroundColor: "transparent" } }}
           />
         }
         label={
-          <Box sx={{ minWidth: 0, py: 0.5 }}>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 0.75,
+              minWidth: 0,
+            }}
+          >
+            <KindChip id={option.other} />
             <Typography
               variant="body2"
-              sx={{ overflowWrap: "anywhere" }}
-              data-testid={`fw-link-sentence-${option.key}`}
+              sx={{ overflowWrap: "anywhere", minWidth: 0 }}
+              data-testid={`fw-link-name-${option.key}`}
             >
-              {namedSentence(option.edge)}
+              {label(option.other)}
             </Typography>
             {option.linked ? (
               <Typography
                 variant="caption"
                 color="text.secondary"
-                display="block"
+                data-testid={`fw-link-made-${option.key}`}
               >
-                Already linked
+                {option.undirected ? "↔" : "Already linked"}
               </Typography>
             ) : null}
           </Box>
@@ -988,8 +1128,9 @@ const FigureWorkspace = () => {
   const LinkDialog = () => {
     const id = connectFor;
     if (!id) return null;
-    const { workflow, related } = linkCandidates(id);
-    const anything = [...workflow, ...related].some((option) => !option.linked);
+    const options = linkCandidates(id, reversed);
+    const anything = options.some((option) => !option.linked);
+    const me = label(id);
 
     return (
       <Dialog
@@ -999,61 +1140,64 @@ const FigureWorkspace = () => {
         maxWidth="sm"
         data-testid="fw-link-dialog"
       >
-        <DialogTitle sx={{ overflowWrap: "anywhere", pb: 0.5 }}>
-          Link existing
-          <Typography
-            variant="body2"
-            color="text.secondary"
-            sx={{ overflowWrap: "anywhere" }}
-          >
-            {`What existing resource belongs to \u201C${named(id)}\u201D?`}
-          </Typography>
-        </DialogTitle>
+        <DialogTitle sx={{ pb: 0.5 }}>Link existing</DialogTitle>
         <DialogContent dividers>
-          {/* TWO KINDS OF ANSWER, kept apart.
-              One says what produced what and reads in a direction; the other
-              says only that two things belong together. Mixing them in one
-              list would leave a curator unsure which claim they were making. */}
-          {workflow.length ? (
-            <Box sx={{ mb: related.length ? 1.5 : 0 }}>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                display="block"
-                data-testid="fw-link-group-workflow"
-              >
-                Workflow connection
-              </Typography>
-              <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
-                {workflow.map((option) => (
-                  <LinkOption key={option.key} option={option} />
-                ))}
-              </Box>
-            </Box>
-          ) : null}
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 0.75,
+              mb: 1,
+              minWidth: 0,
+            }}
+          >
+            <Typography variant="caption" color="text.secondary">
+              Source
+            </Typography>
+            <KindChip id={id} />
+            <Typography
+              variant="body2"
+              sx={{ overflowWrap: "anywhere", minWidth: 0 }}
+            >
+              {me}
+            </Typography>
+          </Box>
 
-          {related.length ? (
-            <Box>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                display="block"
-                data-testid="fw-link-group-related"
-              >
-                {`Related ${KIND_PLURAL[prefixOf(id)] || "resources"}`}
-              </Typography>
-              <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
-                {related.map((option) => (
-                  <LinkOption key={option.key} option={option} />
-                ))}
-              </Box>
-            </Box>
-          ) : null}
+          {/* THE DIRECTION, CHOSEN ONCE. Flipping it offers the same
+              artifacts for an arrow the other way, which is a different fact
+              and is allowed even when this one already exists. */}
+          <Typography variant="caption" color="text.secondary" display="block">
+            Arrow direction
+          </Typography>
+          <ToggleButtonGroup
+            exclusive
+            size="small"
+            value={reversed ? "in" : "out"}
+            onChange={(event, next) => {
+              if (!next) return;
+              setReversed(next === "in");
+              setPicked({});
+            }}
+            sx={{ mb: 1.5, flexWrap: "wrap" }}
+          >
+            <ToggleButton value="out" data-testid="fw-dir-out" sx={{ textTransform: "none" }}>
+              {`${me} → selected`}
+            </ToggleButton>
+            <ToggleButton value="in" data-testid="fw-dir-in" sx={{ textTransform: "none" }}>
+              {`selected → ${me}`}
+            </ToggleButton>
+          </ToggleButtonGroup>
 
-          {workflow.length || related.length ? null : (
+          {options.length ? (
+            <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+              {options.map((option) => (
+                <LinkOption key={option.key} option={option} />
+              ))}
+            </Box>
+          ) : (
             <Typography variant="body2" color="text.secondary">
-              Nothing in this paper can be linked to this yet. Add a resource
-              first, then link it here.
+              Nothing else in this paper yet. Add a resource first, then link
+              it here.
             </Typography>
           )}
         </DialogContent>
@@ -1154,15 +1298,39 @@ const FigureWorkspace = () => {
         </RegularStyledButton>
       </Box>
 
-      {/* THE ONE MENU, in up to three steps.
-          Link what exists, or make something new; and if new, from the RCC
-          folder or by hand. Each step asks one thing. */}
+      {/* ONE INTENTION, ASKED AS A TREE.
+          Link what already exists, or make something new -- and if new, what
+          kind, and then how it arrives. A curator picks the RESOURCE TYPE
+          first, because that is the decision they came with; where it comes
+          from is a detail of the same decision.
+
+          Wide: the parent stays put and the child opens beside it, on hover
+          or on keyboard focus, so the path taken is visible the whole way
+          down. Narrow: hover does not exist, so the pane is replaced and a
+          Back row leads out. */}
       <Menu
         open={Boolean(flow.el)}
         anchorEl={flow.el}
         onClose={closeFlow}
         data-testid="fw-flow-menu"
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
       >
+        {narrow && flow.step !== "root" ? (
+          <MenuItem
+            data-testid="fw-flow-back"
+            onClick={() =>
+              setFlow((was) => ({
+                ...was,
+                step: was.step === "type" ? "new" : "root",
+                type: was.step === "type" ? was.type : "",
+              }))
+            }
+          >
+            ← Back
+          </MenuItem>
+        ) : null}
+
         {flow.step === "root"
           ? [
               // Nothing to link TO from the top of the section.
@@ -1182,83 +1350,100 @@ const FigureWorkspace = () => {
               <MenuItem
                 key="new"
                 data-testid="fw-flow-new"
-                onClick={() => setFlow((was) => ({ ...was, step: "source" }))}
+                aria-haspopup="menu"
+                aria-expanded={Boolean(newAnchor)}
+                onMouseEnter={(event) =>
+                  narrow ? null : setNewAnchor(event.currentTarget)
+                }
+                onFocus={(event) =>
+                  narrow ? null : setNewAnchor(event.currentTarget)
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowRight" && !narrow) {
+                    event.preventDefault();
+                    setNewAnchor(event.currentTarget);
+                  }
+                }}
+                onClick={(event) =>
+                  narrow
+                    ? setFlow((was) => ({ ...was, step: "new" }))
+                    : setNewAnchor(event.currentTarget)
+                }
               >
-                Add new…
+                Add new ▸
               </MenuItem>,
             ].filter(Boolean)
           : null}
 
-        {flow.step === "source"
-          ? [
-              <MenuItem
-                key="rcc"
-                data-testid="fw-source-rcc"
-                disabled={!canImport}
-                onClick={() =>
-                  setFlow((was) => ({ ...was, step: "type", source: "rcc" }))
-                }
-              >
-                From RCC
-              </MenuItem>,
-              // A greyed row with no explanation is a dead end. One line,
-              // and only when it applies.
-              canImport ? null : (
-                <MenuItem
-                  key="hint"
-                  disabled
-                  data-testid="fw-rcc-hint"
-                  sx={{ whiteSpace: "normal", maxWidth: 260 }}
-                >
-                  <Typography variant="caption">
-                    Choose a File Server Path above to import from RCC.
-                  </Typography>
-                </MenuItem>
-              ),
-              <MenuItem
-                key="manual"
-                data-testid="fw-source-manual"
-                onClick={() =>
-                  setFlow((was) => ({ ...was, step: "type", source: "manual" }))
-                }
-              >
-                Enter manually
-              </MenuItem>,
-            ].filter(Boolean)
-          : null}
-
-        {flow.step === "type" && flow.source === "rcc"
-          ? IMPORTABLE.map(({ type, label: text }) => (
+        {/* Narrow only: the same two levels, one pane at a time. */}
+        {narrow && flow.step === "new"
+          ? MENU_TYPES.map(({ type, label: text }) => (
               <MenuItem
                 key={type}
-                data-testid={`fw-rcc-${type}`}
-                onClick={() => {
-                  closeFlow();
-                  setRccImport((was) => ({ type, nonce: was.nonce + 1 }));
-                }}
+                data-testid={`fw-kind-${type}`}
+                onClick={() => setFlow((was) => ({ ...was, step: "type", type }))}
               >
                 {text}
               </MenuItem>
             ))
           : null}
 
-        {flow.step === "type" && flow.source === "manual"
-          ? (flow.id ? addableTo(flow.id) : NEW_TYPES).map(
-              ({ type, label: text }) => (
-                <MenuItem
-                  key={type}
-                  data-testid={`fw-add-${flow.id}-${type}`}
-                  onClick={() => {
-                    const target = flow.id;
-                    closeFlow();
-                    createAttachedTo(type, target);
-                  }}
-                >
-                  {text}
-                </MenuItem>
-              )
-            )
+        {narrow && flow.step === "type"
+          ? sourcesFor(flow.type)
           : null}
+      </Menu>
+
+      {/* Wide: the second level, beside the first. */}
+      <Menu
+        open={Boolean(newAnchor) && !narrow}
+        anchorEl={newAnchor}
+        onClose={() => setNewAnchor(null)}
+        data-testid="fw-kind-menu"
+        anchorOrigin={{ vertical: "top", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+        slotProps={{ list: { autoFocusItem: false } }}
+        disableAutoFocus
+        disableEnforceFocus
+      >
+        {MENU_TYPES.map(({ type, label: text }) => (
+          <MenuItem
+            key={type}
+            data-testid={`fw-kind-${type}`}
+            aria-haspopup="menu"
+            aria-expanded={typeAnchor.type === type}
+            onMouseEnter={(event) =>
+              setTypeAnchor({ type, el: event.currentTarget })
+            }
+            onFocus={(event) => setTypeAnchor({ type, el: event.currentTarget })}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowRight") {
+                event.preventDefault();
+                setTypeAnchor({ type, el: event.currentTarget });
+              }
+              if (event.key === "ArrowLeft") {
+                event.preventDefault();
+                setNewAnchor(null);
+              }
+            }}
+            onClick={(event) => setTypeAnchor({ type, el: event.currentTarget })}
+          >
+            {`${text} ▸`}
+          </MenuItem>
+        ))}
+      </Menu>
+
+      {/* Wide: the third level. */}
+      <Menu
+        open={Boolean(typeAnchor.el) && !narrow}
+        anchorEl={typeAnchor.el}
+        onClose={() => setTypeAnchor({ type: "", el: null })}
+        data-testid="fw-source-menu"
+        anchorOrigin={{ vertical: "top", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+        disableAutoFocus
+        disableEnforceFocus
+      >
+        {sourcesFor(typeAnchor.type)}
       </Menu>
 
       {rccImport.type ? (
@@ -1494,6 +1679,11 @@ const FigureWorkspace = () => {
         <ScriptsInfoForm hideTrigger />
         <DatasetsInfoForm hideTrigger />
         <ToolsInfoForm hideTrigger />
+        {/* The External Data dialog. It lived in "Build your workflow",
+            which was hidden until the graph already had nodes -- so the one
+            way to create external data vanished exactly when a curator had
+            none. */}
+        <WorkflowInfoForm dialogOnly />
       </Box>
     </Drawer>
   );

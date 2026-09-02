@@ -28,7 +28,17 @@ import AlertContext from "../../Context/Alert/alertContext";
 import CuratorContext from "../../Context/Curator/curatorContext";
 import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperContext";
 
-const WorkflowInfoForm = () => {
+/**
+ * The External Data form.
+ *
+ * `dialogOnly` mounts the DIALOG and nothing else. That dialog is the only
+ * way to enter external data anywhere in the Curator, and it used to live
+ * inside a section that was hidden until the workflow already had nodes --
+ * so the one path to creating external data disappeared exactly when a
+ * curator had none of it yet. The workspace mounts this the way it mounts
+ * the other four forms: hidden, for its dialog.
+ */
+const WorkflowInfoForm = ({ dialogOnly = false }) => {
   const { setAlert, unsetAlert } = useContext(AlertContext);
 
   const {
@@ -226,6 +236,7 @@ const WorkflowInfoForm = () => {
 
   return (
     <Fragment>
+      {dialogOnly ? null : (
       <Drawer heading="Build your workflow" defaultOpen={true}>
         {/* The ordinary path is "Organize figures and resources" above: the
             figure is the root and the connections are made for you. This is
@@ -284,6 +295,7 @@ const WorkflowInfoForm = () => {
           </RegularStyledButton>
         </Box>
       </Drawer>
+      )}
       <Dialog open={open} onClose={closeExternalNode}>
         <form onSubmit={handleSubmit(onSubmit)}>
           <DialogTitle>

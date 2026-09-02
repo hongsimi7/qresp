@@ -379,8 +379,12 @@ const curator = () => {
                         before the optional README, because curating the
                         record is the work and a README is an extra. */}
                     <FigureWorkspace />
-                    <DocumentationInfoElement />
+                    {/* A picture of what the section above produced, and
+                        nothing to press. It sits between them because the
+                        result of the work belongs next to the work, and
+                        ahead of a README that is optional. */}
                     <WorkflowInfoElement />
+                    <DocumentationInfoElement />
                     <LicenseInfoElement />
                     {!editMode && <Publish />}
                   </CuratorFormsRemounter>
