@@ -149,12 +149,16 @@ const IMPORTABLE = [
 // another colour to the page.
 // WHICH NODE THIS IS, in the drawing below.
 //
-// NOT PRINTED. An id is positional: delete one figure and the rest are
-// renumbered, so a curator who learns "my figure is c2" has been told
-// something that will quietly stop being true. It stays in the DOM, where
-// tests and tooling address it, and in the accessible name for anyone who
-// needs to say which node they mean -- but the way to match a row to a box
-// is to point at one and watch the other light up.
+// NOT PRINTED, AND NOT ANNOUNCED. An id is positional: delete one figure and
+// the rest are renumbered, so a curator who learns "my figure is c2" has been
+// told something that will quietly stop being true -- and that is as true
+// through a screen reader as it is on the screen. It is hidden both ways:
+// `display: none` for the eye, `aria-hidden` for the accessibility tree.
+// Chrome ignores it as an ariaHiddenElement and gives it no accessible name.
+//
+// What stays is what addresses artifacts rather than reads them: `data-testid`
+// and `data-artifact`. The way a curator matches a row to a box is to point at
+// one and watch the other light up.
 const NodeId = ({ id }) => (
   <Box
     component="span"

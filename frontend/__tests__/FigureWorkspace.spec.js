@@ -965,6 +965,25 @@ describe("what a row says", () => {
     });
   });
 
+  it("keeps the marker out of the accessibility tree, not just out of sight", () => {
+    // `display: none` alone would be enough for Chrome, but the two are not
+    // the same promise: a marker that is later given a size for any reason
+    // would start being announced. `aria-hidden` says what is meant.
+    //
+    // Verified against a real accessibility tree, not just this assertion:
+    // Chrome reports all fifteen markers ignored, reason ariaHiddenElement,
+    // none with an accessible name.
+    renderWorkspace(CHAIN);
+    ["c0", "s0", "d0", "t0"].forEach((id) => {
+      const marker = screen.getAllByTestId(`fw-id-${id}`)[0];
+      expect(marker).toHaveAttribute("aria-hidden", "true");
+      expect(marker).toHaveTextContent("");
+      expect(marker).not.toBeVisible();
+      // And still addressable by everything that is not a person.
+      expect(marker).toHaveAttribute("data-artifact", id);
+    });
+  });
+
   it("lights the row that is being pointed at", async () => {
     // Matching a row to a box in the drawing is done by pointing, not by
     // reading an id off both.
