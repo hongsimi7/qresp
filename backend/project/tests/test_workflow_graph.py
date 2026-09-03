@@ -445,10 +445,50 @@ class LinksToTest(unittest.TestCase):
     def arrow(self, source, target):
         return edge(source, target, LINKS_TO)
 
-    def test_every_combination_of_two_kinds(self):
+    # A paper holding TWO of every kind, so a same-kind arrow has two
+    # distinct ids to join.
+    TWO_OF_EACH = {
+        "charts": [{"id": "c0"}, {"id": "c1"}],
+        "scripts": [{"id": "s0"}, {"id": "s1"}],
+        "datasets": [{"id": "d0"}, {"id": "d1"}],
+        "tools": [{"id": "t0"}, {"id": "t1"}],
+        "heads": [{"id": "h0"}, {"id": "h1"}],
+    }
+
+    def doubled(self, edges):
+        data = dict((k, list(v)) for k, v in self.TWO_OF_EACH.items())
+        data["workflow"] = {"nodes": [], "edges": edges}
+        return data
+
+    def test_the_whole_five_by_five_matrix(self):
+        # Twenty-five cells, not twenty: an arrow between two artifacts of
+        # the SAME kind is as ordinary as any other. Only the ids have to
+        # differ.
         import itertools
-        for source, target in itertools.permutations(self.KINDS, 2):
-            validate_workflow(paper([self.arrow(source, target)]))
+        first = {"c": "c0", "s": "s0", "d": "d0", "t": "t0", "h": "h0"}
+        second = {"c": "c1", "s": "s1", "d": "d1", "t": "t1", "h": "h1"}
+        cells = 0
+        for a, b in itertools.product("csdth", repeat=2):
+            source = first[a]
+            target = second[b] if a == b else first[b]
+            validate_workflow(self.doubled([self.arrow(source, target)]))
+            cells += 1
+        self.assertEqual(cells, 25)
+
+    def test_same_kind_needs_two_different_artifacts(self):
+        for same in ("c0", "s0", "d0", "t0", "h0"):
+            with self.assertRaises(WorkflowError) as caught:
+                validate_workflow(self.doubled([self.arrow(same, same)]))
+            self.assertIn("itself", str(caught.exception))
+
+    def test_same_kind_refuses_the_same_arrow_twice(self):
+        with self.assertRaises(WorkflowError):
+            validate_workflow(self.doubled([self.arrow("d0", "d1"),
+                                            self.arrow("d0", "d1")]))
+
+    def test_same_kind_allows_the_opposite_arrow(self):
+        validate_workflow(self.doubled([self.arrow("d0", "d1"),
+                                        self.arrow("d1", "d0")]))
 
     def test_the_pair_the_old_rules_forbade_both_ways(self):
         # `consumes` said a dataset feeds a script and never the reverse.

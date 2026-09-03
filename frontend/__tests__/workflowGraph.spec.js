@@ -22,6 +22,7 @@ import {
   closesLoop,
   componentsOf,
   edgeProblem,
+  LINKS_TO,
   fromStoredEdge,
   hasEdge,
   inferEdgeType,
@@ -438,5 +439,67 @@ describe("a confirmed feedback loop", () => {
     // The mark rides along; it is not part of the relationship.
     const edge = { from: "s0", to: "s1", type: FEEDS_INTO, feedback: true };
     expect(edgeProblem(edge, ["s0", "s1"])).toBe("");
+  });
+});
+
+// The arrow a curator draws, between any two things.
+describe("links_to across the five by five matrix", () => {
+  const KINDS = ["c", "s", "d", "t", "h"];
+
+  it("fits every cell, same kind included", () => {
+    const cells = [];
+    KINDS.forEach((a) =>
+      KINDS.forEach((b) => {
+        if (edgeFits(LINKS_TO, a, b)) cells.push(`${a}->${b}`);
+      })
+    );
+    // Twenty-five, not twenty: like to like is as ordinary as any other.
+    expect(cells).toHaveLength(25);
+    KINDS.forEach((k) => expect(cells).toContain(`${k}->${k}`));
+  });
+
+  it("accepts a same-kind arrow between two different artifacts", () => {
+    KINDS.forEach((k) =>
+      expect(
+        edgeProblem(
+          { from: `${k}0`, to: `${k}1`, type: LINKS_TO },
+          [`${k}0`, `${k}1`]
+        )
+      ).toBe("")
+    );
+  });
+
+  it("refuses an artifact joined to itself, of any kind", () => {
+    KINDS.forEach((k) =>
+      expect(
+        edgeProblem({ from: `${k}0`, to: `${k}0`, type: LINKS_TO }, [`${k}0`])
+      ).toBeTruthy()
+    );
+  });
+
+  it("refuses the same arrow twice and allows the opposite one", () => {
+    const held = [{ from: "d0", to: "d1", type: LINKS_TO }];
+    expect(
+      edgeProblem({ from: "d0", to: "d1", type: LINKS_TO }, ["d0", "d1"], held)
+    ).toBeTruthy();
+    expect(
+      edgeProblem({ from: "d1", to: "d0", type: LINKS_TO }, ["d0", "d1"], held)
+    ).toBe("");
+  });
+
+  it("leaves the older relationships to their own endpoints", () => {
+    // Widening one type must not widen the others.
+    expect(edgeFits(USES_TOOL, "t", "c")).toBe(false);
+    expect(edgeFits(GENERATES, "c", "s")).toBe(false);
+    expect(edgeFits(CONSUMES, "s", "d")).toBe(false);
+    expect(edgeFits(RELATED_TO, "c", "s")).toBe(false);
+  });
+
+  it("is never what a pair is inferred to hold", () => {
+    // It fits everything, so inferring it would make every contextual Add
+    // ambiguous. It is only ever chosen.
+    expect(inferEdgeType("d0", "s0")).toBe(CONSUMES);
+    expect(inferEdgeType("s0", "s1")).toBe(FEEDS_INTO);
+    expect(inferEdgeType("c0", "d0")).toBe("");
   });
 });
