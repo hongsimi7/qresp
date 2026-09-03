@@ -1,5 +1,6 @@
 import React, { useReducer } from "react";
 import CuratorHelperContext from "./curatorHelperContext";
+import SpotlightState from "../Spotlight/SpotlightState";
 import curatorHelperReducer from "./curatorHelperReducer";
 
 import {
@@ -78,7 +79,10 @@ const CuratorHelperState = (props) => {
         setEditing,
       }}
     >
-      {props.children}
+      {/* Which artifact is being pointed at lives one level in, so a
+          pointer move does not re-render every section that reads a
+          curator helper. */}
+      <SpotlightState>{props.children}</SpotlightState>
     </CuratorHelperContext.Provider>
   );
 };

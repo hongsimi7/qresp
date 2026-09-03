@@ -70,6 +70,7 @@ jest.mock("../components/CuratorElements/FolderAnalysis", () => {
 
 import CuratorContext from "../Context/Curator/curatorContext";
 import CuratorHelperContext from "../Context/CuratorHelpers/curatorHelperContext";
+import SpotlightState from "../Context/Spotlight/SpotlightState";
 import FigureWorkspace from "../components/CuratorElements/FigureWorkspace";
 
 const build = (overrides = {}) => ({
@@ -91,22 +92,34 @@ const buildHelpers = () => ({
   setExternalNodeFormOpen: jest.fn(),
 });
 
-const renderWorkspace = (overrides = {}, helpers = buildHelpers()) => {
-  const value = build(overrides);
-  const view = render(
-    <CuratorHelperContext.Provider value={helpers}>
-      <CuratorContext.Provider value={value}>
+// The real spotlight provider, not a stand-in: what it does under a pointer
+// -- re-render the rows and nothing above them -- is half of what is being
+// tested here.
+const Host = ({ helpers, curator }) => (
+  <CuratorHelperContext.Provider value={helpers}>
+    <SpotlightState>
+      <CuratorContext.Provider value={curator}>
         <FigureWorkspace />
       </CuratorContext.Provider>
-    </CuratorHelperContext.Provider>
-  );
+    </SpotlightState>
+  </CuratorHelperContext.Provider>
+);
+
+const renderWorkspace = (overrides = {}, helpers = buildHelpers()) => {
+  const value = build(overrides);
+  const view = render(<Host helpers={helpers} curator={value} />);
   const rerenderWith = (next) =>
     view.rerender(
-      <CuratorHelperContext.Provider value={helpers}>
-        <CuratorContext.Provider value={build({ ...overrides, ...next, addEdge: value.addEdge, unlink: value.unlink, del: value.del })}>
-          <FigureWorkspace />
-        </CuratorContext.Provider>
-      </CuratorHelperContext.Provider>
+      <Host
+        helpers={helpers}
+        curator={build({
+          ...overrides,
+          ...next,
+          addEdge: value.addEdge,
+          unlink: value.unlink,
+          del: value.del,
+        })}
+      />
     );
   return { ...value, helpers, rerenderWith };
 };
@@ -934,15 +947,100 @@ describe("what a row says", () => {
     );
   });
 
-  it("names which node in the drawing each row is", () => {
-    // The picture labels its boxes c0, s0, d0. Until now nothing on this
-    // list said which row was which box.
+  it("keeps the internal id out of sight but not out of the DOM", () => {
+    // An id is positional -- delete one figure and the rest renumber -- so
+    // printing it invites a curator to treat it as a permanent name for
+    // their own work. It stays where tests and tooling address it.
     renderWorkspace(CHAIN);
-    ["c0", "s0", "d0", "t0"].forEach((id) =>
-      expect(screen.getAllByTestId(`fw-id-${id}`)[0]).toHaveTextContent(
-        `(${id})`
+    const text = screen.getByTestId("fw-resources").textContent;
+    ["(c0)", "(s0)", "(d0)", "(t0)"].forEach((id) =>
+      expect(text).not.toContain(id)
+    );
+    ["c0", "s0", "d0", "t0"].forEach((id) => {
+      expect(screen.getAllByTestId(`fw-id-${id}`).length).toBeGreaterThan(0);
+      expect(screen.getByTestId(`fw-node-${id}`)).toHaveAttribute(
+        "data-artifact",
+        id
+      );
+    });
+  });
+
+  it("lights the row that is being pointed at", async () => {
+    // Matching a row to a box in the drawing is done by pointing, not by
+    // reading an id off both.
+    const u = user();
+    renderWorkspace(CHAIN);
+    const row = screen.getByTestId("fw-node-s0");
+    expect(row).toHaveAttribute("data-spotlit", "false");
+
+    await u.hover(row);
+    expect(screen.getByTestId("fw-node-s0")).toHaveAttribute(
+      "data-spotlit",
+      "true"
+    );
+    // And only that one.
+    expect(screen.getByTestId("fw-node-c0")).toHaveAttribute(
+      "data-spotlit",
+      "false"
+    );
+
+    await u.unhover(row);
+    expect(screen.getByTestId("fw-node-s0")).toHaveAttribute(
+      "data-spotlit",
+      "false"
+    );
+  });
+
+  it("drops the light when the artifacts are renumbered", async () => {
+    // Ids are positional. Delete one figure and `c1` becomes `c0`, so a
+    // spotlight held across the delete would light the row of an artifact
+    // the curator never pointed at -- and light it next to the wrong box.
+    const u = user();
+    const ctx = renderWorkspace({
+      charts: [FIGURE, { id: "c1", caption: "Second figure" }],
+      scripts: [SCRIPT],
+    });
+    await u.hover(screen.getByTestId("fw-node-c1"));
+    expect(screen.getByTestId("fw-node-c1")).toHaveAttribute(
+      "data-spotlit",
+      "true"
+    );
+
+    // The second figure is gone; what was c1 no longer exists.
+    ctx.rerenderWith({ charts: [FIGURE], scripts: [SCRIPT] });
+    expect(screen.queryByTestId("fw-node-c1")).toBeNull();
+    expect(screen.getByTestId("fw-node-c0")).toHaveAttribute(
+      "data-spotlit",
+      "false"
+    );
+  });
+
+  it("keeps internal ids out of the connection manager as well", async () => {
+    const u = user();
+    renderWorkspace(CHAIN);
+    await u.click(screen.getByTestId("fw-addlink-s0"));
+    await u.click(screen.getByTestId("fw-link-s0"));
+    const dialog = await screen.findByTestId("fw-link-dialog");
+    ["(c0)", "(d0)", "(t0)", "(s0)"].forEach((id) =>
+      expect(dialog.textContent).not.toContain(id)
+    );
+    // The rows are still addressed by id, and still named.
+    expect(screen.getByTestId("fw-link-name-s0-c0")).toHaveTextContent(
+      FIGURE.caption
+    );
+  });
+
+  it("lights the row from the keyboard too", async () => {
+    const u = user();
+    renderWorkspace(CHAIN);
+    screen.getByTestId("fw-addlink-s0").focus();
+    await waitFor(() =>
+      expect(screen.getByTestId("fw-node-s0")).toHaveAttribute(
+        "data-spotlit",
+        "true"
       )
     );
+    await u.tab();
   });
 
   it("keeps a resource in the same place when an edge is drawn", () => {

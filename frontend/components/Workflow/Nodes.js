@@ -1,4 +1,5 @@
 import { IdTypeMap, NodeType } from "./Types";
+import { artifactLabel } from "../../Utils/artifactLabel";
 import { buildFileUrl } from "../../Utils/fileServerUrl";
 
 const hoverTooltip = (type, id, nodeData) => {
@@ -81,7 +82,15 @@ const createNode = (id, data, showLabels = false, position = {}) => {
         color: "black",
       },
     },
-    label: showLabels ? id : "",
+    // THE CURATOR'S OWN WORD FOR IT, not `c0`. An id is an internal
+    // reference: positional, renumbered when a sibling is deleted, and no
+    // kind of name for somebody's own work. It stays in `node.id`, which is
+    // what every edge and every lookup actually addresses.
+    label: showLabels ? artifactLabel(nodeData, id) : "",
+    // A caption is a sentence, and a sentence written on one line runs
+    // across its neighbours. Wrapped, a long name costs height -- which
+    // this drawing has -- instead of the width it does not.
+    widthConstraint: { maximum: 160 },
     ...position,
   };
 

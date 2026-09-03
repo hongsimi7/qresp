@@ -31,7 +31,9 @@ import FolderAnalysis from "./FolderAnalysis";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
 import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperContext";
-import { displayUrl, externalLabel, noteFor } from "../../Utils/externalData";
+import SpotlightContext from "../../Context/Spotlight/spotlightContext";
+import { displayUrl, noteFor } from "../../Utils/externalData";
+import { artifactLabel } from "../../Utils/artifactLabel";
 import {
   CHART,
   CONSUMES,
@@ -113,21 +115,10 @@ const LIST_BY_TYPE = {
   head: "heads",
 };
 
-/** What a row is CALLED. Never a bare id, never an empty chip. */
-export const rowLabel = (artifact, id) => {
-  if (prefixOf(id) === EXTERNAL) return externalLabel(artifact, id);
-  const named =
-    (artifact &&
-      (artifact.caption ||
-        artifact.packageName ||
-        artifact.programName ||
-        artifact.facilityName ||
-        artifact.readme)) ||
-    "";
-  const text = String(named).replace(/\s+/g, " ").trim();
-  if (text) return text.length > 60 ? `${text.slice(0, 59)}…` : text;
-  return `Untitled ${KIND_LABEL[prefixOf(id)] || "item"} (${id})`;
-};
+/**
+ * What a row is CALLED. Shared with the drawing, so the two agree.
+ */
+export const rowLabel = artifactLabel;
 
 // The kinds a curator can create, in the order the menu offers them, and
 // whether the RCC importer can propose that kind at all. External data is
@@ -156,21 +147,22 @@ const IMPORTABLE = [
 // Dataset and a Tool were told apart only by reading their names. A small
 // neutral marker in a fixed column makes the kinds scannable without adding
 // another colour to the page.
-// WHICH NODE THIS IS, in the graph below.
+// WHICH NODE THIS IS, in the drawing below.
 //
-// The drawing labels its nodes c0, s1, d0 -- and until now nothing on this
-// list said which row was which node, so matching a resource to a box in
-// the picture meant guessing from the name.
+// NOT PRINTED. An id is positional: delete one figure and the rest are
+// renumbered, so a curator who learns "my figure is c2" has been told
+// something that will quietly stop being true. It stays in the DOM, where
+// tests and tooling address it, and in the accessible name for anyone who
+// needs to say which node they mean -- but the way to match a row to a box
+// is to point at one and watch the other light up.
 const NodeId = ({ id }) => (
-  <Typography
-    variant="caption"
-    color="text.secondary"
+  <Box
     component="span"
     data-testid={`fw-id-${id}`}
-    sx={{ fontFamily: "monospace", flexShrink: 0 }}
-  >
-    {`(${id})`}
-  </Typography>
+    data-artifact={id}
+    aria-hidden="true"
+    sx={{ display: "none" }}
+  />
 );
 
 const KindChip = ({ id }) => (
@@ -187,6 +179,23 @@ const KindChip = ({ id }) => (
     }}
   />
 );
+
+/**
+ * Drops the spotlight when the set of artifacts changes.
+ *
+ * Ids are POSITIONAL: delete one figure and the rest are renumbered, so a
+ * spotlight held across a delete would go on pointing at a reference that
+ * now belongs to a different artifact -- the wrong row lit next to the
+ * wrong box. It renders nothing; it reads the context here rather than in
+ * the workspace so that a pointer move does not re-render the list.
+ */
+const SpotlightReset = ({ signature }) => {
+  const { setSpotlight } = useContext(SpotlightContext);
+  useEffect(() => {
+    setSpotlight("");
+  }, [signature, setSpotlight]);
+  return null;
+};
 
 // Row-level actions are TEXT, not filled buttons.
 //
@@ -418,6 +427,8 @@ const FigureWorkspace = () => {
   const {
     openForm, setDefault, setExternalNodeFormOpen,
   } = useContext(CuratorHelperContext) || {};
+  // NOTE: the workspace itself deliberately does not read the spotlight.
+  // Only the rows do, one level down -- see SpotlightContext.
 
   const [notice, setNotice] = useState("");
   // Which row's "Add new" / overflow menu is open, and which shared node was
@@ -501,6 +512,8 @@ const FigureWorkspace = () => {
   }, [charts, scripts, datasets, tools, heads]);
 
   const knownIds = useMemo(() => Object.keys(byId), [byId]);
+
+  const idSignature = knownIds.join(",");
   const edges = (workflow && workflow.edges) || [];
 
   // THE POST-SAVE LINK.
@@ -1112,6 +1125,9 @@ const FigureWorkspace = () => {
    * answers.
    */
   const ResourceRow = ({ id }) => {
+    // Read one level down, not in the workspace: a pointer move must not
+    // re-render this whole list out from under the cursor.
+    const { spotlight, setSpotlight } = useContext(SpotlightContext);
     const into = incoming(id).filter(
       (edge) => !UNDIRECTED.includes(edge.type)
     );
@@ -1132,7 +1148,24 @@ const FigureWorkspace = () => {
       <Box
         component="li"
         data-testid={`fw-node-${id}`}
-        sx={{ minWidth: 0, py: 0.5, borderBottom: 1, borderColor: "divider" }}
+        data-artifact={id}
+        data-spotlit={String(spotlight === id)}
+        // Pointing at a row lights the matching box in the drawing, and a
+        // box lights its row. That replaces the internal id that used to be
+        // printed on both so they could be matched by eye.
+        onMouseEnter={() => setSpotlight && setSpotlight(id)}
+        onMouseLeave={() => setSpotlight && setSpotlight("")}
+        onFocus={() => setSpotlight && setSpotlight(id)}
+        onBlur={() => setSpotlight && setSpotlight("")}
+        sx={{
+          minWidth: 0,
+          py: 0.5,
+          borderBottom: 1,
+          borderColor: "divider",
+          ...(spotlight === id
+            ? { bgcolor: "action.selected", borderRadius: 1 }
+            : null),
+        }}
       >
         <Box
           sx={{
@@ -1536,6 +1569,7 @@ const FigureWorkspace = () => {
           data-testid="fw-resources"
           aria-label="Resources"
         >
+          <SpotlightReset signature={idSignature} />
           {ordered.map((id) => (
             <ResourceRow key={id} id={id} />
           ))}

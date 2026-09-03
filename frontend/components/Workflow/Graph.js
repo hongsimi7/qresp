@@ -11,6 +11,7 @@ import createEdge from "./Edges";
 import DetailsDialog from "./Details";
 
 import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperContext";
+import SpotlightContext from "../../Context/Spotlight/spotlightContext";
 
 // Global Edge Setting
 // Enlarge Edge of the node being hovered
@@ -74,10 +75,19 @@ const Graph = ({ workflow, data, manipulate = {} }) => {
   const [showDetails, setShowDetails] = useState(false);
 
   const [positions, setPositions] = useState(null);
+  // The live node DataSet, so the spotlight can restyle one box without
+  // rebuilding the network -- a rebuild would throw away the layout the
+  // curator is looking at.
+  const nodeSet = useRef(null);
+  // Which box is currently lit, and how it looked before it was -- so it
+  // can be put back as it was rather than as something guessed.
+  const lit = useRef("");
+  const litWas = useRef(null);
 
   const {
     workflowHelper: { fit, showLabels, onClick },
   } = useContext(CuratorHelperContext);
+  const { spotlight, setSpotlight } = useContext(SpotlightContext);
 
   // A reference to the div rendered by this component
   const domNode = useRef(null);
@@ -140,11 +150,23 @@ const Graph = ({ workflow, data, manipulate = {} }) => {
     // Change mouse pointer to a small hand
     wflow.on("hoverNode", function (params) {
       wflow.canvas.body.container.style.cursor = "pointer";
+      // Tell the resource list which artifact this box is.
+      if (setSpotlight) setSpotlight(params.node);
     });
     // Have to set pointer to regular after exiting a node hover
     wflow.on("blurNode", function (params) {
       wflow.canvas.body.container.style.cursor = "default";
+      if (setSpotlight) setSpotlight("");
     });
+    // A keyboard reaches a node by selecting it, not by hovering.
+    wflow.on("selectNode", function (params) {
+      if (setSpotlight && params.nodes.length) setSpotlight(params.nodes[0]);
+    });
+    wflow.on("deselectNode", function () {
+      if (setSpotlight) setSpotlight("");
+    });
+
+    nodeSet.current = data.nodes;
 
     if (
       positions == null ||
@@ -161,6 +183,52 @@ const Graph = ({ workflow, data, manipulate = {} }) => {
   useEffect(() => {
     network.current.stabilize();
   }, [fit]);
+
+  // POINTED AT FROM THE LIST: light up the matching box.
+  //
+  // Only the two boxes that change are touched -- the one being let go and
+  // the one being lit. Rewriting every node on each pointer move redraws
+  // the whole canvas to move one outline.
+  //
+  // THE FILL IS LEFT ALONE and the OUTLINE is what changes: colour is how a
+  // curator tells a Chart from a Tool at a glance, so a highlight that
+  // repainted the shape would answer one question by taking away another.
+  // A kind's colour is given to vis as a single word -- `orange`, `blue` --
+  // which makes the border that colour too, so a thicker border on its own
+  // is a thicker invisible line. It is given a dark border explicitly.
+  useEffect(() => {
+    const nodes = nodeSet.current;
+    if (!nodes) return;
+    const changes = [];
+    if (lit.current && lit.current !== spotlight && litWas.current) {
+      // Exactly what it was, not what its kind's default happens to be.
+      if (nodes.get(lit.current)) changes.push(litWas.current);
+      litWas.current = null;
+    }
+    if (spotlight && spotlight !== lit.current) {
+      const node = nodes.get(spotlight);
+      if (node) {
+        litWas.current = {
+          id: spotlight,
+          color: node.color,
+          borderWidth: node.borderWidth === undefined ? 1 : node.borderWidth,
+          shadow: node.shadow === undefined ? false : node.shadow,
+        };
+        const fill =
+          typeof node.color === "string"
+            ? { background: node.color }
+            : { ...(node.color || {}) };
+        changes.push({
+          id: spotlight,
+          color: { ...fill, border: "#111111" },
+          borderWidth: 5,
+          shadow: true,
+        });
+      }
+    }
+    lit.current = spotlight;
+    if (changes.length) nodes.update(changes);
+  }, [spotlight]);
 
   return (
     <Fragment>
