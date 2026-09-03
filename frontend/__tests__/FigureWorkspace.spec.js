@@ -284,7 +284,7 @@ describe("add or link, one question at a time", () => {
     // The first pane asks HOW. The kinds live in the branch, never in it --
     // opening the menu focuses its first item, and focus opens the branch,
     // which is the behaviour a keyboard needs.
-    const root = within(screen.getByTestId("fw-flow-menu"));
+    const root = within(screen.getAllByTestId("fw-flow-menu")[0]);
     expect(root.queryByTestId("fw-add--chart")).not.toBeInTheDocument();
     expect(root.getByTestId("fw-source-manual")).toBeInTheDocument();
 
@@ -345,7 +345,7 @@ describe("add or link, one question at a time", () => {
     await u.hover(screen.getByTestId("fw-source-manual"));
     await screen.findByTestId("fw-kind-menu");
 
-    expect(screen.getByTestId("fw-flow-menu")).toBeInTheDocument();
+    expect(screen.getAllByTestId("fw-flow-menu")[0]).toBeInTheDocument();
     expect(screen.getByTestId("fw-source-manual")).toBeInTheDocument();
   });
 
@@ -617,7 +617,10 @@ describe("drawing an arrow between any two resources", () => {
     expect(ctx.helpers.setDefault).not.toHaveBeenCalled();
   });
 
-  it("shows an arrow already drawn as made, and refuses a second", async () => {
+  it("shows an arrow already drawn as ticked, and lets it be unticked", async () => {
+    // The box is the state a curator WANTS, not a report of what is. Greying
+    // it out made the one place for managing a resource's connections the
+    // one place they could not undo one.
     const u = user();
     renderWorkspace({
       ...PAIR,
@@ -627,7 +630,10 @@ describe("drawing an arrow between any two resources", () => {
 
     const made = screen.getByTestId("fw-link-option-s0-d0");
     expect(made).toBeChecked();
-    expect(made).toBeDisabled();
+    expect(made).toBeEnabled();
+    expect(screen.getByTestId("fw-link-dialog")).not.toHaveTextContent(
+      /already linked/i
+    );
   });
 
   it("still offers the opposite arrow, which is a different fact", async () => {
@@ -641,6 +647,7 @@ describe("drawing an arrow between any two resources", () => {
 
     const back = screen.getByTestId("fw-link-option-d0-s0");
     expect(back).toBeEnabled();
+    expect(back).not.toBeChecked();
     await u.click(back);
     await u.click(screen.getByTestId("fw-link-apply"));
     // It closes a loop, so it is asked about rather than refused.
@@ -653,16 +660,25 @@ describe("drawing an arrow between any two resources", () => {
     });
   });
 
-  it("reads an existing association as a two-headed arrow", async () => {
+  it("reads an existing association as a two-headed arrow it can undo", async () => {
     const u = user();
-    renderWorkspace({
+    const ctx = renderWorkspace({
       charts: [FIGURE, { id: "c1", caption: "Band structure" }],
       workflow: { nodes: [], edges: [{ from: "c1", to: "c0", type: "related_to" }] },
     });
     await openLinkFor(u, "c0");
 
-    expect(screen.getByTestId("fw-link-made-c0-c1")).toHaveTextContent("↔");
-    expect(screen.getByTestId("fw-link-option-c0-c1")).toBeDisabled();
+    const row = screen.getByTestId("fw-link-option-c1-c0-related_to");
+    expect(screen.getByTestId("fw-link-both-c1-c0-related_to")).toHaveTextContent(
+      "↔"
+    );
+    expect(row).toBeChecked();
+    expect(row).toBeEnabled();
+
+    // Removed in the orientation the record holds, not the one being read.
+    await u.click(row);
+    await u.click(screen.getByTestId("fw-link-apply"));
+    expect(ctx.unlink).toHaveBeenCalledWith("c1", "c0");
   });
 
   it("makes nothing when the dialog is cancelled", async () => {
@@ -689,6 +705,8 @@ describe("drawing an arrow between any two resources", () => {
     expect(box).toBeChecked();
     // Nothing appeared, so nothing below it moved.
     expect(screen.getByTestId("fw-link-dialog").textContent).toBe(before);
+    // And the same DOM node -- a remount is what flashed.
+    expect(screen.getByTestId("fw-link-option-s0-c0")).toBe(box);
     // The one visual affordance that is not decoration: it stays reachable.
     expect(box).not.toBeDisabled();
     expect(box).not.toHaveAttribute("tabindex", "-1");
@@ -753,11 +771,11 @@ describe("feedback loops", () => {
         ],
       },
     });
-    expect(screen.getByTestId("fw-feedback-s0-c0")).toHaveTextContent(
+    expect(screen.getAllByTestId("fw-feedback-s0-c0")[0]).toHaveTextContent(
       /feedback loop/i
     );
     // The other edge closes the same loop and is NOT marked: nobody said so.
-    expect(screen.queryByTestId("fw-feedback-c0-s0")).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId("fw-feedback-c0-s0")).toHaveLength(0);
   });
 
   it("keeps the mark when the edge that closed the loop is removed", () => {
@@ -778,7 +796,7 @@ describe("feedback loops", () => {
         edges: [{ from: "s0", to: "c0", type: "links_to", feedback: true }],
       },
     });
-    expect(screen.getByTestId("fw-feedback-s0-c0")).toBeInTheDocument();
+    expect(screen.getAllByTestId("fw-feedback-s0-c0")[0]).toBeInTheDocument();
   });
 
   it("refuses an artifact joined to itself", async () => {
@@ -794,21 +812,24 @@ describe("feedback loops", () => {
 describe("breaking one relationship", () => {
   afterEach(() => jest.resetAllMocks());
 
-  it("sits beside every arrow that is drawn", () => {
+  it("is reachable from either end of the arrow", () => {
+    // Outgoing under the source, incoming under the target: an arrow you
+    // can see but can only undo from the other side is the complaint this
+    // answers.
     renderWorkspace(CHAIN);
     ["s0-c0", "d0-s0", "t0-s0"].forEach((pair) => {
-      expect(screen.getByTestId(`fw-flow-${pair}`)).toBeInTheDocument();
-      expect(screen.getByTestId(`fw-unlink-${pair}`)).toBeInTheDocument();
+      expect(screen.getAllByTestId(`fw-flow-${pair}`)).toHaveLength(2);
+      expect(screen.getAllByTestId(`fw-unlink-${pair}`)).toHaveLength(2);
     });
   });
 
   it("names both ends and the relationship, for a screen reader", () => {
     renderWorkspace(CHAIN);
     expect(
-      screen.getByRole("button", {
+      screen.getAllByRole("button", {
         name: "Unlink plot_dos.py generates Density of states",
-      })
-    ).toBeInTheDocument();
+      }).length
+    ).toBeGreaterThan(0);
   });
 
   it("removes one edge of a shared artifact and keeps the rest", () => {
@@ -823,7 +844,7 @@ describe("breaking one relationship", () => {
         ],
       },
     });
-    fireEvent.click(screen.getByTestId("fw-unlink-s0-c1"));
+    fireEvent.click(screen.getAllByTestId("fw-unlink-s0-c1")[0]);
 
     expect(ctx.unlink).toHaveBeenCalledTimes(1);
     expect(ctx.unlink).toHaveBeenCalledWith("s0", "c1");
@@ -833,9 +854,22 @@ describe("breaking one relationship", () => {
 
   it("is a real button a keyboard can reach", () => {
     renderWorkspace(CHAIN);
-    const button = screen.getByTestId("fw-unlink-s0-c0");
+    const button = screen.getAllByTestId("fw-unlink-s0-c0")[0];
     expect(button.tagName).toBe("BUTTON");
     expect(button).not.toBeDisabled();
+  });
+
+  it("can be folded away, leaving the count", async () => {
+    const u = user();
+    renderWorkspace(CHAIN);
+    expect(screen.getByTestId("fw-wiring-s0")).toBeInTheDocument();
+
+    await u.click(screen.getByTestId("fw-state-s0"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("fw-wiring-s0")).not.toBeInTheDocument()
+    );
+    // The count survives the fold: it is what says there is anything there.
+    expect(screen.getByTestId("fw-state-s0")).toHaveTextContent("2 in");
   });
 });
 
@@ -859,12 +893,12 @@ describe("what a row says", () => {
       "related to",
     ].forEach((phrase) => expect(text).not.toContain(phrase));
 
-    expect(screen.getByTestId("fw-flow-s0-c0")).toHaveTextContent("\u2192");
+    expect(screen.getAllByTestId("fw-flow-s0-c0")[0]).toHaveTextContent("\u2192");
   });
 
   it("still describes the relationship to a screen reader", () => {
     renderWorkspace(CHAIN);
-    expect(screen.getByTestId("fw-flow-s0-c0")).toHaveAttribute(
+    expect(screen.getAllByTestId("fw-flow-s0-c0")[0]).toHaveAttribute(
       "aria-label",
       "plot_dos.py generates Density of states"
     );
@@ -875,7 +909,7 @@ describe("what a row says", () => {
       charts: [FIGURE, { id: "c1", caption: "Band structure" }],
       workflow: { nodes: [], edges: [{ from: "c0", to: "c1", type: "related_to" }] },
     });
-    expect(screen.getByTestId("fw-flow-c0-c1")).toHaveTextContent("\u2194");
+    expect(screen.getAllByTestId("fw-flow-c0-c1")[0]).toHaveTextContent("\u2194");
   });
 
   it("draws no graph of its own", () => {
@@ -891,11 +925,23 @@ describe("what a row says", () => {
     );
   });
 
-  it("says whether a resource is part of the workflow", () => {
+  it("says how many connections a resource has, each way", () => {
     renderWorkspace({ ...CHAIN, heads: [{ id: "h0", URLs: ["https://e.org/a"] }] });
-    expect(screen.getByTestId("fw-state-s0")).toHaveTextContent("Connected");
+    // Two arrows in, one out.
+    expect(screen.getByTestId("fw-state-s0")).toHaveTextContent("2 in · 1 out");
     expect(screen.getByTestId("fw-state-h0")).toHaveTextContent(
       "Not connected"
+    );
+  });
+
+  it("names which node in the drawing each row is", () => {
+    // The picture labels its boxes c0, s0, d0. Until now nothing on this
+    // list said which row was which box.
+    renderWorkspace(CHAIN);
+    ["c0", "s0", "d0", "t0"].forEach((id) =>
+      expect(screen.getAllByTestId(`fw-id-${id}`)[0]).toHaveTextContent(
+        `(${id})`
+      )
     );
   });
 
@@ -957,8 +1003,8 @@ describe("the draft between the two saves", () => {
       scripts: [SCRIPT],
       workflow: { nodes: [], edges: [["s0", "c0"]] },
     });
-    expect(screen.getByTestId("fw-flow-s0-c0")).toHaveTextContent("\u2192");
-    expect(screen.getByTestId("fw-flow-s0-c0")).toHaveAttribute(
+    expect(screen.getAllByTestId("fw-flow-s0-c0")[0]).toHaveTextContent("\u2192");
+    expect(screen.getAllByTestId("fw-flow-s0-c0")[0]).toHaveAttribute(
       "aria-label",
       "plot_dos.py connects to Density of states"
     );
@@ -1043,8 +1089,8 @@ describe("an arrow between two of the same kind", () => {
       workflow: { nodes: [], edges: [{ from: "d0", to: "d1", type: "links_to" }] },
     });
     await openLinkFor(u, "d0");
-    // The one already drawn is spent...
-    expect(screen.getByTestId("fw-link-option-d0-d1")).toBeDisabled();
+    // The one already drawn is shown as made, and could be undone here...
+    expect(screen.getByTestId("fw-link-option-d0-d1")).toBeChecked();
     // ...and the reverse is a different fact.
     await u.click(screen.getByTestId("fw-dir-in"));
     await u.click(screen.getByTestId("fw-link-option-d1-d0"));
@@ -1125,7 +1171,7 @@ describe("a resource that is joined to nothing", () => {
     });
   });
 
-  it("says Connected the moment it is joined", () => {
+  it("counts the connection the moment it is made", () => {
     const ctx = renderWorkspace({
       charts: [FIGURE],
       datasets: [{ id: "d0", readme: "orphan data" }],
@@ -1136,7 +1182,7 @@ describe("a resource that is joined to nothing", () => {
     ctx.rerenderWith({
       workflow: { nodes: [], edges: [{ from: "d0", to: "c0", type: "links_to" }] },
     });
-    expect(screen.getByTestId("fw-state-d0")).toHaveTextContent("Connected");
+    expect(screen.getByTestId("fw-state-d0")).toHaveTextContent("0 in · 1 out");
   });
 });
 
@@ -1221,8 +1267,8 @@ describe("the list does not reconstruct the graph", () => {
       },
     });
     ["s0-s1", "s1-s2", "s2-s0"].forEach((pair) => {
-      expect(screen.getByTestId(`fw-flow-${pair}`)).toBeInTheDocument();
-      expect(screen.getByTestId(`fw-unlink-${pair}`)).toBeInTheDocument();
+      expect(screen.getAllByTestId(`fw-flow-${pair}`)[0]).toBeInTheDocument();
+      expect(screen.getAllByTestId(`fw-unlink-${pair}`)[0]).toBeInTheDocument();
     });
     ["s0", "s1", "s2"].forEach((id) =>
       expect(screen.getAllByTestId(`fw-node-${id}`)).toHaveLength(1)
@@ -1240,14 +1286,14 @@ describe("the list does not reconstruct the graph", () => {
         ],
       },
     });
-    expect(screen.getByTestId("fw-flow-s0-s1")).toBeInTheDocument();
-    expect(screen.getByTestId("fw-flow-s1-s0")).toBeInTheDocument();
+    expect(screen.getAllByTestId("fw-flow-s0-s1")[0]).toBeInTheDocument();
+    expect(screen.getAllByTestId("fw-flow-s1-s0")[0]).toBeInTheDocument();
     // Each is undone on its own.
-    expect(screen.getByTestId("fw-unlink-s0-s1")).toBeInTheDocument();
-    expect(screen.getByTestId("fw-unlink-s1-s0")).toBeInTheDocument();
+    expect(screen.getAllByTestId("fw-unlink-s0-s1")[0]).toBeInTheDocument();
+    expect(screen.getAllByTestId("fw-unlink-s1-s0")[0]).toBeInTheDocument();
     // And only the confirmed one is marked.
-    expect(screen.getByTestId("fw-feedback-s1-s0")).toBeInTheDocument();
-    expect(screen.queryByTestId("fw-feedback-s0-s1")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("fw-feedback-s1-s0")[0]).toBeInTheDocument();
+    expect(screen.queryAllByTestId("fw-feedback-s0-s1")).toHaveLength(0);
   });
 });
 
@@ -1272,7 +1318,6 @@ describe("who owns a feedback mark", () => {
     await u.click(await screen.findByTestId("fw-loop-confirm"));
 
     expect(ctx.addEdge).toHaveBeenCalledTimes(1);
-    // The edge already there is not touched.
     expect(ctx.addEdge).not.toHaveBeenCalledWith(
       expect.objectContaining({ from: "c0", to: "s0" })
     );
@@ -1282,8 +1327,8 @@ describe("who owns a feedback mark", () => {
     renderWorkspace(
       held([{ from: "s0", to: "c0", type: "links_to", feedback: true }])
     );
-    expect(screen.getByTestId("fw-feedback-s0-c0")).toBeInTheDocument();
-    expect(screen.queryByTestId("fw-feedback-c0-s0")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("fw-feedback-s0-c0").length).toBeGreaterThan(0);
+    expect(screen.queryAllByTestId("fw-feedback-c0-s0")).toHaveLength(0);
   });
 
   it("keeps the mark when the OTHER edge of the loop is removed", () => {
@@ -1296,7 +1341,7 @@ describe("who owns a feedback mark", () => {
         edges: [{ from: "s0", to: "c0", type: "links_to", feedback: true }],
       },
     });
-    expect(screen.getByTestId("fw-feedback-s0-c0")).toBeInTheDocument();
+    expect(screen.getAllByTestId("fw-feedback-s0-c0").length).toBeGreaterThan(0);
   });
 
   it("loses the mark when the feedback edge itself is removed", () => {
@@ -1306,12 +1351,12 @@ describe("who owns a feedback mark", () => {
     ctx.rerenderWith({
       workflow: { nodes: [], edges: [{ from: "c0", to: "s0", type: "links_to" }] },
     });
-    expect(screen.queryByTestId(/^fw-feedback-/)).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^fw-feedback-/)).toHaveLength(0);
   });
 
   it("adds no mark to a cycle nobody was asked about", () => {
     renderWorkspace(held([{ from: "s0", to: "c0", type: "links_to" }]));
-    expect(screen.queryByTestId(/^fw-feedback-/)).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^fw-feedback-/)).toHaveLength(0);
   });
 
   it("adds no mark to a legacy untyped loop", () => {
@@ -1320,7 +1365,7 @@ describe("who owns a feedback mark", () => {
       scripts: [SCRIPT],
       workflow: { nodes: [], edges: [["s0", "c0"], ["c0", "s0"]] },
     });
-    expect(screen.queryByTestId(/^fw-feedback-/)).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^fw-feedback-/)).toHaveLength(0);
   });
 
   it("marks nothing when the question is declined", async () => {
@@ -1334,7 +1379,6 @@ describe("who owns a feedback mark", () => {
   });
 
   it("keeps the other choices when the loop is declined", async () => {
-    // Refusing one connection is not a reason to discard the rest.
     const u = user();
     const ctx = renderWorkspace({
       ...held(),
@@ -1362,20 +1406,19 @@ describe("who owns a feedback mark", () => {
       workflow: { nodes: [], edges: [{ from: "c1", to: "c0", type: "related_to" }] },
     });
     await openLinkFor(u, "c0");
-    // The association is already there, so the remaining candidate is the
-    // directed one, and it closes nothing.
-    expect(screen.getByTestId("fw-link-option-c0-c1")).toBeDisabled();
-    await u.click(screen.getByTestId("fw-link-cancel"));
-    expect(ctx.addEdge).not.toHaveBeenCalled();
+    // Removing it is not a loop question.
+    await u.click(screen.getByTestId("fw-link-option-c1-c0-related_to"));
+    await u.click(screen.getByTestId("fw-link-apply"));
+
+    expect(screen.queryByTestId("fw-loop-dialog")).not.toBeInTheDocument();
+    expect(ctx.unlink).toHaveBeenCalledWith("c1", "c0");
   });
 });
 
 describe("unlink, from wherever the arrow is drawn", () => {
   afterEach(() => jest.resetAllMocks());
 
-  it("reaches an edge leaving the root of its outline", () => {
-    // s0 roots this outline and s1 hangs under it; the edge s0 -> s1 is
-    // written on the reference row, and that is where it can be undone.
+  it("reaches an edge from the row it leaves and the row it enters", () => {
     const ctx = renderWorkspace({
       scripts: [SCRIPT, { id: "s1", readme: "preprocess.py" }],
       workflow: {
@@ -1386,24 +1429,23 @@ describe("unlink, from wherever the arrow is drawn", () => {
         ],
       },
     });
-    expect(screen.getByTestId("fw-unlink-s0-s1")).toBeInTheDocument();
-    expect(screen.getByTestId("fw-unlink-s1-s0")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("fw-unlink-s0-s1"));
+    // Two edges, each shown at both ends.
+    expect(screen.getAllByTestId("fw-unlink-s0-s1")).toHaveLength(2);
+    expect(screen.getAllByTestId("fw-unlink-s1-s0")).toHaveLength(2);
+
+    fireEvent.click(screen.getAllByTestId("fw-unlink-s0-s1")[1]);
+    expect(ctx.unlink).toHaveBeenCalledTimes(1);
     expect(ctx.unlink).toHaveBeenCalledWith("s0", "s1");
   });
 
   it("breaks an association from either end, in its stored direction", () => {
-    // Stored c0 -> c1. Read from c1 it says the same thing, and unlinking
-    // from there must still name the endpoints the record holds.
     const ctx = renderWorkspace({
       charts: [FIGURE, { id: "c1", caption: "Band structure" }],
       workflow: { nodes: [], edges: [{ from: "c0", to: "c1", type: "related_to" }] },
     });
-    // Listed under the SOURCE only, so one edge has exactly one row and
-    // exactly one way to undo it.
     const buttons = screen.getAllByTestId("fw-unlink-c0-c1");
-    expect(buttons.length).toBe(1);
-    fireEvent.click(buttons[0]);
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[1]);
     expect(ctx.unlink).toHaveBeenCalledWith("c0", "c1");
   });
 
@@ -1419,19 +1461,19 @@ describe("unlink, from wherever the arrow is drawn", () => {
         ],
       },
     });
-    expect(screen.getByTestId("fw-feedback-s0-c0")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("fw-unlink-s0-c0"));
+    expect(screen.getAllByTestId("fw-feedback-s0-c0").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByTestId("fw-unlink-s0-c0")[0]);
     expect(ctx.unlink).toHaveBeenCalledWith("s0", "c0");
 
     ctx.rerenderWith({
       workflow: { nodes: [], edges: [{ from: "c0", to: "s0", type: "links_to" }] },
     });
-    expect(screen.queryByTestId(/^fw-feedback-/)).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^fw-feedback-/)).toHaveLength(0);
   });
 
   it("offers no unlink where no relationship is written", () => {
     renderWorkspace({ charts: [FIGURE] });
-    expect(screen.queryByTestId(/^fw-unlink-/)).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^fw-unlink-/)).toHaveLength(0);
   });
 });
 
@@ -1469,7 +1511,7 @@ describe("reachable without a mouse", () => {
   it("keeps every Unlink a real button", () => {
     renderWorkspace(CHAIN);
     ["s0-c0", "d0-s0", "t0-s0"].forEach((pair) => {
-      const button = screen.getByTestId(`fw-unlink-${pair}`);
+      const button = screen.getAllByTestId(`fw-unlink-${pair}`)[0];
       expect(button.tagName).toBe("BUTTON");
       expect(button).not.toBeDisabled();
     });
@@ -1667,5 +1709,200 @@ describe("suggested connections", () => {
     expect(screen.getByTestId("fw-addlink-c0")).toBeInTheDocument();
     expect(screen.getByTestId("fw-edit-c0")).toBeInTheDocument();
     expect(screen.getByTestId("fw-remove-c0")).toBeInTheDocument();
+  });
+});
+
+// THE DIALOG IS A CONNECTION MANAGER.
+//
+// A checkbox says the state the curator WANTS, not a report of what is. That
+// is what makes it possible to undo a connection in the same place it was
+// made -- which, before, meant closing the window and hunting for the row.
+describe("managing a resource's connections", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  const WIRED = {
+    charts: [FIGURE],
+    scripts: [SCRIPT],
+    datasets: [{ id: "d0", readme: "spectra" }],
+    tools: [{ id: "t0", packageName: "numpy" }],
+    workflow: {
+      nodes: [],
+      edges: [
+        { from: "s0", to: "c0", type: "generates" },
+        { from: "s0", to: "d0", type: "links_to" },
+      ],
+    },
+  };
+
+  it("calls the action Apply changes, not Link selected", async () => {
+    const u = user();
+    renderWorkspace(WIRED);
+    await openLinkFor(u, "s0");
+    expect(screen.getByTestId("fw-link-apply")).toHaveTextContent(
+      /apply changes/i
+    );
+  });
+
+  it("removes exactly the one connection that was unticked", async () => {
+    const u = user();
+    const ctx = renderWorkspace(WIRED);
+    await openLinkFor(u, "s0");
+
+    await u.click(screen.getByTestId("fw-link-option-s0-d0"));
+    await u.click(screen.getByTestId("fw-link-apply"));
+
+    expect(ctx.unlink).toHaveBeenCalledTimes(1);
+    expect(ctx.unlink).toHaveBeenCalledWith("s0", "d0");
+    // The other connection is untouched, and nothing was added.
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+    expect(ctx.del).not.toHaveBeenCalled();
+  });
+
+  it("adds and removes together, in one Apply", async () => {
+    const u = user();
+    const ctx = renderWorkspace(WIRED);
+    await openLinkFor(u, "s0");
+
+    await u.click(screen.getByTestId("fw-link-option-s0-d0")); // untick
+    await u.click(screen.getByTestId("fw-link-option-s0-t0")); // tick
+    await u.click(screen.getByTestId("fw-link-apply"));
+
+    expect(ctx.unlink).toHaveBeenCalledWith("s0", "d0");
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "s0",
+      to: "t0",
+      type: "links_to",
+    });
+  });
+
+  it("removes an incoming connection from the other endpoint", async () => {
+    // Opened at the figure, flipped to what points AT it.
+    const u = user();
+    const ctx = renderWorkspace(WIRED);
+    await openLinkFor(u, "c0");
+    await u.click(screen.getByTestId("fw-dir-in"));
+
+    const incoming = screen.getByTestId("fw-link-option-s0-c0");
+    expect(incoming).toBeChecked();
+    await u.click(incoming);
+    await u.click(screen.getByTestId("fw-link-apply"));
+
+    expect(ctx.unlink).toHaveBeenCalledWith("s0", "c0");
+  });
+
+  it("keeps a pending change when the direction is flipped", async () => {
+    // Pending is keyed by EDGE, so turning the dialog round does not lose
+    // what has already been decided.
+    const u = user();
+    const ctx = renderWorkspace(WIRED);
+    await openLinkFor(u, "s0");
+
+    await u.click(screen.getByTestId("fw-link-option-s0-d0")); // untick
+    await u.click(screen.getByTestId("fw-dir-in"));
+    await u.click(screen.getByTestId("fw-dir-out"));
+    expect(screen.getByTestId("fw-link-option-s0-d0")).not.toBeChecked();
+
+    await u.click(screen.getByTestId("fw-link-apply"));
+    expect(ctx.unlink).toHaveBeenCalledWith("s0", "d0");
+  });
+
+  it("Cancel throws away every pending change", async () => {
+    const u = user();
+    const ctx = renderWorkspace(WIRED);
+    await openLinkFor(u, "s0");
+
+    await u.click(screen.getByTestId("fw-link-option-s0-d0")); // untick
+    await u.click(screen.getByTestId("fw-link-option-s0-t0")); // tick
+    await u.click(screen.getByTestId("fw-link-cancel"));
+
+    expect(ctx.unlink).not.toHaveBeenCalled();
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("fw-link-dialog")).not.toBeInTheDocument();
+  });
+
+  it("stays open after Apply, with the new state as the baseline", async () => {
+    // Managing connections is rarely one change. Closing the window under a
+    // curator costs them the place they were working.
+    const u = user();
+    const ctx = renderWorkspace(WIRED);
+    await openLinkFor(u, "s0");
+
+    await u.click(screen.getByTestId("fw-link-option-s0-t0"));
+    await u.click(screen.getByTestId("fw-link-apply"));
+
+    expect(ctx.addEdge).toHaveBeenCalled();
+    expect(screen.getByTestId("fw-link-dialog")).toBeInTheDocument();
+    // Nothing is pending any more, so there is nothing left to apply.
+    expect(screen.getByTestId("fw-link-apply")).toBeDisabled();
+  });
+
+  it("does not rebuild the dialog when a box is ticked", async () => {
+    // A remounted Modal is the flicker, and a remounted input is why focus
+    // used to vanish mid-use.
+    const u = user();
+    renderWorkspace(WIRED);
+    await openLinkFor(u, "s0");
+
+    const dialog = screen.getByTestId("fw-link-dialog");
+    const box = screen.getByTestId("fw-link-option-s0-t0");
+    await u.click(box);
+
+    expect(screen.getByTestId("fw-link-dialog")).toBe(dialog);
+    expect(screen.getByTestId("fw-link-option-s0-t0")).toBe(box);
+  });
+
+  it("asks about a loop only for what is being ADDED", async () => {
+    const u = user();
+    const ctx = renderWorkspace({
+      charts: [FIGURE],
+      scripts: [SCRIPT],
+      workflow: { nodes: [], edges: [{ from: "c0", to: "s0", type: "links_to" }] },
+    });
+    await openLinkFor(u, "s0");
+    await u.click(screen.getByTestId("fw-link-option-s0-c0"));
+    await u.click(screen.getByTestId("fw-link-apply"));
+
+    await screen.findByTestId("fw-loop-dialog");
+    await u.click(screen.getByTestId("fw-loop-confirm"));
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "s0",
+      to: "c0",
+      type: "links_to",
+      feedback: true,
+    });
+  });
+
+  it("says so when nothing was changed", async () => {
+    const u = user();
+    const ctx = renderWorkspace(WIRED);
+    await openLinkFor(u, "s0");
+    expect(screen.getByTestId("fw-link-apply")).toBeDisabled();
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+  });
+});
+
+describe("what a row shows about its wiring", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  it("separates what reaches it from what it reaches", () => {
+    renderWorkspace(CHAIN);
+    const wiring = within(screen.getByTestId("fw-wiring-s0"));
+    expect(wiring.getByText("Incoming")).toBeInTheDocument();
+    expect(wiring.getByText("Outgoing")).toBeInTheDocument();
+    // d0 -> s0 and t0 -> s0 come in; s0 -> c0 goes out.
+    expect(wiring.getAllByTestId("fw-unlink-d0-s0")).toHaveLength(1);
+    expect(wiring.getAllByTestId("fw-unlink-s0-c0")).toHaveLength(1);
+  });
+
+  it("shows an association in its own list, not as a flow", () => {
+    renderWorkspace({
+      charts: [FIGURE, { id: "c1", caption: "Band structure" }],
+      workflow: { nodes: [], edges: [{ from: "c0", to: "c1", type: "related_to" }] },
+    });
+    const wiring = within(screen.getByTestId("fw-wiring-c0"));
+    expect(wiring.getByText("Related")).toBeInTheDocument();
+    expect(wiring.queryByText("Incoming")).not.toBeInTheDocument();
+    expect(wiring.queryByText("Outgoing")).not.toBeInTheDocument();
+    expect(screen.getByTestId("fw-state-c0")).toHaveTextContent("1 related");
   });
 });

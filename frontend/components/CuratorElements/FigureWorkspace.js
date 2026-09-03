@@ -156,6 +156,23 @@ const IMPORTABLE = [
 // Dataset and a Tool were told apart only by reading their names. A small
 // neutral marker in a fixed column makes the kinds scannable without adding
 // another colour to the page.
+// WHICH NODE THIS IS, in the graph below.
+//
+// The drawing labels its nodes c0, s1, d0 -- and until now nothing on this
+// list said which row was which node, so matching a resource to a box in
+// the picture meant guessing from the name.
+const NodeId = ({ id }) => (
+  <Typography
+    variant="caption"
+    color="text.secondary"
+    component="span"
+    data-testid={`fw-id-${id}`}
+    sx={{ fontFamily: "monospace", flexShrink: 0 }}
+  >
+    {`(${id})`}
+  </Typography>
+);
+
 const KindChip = ({ id }) => (
   <Chip
     label={KIND_LABEL[prefixOf(id)] || "Item"}
@@ -210,7 +227,6 @@ const LinkOption = ({ option, name, checked, onToggle }) => (
           disableTouchRipple
           disableFocusRipple
           checked={checked}
-          disabled={option.linked}
           onChange={(event) => onToggle(option.key, event.target.checked)}
           slotProps={{
             input: { "data-testid": `fw-link-option-${option.key}` },
@@ -234,13 +250,16 @@ const LinkOption = ({ option, name, checked, onToggle }) => (
           >
             {name}
           </Typography>
-          {option.linked ? (
+          <NodeId id={option.other} />
+          {/* An association states no order, so it is marked as the
+              two-headed thing it is rather than given a direction. */}
+          {option.undirected ? (
             <Typography
               variant="caption"
               color="text.secondary"
-              data-testid={`fw-link-made-${option.key}`}
+              data-testid={`fw-link-both-${option.key}`}
             >
-              {option.undirected ? "↔" : "Already linked"}
+              ↔
             </Typography>
           ) : null}
         </Box>
@@ -248,6 +267,148 @@ const LinkOption = ({ option, name, checked, onToggle }) => (
     />
   </Box>
 );
+
+/**
+ * The connection manager.
+ *
+ * AT MODULE SCOPE ON PURPOSE. Declared inside FigureWorkspace it was a new
+ * component type on every render, so React discarded and rebuilt the entire
+ * dialog -- Modal, paper, every checkbox -- each time a box was ticked.
+ * That is the flicker, and it is why focus vanished mid-use. Everything it
+ * needs arrives as props.
+ */
+const LinkDialog = ({
+  id,
+  options,
+  reversed,
+  setReversed,
+  label,
+  wantsLinked,
+  onToggle,
+  onApply,
+  onClose,
+}) => {
+    if (!id) return null;
+    // Something to apply when any box disagrees with the record.
+    const changed = options.some(
+      (option) => wantsLinked(option) !== option.exists
+    );
+    const me = label(id);
+
+    return (
+      <Dialog
+        open
+        onClose={onClose}
+        fullWidth
+        maxWidth="sm"
+        data-testid="fw-link-dialog"
+      >
+        <DialogTitle sx={{ pb: 0.5 }}>Link existing</DialogTitle>
+        <DialogContent dividers>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 0.75,
+              mb: 1,
+              minWidth: 0,
+            }}
+          >
+            <Typography variant="caption" color="text.secondary">
+              Source
+            </Typography>
+            <KindChip id={id} />
+            <Typography
+              variant="body2"
+              sx={{ overflowWrap: "anywhere", minWidth: 0 }}
+            >
+              {me}
+            </Typography>
+          </Box>
+
+          {/* THE DIRECTION, CHOSEN ONCE. Flipping it offers the same
+              artifacts for an arrow the other way, which is a different fact
+              and is allowed even when this one already exists. */}
+          <Typography variant="caption" color="text.secondary" display="block">
+            Arrow direction
+          </Typography>
+          <ToggleButtonGroup
+            exclusive
+            size="small"
+            value={reversed ? "in" : "out"}
+            onChange={(event, next) => {
+              if (!next) return;
+              // Pending changes are keyed by edge, so they survive.
+              setReversed(next === "in");
+            }}
+            sx={{ mb: 1.5, flexWrap: "wrap" }}
+          >
+            <ToggleButton
+              value="out"
+              data-testid="fw-dir-out"
+              sx={{ textTransform: "none" }}
+            >
+              {`${me} → selected`}
+            </ToggleButton>
+            <ToggleButton
+              value="in"
+              data-testid="fw-dir-in"
+              sx={{ textTransform: "none" }}
+            >
+              {`selected → ${me}`}
+            </ToggleButton>
+          </ToggleButtonGroup>
+
+          {options.length ? (
+            <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+              {options.map((option) => (
+                <LinkOption
+                  key={option.key}
+                  option={option}
+                  name={label(option.other)}
+                  checked={wantsLinked(option)}
+                  onToggle={onToggle}
+                />
+              ))}
+            </Box>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              Nothing else in this paper yet. Add a resource first, then link
+              it here.
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={onClose} data-testid="fw-link-cancel">
+            Cancel
+          </Button>
+          <RegularStyledButton
+            onClick={onApply}
+            disabled={!changed}
+            data-testid="fw-link-apply"
+          >
+            Apply changes
+          </RegularStyledButton>
+        </DialogActions>
+      </Dialog>
+    );
+  };
+
+  /**
+   * ONE ROW PER ARTIFACT, in a flat list.
+   *
+   * This section used to draw the workflow: a figure-rooted tree, shared
+   * nodes rendered once with references after them, and an SVG above it.
+   * That was a SECOND picture of the same graph, and the two had to be kept
+   * in step by hand -- while the tree could not honestly show a cycle, a
+   * reversed pair, or many-to-many without either cutting an edge or
+   * repeating a node.
+   *
+   * The graph belongs in "Build your workflow", which already draws it and
+   * already lets it be edited. This is a resource manager: what the paper
+   * holds, what each thing is joined to, and the four things a curator does
+   * to it. No hierarchy is invented, so none can be wrong.
+   */
 
 const FigureWorkspace = () => {
   const {
@@ -292,9 +453,16 @@ const FigureWorkspace = () => {
   // Links the curator picked that would close a feedback loop, held until
   // they say yes. Nothing is added while this is set.
   const [loopAsk, setLoopAsk] = useState(null);
+  // Which rows have had their connections FOLDED AWAY. Open is the default:
+  // the connections are the reason to look at a row, and hiding them behind
+  // a click puts Unlink one step further from the arrow it undoes.
+  const [folded, setFolded] = useState({});
   // Which artifact's connection dialog is open, and what is ticked in it.
   const [connectFor, setConnectFor] = useState("");
-  const [picked, setPicked] = useState({});
+  // What the boxes SAY, keyed by edge, holding only the deviations from
+  // what the record currently holds. Keyed by edge rather than by row so a
+  // change survives flipping the direction.
+  const [wanted, setWanted] = useState({});
   // Which way the arrow points. Chosen once, above the list, rather than
   // repeated as a sentence on every row.
   const [reversed, setReversed] = useState(false);
@@ -499,29 +667,75 @@ const FigureWorkspace = () => {
    * said. An edge the OTHER way does not block anything: that is a different
    * fact.
    */
-  const linkCandidates = (id, reversed) =>
+  /**
+   * Every connection this row could HAVE, in the chosen direction.
+   *
+   * The dialog used to list only the connections that did not exist yet and
+   * grey out the rest as "Already linked" -- so the one place a curator went
+   * to manage a resource's connections was the one place they could not undo
+   * one. They had to close it, find the resource in the list, and unlink
+   * from there.
+   *
+   * A row is now the STATE of a connection: ticked means it exists, and the
+   * tick is what changes it. `edge` is the edge that would be added, or the
+   * stored edge that would be removed -- `unlink` matches on the endpoints
+   * as stored, so an association drawn the other way round must be removed
+   * by the orientation the record holds, not the one being read.
+   */
+  const linkCandidates = (id, reversed) => {
+    const stored = edges.map(fromStoredEdge);
+    const rows = [];
+
     knownIds
       .filter((other) => other !== id)
-      .map((other) => {
+      .forEach((other) => {
         const from = reversed ? other : id;
         const to = reversed ? id : other;
-        const existing = edges
-          .map(fromStoredEdge)
-          .find(
-            (edge) =>
-              (edge.from === from && edge.to === to) ||
-              (UNDIRECTED.includes(edge.type) &&
-                edge.from === to &&
-                edge.to === from)
-          );
-        return {
+
+        // The arrow in the direction being looked at.
+        const flow = stored.find(
+          (edge) =>
+            !UNDIRECTED.includes(edge.type) &&
+            edge.from === from &&
+            edge.to === to
+        );
+        rows.push({
           key: `${from}-${to}`,
           other,
-          edge: { from, to, type: LINKS_TO },
-          linked: Boolean(existing),
-          undirected: Boolean(existing && UNDIRECTED.includes(existing.type)),
-        };
+          exists: Boolean(flow),
+          // Removing takes the stored edge; adding makes a generic arrow.
+          edge: flow || { from, to, type: LINKS_TO },
+          undirected: false,
+        });
+
+        // An association states no order, so it belongs on screen whichever
+        // way the dialog is being read -- and it has to be removable here
+        // too, which was the whole complaint.
+        const related = stored.find(
+          (edge) =>
+            UNDIRECTED.includes(edge.type) &&
+            ((edge.from === id && edge.to === other) ||
+              (edge.from === other && edge.to === id))
+        );
+        if (related) {
+          rows.push({
+            key: `${related.from}-${related.to}-${related.type}`,
+            other,
+            exists: true,
+            edge: related,
+            undirected: true,
+          });
+        }
       });
+
+    return rows;
+  };
+
+  /** Ticked = the state this row will be in once changes are applied. */
+  const wantsLinked = (option) =>
+    Object.prototype.hasOwnProperty.call(wanted, option.key)
+      ? wanted[option.key]
+      : option.exists;
 
   /**
    * The live element behind a testid, or null.
@@ -608,18 +822,19 @@ const FigureWorkspace = () => {
     );
 
   const togglePick = (key, on) =>
-    setPicked((was) => ({ ...was, [key]: on }));
+    setWanted((was) => ({ ...was, [key]: on }));
 
   const openLink = (id) => {
     setNotice("");
-    setPicked({});
+    setWanted({});
     setReversed(false);
     setConnectFor(id);
   };
 
+  /** Cancel: every pending tick is dropped, and nothing was written. */
   const closeLink = () => {
     setConnectFor("");
-    setPicked({});
+    setWanted({});
   };
 
   /**
@@ -651,21 +866,54 @@ const FigureWorkspace = () => {
    * Only the curator can tell them apart, so they are asked, once, with the
    * loop written out.
    */
-  const linkSelected = () => {
-    const chosen = linkCandidates(connectFor, reversed)
-      .filter((option) => picked[option.key] && !option.linked)
-      .map((option) => option.edge);
+  /**
+   * Make the graph match what the boxes say.
+   *
+   * Both directions are considered, not just the one on screen: a tick made
+   * before the direction was flipped is still a tick, and `pending` is keyed
+   * by edge so it survives the flip.
+   *
+   * THE DIALOG STAYS OPEN. Applying is not leaving -- a curator managing a
+   * resource's connections usually has more than one to make, and closing
+   * the window under them costs the place they were working. Clearing
+   * `pending` is what makes the new state the baseline.
+   */
+  const applyChanges = () => {
+    const rows = [
+      ...linkCandidates(connectFor, false),
+      ...linkCandidates(connectFor, true),
+    ];
+    const seen = new Set();
+    const adds = [];
+    const removes = [];
+    rows.forEach((option) => {
+      if (seen.has(option.key)) return;
+      seen.add(option.key);
+      const want = wantsLinked(option);
+      if (want && !option.exists) adds.push(option.edge);
+      if (!want && option.exists) removes.push(option.edge);
+    });
 
-    if (!chosen.length) {
-      setNotice("Nothing was selected, so nothing was linked.");
-      closeLink();
+    if (!adds.length && !removes.length) {
+      setNotice("Nothing changed, so nothing was applied.");
       return;
     }
 
-    const running = edges.slice();
+    // Removals first: undoing an arrow can be what makes an addition stop
+    // closing a loop, and the curator should not be asked about a loop they
+    // have just broken in the same breath.
+    removes.forEach((edge) => unlink(edge.from, edge.to));
+
+    const running = edges.filter(
+      (edge) =>
+        !removes.some((gone) => {
+          const parsed = fromStoredEdge(edge);
+          return parsed.from === gone.from && parsed.to === gone.to;
+        })
+    );
     const safe = [];
     const loops = [];
-    chosen.forEach((edge) => {
+    adds.forEach((edge) => {
       if (closesLoop(running, edge)) loops.push(edge);
       else safe.push(edge);
       running.push(edge);
@@ -676,10 +924,11 @@ const FigureWorkspace = () => {
       return;
     }
     applyEdges(safe);
-    closeLink();
+    setWanted({});
   };
 
   const confirmLoops = () => {
+    setWanted({});
     if (loopAsk) {
       applyEdges([
         ...loopAsk.safe,
@@ -690,15 +939,14 @@ const FigureWorkspace = () => {
       ]);
     }
     setLoopAsk(null);
-    closeLink();
   };
 
   const declineLoops = () => {
+    setWanted({});
     // Everything that was NOT a loop still goes in: refusing the loop is not
     // a reason to throw away the other choices.
     if (loopAsk) applyEdges(loopAsk.safe);
     setLoopAsk(null);
-    closeLink();
   };
 
   /** The artifacts this one is associated with, in either stored order. */
@@ -810,140 +1058,81 @@ const FigureWorkspace = () => {
     </Typography>
   );
 
-  const LinkDialog = () => {
-    const id = connectFor;
-    if (!id) return null;
-    const options = linkCandidates(id, reversed);
-    const anything = options.some((option) => !option.linked);
-    const me = label(id);
-
+  /** One connection, from whichever end it is being read. */
+  const ConnectionLine = ({ edge, id }) => {
+    const undirected = UNDIRECTED.includes(edge.type);
+    const other = edge.from === id ? edge.to : edge.from;
     return (
-      <Dialog
-        open
-        onClose={closeLink}
-        fullWidth
-        maxWidth="sm"
-        data-testid="fw-link-dialog"
+      <Box
+        component="li"
+        sx={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 0.75,
+          minWidth: 0,
+        }}
       >
-        <DialogTitle sx={{ pb: 0.5 }}>Link existing</DialogTitle>
-        <DialogContent dividers>
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 0.75,
-              mb: 1,
-              minWidth: 0,
-            }}
-          >
-            <Typography variant="caption" color="text.secondary">
-              Source
-            </Typography>
-            <KindChip id={id} />
-            <Typography
-              variant="body2"
-              sx={{ overflowWrap: "anywhere", minWidth: 0 }}
-            >
-              {me}
-            </Typography>
-          </Box>
-
-          {/* THE DIRECTION, CHOSEN ONCE. Flipping it offers the same
-              artifacts for an arrow the other way, which is a different fact
-              and is allowed even when this one already exists. */}
-          <Typography variant="caption" color="text.secondary" display="block">
-            Arrow direction
-          </Typography>
-          <ToggleButtonGroup
-            exclusive
+        <EdgeArrow edge={edge} />
+        <KindChip id={other} />
+        <Typography
+          variant="body2"
+          sx={{ overflowWrap: "anywhere", minWidth: 0 }}
+        >
+          {label(other)}
+        </Typography>
+        <NodeId id={other} />
+        {edge.feedback ? (
+          <Chip
+            label="feedback loop"
             size="small"
-            value={reversed ? "in" : "out"}
-            onChange={(event, next) => {
-              if (!next) return;
-              setReversed(next === "in");
-              setPicked({});
+            variant="outlined"
+            data-testid={`fw-feedback-${edge.from}-${edge.to}`}
+            sx={{
+              height: 18,
+              flexShrink: 0,
+              borderColor: "warning.main",
+              color: "warning.main",
+              "& .MuiChip-label": { px: 0.75, fontSize: 10 },
             }}
-            sx={{ mb: 1.5, flexWrap: "wrap" }}
-          >
-            <ToggleButton
-              value="out"
-              data-testid="fw-dir-out"
-              sx={{ textTransform: "none" }}
-            >
-              {`${me} → selected`}
-            </ToggleButton>
-            <ToggleButton
-              value="in"
-              data-testid="fw-dir-in"
-              sx={{ textTransform: "none" }}
-            >
-              {`selected → ${me}`}
-            </ToggleButton>
-          </ToggleButtonGroup>
-
-          {options.length ? (
-            <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
-              {options.map((option) => (
-                <LinkOption
-                  key={option.key}
-                  option={option}
-                  name={label(option.other)}
-                  checked={option.linked || Boolean(picked[option.key])}
-                  onToggle={togglePick}
-                />
-              ))}
-            </Box>
-          ) : (
-            <Typography variant="body2" color="text.secondary">
-              Nothing else in this paper yet. Add a resource first, then link
-              it here.
-            </Typography>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={closeLink} data-testid="fw-link-cancel">
-            Cancel
-          </Button>
-          <RegularStyledButton
-            onClick={linkSelected}
-            disabled={!anything}
-            data-testid="fw-link-apply"
-          >
-            Link selected
-          </RegularStyledButton>
-        </DialogActions>
-      </Dialog>
+          />
+        ) : null}
+        <UnlinkEdge edge={edge} />
+      </Box>
     );
   };
 
   /**
-   * ONE ROW PER ARTIFACT, in a flat list.
+   * ONE ROW PER ARTIFACT, with what reaches it and what it reaches.
    *
-   * This section used to draw the workflow: a figure-rooted tree, shared
-   * nodes rendered once with references after them, and an SVG above it.
-   * That was a SECOND picture of the same graph, and the two had to be kept
-   * in step by hand -- while the tree could not honestly show a cycle, a
-   * reversed pair, or many-to-many without either cutting an edge or
-   * repeating a node.
-   *
-   * The graph belongs in "Build your workflow", which already draws it and
-   * already lets it be edited. This is a resource manager: what the paper
-   * holds, what each thing is joined to, and the four things a curator does
-   * to it. No hierarchy is invented, so none can be wrong.
+   * Not a tree: no hierarchy is invented, so none can be wrong. What a
+   * curator needs standing at one resource is both halves of its
+   * neighbourhood, and an edge is reachable from either end -- an arrow
+   * you can see but only undo from the other side is the complaint this
+   * answers.
    */
   const ResourceRow = ({ id }) => {
-    const out = outgoing(id);
-    const linked = out.length > 0 || incoming(id).length > 0;
+    const into = incoming(id).filter(
+      (edge) => !UNDIRECTED.includes(edge.type)
+    );
+    const outOf = outgoing(id).filter(
+      (edge) => !UNDIRECTED.includes(edge.type)
+    );
+    const both = edges
+      .map(fromStoredEdge)
+      .filter(
+        (edge) =>
+          UNDIRECTED.includes(edge.type) &&
+          (edge.from === id || edge.to === id)
+      );
+    const total = into.length + outOf.length + both.length;
+    const open = !folded[id];
+
     return (
       <Box
         component="li"
         data-testid={`fw-node-${id}`}
-        sx={{
-          minWidth: 0,
-          py: 0.5,
-          borderBottom: 1,
-          borderColor: "divider",
-        }}
+        sx={{ minWidth: 0, py: 0.5, borderBottom: 1, borderColor: "divider" }}
       >
         <Box
           sx={{
@@ -957,6 +1146,7 @@ const FigureWorkspace = () => {
           <Box
             sx={{
               display: "flex",
+              flexWrap: "wrap",
               alignItems: "center",
               gap: 0.75,
               minWidth: 0,
@@ -970,64 +1160,79 @@ const FigureWorkspace = () => {
             >
               {label(id)}
             </Typography>
-            {/* Whether it is part of the workflow -- a fact, not a hierarchy. */}
-            <Typography
-              variant="caption"
-              color="text.secondary"
+            {/* Which node this is in the drawing below. */}
+            <NodeId id={id} />
+            {/* The counts are always readable; the lists can be folded. */}
+            <RowAction
+              onClick={() =>
+                setFolded((was) => ({ ...was, [id]: !was[id] }))
+              }
+              aria-expanded={open}
               data-testid={`fw-state-${id}`}
             >
-              {linked ? "Connected" : "Not connected"}
-            </Typography>
+              {total
+                ? `${into.length} in · ${outOf.length} out${
+                    both.length ? ` · ${both.length} related` : ""
+                  }`
+                : "Not connected"}
+            </RowAction>
           </Box>
           <RowActions node={{ id }} />
         </Box>
 
-        {/* Its own arrows, each with the way to undo it. Listed under the
-            SOURCE only, so every edge appears exactly once in this list. */}
-        {out.length ? (
-          <Box component="ul" sx={{ listStyle: "none", m: 0, mt: 0.25, p: 0, pl: 1.5 }}>
-            {out.map((edge) => (
-              <Box
-                component="li"
-                key={`${edge.from}-${edge.to}-${edge.type}`}
-                sx={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  alignItems: "center",
-                  gap: 0.75,
-                  minWidth: 0,
-                }}
-              >
-                <EdgeArrow edge={edge} />
-                <KindChip id={edge.to} />
-                <Typography
-                  variant="body2"
-                  sx={{ overflowWrap: "anywhere", minWidth: 0 }}
-                >
-                  {label(edge.to)}
+        <Collapse in={open && total > 0} unmountOnExit>
+          <Box sx={{ pl: 1.5 }} data-testid={`fw-wiring-${id}`}>
+            {into.length ? (
+              <Fragment>
+                <Typography variant="caption" color="text.secondary" display="block">
+                  Incoming
                 </Typography>
-                {edge.feedback ? (
-                  <Chip
-                    label="feedback loop"
-                    size="small"
-                    variant="outlined"
-                    data-testid={`fw-feedback-${edge.from}-${edge.to}`}
-                    sx={{
-                      height: 18,
-                      flexShrink: 0,
-                      borderColor: "warning.main",
-                      color: "warning.main",
-                      "& .MuiChip-label": { px: 0.75, fontSize: 10 },
-                    }}
-                  />
-                ) : null}
-                <UnlinkEdge edge={edge} />
-              </Box>
-            ))}
+                <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+                  {into.map((edge) => (
+                    <ConnectionLine
+                      key={`in-${edge.from}-${edge.to}-${edge.type}`}
+                      edge={edge}
+                      id={id}
+                    />
+                  ))}
+                </Box>
+              </Fragment>
+            ) : null}
+            {outOf.length ? (
+              <Fragment>
+                <Typography variant="caption" color="text.secondary" display="block">
+                  Outgoing
+                </Typography>
+                <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+                  {outOf.map((edge) => (
+                    <ConnectionLine
+                      key={`out-${edge.from}-${edge.to}-${edge.type}`}
+                      edge={edge}
+                      id={id}
+                    />
+                  ))}
+                </Box>
+              </Fragment>
+            ) : null}
+            {both.length ? (
+              <Fragment>
+                <Typography variant="caption" color="text.secondary" display="block">
+                  Related
+                </Typography>
+                <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+                  {both.map((edge) => (
+                    <ConnectionLine
+                      key={`rel-${edge.from}-${edge.to}`}
+                      edge={edge}
+                      id={id}
+                    />
+                  ))}
+                </Box>
+              </Fragment>
+            ) : null}
           </Box>
-        ) : null}
+        </Collapse>
 
-        {/* External data has nothing else on screen but its link. */}
         {prefixOf(id) === EXTERNAL ? (
           <Box sx={{ pl: 1.5, minWidth: 0 }}>
             {displayUrl(byId[id]) ? (
@@ -1342,7 +1547,17 @@ const FigureWorkspace = () => {
         </Typography>
       )}
 
-      <LinkDialog />
+      <LinkDialog
+        id={connectFor}
+        options={connectFor ? linkCandidates(connectFor, reversed) : []}
+        reversed={reversed}
+        setReversed={setReversed}
+        label={label}
+        wantsLinked={wantsLinked}
+        onToggle={togglePick}
+        onApply={applyChanges}
+        onClose={closeLink}
+      />
 
       {/* ASKED, NOT REFUSED, AND NOT ASSUMED.
           A loop is both a real way of working and the shape a mistake takes,
