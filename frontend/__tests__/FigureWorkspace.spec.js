@@ -124,18 +124,18 @@ const openFlowFor = async (u, id) => {
   await u.click(screen.getByTestId(id ? `fw-addlink-${id}` : "fw-addlink"));
   return screen.findByTestId("fw-flow-menu");
 };
-const openKindsFor = async (u, id) => {
+const openManualKinds = async (u, id) => {
   await openFlowFor(u, id);
-  await u.click(screen.getByTestId("fw-flow-new"));
+  await u.hover(screen.getByTestId("fw-source-manual"));
   return screen.findByTestId("fw-kind-menu");
 };
-const openSourcesFor = async (u, id, kind) => {
-  await openKindsFor(u, id);
-  await u.click(screen.getByTestId(`fw-kind-${kind}`));
-  return screen.findByTestId("fw-source-menu");
+const openRccKinds = async (u, id) => {
+  await openFlowFor(u, id);
+  await u.hover(screen.getByTestId("fw-source-rcc"));
+  return screen.findByTestId("fw-kind-menu");
 };
 const addManually = async (u, id, kind) => {
-  await openSourcesFor(u, id, kind);
+  await openManualKinds(u, id);
   await u.click(screen.getByTestId(`fw-add-${id}-${kind}`));
 };
 const openLinkFor = async (u, id) => {
@@ -266,70 +266,118 @@ describe("the three actions on a row", () => {
 describe("add or link, one question at a time", () => {
   afterEach(() => jest.resetAllMocks());
 
-  it("offers linking first on a row, and only Add new at the top", async () => {
+  it("offers linking and the two ways in, and no Add new step", async () => {
     const u = user();
-    renderWorkspace({ charts: [FIGURE] });
-
+    renderWorkspace({ charts: [FIGURE], fileServerPath: "/proj" });
     await openFlowFor(u, "c0");
-    expect(screen.getByTestId("fw-link-c0")).toHaveTextContent(/link existing/i);
-    expect(screen.getByTestId("fw-flow-new")).toHaveTextContent(/add new/i);
-  });
 
-  it("asks for the KIND before the way it arrives", async () => {
-    const u = user();
-    renderWorkspace({ fileServerPath: "/proj" });
-
-    const kinds = within(await openKindsFor(u, ""));
-    ["chart", "dataset", "script", "tool", "head"].forEach((kind) =>
-      expect(kinds.getByTestId(`fw-kind-${kind}`)).toBeInTheDocument()
-    );
-    // How it arrives comes after.
-    expect(screen.queryByTestId("fw-source-menu")).not.toBeInTheDocument();
-
-    const sources = within(await openSourcesFor(u, "", "dataset"));
-    expect(sources.getByTestId("fw-add--dataset")).toHaveTextContent(
+    expect(screen.getByTestId(`fw-link-c0`)).toHaveTextContent(/link existing/i);
+    expect(screen.getByTestId("fw-source-manual")).toHaveTextContent(
       /enter manually/i
     );
-    expect(sources.getByTestId("fw-rcc-dataset")).toHaveTextContent(/from rcc/i);
+    expect(screen.getByTestId("fw-source-rcc")).toHaveTextContent(/from rcc/i);
+    // "Add new" asked nothing: every path under it led to these same two.
+    expect(screen.queryByTestId("fw-flow-new")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Add new/)).not.toBeInTheDocument();
   });
 
-  it("keeps the parent menu open beside the child", async () => {
-    // A cascade, not a replacement: the path taken stays visible.
+  it("asks HOW it arrives before WHAT it is", async () => {
     const u = user();
     renderWorkspace({ fileServerPath: "/proj" });
-    await openSourcesFor(u, "", "script");
+    await openFlowFor(u, "");
+    // The first pane asks HOW. The kinds live in the branch, never in it --
+    // opening the menu focuses its first item, and focus opens the branch,
+    // which is the behaviour a keyboard needs.
+    const root = within(screen.getByTestId("fw-flow-menu"));
+    expect(root.queryByTestId("fw-add--chart")).not.toBeInTheDocument();
+    expect(root.getByTestId("fw-source-manual")).toBeInTheDocument();
 
-    expect(screen.getByTestId("fw-flow-menu")).toBeInTheDocument();
-    expect(screen.getByTestId("fw-kind-menu")).toBeInTheDocument();
-    expect(screen.getByTestId("fw-source-menu")).toBeInTheDocument();
+    await u.hover(screen.getByTestId("fw-source-manual"));
+    const kinds = within(await screen.findByTestId("fw-kind-menu"));
+    ["chart", "dataset", "script", "tool", "head"].forEach((kind) =>
+      expect(kinds.getByTestId(`fw-add--${kind}`)).toBeInTheDocument()
+    );
   });
 
-  it("opens a submenu from the keyboard", async () => {
+  it("opens the branch on hover alone, with no click", async () => {
+    const u = user();
+    renderWorkspace({ fileServerPath: "/proj" });
+    await openFlowFor(u, "");
+    await u.hover(screen.getByTestId("fw-source-rcc"));
+    expect(await screen.findByTestId("fw-kind-menu")).toBeInTheDocument();
+  });
+
+  it("keeps the branch open while the pointer crosses into it", async () => {
+    // The pointer has to cross a gap to reach the child; a branch that
+    // closed on mouseleave closed underneath it every time.
+    const u = user();
+    renderWorkspace({ fileServerPath: "/proj" });
+    await openFlowFor(u, "");
+    await u.hover(screen.getByTestId("fw-source-manual"));
+    const branch = await screen.findByTestId("fw-kind-menu");
+
+    await u.unhover(screen.getByTestId("fw-source-manual"));
+    await u.hover(within(branch).getByTestId("fw-add--script"));
+    expect(screen.getByTestId("fw-kind-menu")).toBeInTheDocument();
+  });
+
+  it("lets the pointer go back and pick the OTHER way in", async () => {
+    // A Menu is a Modal, and its backdrop swallows the pointer. With the
+    // branch open, the parent's other item could not be reached at all.
     const u = user();
     renderWorkspace({ fileServerPath: "/proj" });
     await openFlowFor(u, "");
 
-    screen.getByTestId("fw-flow-new").focus();
+    await u.hover(screen.getByTestId("fw-source-manual"));
+    expect(
+      within(await screen.findByTestId("fw-kind-menu")).getByTestId(
+        "fw-add--head"
+      )
+    ).toBeInTheDocument();
+
+    await u.hover(screen.getByTestId("fw-source-rcc"));
+    const rcc = within(await screen.findByTestId("fw-kind-menu"));
+    expect(rcc.getByTestId("fw-rcc-chart")).toBeInTheDocument();
+    // External data is not something a folder can be scanned for.
+    expect(rcc.queryByTestId("fw-rcc-head")).not.toBeInTheDocument();
+  });
+
+  it("keeps the parent pane open beside the child", async () => {
+    const u = user();
+    renderWorkspace({ fileServerPath: "/proj" });
+    await openFlowFor(u, "");
+    await u.hover(screen.getByTestId("fw-source-manual"));
+    await screen.findByTestId("fw-kind-menu");
+
+    expect(screen.getByTestId("fw-flow-menu")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-source-manual")).toBeInTheDocument();
+  });
+
+  it("anchors to the control that was pressed, not to the page", async () => {
+    // Stored as a testid and looked up live: an element captured from the
+    // event goes stale on the next render, and MUI then falls back to the
+    // top left of the screen.
+    const u = user();
+    renderWorkspace({ charts: [FIGURE], scripts: [SCRIPT] });
+    await openFlowFor(u, "s0");
+    // The menu is built for THIS row: its Link item names s0.
+    expect(screen.getByTestId("fw-link-s0")).toBeInTheDocument();
+    expect(screen.queryByTestId("fw-link-c0")).not.toBeInTheDocument();
+  });
+
+  it("opens and closes a branch from the keyboard", async () => {
+    const u = user();
+    renderWorkspace({ fileServerPath: "/proj" });
+    await openFlowFor(u, "");
+
+    screen.getByTestId("fw-source-manual").focus();
     await u.keyboard("{ArrowRight}");
     expect(await screen.findByTestId("fw-kind-menu")).toBeInTheDocument();
 
-    screen.getByTestId("fw-kind-tool").focus();
-    await u.keyboard("{ArrowRight}");
-    expect(await screen.findByTestId("fw-source-menu")).toBeInTheDocument();
-  });
-
-  it("closes a submenu with ArrowLeft", async () => {
-    const u = user();
-    renderWorkspace({ fileServerPath: "/proj" });
-    await openKindsFor(u, "");
-
-    screen.getByTestId("fw-kind-tool").focus();
+    screen.getByTestId("fw-source-manual").focus();
     await u.keyboard("{ArrowLeft}");
     await waitFor(() =>
-      expect(screen.getByTestId("fw-kind-menu")).toHaveAttribute(
-        "aria-hidden",
-        "true"
-      )
+      expect(screen.queryByTestId("fw-kind-menu")).not.toBeInTheDocument()
     );
   });
 
@@ -340,18 +388,14 @@ describe("add or link, one question at a time", () => {
 
     expect(ctx.helpers.setDefault).toHaveBeenCalledWith("chart", null);
     expect(ctx.helpers.openForm).toHaveBeenCalledWith("chart");
-    // Opening a form creates nothing.
     expect(ctx.addEdge).not.toHaveBeenCalled();
   });
 
-  it("sends External data to its own form and offers it no RCC", async () => {
+  it("sends External data to its own form", async () => {
     const u = user();
     const ctx = renderWorkspace({ fileServerPath: "/proj" });
-    const sources = within(await openSourcesFor(u, "", "head"));
+    await addManually(u, "", "head");
 
-    // There is nothing in a folder to scan for a URL somebody types.
-    expect(sources.queryByTestId("fw-rcc-head")).not.toBeInTheDocument();
-    await u.click(screen.getByTestId("fw-add--head"));
     expect(ctx.helpers.setExternalNodeFormOpen).toHaveBeenCalledWith(true);
     expect(ctx.helpers.openForm).not.toHaveBeenCalledWith("head");
   });
@@ -381,20 +425,22 @@ describe("add or link, one question at a time", () => {
 describe("importing from RCC", () => {
   afterEach(() => jest.resetAllMocks());
 
-  it("offers RCC on the four kinds it can propose", async () => {
+  it("offers only the four kinds a folder can be scanned for", async () => {
     const u = user();
     renderWorkspace({ fileServerPath: "/proj" });
-    for (const kind of ["chart", "dataset", "script", "tool"]) {
-      const sources = within(await openSourcesFor(u, "", kind));
-      expect(sources.getByTestId(`fw-rcc-${kind}`)).toBeEnabled();
-      await u.keyboard("{Escape}");
-    }
+    const kinds = within(await openRccKinds(u, ""));
+
+    ["chart", "dataset", "script", "tool"].forEach((kind) =>
+      expect(kinds.getByTestId(`fw-rcc-${kind}`)).toBeInTheDocument()
+    );
+    // External data is a URL somebody types.
+    expect(kinds.queryByTestId("fw-rcc-head")).not.toBeInTheDocument();
   });
 
   it("opens the existing typed flow for the chosen kind", async () => {
     const u = user();
     renderWorkspace({ fileServerPath: "/proj" });
-    await openSourcesFor(u, "", "tool");
+    await openRccKinds(u, "");
     await u.click(screen.getByTestId("fw-rcc-tool"));
 
     const importer = screen.getByTestId("stub-folder-analysis");
@@ -406,17 +452,17 @@ describe("importing from RCC", () => {
   it("disables only RCC when no folder is chosen, and says why", async () => {
     const u = user();
     renderWorkspace({ fileServerPath: "" });
-    const sources = within(await openSourcesFor(u, "", "script"));
+    await openFlowFor(u, "");
 
-    expect(sources.getByTestId("fw-rcc-script")).toHaveAttribute(
+    expect(screen.getByTestId("fw-source-rcc")).toHaveAttribute(
       "aria-disabled",
       "true"
     );
-    expect(sources.getByTestId("fw-rcc-hint")).toHaveTextContent(
+    expect(screen.getByTestId("fw-rcc-hint")).toHaveTextContent(
       /choose a file server path above, in this page/i
     );
     // Entering by hand is unaffected.
-    expect(sources.getByTestId("fw-add--script")).not.toHaveAttribute(
+    expect(screen.getByTestId("fw-source-manual")).not.toHaveAttribute(
       "aria-disabled",
       "true"
     );
@@ -425,14 +471,14 @@ describe("importing from RCC", () => {
   it("drops the explanation once a folder is chosen", async () => {
     const u = user();
     renderWorkspace({ fileServerPath: "/proj" });
-    await openSourcesFor(u, "", "script");
+    await openFlowFor(u, "");
     expect(screen.queryByTestId("fw-rcc-hint")).not.toBeInTheDocument();
   });
 
   it("asks the network nothing while rendering", async () => {
     const u = user();
     renderWorkspace({ fileServerPath: "/proj" });
-    await openSourcesFor(u, "", "chart");
+    await openRccKinds(u, "");
     expect(axios.get).not.toHaveBeenCalled();
     expect(axios.post).not.toHaveBeenCalled();
   });

@@ -189,6 +189,71 @@ const RowAction = ({ children, ...rest }) => (
   </Button>
 );
 
+/**
+ * One candidate: a checkbox, a kind, a name. Nothing else.
+ *
+ * AT MODULE SCOPE ON PURPOSE. Defined inside the component, this was a new
+ * component type on every render, so React unmounted and remounted the whole
+ * row for each keystroke of state -- and a remounted checkbox replays its
+ * check animation. That was the flash. The fix is not a shorter transition;
+ * it is not throwing the element away.
+ *
+ * NOTHING ANIMATES. Ripple, touch ripple and the icon's transition are all
+ * off, and the row grows nothing when it changes, so ticking four boxes is
+ * four instant marks rather than four bursts of motion and four small jumps
+ * of the list under the pointer. The focus ring stays: that one is not
+ * decoration.
+ */
+const LinkOption = ({ option, name, checked, onToggle }) => (
+  <Box component="li" sx={{ minWidth: 0 }}>
+    <FormControlLabel
+      sx={{ m: 0, py: 0.25, width: "100%", alignItems: "center" }}
+      control={
+        <Checkbox
+          size="small"
+          disableRipple
+          disableTouchRipple
+          disableFocusRipple
+          checked={checked}
+          disabled={option.linked}
+          onChange={(event) => onToggle(option.key, event.target.checked)}
+          slotProps={{
+            input: { "data-testid": `fw-link-option-${option.key}` },
+          }}
+          sx={{
+            transition: "none",
+            "&:hover": { backgroundColor: "transparent" },
+            "& .MuiSvgIcon-root": { transition: "none" },
+          }}
+        />
+      }
+      label={
+        <Box
+          sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0 }}
+        >
+          <KindChip id={option.other} />
+          <Typography
+            variant="body2"
+            sx={{ overflowWrap: "anywhere", minWidth: 0 }}
+            data-testid={`fw-link-name-${option.key}`}
+          >
+            {name}
+          </Typography>
+          {option.linked ? (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              data-testid={`fw-link-made-${option.key}`}
+            >
+              {option.undirected ? "↔" : "Already linked"}
+            </Typography>
+          ) : null}
+        </Box>
+      }
+    />
+  </Box>
+);
+
 const FigureWorkspace = () => {
   const {
     charts, scripts, datasets, tools, heads,
@@ -210,13 +275,23 @@ const FigureWorkspace = () => {
   //
   // `id` is the row it was opened from, or "" at the top of the section,
   // where there is nothing yet to link TO.
-  const [flow, setFlow] = useState({ id: "", el: null, step: "root", type: "" });
-  const [newAnchor, setNewAnchor] = useState(null);
-  const [typeAnchor, setTypeAnchor] = useState({ type: "", el: null });
+  //
+  // `anchor` is a TESTID, not an element. This component re-renders on every
+  // state change, so an element captured from an event is detached by the
+  // time the menu positions itself -- and MUI, handed a detached node, falls
+  // back to the top left of the screen. Looking the element up live also
+  // keeps the menu beside its trigger after a scroll.
+  const [flow, setFlow] = useState({
+    id: "",
+    anchor: "",
+    step: "root",
+    source: "",
+  });
+  const branchTimer = useRef(null);
+
   const closeFlow = () => {
-    setFlow({ id: "", el: null, step: "root", type: "" });
-    setNewAnchor(null);
-    setTypeAnchor({ type: "", el: null });
+    if (branchTimer.current) clearTimeout(branchTimer.current);
+    setFlow({ id: "", anchor: "", step: "root", source: "" });
   };
   const [moreAnchor, setMoreAnchor] = useState({ id: "", parentId: "", el: null });
   const [highlight, setHighlight] = useState("");
@@ -536,61 +611,91 @@ const FigureWorkspace = () => {
       });
 
   /**
-   * The last question: by hand, or out of the RCC folder.
+   * The live element behind a testid, or null.
    *
-   * Shared by both readings of the menu, so the wide cascade and the narrow
-   * pane cannot drift apart about what is on offer.
+   * Guarded for the server, which has no document: this page is rendered
+   * there first, and an unguarded lookup takes the whole route down with it.
    */
-  const sourcesFor = (kind) => {
-    const row = MENU_TYPES.find((entry) => entry.type === kind);
-    if (!row) return null;
-    const items = [
-      <MenuItem
-        key="manual"
-        data-testid={`fw-add-${flow.id}-${kind}`}
-        onClick={() => {
-          const target = flow.id;
-          closeFlow();
-          createAttachedTo(kind, target);
-        }}
-      >
-        Enter manually
-      </MenuItem>,
-    ];
-    if (row.rcc) {
-      items.push(
+  const elementFor = (testid) =>
+    testid && typeof document !== "undefined"
+      ? document.querySelector(`[data-testid="${testid}"]`)
+      : null;
+
+  const holdBranch = () => {
+    if (branchTimer.current) clearTimeout(branchTimer.current);
+  };
+
+  const openBranch = (source) => {
+    holdBranch();
+    // Narrow screens have no hover, so there the pane is replaced instead.
+    setFlow((was) => ({ ...was, source, step: narrow ? "kinds" : "root" }));
+  };
+
+  const closeBranch = () => {
+    holdBranch();
+    setFlow((was) => (was.source ? { ...was, source: "" } : was));
+  };
+
+  /**
+   * Leaving the parent item does NOT close the branch at once.
+   *
+   * The pointer has to cross the gap between the two menus to reach the
+   * child, and a branch that closes on `mouseleave` closes underneath it
+   * every time. The child cancels this on entry.
+   */
+  const closeBranchSoon = () => {
+    holdBranch();
+    branchTimer.current = setTimeout(closeBranch, 260);
+  };
+
+  const branchKeys = (event, source) => {
+    if (event.key === "ArrowRight" || event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openBranch(source);
+    }
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      closeBranch();
+    }
+  };
+
+  /**
+   * The kinds this way in can produce.
+   *
+   * External data is a URL somebody types, so there is nothing in a folder
+   * to scan for it -- it appears under Enter manually and nowhere else.
+   */
+  const kindItems = (source) =>
+    MENU_TYPES.filter((row) => source !== "rcc" || row.rcc).map(
+      ({ type, label: text }) => (
         <MenuItem
-          key="rcc"
-          data-testid={`fw-rcc-${kind}`}
-          disabled={!canImport}
+          key={type}
+          data-testid={
+            source === "rcc" ? `fw-rcc-${type}` : `fw-add-${flow.id}-${type}`
+          }
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") {
+              event.preventDefault();
+              closeBranch();
+            }
+          }}
           onClick={() => {
+            const target = flow.id;
             closeFlow();
-            setRccImport((was) => ({ type: kind, nonce: was.nonce + 1 }));
+            if (source === "rcc") {
+              setRccImport((was) => ({ type, nonce: was.nonce + 1 }));
+            } else {
+              createAttachedTo(type, target);
+            }
           }}
         >
-          From RCC
+          {text}
         </MenuItem>
-      );
-      // A greyed row with no explanation is a dead end. One line, and only
-      // where it applies.
-      if (!canImport) {
-        items.push(
-          <MenuItem
-            key="hint"
-            disabled
-            data-testid="fw-rcc-hint"
-            sx={{ whiteSpace: "normal", maxWidth: 260 }}
-          >
-            <Typography variant="caption">
-              Choose a File Server Path above, in this page, to import from
-              RCC.
-            </Typography>
-          </MenuItem>
-        );
-      }
-    }
-    return items;
-  };
+      )
+    );
+
+  const togglePick = (key, on) =>
+    setPicked((was) => ({ ...was, [key]: on }));
 
   const openLink = (id) => {
     setNotice("");
@@ -749,8 +854,13 @@ const FigureWorkspace = () => {
         data-testid={`fw-actions-${id}`}
       >
         <RowAction
-          onClick={(event) =>
-            setFlow({ id, el: event.currentTarget, step: "root", type: "" })
+          onClick={() =>
+            setFlow({
+              id,
+              anchor: `fw-addlink-${id}`,
+              step: "root",
+              source: "",
+            })
           }
           aria-haspopup="menu"
           data-testid={`fw-addlink-${id}`}
@@ -1062,69 +1172,6 @@ const FigureWorkspace = () => {
     </Box>
   );
 
-  /**
-   * One candidate: a checkbox, a kind, a name. Nothing else.
-   *
-   * NO ANIMATION. MUI's checkbox ripples, and the row used to grow a second
-   * line of explanation when it changed -- so ticking four boxes was four
-   * bursts of motion and four small jumps of the list under the pointer.
-   * Ticked or not ticked is the whole state, and it shows instantly. The
-   * focus ring is kept: that one is not decoration.
-   */
-  const LinkOption = ({ option }) => (
-    <Box component="li" sx={{ minWidth: 0 }}>
-      <FormControlLabel
-        sx={{ m: 0, py: 0.25, width: "100%", alignItems: "center" }}
-        control={
-          <Checkbox
-            size="small"
-            disableRipple
-            checked={option.linked || Boolean(picked[option.key])}
-            disabled={option.linked}
-            onChange={(event) =>
-              setPicked((was) => ({
-                ...was,
-                [option.key]: event.target.checked,
-              }))
-            }
-            slotProps={{
-              input: { "data-testid": `fw-link-option-${option.key}` },
-            }}
-            sx={{ transition: "none", "&:hover": { backgroundColor: "transparent" } }}
-          />
-        }
-        label={
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 0.75,
-              minWidth: 0,
-            }}
-          >
-            <KindChip id={option.other} />
-            <Typography
-              variant="body2"
-              sx={{ overflowWrap: "anywhere", minWidth: 0 }}
-              data-testid={`fw-link-name-${option.key}`}
-            >
-              {label(option.other)}
-            </Typography>
-            {option.linked ? (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                data-testid={`fw-link-made-${option.key}`}
-              >
-                {option.undirected ? "↔" : "Already linked"}
-              </Typography>
-            ) : null}
-          </Box>
-        }
-      />
-    </Box>
-  );
-
   const LinkDialog = () => {
     const id = connectFor;
     if (!id) return null;
@@ -1191,7 +1238,13 @@ const FigureWorkspace = () => {
           {options.length ? (
             <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
               {options.map((option) => (
-                <LinkOption key={option.key} option={option} />
+                <LinkOption
+                  key={option.key}
+                  option={option}
+                  name={label(option.other)}
+                  checked={option.linked || Boolean(picked[option.key])}
+                  onToggle={togglePick}
+                />
               ))}
             </Box>
           ) : (
@@ -1288,8 +1341,8 @@ const FigureWorkspace = () => {
           without competing with the thing most curators want first. */}
       <Box sx={{ mb: 2 }}>
         <RegularStyledButton
-          onClick={(event) =>
-            setFlow({ id: "", el: event.currentTarget, step: "root", source: "" })
+          onClick={() =>
+            setFlow({ id: "", anchor: "fw-addlink", step: "root", source: "" })
           }
           aria-haspopup="menu"
           data-testid="fw-addlink"
@@ -1298,19 +1351,23 @@ const FigureWorkspace = () => {
         </RegularStyledButton>
       </Box>
 
-      {/* ONE INTENTION, ASKED AS A TREE.
-          Link what already exists, or make something new -- and if new, what
-          kind, and then how it arrives. A curator picks the RESOURCE TYPE
-          first, because that is the decision they came with; where it comes
-          from is a detail of the same decision.
+      {/* ONE INTENTION, ASKED AS A CASCADE.
+          Link what already exists, or make something new -- and if new, HOW
+          it arrives, then WHAT it is. "Add new" was a step that asked
+          nothing: every path under it led to the same two ways in, so it was
+          a click to reach a click.
 
-          Wide: the parent stays put and the child opens beside it, on hover
-          or on keyboard focus, so the path taken is visible the whole way
-          down. Narrow: hover does not exist, so the pane is replaced and a
-          Back row leads out. */}
+          Anchored by a LIVE LOOKUP, not by a captured event target. This
+          component re-renders on every state change, so a stored element
+          goes stale and MUI, given a detached node, falls back to the top
+          left of the screen -- which is where the menu kept appearing. */}
       <Menu
-        open={Boolean(flow.el)}
-        anchorEl={flow.el}
+        open={Boolean(flow.anchor)}
+        anchorEl={
+          typeof document === "undefined"
+            ? null
+            : () => elementFor(flow.anchor)
+        }
         onClose={closeFlow}
         data-testid="fw-flow-menu"
         anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
@@ -1319,13 +1376,7 @@ const FigureWorkspace = () => {
         {narrow && flow.step !== "root" ? (
           <MenuItem
             data-testid="fw-flow-back"
-            onClick={() =>
-              setFlow((was) => ({
-                ...was,
-                step: was.step === "type" ? "new" : "root",
-                type: was.step === "type" ? was.type : "",
-              }))
-            }
+            onClick={() => setFlow((was) => ({ ...was, step: "root", source: "" }))}
           >
             ← Back
           </MenuItem>
@@ -1338,6 +1389,7 @@ const FigureWorkspace = () => {
                 <MenuItem
                   key="link"
                   data-testid={`fw-link-${flow.id}`}
+                  onMouseEnter={closeBranch}
                   onClick={() => {
                     const target = flow.id;
                     closeFlow();
@@ -1348,102 +1400,88 @@ const FigureWorkspace = () => {
                 </MenuItem>
               ) : null,
               <MenuItem
-                key="new"
-                data-testid="fw-flow-new"
+                key="manual"
+                data-testid="fw-source-manual"
                 aria-haspopup="menu"
-                aria-expanded={Boolean(newAnchor)}
-                onMouseEnter={(event) =>
-                  narrow ? null : setNewAnchor(event.currentTarget)
-                }
-                onFocus={(event) =>
-                  narrow ? null : setNewAnchor(event.currentTarget)
-                }
-                onKeyDown={(event) => {
-                  if (event.key === "ArrowRight" && !narrow) {
-                    event.preventDefault();
-                    setNewAnchor(event.currentTarget);
-                  }
-                }}
-                onClick={(event) =>
-                  narrow
-                    ? setFlow((was) => ({ ...was, step: "new" }))
-                    : setNewAnchor(event.currentTarget)
-                }
+                aria-expanded={flow.source === "manual"}
+                onMouseEnter={() => openBranch("manual")}
+                onFocus={() => openBranch("manual")}
+                onKeyDown={(event) => branchKeys(event, "manual")}
+                onClick={() => openBranch("manual")}
               >
-                Add new ▸
+                Enter manually ▸
               </MenuItem>,
+              <MenuItem
+                key="rcc"
+                data-testid="fw-source-rcc"
+                disabled={!canImport}
+                aria-haspopup="menu"
+                aria-expanded={flow.source === "rcc"}
+                onMouseEnter={() => openBranch("rcc")}
+                onFocus={() => openBranch("rcc")}
+                onKeyDown={(event) => branchKeys(event, "rcc")}
+                onClick={() => openBranch("rcc")}
+              >
+                From RCC ▸
+              </MenuItem>,
+              // A greyed row with no explanation is a dead end. One line,
+              // and only where it applies.
+              canImport ? null : (
+                <MenuItem
+                  key="hint"
+                  disabled
+                  data-testid="fw-rcc-hint"
+                  sx={{ whiteSpace: "normal", maxWidth: 260 }}
+                >
+                  <Typography variant="caption">
+                    Choose a File Server Path above, in this page, to import
+                    from RCC.
+                  </Typography>
+                </MenuItem>
+              ),
             ].filter(Boolean)
           : null}
 
-        {/* Narrow only: the same two levels, one pane at a time. */}
-        {narrow && flow.step === "new"
-          ? MENU_TYPES.map(({ type, label: text }) => (
-              <MenuItem
-                key={type}
-                data-testid={`fw-kind-${type}`}
-                onClick={() => setFlow((was) => ({ ...was, step: "type", type }))}
-              >
-                {text}
-              </MenuItem>
-            ))
-          : null}
-
-        {narrow && flow.step === "type"
-          ? sourcesFor(flow.type)
-          : null}
+        {/* Narrow only: no hover to lean on, so the pane is replaced and a
+            Back row leads out. */}
+        {narrow && flow.step === "kinds" ? kindItems(flow.source) : null}
       </Menu>
 
-      {/* Wide: the second level, beside the first. */}
+      {/* Wide: the branch, beside its parent and not on top of it. */}
       <Menu
-        open={Boolean(newAnchor) && !narrow}
-        anchorEl={newAnchor}
-        onClose={() => setNewAnchor(null)}
+        open={!narrow && Boolean(flow.source) && Boolean(flow.anchor)}
+        anchorEl={
+          typeof document === "undefined"
+            ? null
+            : () =>
+                elementFor(
+                  flow.source === "rcc" ? "fw-source-rcc" : "fw-source-manual"
+                )
+        }
+        onClose={closeBranch}
         data-testid="fw-kind-menu"
         anchorOrigin={{ vertical: "top", horizontal: "right" }}
         transformOrigin={{ vertical: "top", horizontal: "left" }}
-        slotProps={{ list: { autoFocusItem: false } }}
         disableAutoFocus
         disableEnforceFocus
+        hideBackdrop
+        disableScrollLock
+        slotProps={{
+          // The branch is a Modal, and a Modal's backdrop swallows the
+          // pointer: with it in place, moving back to the OTHER parent item
+          // did nothing at all. Only the branch's own paper takes events.
+          root: { sx: { pointerEvents: "none" } },
+          // A gap, so the child does not sit flush against the parent and
+          // read as one list. MUI keeps it in the viewport, which is what
+          // flips it near the right edge and only there.
+          paper: {
+            sx: { ml: "6px", pointerEvents: "auto" },
+            onMouseEnter: holdBranch,
+            onMouseLeave: closeBranchSoon,
+          },
+        }}
       >
-        {MENU_TYPES.map(({ type, label: text }) => (
-          <MenuItem
-            key={type}
-            data-testid={`fw-kind-${type}`}
-            aria-haspopup="menu"
-            aria-expanded={typeAnchor.type === type}
-            onMouseEnter={(event) =>
-              setTypeAnchor({ type, el: event.currentTarget })
-            }
-            onFocus={(event) => setTypeAnchor({ type, el: event.currentTarget })}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowRight") {
-                event.preventDefault();
-                setTypeAnchor({ type, el: event.currentTarget });
-              }
-              if (event.key === "ArrowLeft") {
-                event.preventDefault();
-                setNewAnchor(null);
-              }
-            }}
-            onClick={(event) => setTypeAnchor({ type, el: event.currentTarget })}
-          >
-            {`${text} ▸`}
-          </MenuItem>
-        ))}
-      </Menu>
-
-      {/* Wide: the third level. */}
-      <Menu
-        open={Boolean(typeAnchor.el) && !narrow}
-        anchorEl={typeAnchor.el}
-        onClose={() => setTypeAnchor({ type: "", el: null })}
-        data-testid="fw-source-menu"
-        anchorOrigin={{ vertical: "top", horizontal: "right" }}
-        transformOrigin={{ vertical: "top", horizontal: "left" }}
-        disableAutoFocus
-        disableEnforceFocus
-      >
-        {sourcesFor(typeAnchor.type)}
+        {kindItems(flow.source)}
       </Menu>
 
       {rccImport.type ? (
