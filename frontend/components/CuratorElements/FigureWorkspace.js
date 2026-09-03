@@ -27,9 +27,7 @@ import ChartsInfoForm from "../CuratorForms/ChartsInfoForm";
 import ScriptsInfoForm from "../CuratorForms/ScriptsInfoForm";
 import DatasetsInfoForm from "../CuratorForms/DatasetsInfoForm";
 import ToolsInfoForm from "../CuratorForms/ToolsInfoForm";
-import WorkflowInfoForm from "../CuratorForms/WorkflowInfoForm";
 import FolderAnalysis from "./FolderAnalysis";
-import WorkflowLanes from "./WorkflowLanes";
 
 import CuratorContext from "../../Context/Curator/curatorContext";
 import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperContext";
@@ -45,9 +43,7 @@ import {
   USES_TOOL,
   fromStoredEdge,
   DIRECTED,
-  EDGE_GROUP,
   closesLoop,
-  componentsOf,
   EDGE_VERB,
   FEEDS_INTO,
   LINKS_TO,
@@ -57,7 +53,6 @@ import {
   edgeProblem,
   edgeSentence,
   hasEdge,
-  hasRelation,
   inferEdgeType,
   prefixOf,
 } from "../../Utils/workflowGraph";
@@ -294,7 +289,6 @@ const FigureWorkspace = () => {
     setFlow({ id: "", anchor: "", step: "root", source: "" });
   };
   const [moreAnchor, setMoreAnchor] = useState({ id: "", parentId: "", el: null });
-  const [highlight, setHighlight] = useState("");
   // Links the curator picked that would close a feedback loop, held until
   // they say yes. Nothing is added while this is set.
   const [loopAsk, setLoopAsk] = useState(null);
@@ -443,19 +437,6 @@ const FigureWorkspace = () => {
 
   // What hangs under a node, and in what order. A figure is a result, so
   // everything below it is what went into it.
-  // What hangs under a node in the outline.
-  //
-  // `links_to` is under EVERY kind, because it joins every kind -- an arrow
-  // a curator drew has to appear in the outline whatever the two ends were.
-  // The five older types keep the shapes they were always allowed.
-  const CHILD_RULES = {
-    [CHART]: [GENERATES, CONSUMES, LINKS_TO],
-    [SCRIPT]: [USES_TOOL, CONSUMES, FEEDS_INTO, LINKS_TO],
-    [DATASET]: [LINKS_TO],
-    [TOOL]: [LINKS_TO],
-    [EXTERNAL]: [LINKS_TO],
-  };
-
   const NEW_TYPES = [
     { type: "chart", label: "Figure", probe: `${CHART}?` },
     { type: "script", label: "Script", probe: `${SCRIPT}?` },
@@ -471,7 +452,6 @@ const FigureWorkspace = () => {
         Boolean(inferEdgeType(id, probe)) || Boolean(inferEdgeType(probe, id))
     );
 
-  const anchorOf = (id) => `fw-anchor-${id}`;
   const label = (id) => rowLabel(byId[id], id);
   const named = (id) => `${KIND_LABEL[prefixOf(id)] || "Item"}: ${label(id)}`;
 
@@ -482,76 +462,9 @@ const FigureWorkspace = () => {
    * rather than in the indentation. An undirected one gets a double-headed
    * connector and no subject, because neither end came first.
    */
-  const sentence = (edge) => edgeSentence(edge, label);
   const namedSentence = (edge) => edgeSentence(edge, named);
 
   const figureIds = knownIds.filter((id) => prefixOf(id) === CHART).sort();
-
-  /**
-   * The outline.
-   *
-   * A workflow is a GRAPH, not a tree: one script generates three figures,
-   * one dataset feeds five scripts. Drawing it as a tree therefore has to
-   * answer what happens when the same artifact is reached twice, and "draw
-   * it again, fully editable" is the wrong answer -- a curator editing the
-   * second copy has no way to know it is the same thing they already have.
-   *
-   * So an artifact is a REAL NODE exactly once, where the outline first
-   * reaches it, and every later arrival is a reference back to that one.
-   * Nothing is duplicated in the data, and nothing is duplicated on screen.
-   */
-  const buildOutline = (scope) => {
-    const placed = new Set();
-    const build = (id, parentId, type, feedback) => {
-      const first = !placed.has(id);
-      const node = { id, parentId, type, feedback, first, groups: [] };
-      if (!first) return node;
-      placed.add(id);
-      [...(CHILD_RULES[prefixOf(id)] || []), ""].forEach((relation) => {
-        const kids = incoming(id)
-          .filter((edge) => (relation ? edge.type === relation : !edge.type))
-          .map((edge) => build(edge.from, id, relation, edge.feedback));
-        if (kids.length) node.groups.push({ type: relation, nodes: kids });
-      });
-      return node;
-    };
-    const roots = (scope || figureIds)
-      .filter((id) => prefixOf(id) === CHART)
-      .sort()
-      .map((id) => build(id, "", ""));
-
-    // A workflow does not have to end at a figure yet. Two scripts joined to
-    // each other, or a dataset feeding a script, are real work in progress
-    // and reachable from no figure at all -- rendering only figure-rooted
-    // trees made them vanish from the page while still being in the record.
-    const stranded = [];
-    const connected = (id) => incoming(id).length || outgoing(id).length;
-    let left = (scope || knownIds).filter(
-      (id) => !placed.has(id) && connected(id)
-    );
-    while (left.length) {
-      // Prefer a node nothing else here feeds into, so the subgraph reads
-      // downstream-first like the figures do. A cycle has no such node, and
-      // then any member will do -- what matters is that it gets on screen.
-      const sink =
-        left.find((id) => !outgoing(id).some((edge) => !placed.has(edge.to))) ||
-        left[0];
-      stranded.push(build(sink, "", ""));
-      left = left.filter((id) => !placed.has(id));
-    }
-
-    return { roots, stranded };
-  };
-
-  // WHAT A CURATOR CALLS "ONE WORKFLOW" is a connected component of the
-  // graph. It is DERIVED here on every render from the artifacts and edges
-  // that exist -- there is no group model and nothing to migrate. Joining two
-  // groups merges them because they become one component; removing the last
-  // edge between them splits them again for the same reason.
-  const { connected: components, alone } = componentsOf(knownIds, edges);
-
-  /** Everything this artifact feeds, so a shared one can say so. */
-  const servesOf = (id) => outgoing(id).map((edge) => edge.to);
 
   // ---- LINKING -----------------------------------------------------------
 
@@ -790,48 +703,6 @@ const FigureWorkspace = () => {
 
   /** The artifacts this one is associated with, in either stored order. */
   /**
-   * The associations this artifact is part of, as {other, edge}.
-   *
-   * The EDGE comes back too, in the orientation it is stored in. An
-   * association reads the same from either end but is stored one way round,
-   * and `unlink` matches on the stored endpoints.
-   */
-  const relatedOf = (id) =>
-    edges
-      .map(fromStoredEdge)
-      .filter((edge) => edge.type === RELATED_TO)
-      .map((edge) => {
-        if (edge.from === id) return { other: edge.to, edge };
-        if (edge.to === id) return { other: edge.from, edge };
-        return null;
-      })
-      .filter(Boolean);
-
-  // ---- ROW FURNITURE -----------------------------------------------------
-
-  const KindChip = ({ id }) => (
-    <Chip
-      label={KIND_LABEL[prefixOf(id)] || "Item"}
-      size="small"
-      variant="outlined"
-      sx={{
-        height: 20,
-        flexShrink: 0,
-        borderColor: "divider",
-        color: "text.secondary",
-        "& .MuiChip-label": { px: 0.75, fontSize: 11 },
-      }}
-    />
-  );
-
-  /**
-   * The two things a curator does to a row, and nothing else.
-   *
-   * Edit and Remove moved into the overflow because they are rarer than
-   * linking and were pushing the names and relationships -- the things the
-   * outline exists to show -- off the end of the line.
-   */
-  /**
    * What a curator does to an artifact: three actions, in one group, always
    * on the row.
    *
@@ -939,239 +810,6 @@ const FigureWorkspace = () => {
     </Typography>
   );
 
-  const OutlineRow = ({ node, depth }) => {
-    const { id, parentId, type, feedback, first } = node;
-    const edge = parentId
-      ? { from: id, to: parentId, type, feedback }
-      : null;
-    const serves = first ? servesOf(id) : [];
-    return (
-      <Box
-        sx={{
-          display: "flex",
-          flexWrap: "wrap",
-          alignItems: "flex-start",
-          gap: 0.75,
-          minWidth: 0,
-          py: 0.25,
-        }}
-      >
-        <Box
-          sx={{
-            display: "flex",
-            flexWrap: "wrap",
-            alignItems: "center",
-            gap: 0.75,
-            minWidth: 0,
-            flex: { xs: "1 1 100%", sm: "1 1 auto" },
-          }}
-        >
-          <KindChip id={id} />
-          <Typography
-            variant={depth ? "body2" : "subtitle2"}
-            component="span"
-            sx={{ overflowWrap: "anywhere", minWidth: 0 }}
-          >
-            {label(id)}
-          </Typography>
-          {edge ? <EdgeArrow edge={edge} /> : null}
-          {edge ? <UnlinkEdge edge={edge} /> : null}
-          {edge && edge.feedback ? (
-            <Chip
-              label="feedback loop"
-              size="small"
-              variant="outlined"
-              data-testid={`fw-feedback-${id}-${parentId}`}
-              sx={{
-                height: 18,
-                flexShrink: 0,
-                borderColor: "warning.main",
-                color: "warning.main",
-                "& .MuiChip-label": { px: 0.75, fontSize: 10 },
-              }}
-            />
-          ) : null}
-          {serves.length > 1 ? (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              component="span"
-              data-testid={`fw-shared-${id}`}
-            >
-              {`Also used by ${serves.length - 1} more`}
-            </Typography>
-          ) : null}
-        </Box>
-        {first ? (
-          <RowActions node={node} />
-        ) : (
-          <Box sx={{ display: "flex", flexShrink: 0, alignItems: "center" }}>
-            <RowAction
-              onClick={() => {
-                const target = document.getElementById(anchorOf(id));
-                if (target && target.scrollIntoView) {
-                  target.scrollIntoView({ block: "center" });
-                }
-                setHighlight(id);
-              }}
-              data-target={anchorOf(id)}
-              data-testid={`fw-goto-${id}-${parentId}`}
-            >
-              Go to
-            </RowAction>
-          </Box>
-        )}
-      </Box>
-    );
-  };
-
-  const OutlineNode = ({ node, depth = 0 }) => (
-    <Box
-      component="li"
-      id={node.first ? anchorOf(node.id) : undefined}
-      data-testid={
-        node.first
-          ? `fw-node-${node.id}`
-          : `fw-ref-${node.id}-${node.parentId}`
-      }
-      sx={{
-        minWidth: 0,
-        ...(highlight === node.id && node.first
-          ? { bgcolor: "action.selected", borderRadius: 1 }
-          : null),
-      }}
-    >
-      <OutlineRow node={node} depth={depth} />
-      {node.first ? null : (
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          display="block"
-          sx={{ pl: 1 }}
-        >
-          Shown above
-        </Typography>
-      )}
-      {node.first && prefixOf(node.id) === EXTERNAL ? (
-        <Box sx={{ pl: 1, minWidth: 0 }}>
-          {displayUrl(byId[node.id]) ? (
-            <Typography
-              variant="caption"
-              component="a"
-              href={displayUrl(byId[node.id])}
-              target="_blank"
-              rel="noopener noreferrer"
-              data-testid={`fw-url-${node.id}`}
-              sx={{ display: "block", overflowWrap: "anywhere" }}
-            >
-              {displayUrl(byId[node.id])}
-            </Typography>
-          ) : null}
-          {noteFor(byId[node.id]) ? (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              display="block"
-              data-testid={`fw-note-${node.id}`}
-              sx={{ overflowWrap: "anywhere" }}
-            >
-              {noteFor(byId[node.id])}
-            </Typography>
-          ) : null}
-        </Box>
-      ) : null}
-      {node.groups.map((group) => (
-        <Box
-          key={group.type || "legacy"}
-          sx={{ ml: 1, pl: 1.5, borderLeft: 2, borderColor: "divider" }}
-        >
-          <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
-            {group.nodes.map((child) => (
-              <OutlineNode
-                key={`${child.id}-${child.parentId}`}
-                node={child}
-                depth={depth + 1}
-              />
-            ))}
-          </Box>
-        </Box>
-      ))}
-      {/* ASSOCIATIONS ARE NOT CHILDREN.
-          Indenting them under a node would say one produced the other, which
-          is the one thing `related_to` does not claim. They sit beside the
-          tree as a flat reference list instead, and never recurse. */}
-      {node.first && relatedOf(node.id).length ? (
-        <Box
-          sx={{ ml: 1, pl: 1.5, mt: 0.25 }}
-          data-testid={`fw-related-${node.id}`}
-        >
-          <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
-            {relatedOf(node.id).map(({ other, edge }) => (
-              <Box
-                component="li"
-                key={other}
-                sx={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  alignItems: "center",
-                  gap: 0.75,
-                  minWidth: 0,
-                }}
-              >
-                <KindChip id={other} />
-                <Typography
-                  variant="body2"
-                  component="span"
-                  sx={{ overflowWrap: "anywhere", minWidth: 0 }}
-                >
-                  {label(other)}
-                </Typography>
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  component="span"
-                  sx={{ overflowWrap: "anywhere" }}
-                  aria-label={`${label(node.id)} related to ${label(other)}`}
-                  data-testid={`fw-relation-${node.id}-${other}`}
-                >
-                  ↔
-                </Typography>
-                <UnlinkEdge edge={edge} />
-                <RowAction
-                  onClick={() => {
-                    const target = document.getElementById(anchorOf(other));
-                    if (target && target.scrollIntoView) {
-                      target.scrollIntoView({ block: "center" });
-                    }
-                    setHighlight(other);
-                  }}
-                  data-target={anchorOf(other)}
-                  data-testid={`fw-goto-related-${node.id}-${other}`}
-                >
-                  Go to
-                </RowAction>
-              </Box>
-            ))}
-          </Box>
-        </Box>
-      ) : null}
-      {node.first && !node.groups.length && prefixOf(node.id) === CHART ? (
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          display="block"
-          sx={{ ml: 1, pl: 1.5 }}
-          data-testid={`fw-empty-${node.id}`}
-        >
-          No connected resources yet.
-        </Typography>
-      ) : null}
-      {node.first && prefixOf(node.id) === CHART ? (
-        <SuggestionPanel id={node.id} />
-      ) : null}
-    </Box>
-  );
-
   const LinkDialog = () => {
     const id = connectFor;
     if (!id) return null;
@@ -1227,10 +865,18 @@ const FigureWorkspace = () => {
             }}
             sx={{ mb: 1.5, flexWrap: "wrap" }}
           >
-            <ToggleButton value="out" data-testid="fw-dir-out" sx={{ textTransform: "none" }}>
+            <ToggleButton
+              value="out"
+              data-testid="fw-dir-out"
+              sx={{ textTransform: "none" }}
+            >
               {`${me} → selected`}
             </ToggleButton>
-            <ToggleButton value="in" data-testid="fw-dir-in" sx={{ textTransform: "none" }}>
+            <ToggleButton
+              value="in"
+              data-testid="fw-dir-in"
+              sx={{ textTransform: "none" }}
+            >
               {`selected → ${me}`}
             </ToggleButton>
           </ToggleButtonGroup>
@@ -1267,6 +913,152 @@ const FigureWorkspace = () => {
           </RegularStyledButton>
         </DialogActions>
       </Dialog>
+    );
+  };
+
+  /**
+   * ONE ROW PER ARTIFACT, in a flat list.
+   *
+   * This section used to draw the workflow: a figure-rooted tree, shared
+   * nodes rendered once with references after them, and an SVG above it.
+   * That was a SECOND picture of the same graph, and the two had to be kept
+   * in step by hand -- while the tree could not honestly show a cycle, a
+   * reversed pair, or many-to-many without either cutting an edge or
+   * repeating a node.
+   *
+   * The graph belongs in "Build your workflow", which already draws it and
+   * already lets it be edited. This is a resource manager: what the paper
+   * holds, what each thing is joined to, and the four things a curator does
+   * to it. No hierarchy is invented, so none can be wrong.
+   */
+  const ResourceRow = ({ id }) => {
+    const out = outgoing(id);
+    const linked = out.length > 0 || incoming(id).length > 0;
+    return (
+      <Box
+        component="li"
+        data-testid={`fw-node-${id}`}
+        sx={{
+          minWidth: 0,
+          py: 0.5,
+          borderBottom: 1,
+          borderColor: "divider",
+        }}
+      >
+        <Box
+          sx={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 0.75,
+            minWidth: 0,
+          }}
+        >
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 0.75,
+              minWidth: 0,
+              flex: { xs: "1 1 100%", sm: "1 1 auto" },
+            }}
+          >
+            <KindChip id={id} />
+            <Typography
+              variant="body2"
+              sx={{ overflowWrap: "anywhere", minWidth: 0 }}
+            >
+              {label(id)}
+            </Typography>
+            {/* Whether it is part of the workflow -- a fact, not a hierarchy. */}
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              data-testid={`fw-state-${id}`}
+            >
+              {linked ? "Connected" : "Not connected"}
+            </Typography>
+          </Box>
+          <RowActions node={{ id }} />
+        </Box>
+
+        {/* Its own arrows, each with the way to undo it. Listed under the
+            SOURCE only, so every edge appears exactly once in this list. */}
+        {out.length ? (
+          <Box component="ul" sx={{ listStyle: "none", m: 0, mt: 0.25, p: 0, pl: 1.5 }}>
+            {out.map((edge) => (
+              <Box
+                component="li"
+                key={`${edge.from}-${edge.to}-${edge.type}`}
+                sx={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  gap: 0.75,
+                  minWidth: 0,
+                }}
+              >
+                <EdgeArrow edge={edge} />
+                <KindChip id={edge.to} />
+                <Typography
+                  variant="body2"
+                  sx={{ overflowWrap: "anywhere", minWidth: 0 }}
+                >
+                  {label(edge.to)}
+                </Typography>
+                {edge.feedback ? (
+                  <Chip
+                    label="feedback loop"
+                    size="small"
+                    variant="outlined"
+                    data-testid={`fw-feedback-${edge.from}-${edge.to}`}
+                    sx={{
+                      height: 18,
+                      flexShrink: 0,
+                      borderColor: "warning.main",
+                      color: "warning.main",
+                      "& .MuiChip-label": { px: 0.75, fontSize: 10 },
+                    }}
+                  />
+                ) : null}
+                <UnlinkEdge edge={edge} />
+              </Box>
+            ))}
+          </Box>
+        ) : null}
+
+        {/* External data has nothing else on screen but its link. */}
+        {prefixOf(id) === EXTERNAL ? (
+          <Box sx={{ pl: 1.5, minWidth: 0 }}>
+            {displayUrl(byId[id]) ? (
+              <Typography
+                variant="caption"
+                component="a"
+                href={displayUrl(byId[id])}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid={`fw-url-${id}`}
+                sx={{ display: "block", overflowWrap: "anywhere" }}
+              >
+                {displayUrl(byId[id])}
+              </Typography>
+            ) : null}
+            {noteFor(byId[id]) ? (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                display="block"
+                data-testid={`fw-note-${id}`}
+                sx={{ overflowWrap: "anywhere" }}
+              >
+                {noteFor(byId[id])}
+              </Typography>
+            ) : null}
+          </Box>
+        ) : null}
+
+        {prefixOf(id) === CHART ? <SuggestionPanel id={id} /> : null}
+      </Box>
     );
   };
 
@@ -1318,20 +1110,20 @@ const FigureWorkspace = () => {
     );
   };
 
-  // Anything with no connection at all. Not hidden and not flagged: a
-  // dataset that produced no figure is a normal thing for a paper to hold,
-  // and a resource entered before the figure it belongs to is a normal way
-  // to work.
-  // An artifact with no edge at all stands on its own. That is exactly a
-  // one-member component, so it comes from the same derivation as the groups
-  // rather than a second rule that could disagree with it.
-  const unlinked = alone;
+  // A stable order: by kind, then by id. The list is a place to FIND a
+  // resource, so nothing may move because an edge was drawn.
+  const KIND_ORDER = [CHART, SCRIPT, DATASET, TOOL, EXTERNAL];
+  const ordered = knownIds.slice().sort((a, b) => {
+    const byKind =
+      KIND_ORDER.indexOf(prefixOf(a)) - KIND_ORDER.indexOf(prefixOf(b));
+    return byKind || (a < b ? -1 : a > b ? 1 : 0);
+  });
 
   return (
     <Drawer heading="Organize figures and resources" defaultOpen={true}>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        Each figure, and what produced it. Nothing is saved until you save the
-        record.
+        Everything this paper holds. Add resources, link them, and see the
+        workflow they make in “Build your workflow” below.
       </Typography>
 
       {/* ONE place to start anything.
@@ -1528,122 +1320,27 @@ const FigureWorkspace = () => {
         </Alert>
       ) : null}
 
-      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-        Workflow
-      </Typography>
-      {components.length ? (
+      {/* THE PAPER'S RESOURCES, in one flat list.
+          Sorted by kind so the same thing is always in the same place, and
+          not arranged by who produced what -- that is the workflow, and the
+          workflow has its own section. */}
+      {knownIds.length ? (
         <Box
           component="ul"
           sx={{ listStyle: "none", m: 0, p: 0 }}
-          data-testid="fw-figures"
-          aria-label="Workflow"
+          data-testid="fw-resources"
+          aria-label="Resources"
         >
-          {components.map((members) => {
-            const { roots, stranded } = buildOutline(members);
-            const figures = members.filter((id) => prefixOf(id) === CHART);
-            return (
-              <Box
-                component="li"
-                key={members[0]}
-                sx={{
-                  mb: 1.5,
-                  p: 1.5,
-                  border: 1,
-                  borderColor: "divider",
-                  borderRadius: 1,
-                  minWidth: 0,
-                }}
-                data-testid={`fw-group-${members[0]}`}
-              >
-                {figures.length ? null : (
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    display="block"
-                    data-testid={`fw-stranded-${members[0]}`}
-                  >
-                    Independent workflow
-                  </Typography>
-                )}
-
-                {/* The SAME graph, twice over. Wide: a drawing, because the
-                    shape of the work is what a picture is for. Narrow: the
-                    outline, because a drawing is the worst thing to read on
-                    a phone or with a screen reader. */}
-                {narrow ? null : (
-                  <WorkflowLanes
-                    ids={members}
-                    byId={byId}
-                    edges={edges}
-                    name={label}
-                    onPick={(id) => setHighlight(id)}
-                    active={highlight}
-                  />
-                )}
-
-                <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
-                  {[...roots, ...stranded].map((node) => (
-                    <OutlineNode key={node.id} node={node} />
-                  ))}
-                </Box>
-              </Box>
-            );
-          })}
+          {ordered.map((id) => (
+            <ResourceRow key={id} id={id} />
+          ))}
         </Box>
       ) : (
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          {knownIds.length
-            ? "Nothing is connected yet. Link two resources below and they " +
-              "become a workflow here."
-            : "No workflow yet. Add a figure or a resource to start, or " +
-              "import from an RCC folder."}
+          Nothing here yet. Add a figure or a resource to start, or import
+          from an RCC folder.
         </Typography>
       )}
-
-      {/* "INDEPENDENT", not "unlinked".
-          The old heading named these by what they LACK, so a perfectly
-          ordinary dataset -- one that produced no figure, or one entered
-          before its figure exists -- was filed under something that reads
-          like a list of defects to go and fix. Standing on its own is a
-          valid state for a resource, and the heading now says that. */}
-      <Box
-        sx={{
-          mt: 2,
-          p: 1.5,
-          border: 1,
-          borderColor: "divider",
-          borderRadius: 1,
-          bgcolor: "action.hover",
-        }}
-        data-testid="fw-unlinked"
-      >
-        <Typography variant="subtitle2" gutterBottom>
-          Independent resources
-        </Typography>
-        <Box
-          component="ul"
-          sx={{ listStyle: "none", m: 0, p: 0 }}
-          aria-label="Independent resources"
-        >
-          {unlinked.map((id) => (
-            <OutlineNode
-              key={id}
-              node={{ id, parentId: "", type: "", first: true, groups: [] }}
-            />
-          ))}
-        </Box>
-        {/* Neither line is a nudge to go and connect something. The first
-            reports where this paper's resources happen to sit; the second
-            says out loud that standing alone is allowed. */}
-        {unlinked.length === 0 ? (
-          <Typography variant="caption" color="text.secondary" display="block">
-            {knownIds.length
-              ? "No independent resources — every resource here belongs to a figure."
-              : "No independent resources yet. A script, dataset, tool or " +
-                "external data item can stand on its own here, with no figure."}
-          </Typography>
-        ) : null}
-      </Box>
 
       <LinkDialog />
 
@@ -1717,11 +1414,6 @@ const FigureWorkspace = () => {
         <ScriptsInfoForm hideTrigger />
         <DatasetsInfoForm hideTrigger />
         <ToolsInfoForm hideTrigger />
-        {/* The External Data dialog. It lived in "Build your workflow",
-            which was hidden until the graph already had nodes -- so the one
-            way to create external data vanished exactly when a curator had
-            none. */}
-        <WorkflowInfoForm dialogOnly />
       </Box>
     </Drawer>
   );

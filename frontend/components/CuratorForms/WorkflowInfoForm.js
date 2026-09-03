@@ -22,6 +22,7 @@ import Graph from "../Workflow/Graph";
 import Legend from "../Workflow/Legend";
 import { formatData } from "../Workflow/util";
 import { isGraph } from "../../Utils/graph";
+import { LINKS_TO, closesLoop, edgeProblem } from "../../Utils/workflowGraph";
 import { changedUrlProblem } from "../../Utils/externalData";
 
 import AlertContext from "../../Context/Alert/alertContext";
@@ -89,26 +90,50 @@ const WorkflowInfoForm = ({ dialogOnly = false }) => {
     setEditing("workflowInfo", true);
   }, [workflow]);
 
+  // Every artifact this paper holds, which is what an edge's endpoints are
+  // checked against.
+  const knownIds = [charts, scripts, datasets, tools, heads]
+    .flatMap((list) => list || [])
+    .map((item) => item && item.id)
+    .filter(Boolean);
+
   const manipulate = {
     manipulation: {
       enabled: true,
       initiallyActive: true,
       addNode: false,
       addEdge: (data, callback) => {
-        if (data.to == data.from) {
+        // ONE CONTRACT, TWO WAYS IN. An arrow dragged here is the same claim
+        // as one ticked in "Organize figures and resources", so it is the
+        // same edge type, checked the same way, and asks the same question
+        // when it closes a loop.
+        const edge = { from: data.from, to: data.to, type: LINKS_TO };
+        const problem = edgeProblem(edge, knownIds, workflow.edges || []);
+        if (problem) {
+          setAlert("That connection cannot be made", problem, null);
+          callback(null);
+          return;
+        }
+        if (closesLoop(workflow.edges || [], edge)) {
           setAlert(
-            "Self Edge Alert",
-            "You are adding a self edge, if you want to proceed click Go Ahead",
+            "Make a feedback loop?",
+            "This connection sends the workflow back to something earlier " +
+              "in it. That is a real way to work \u2014 fit, adjust, fit " +
+              "again \u2014 so Qresp will keep it and mark it as a feedback " +
+              "loop.",
             <RegularStyledButton
               onClick={() => {
                 unsetAlert();
-                addEdge(data);
+                addEdge({ ...edge, feedback: true });
               }}
             >
-              Go Ahead
+              Make feedback loop
             </RegularStyledButton>
           );
-        } else addEdge(data);
+          callback(null);
+          return;
+        }
+        addEdge(edge);
         callback(null);
       },
       deleteNode: (data, callback) => {
