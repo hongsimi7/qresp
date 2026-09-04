@@ -1,4 +1,13 @@
-import { Fragment, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  Fragment,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import {
   Alert,
@@ -20,6 +29,8 @@ import {
   MenuItem,
   Typography,
 } from "@mui/material";
+
+import { ExpandMore } from "@mui/icons-material";
 
 import Drawer from "../drawer";
 import { RegularStyledButton } from "../button";
@@ -183,6 +194,66 @@ const KindChip = ({ id }) => (
     }}
   />
 );
+
+// WHICH ROWS ARE OPEN. Closed is the default, and every row starts closed.
+//
+// Open-by-default was the wrong reading of "the connections are the reason to
+// look at a row". They are the reason to look at ONE row. Making a single
+// connection unfolded the resource being worked on AND every resource it
+// reached, so a page that fitted on a screen became one to scroll through
+// looking for the place you had been.
+//
+// It is view state and only view state: which rows are open is never stored,
+// saved, published or sent anywhere.
+//
+// IT IS ITS OWN CONTEXT, not another piece of workspace state, for the same
+// reason the spotlight is. Every consumer of a context re-renders when its
+// value changes, and the row components are declared inside FigureWorkspace,
+// so a workspace re-render replaces their DOM outright: pressing a chevron
+// would rebuild the row under the pointer and take the keyboard focus off
+// the very control that was pressed. `children` passed straight through
+// means a toggle re-renders the rows and nothing above them.
+const RowOpenContext = createContext({
+  isOpen: () => false,
+  toggle: () => {},
+});
+
+const RowOpenState = ({ api, children }) => {
+  const [open, setOpen] = useState({});
+
+  const toggle = useCallback(
+    (id) => setOpen((was) => ({ ...was, [id]: !was[id] })),
+    []
+  );
+
+  // Open the row the curator was WORKING ON, and only that one. After making
+  // a connection they want to see what they just made; the resource at the
+  // other end of it is not what they were looking at.
+  //
+  // It never closes anything -- a row opened by hand stays open through
+  // whatever else happens -- and it never re-opens a row twice, so the state
+  // object is untouched when there is nothing to change.
+  const reveal = useCallback(
+    (id) => setOpen((was) => (was[id] ? was : { ...was, [id]: true })),
+    []
+  );
+
+  // The workspace makes connections; the rows know which of them are open.
+  // A ref rather than a prop callback, so the workspace can reach in without
+  // the rows' state living up there.
+  useEffect(() => {
+    if (api) api.current = { reveal };
+  }, [api, reveal]);
+
+  const value = useMemo(
+    () => ({ isOpen: (id) => Boolean(open[id]), toggle }),
+    [open, toggle]
+  );
+
+  return (
+    <RowOpenContext.Provider value={value}>{children}</RowOpenContext.Provider>
+  );
+};
 
 /**
  * Drops the spotlight when the set of artifacts changes.
@@ -468,10 +539,12 @@ const FigureWorkspace = () => {
   // Links the curator picked that would close a feedback loop, held until
   // they say yes. Nothing is added while this is set.
   const [loopAsk, setLoopAsk] = useState(null);
-  // Which rows have had their connections FOLDED AWAY. Open is the default:
-  // the connections are the reason to look at a row, and hiding them behind
-  // a click puts Unlink one step further from the arrow it undoes.
-  const [folded, setFolded] = useState({});
+  // Opening a row is the rows' business (see RowOpenState). The workspace
+  // reaches it only to open the row a curator has just finished working on.
+  const rowsApi = useRef(null);
+  const revealRow = (id) => {
+    if (id && rowsApi.current) rowsApi.current.reveal(id);
+  };
   // Which artifact's connection dialog is open, and what is ticked in it.
   const [connectFor, setConnectFor] = useState("");
   // What the boxes SAY, keyed by edge, holding only the deviations from
@@ -549,6 +622,8 @@ const FigureWorkspace = () => {
       ? { from: request.target, to: created.id, type: backward }
       : null;
     if (edge && !hasEdge(edges, edge.from, edge.to)) addEdge(edge);
+    // The row they started from, not the one that was just created.
+    revealRow(request.target);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listLengths]);
 
@@ -604,10 +679,11 @@ const FigureWorkspace = () => {
    * the suggestion it was handed: between rendering and clicking, the curator
    * may have made this very connection by hand.
    */
-  const acceptSuggestion = (item) => {
+  const acceptSuggestion = (item, source) => {
     setNotice("");
     if (hasEdge(edges, item.from, item.to)) return;
     addEdge({ from: item.from, to: item.to, type: item.type });
+    revealRow(source);
   };
 
   const dismissSuggestion = (item) =>
@@ -941,11 +1017,13 @@ const FigureWorkspace = () => {
       return;
     }
     applyEdges(safe);
+    revealRow(connectFor);
     setWanted({});
   };
 
   const confirmLoops = () => {
     setWanted({});
+    revealRow(connectFor);
     if (loopAsk) {
       applyEdges([
         ...loopAsk.safe,
@@ -960,6 +1038,7 @@ const FigureWorkspace = () => {
 
   const declineLoops = () => {
     setWanted({});
+    revealRow(connectFor);
     // Everything that was NOT a loop still goes in: refusing the loop is not
     // a reason to throw away the other choices.
     if (loopAsk) applyEdges(loopAsk.safe);
@@ -1132,6 +1211,7 @@ const FigureWorkspace = () => {
     // Read one level down, not in the workspace: a pointer move must not
     // re-render this whole list out from under the cursor.
     const { spotlight, setSpotlight } = useContext(SpotlightContext);
+    const { isOpen, toggle } = useContext(RowOpenContext);
     const into = incoming(id).filter(
       (edge) => !UNDIRECTED.includes(edge.type)
     );
@@ -1146,7 +1226,7 @@ const FigureWorkspace = () => {
           (edge.from === id || edge.to === id)
       );
     const total = into.length + outOf.length + both.length;
-    const open = !folded[id];
+    const open = isOpen(id);
 
     return (
       <Box
@@ -1199,26 +1279,51 @@ const FigureWorkspace = () => {
             </Typography>
             {/* Which node this is in the drawing below. */}
             <NodeId id={id} />
-            {/* The counts are always readable; the lists can be folded. */}
-            <RowAction
-              onClick={() =>
-                setFolded((was) => ({ ...was, [id]: !was[id] }))
-              }
-              aria-expanded={open}
-              data-testid={`fw-state-${id}`}
-            >
-              {total
-                ? `${into.length} in · ${outOf.length} out${
-                    both.length ? ` · ${both.length} related` : ""
-                  }`
-                : "Not connected"}
-            </RowAction>
+            {/* THE COUNTS ARE ALWAYS READABLE, and they are also the way
+                in: pressing them opens the row. The chevron is there so the
+                affordance is visible rather than discovered, and it turns,
+                so a curator can tell an open row from a closed one at a
+                glance down the list.
+
+                A row with nothing connected has nothing to open, so it says
+                so as text -- a control that does nothing is worse than no
+                control. */}
+            {total ? (
+              <RowAction
+                onClick={() => toggle(id)}
+                aria-expanded={open}
+                aria-controls={`fw-wiring-${id}`}
+                data-testid={`fw-state-${id}`}
+                endIcon={
+                  <ExpandMore
+                    aria-hidden="true"
+                    fontSize="small"
+                    sx={{
+                      transition: "transform 120ms",
+                      transform: open ? "rotate(180deg)" : "none",
+                    }}
+                  />
+                }
+              >
+                {`${into.length} in · ${outOf.length} out${
+                  both.length ? ` · ${both.length} related` : ""
+                }`}
+              </RowAction>
+            ) : (
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                data-testid={`fw-state-${id}`}
+              >
+                Not connected
+              </Typography>
+            )}
           </Box>
           <RowActions node={{ id }} />
         </Box>
 
         <Collapse in={open && total > 0} unmountOnExit>
-          <Box sx={{ pl: 1.5 }} data-testid={`fw-wiring-${id}`}>
+          <Box sx={{ pl: 1.5 }} data-testid={`fw-wiring-${id}`} id={`fw-wiring-${id}`}>
             {into.length ? (
               <Fragment>
                 <Typography variant="caption" color="text.secondary" display="block">
@@ -1333,7 +1438,9 @@ const FigureWorkspace = () => {
                   {describeSuggestion(item, (who) => label(who))}
                 </Typography>{" "}
                 <RowAction
-                  onClick={() => acceptSuggestion(item)}
+                  // `id` is the row the panel belongs to -- the resource
+                  // the curator is standing at, and the only one to open.
+                  onClick={() => acceptSuggestion(item, id)}
                   data-testid={`fw-suggest-connect-${item.from}-${item.to}`}
                 >
                   Connect
@@ -1574,9 +1681,11 @@ const FigureWorkspace = () => {
           aria-label="Resources"
         >
           <SpotlightReset signature={idSignature} />
-          {ordered.map((id) => (
-            <ResourceRow key={id} id={id} />
-          ))}
+          <RowOpenState api={rowsApi}>
+            {ordered.map((id) => (
+              <ResourceRow key={id} id={id} />
+            ))}
+          </RowOpenState>
         </Box>
       ) : (
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>

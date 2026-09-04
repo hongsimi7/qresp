@@ -105,6 +105,14 @@ const Host = ({ helpers, curator }) => (
   </CuratorHelperContext.Provider>
 );
 
+// Rows are COMPACT until asked. A test about what a row contains opens it
+// the way a curator does; a test about the default does not call this.
+const openAllRows = () =>
+  screen
+    .queryAllByTestId(/^fw-state-/)
+    .filter((el) => el.tagName === "BUTTON")
+    .forEach((el) => fireEvent.click(el));
+
 const renderWorkspace = (overrides = {}, helpers = buildHelpers()) => {
   const value = build(overrides);
   const view = render(<Host helpers={helpers} curator={value} />);
@@ -264,6 +272,7 @@ describe("the three actions on a row", () => {
         ],
       },
     });
+    openAllRows();
     expect(screen.getAllByTestId("fw-node-s0")).toHaveLength(1);
     expect(screen.getAllByTestId("fw-actions-s0")).toHaveLength(1);
     const row = within(screen.getByTestId("fw-node-s0"));
@@ -784,6 +793,7 @@ describe("feedback loops", () => {
         ],
       },
     });
+    openAllRows();
     expect(screen.getAllByTestId("fw-feedback-s0-c0")[0]).toHaveTextContent(
       /feedback loop/i
     );
@@ -803,6 +813,7 @@ describe("feedback loops", () => {
         ],
       },
     });
+    openAllRows();
     ctx.rerenderWith({
       workflow: {
         nodes: [],
@@ -830,6 +841,7 @@ describe("breaking one relationship", () => {
     // can see but can only undo from the other side is the complaint this
     // answers.
     renderWorkspace(CHAIN);
+    openAllRows();
     ["s0-c0", "d0-s0", "t0-s0"].forEach((pair) => {
       expect(screen.getAllByTestId(`fw-flow-${pair}`)).toHaveLength(2);
       expect(screen.getAllByTestId(`fw-unlink-${pair}`)).toHaveLength(2);
@@ -838,6 +850,7 @@ describe("breaking one relationship", () => {
 
   it("names both ends and the relationship, for a screen reader", () => {
     renderWorkspace(CHAIN);
+    openAllRows();
     expect(
       screen.getAllByRole("button", {
         name: "Unlink plot_dos.py generates Density of states",
@@ -857,6 +870,7 @@ describe("breaking one relationship", () => {
         ],
       },
     });
+    openAllRows();
     fireEvent.click(screen.getAllByTestId("fw-unlink-s0-c1")[0]);
 
     expect(ctx.unlink).toHaveBeenCalledTimes(1);
@@ -867,6 +881,7 @@ describe("breaking one relationship", () => {
 
   it("is a real button a keyboard can reach", () => {
     renderWorkspace(CHAIN);
+    openAllRows();
     const button = screen.getAllByTestId("fw-unlink-s0-c0")[0];
     expect(button.tagName).toBe("BUTTON");
     expect(button).not.toBeDisabled();
@@ -875,6 +890,7 @@ describe("breaking one relationship", () => {
   it("can be folded away, leaving the count", async () => {
     const u = user();
     renderWorkspace(CHAIN);
+    openAllRows();
     expect(screen.getByTestId("fw-wiring-s0")).toBeInTheDocument();
 
     await u.click(screen.getByTestId("fw-state-s0"));
@@ -891,6 +907,7 @@ describe("what a row says", () => {
 
   it("shows a kind, a name and an arrow, and no vocabulary", () => {
     renderWorkspace(CHAIN);
+    openAllRows();
     const text = ["c0", "s0", "d0", "t0"]
       .map((id) => screen.getByTestId(`fw-node-${id}`).textContent)
       .join(" ");
@@ -911,6 +928,7 @@ describe("what a row says", () => {
 
   it("still describes the relationship to a screen reader", () => {
     renderWorkspace(CHAIN);
+    openAllRows();
     expect(screen.getAllByTestId("fw-flow-s0-c0")[0]).toHaveAttribute(
       "aria-label",
       "plot_dos.py generates Density of states"
@@ -922,6 +940,7 @@ describe("what a row says", () => {
       charts: [FIGURE, { id: "c1", caption: "Band structure" }],
       workflow: { nodes: [], edges: [{ from: "c0", to: "c1", type: "related_to" }] },
     });
+    openAllRows();
     expect(screen.getAllByTestId("fw-flow-c0-c1")[0]).toHaveTextContent("\u2194");
   });
 
@@ -1120,6 +1139,7 @@ describe("the draft between the two saves", () => {
       scripts: [SCRIPT],
       workflow: { nodes: [], edges: [["s0", "c0"]] },
     });
+    openAllRows();
     expect(screen.getAllByTestId("fw-flow-s0-c0")[0]).toHaveTextContent("\u2192");
     expect(screen.getAllByTestId("fw-flow-s0-c0")[0]).toHaveAttribute(
       "aria-label",
@@ -1383,6 +1403,7 @@ describe("the list does not reconstruct the graph", () => {
         ],
       },
     });
+    openAllRows();
     ["s0-s1", "s1-s2", "s2-s0"].forEach((pair) => {
       expect(screen.getAllByTestId(`fw-flow-${pair}`)[0]).toBeInTheDocument();
       expect(screen.getAllByTestId(`fw-unlink-${pair}`)[0]).toBeInTheDocument();
@@ -1403,6 +1424,7 @@ describe("the list does not reconstruct the graph", () => {
         ],
       },
     });
+    openAllRows();
     expect(screen.getAllByTestId("fw-flow-s0-s1")[0]).toBeInTheDocument();
     expect(screen.getAllByTestId("fw-flow-s1-s0")[0]).toBeInTheDocument();
     // Each is undone on its own.
@@ -1444,6 +1466,7 @@ describe("who owns a feedback mark", () => {
     renderWorkspace(
       held([{ from: "s0", to: "c0", type: "links_to", feedback: true }])
     );
+    openAllRows();
     expect(screen.getAllByTestId("fw-feedback-s0-c0").length).toBeGreaterThan(0);
     expect(screen.queryAllByTestId("fw-feedback-c0-s0")).toHaveLength(0);
   });
@@ -1452,6 +1475,7 @@ describe("who owns a feedback mark", () => {
     const ctx = renderWorkspace(
       held([{ from: "s0", to: "c0", type: "links_to", feedback: true }])
     );
+    openAllRows();
     ctx.rerenderWith({
       workflow: {
         nodes: [],
@@ -1546,6 +1570,7 @@ describe("unlink, from wherever the arrow is drawn", () => {
         ],
       },
     });
+    openAllRows();
     // Two edges, each shown at both ends.
     expect(screen.getAllByTestId("fw-unlink-s0-s1")).toHaveLength(2);
     expect(screen.getAllByTestId("fw-unlink-s1-s0")).toHaveLength(2);
@@ -1560,6 +1585,7 @@ describe("unlink, from wherever the arrow is drawn", () => {
       charts: [FIGURE, { id: "c1", caption: "Band structure" }],
       workflow: { nodes: [], edges: [{ from: "c0", to: "c1", type: "related_to" }] },
     });
+    openAllRows();
     const buttons = screen.getAllByTestId("fw-unlink-c0-c1");
     expect(buttons).toHaveLength(2);
     fireEvent.click(buttons[1]);
@@ -1578,6 +1604,7 @@ describe("unlink, from wherever the arrow is drawn", () => {
         ],
       },
     });
+    openAllRows();
     expect(screen.getAllByTestId("fw-feedback-s0-c0").length).toBeGreaterThan(0);
     fireEvent.click(screen.getAllByTestId("fw-unlink-s0-c0")[0]);
     expect(ctx.unlink).toHaveBeenCalledWith("s0", "c0");
@@ -1627,6 +1654,7 @@ describe("reachable without a mouse", () => {
 
   it("keeps every Unlink a real button", () => {
     renderWorkspace(CHAIN);
+    openAllRows();
     ["s0-c0", "d0-s0", "t0-s0"].forEach((pair) => {
       const button = screen.getAllByTestId(`fw-unlink-${pair}`)[0];
       expect(button.tagName).toBe("BUTTON");
@@ -2003,6 +2031,7 @@ describe("what a row shows about its wiring", () => {
 
   it("separates what reaches it from what it reaches", () => {
     renderWorkspace(CHAIN);
+    openAllRows();
     const wiring = within(screen.getByTestId("fw-wiring-s0"));
     expect(wiring.getByText("Incoming")).toBeInTheDocument();
     expect(wiring.getByText("Outgoing")).toBeInTheDocument();
@@ -2016,10 +2045,118 @@ describe("what a row shows about its wiring", () => {
       charts: [FIGURE, { id: "c1", caption: "Band structure" }],
       workflow: { nodes: [], edges: [{ from: "c0", to: "c1", type: "related_to" }] },
     });
+    openAllRows();
     const wiring = within(screen.getByTestId("fw-wiring-c0"));
     expect(wiring.getByText("Related")).toBeInTheDocument();
     expect(wiring.queryByText("Incoming")).not.toBeInTheDocument();
     expect(wiring.queryByText("Outgoing")).not.toBeInTheDocument();
     expect(screen.getByTestId("fw-state-c0")).toHaveTextContent("1 related");
+  });
+});
+
+// A LIST YOU CAN READ IN ONE SCREEN.
+//
+// Every row used to arrive with its Incoming, Outgoing and Related lists
+// already unfolded, so four resources and three connections filled a screen
+// and a half -- and making one connection unfolded the resource being worked
+// on together with every resource it reached.
+describe("a row is compact until it is asked", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  it("shows the counts and nothing else, on every row", () => {
+    renderWorkspace(CHAIN);
+
+    ["c0", "s0", "d0", "t0"].forEach((id) => {
+      expect(screen.queryByTestId(`fw-wiring-${id}`)).toBeNull();
+      expect(screen.queryByTestId(`fw-unlink-d0-s0`)).toBeNull();
+    });
+    // What a compact row does say: kind, name, counts, and its three actions.
+    const row = within(screen.getByTestId("fw-node-s0"));
+    expect(row.getByTestId("fw-state-s0")).toHaveTextContent(
+      "2 in · 1 out"
+    );
+    expect(row.getByTestId("fw-addlink-s0")).toBeInTheDocument();
+    expect(row.getByTestId("fw-edit-s0")).toBeInTheDocument();
+    expect(row.getByTestId("fw-remove-s0")).toBeInTheDocument();
+  });
+
+  it("says whether it is open, where a screen reader can hear it", async () => {
+    const u = user();
+    renderWorkspace(CHAIN);
+    const control = () => screen.getByTestId("fw-state-s0");
+
+    expect(control()).toHaveAttribute("aria-expanded", "false");
+    await u.click(control());
+    expect(control()).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("fw-wiring-s0")).toBeInTheDocument();
+
+    await u.click(control());
+    expect(control()).toHaveAttribute("aria-expanded", "false");
+    await waitFor(() =>
+      expect(screen.queryByTestId("fw-wiring-s0")).toBeNull()
+    );
+  });
+
+  it("offers nothing to open on a row with no connections", () => {
+    renderWorkspace({ charts: [FIGURE] });
+    const state = screen.getByTestId("fw-state-c0");
+    expect(state).toHaveTextContent("Not connected");
+    // Not a button: a control that opens nothing is worse than no control.
+    expect(state.tagName).not.toBe("BUTTON");
+  });
+
+  it("keeps the keyboard on the control that was pressed", async () => {
+    // The row components are declared inside the workspace, so anything
+    // that re-renders the workspace REPLACES their DOM -- and takes the
+    // focus with it. Opening a row must not do that.
+    const u = user();
+    renderWorkspace(CHAIN);
+    const before = screen.getByTestId("fw-state-s0");
+    before.focus();
+    await u.keyboard("{Enter}");
+
+    expect(screen.getByTestId("fw-wiring-s0")).toBeInTheDocument();
+    const after = screen.getByTestId("fw-state-s0");
+    expect(after).toBe(before);
+    expect(document.activeElement).toBe(after);
+  });
+
+  it("opens the row that was worked on, and only that one", async () => {
+    const u = user();
+    renderWorkspace(CHAIN);
+
+    // Undo the arrow s0 draws to c0 -- a change to s0's connections, made
+    // from s0's own manager.
+    await openLinkFor(u, "s0");
+    await u.click(screen.getByTestId("fw-link-option-s0-c0"));
+    await u.click(screen.getByTestId("fw-link-apply"));
+
+    // The resource the curator was standing at.
+    await waitFor(() =>
+      expect(screen.getByTestId("fw-wiring-s0")).toBeInTheDocument()
+    );
+    // Not the ones at the other end of its arrows, and not the rest.
+    ["c0", "d0", "t0"].forEach((id) =>
+      expect(screen.queryByTestId(`fw-wiring-${id}`)).toBeNull()
+    );
+  });
+
+  it("leaves a row the curator opened by hand open", async () => {
+    const u = user();
+    renderWorkspace(CHAIN);
+
+    await u.click(screen.getByTestId("fw-state-d0"));
+    expect(screen.getByTestId("fw-wiring-d0")).toBeInTheDocument();
+
+    // Work on a different resource entirely.
+    await openLinkFor(u, "s0");
+    await u.click(screen.getByTestId("fw-link-option-s0-c0"));
+    await u.click(screen.getByTestId("fw-link-apply"));
+    await u.click(screen.getByTestId("fw-link-cancel"));
+
+    // Both are open: the one they chose, and the one they just worked on.
+    expect(screen.getByTestId("fw-wiring-d0")).toBeInTheDocument();
+    expect(screen.getByTestId("fw-wiring-s0")).toBeInTheDocument();
+    expect(screen.queryByTestId("fw-wiring-t0")).toBeNull();
   });
 });

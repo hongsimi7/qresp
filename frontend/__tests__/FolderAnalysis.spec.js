@@ -14,9 +14,6 @@ import axios from "axios";
 
 import FolderAnalysis from "../components/CuratorElements/FolderAnalysis";
 import CuratorState from "../Context/Curator/CuratorState";
-import CuratorHelperState from "../Context/CuratorHelpers/curatorHelperState";
-import SourceTreeState from "../Context/SourceTree/SourceTreeState";
-import ScriptsInfoForm from "../components/CuratorForms/ScriptsInfoForm";
 import { readFileSync } from "fs";
 import { join as pathJoin } from "path";
 
@@ -246,6 +243,11 @@ const completeRequired = () => {
   });
 };
 
+// A card says nothing about a missing field until an Add has been asked for
+// and refused. A test about that message asks first.
+const askToAdd = async (user, name = /add selected items/i) =>
+  user.click(screen.getByRole("button", { name }));
+
 const renderWith = (context = {}) => {
   const addMany = jest.fn();
   const setAlert = jest.fn();
@@ -333,11 +335,10 @@ describe("Analyze RCC Folder", () => {
     expect(
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     ).toBeInTheDocument();
-    // The status names the fields; a bare count told a curator to go
-    // looking for them.
-    expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
-      "Needs information: Figure Number, Figure Caption, Keywords"
-    );
+    // And nothing about what is missing. A folder of twelve figures used to
+    // open as twelve identical warnings about work nobody had started yet.
+    expect(screen.queryByTestId("needs-input-chart-0")).toBeNull();
+    expect(screen.queryByText(/needs /i)).toBeNull();
   });
 
   it("uses compact labels per kind and keeps full paths under Details", async () => {
@@ -2396,21 +2397,20 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     expect(
       await screen.findByText(/not configured on this server/i)
     ).toBeInTheDocument();
-    // The deterministic review is unaffected and still appliable.
-    // The failure is local to that candidate: the rest of the dialog works,
-    // and Add becomes available once the ticked figure is complete. The AI
-    // being unavailable is not what holds it back -- the missing caption is,
-    // and a curator can type one.
+    // The deterministic review is unaffected and still appliable. The
+    // failure is local to that candidate: the rest of the dialog works, Add
+    // is live, and the AI being unavailable is not what stands between the
+    // curator and the record -- the missing caption is, and they can type
+    // one.
     await user.click(
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
-    expect(
-      screen.getByRole("button", { name: /add selected items/i })
-    ).toBeDisabled();
+    await askToAdd(user);
+    expect(screen.getByTestId("blocked-summary")).toBeInTheDocument();
+
     completeRequired();
-    expect(
-      screen.getByRole("button", { name: /add selected items/i })
-    ).toBeEnabled();
+    await askToAdd(user);
+    expect(screen.queryByTestId("blocked-summary")).toBeNull();
   });
 });
 
@@ -2626,13 +2626,14 @@ describe("Folder Analysis field contract", () => {
 
     // The count is real: it names the blank required fields and drops as
     // they are filled.
+    await askToAdd(user);
     expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
-      "Needs information: Figure Number, Figure Caption, Keywords"
+      "Needs Figure Number, Figure Caption, Keywords"
     );
     await fill(user, input(/^figure caption ?\*?$/i), "Density of states");
     await waitFor(() =>
       expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
-        "Needs information: Figure Number, Keywords"
+        "Needs Figure Number, Keywords"
       )
     );
 
@@ -2712,7 +2713,8 @@ describe("Folder Analysis field contract", () => {
     await openFields(user, /scripts \(1\)/i, /select plot_vdos\.py/i,
                      "script-0");
 
-    // readme is blank and required, so the badge is there...
+    // readme is blank and required, so asking for it is refused...
+    await askToAdd(user);
     expect(screen.getByTestId("needs-input-script-0")).toBeInTheDocument();
 
     await fill(user, input(/^description ?\*?$/i), "Plots the VDOS");
@@ -2736,16 +2738,22 @@ describe("Folder Analysis field contract", () => {
     await openFields(user, /scripts \(1\)/i, /select plot_vdos\.py/i,
                      "script-0");
 
-    // The description is required and deliberately left blank.
-    expect(screen.getByTestId("needs-input-script-0")).toHaveTextContent(
-      "Needs information: Description"
-    );
+    // The description is required and deliberately left blank. The card
+    // says nothing until the curator asks for it...
+    expect(screen.queryByTestId("needs-input-script-0")).toBeNull();
     expect(
       screen.getByRole("button", { name: /add selected items/i })
-    ).toBeDisabled();
-    // And it says which candidate, and what it needs, without being pressed.
-    expect(screen.getByTestId("blocked-script-0")).toHaveTextContent(
-      "needs Description"
+    ).toBeEnabled();
+
+    // ...and then it is refused, once, in one sentence, with the fields
+    // named on the card they belong to.
+    await askToAdd(user);
+    expect(addMany).not.toHaveBeenCalled();
+    expect(screen.getByTestId("blocked-summary")).toHaveTextContent(
+      "1 selected item needs details before it can be added. Nothing was added."
+    );
+    expect(screen.getByTestId("needs-input-script-0")).toHaveTextContent(
+      "Needs Description"
     );
 
     await fill(user, input(/^description ?\*?$/i), "Plots the VDOS");
@@ -2924,17 +2932,23 @@ describe("a card never contradicts itself about what a field holds", () => {
     renderWith();
     await suggestForChart(user, SUGGESTION);
 
-    // Before: three required fields are empty, and the header says so.
+    // Ask for it: three required fields are empty, and the refusal says so.
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    );
+    await askToAdd(user);
     expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
-      /Needs information: Figure Number, Figure Caption, Keywords/i
+      /Needs Figure Number, Figure Caption, Keywords/i
     );
 
     await user.click(screen.getByTestId("ai-use-description-chart-0"));
     await user.click(screen.getByTestId("ai-use-keywords-chart-0"));
 
-    // The header already got this right; the chips are what lied.
+    // The message tracks the draft, so accepting the AI's answer for two of
+    // the three fields leaves it asking for the third and no longer for
+    // them. It is derived, never remembered.
     expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
-      /Needs information: Figure Number/i
+      /Needs Figure Number/i
     );
     expect(caption()).toHaveValue(SUGGESTION.description);
     expect(screen.queryByTestId("field-evidence-chart-0-caption")).toBeNull();
@@ -2985,14 +2999,18 @@ describe("a card never contradicts itself about what a field holds", () => {
     renderWith();
     await suggestForChart(user, SUGGESTION);
 
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    );
+    await askToAdd(user);
     await user.click(screen.getByTestId("ai-use-description-chart-0"));
     expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
-      /Needs information: Figure Number, Keywords/i
+      /Needs Figure Number, Keywords/i
     );
 
     await user.clear(caption());
     expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
-      /Needs information: Figure Number, Figure Caption, Keywords/i
+      /Needs Figure Number, Figure Caption, Keywords/i
     );
     expectState("not applied");
     // The Use button comes back, because the field is free again.
@@ -3129,9 +3147,8 @@ describe("a card never contradicts itself about what a field holds", () => {
     expect(screen.queryByTestId("ai-applied-chart-0")).toBeNull();
     expect(screen.queryByTestId("ai-panel-chart-0")).toBeNull();
     expect(caption()).toHaveValue("");
-    expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
-      /Needs information: Figure Number, Figure Caption, Keywords/i
-    );
+    // Nothing is claimed about missing fields on a card nobody has asked for.
+    expect(screen.queryByTestId("needs-input-chart-0")).toBeNull();
   }, 30000);
 });
 // A Chart stores exactly ONE image, so the unit a curator decides about is the
@@ -3956,10 +3973,17 @@ describe("typed import dialog ??readable by default", () => {
     expect(
       screen.queryByTestId("field-evidence-chart-0-notebookFile")
     ).toBeNull();
-    // A missing REQUIRED field is said once in the header, and once in that
-    // field's own helper text ??never as a third chip.
+    // A missing REQUIRED field is said on the card, once, and only after
+    // the curator has asked for that card and been refused.
+    expect(screen.queryByTestId("needs-input-chart-0")).toBeNull();
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /add selected figures/i })
+    );
     expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
-      /Needs information/i
+      /Needs /i
     );
     expect(screen.queryByTestId("field-evidence-chart-0-caption")).toBeNull();
   });
@@ -4480,7 +4504,8 @@ describe("an RCC import may not create what a curator could not type", () => {
 
   it("adds a candidate of any kind that already has everything", async () => {
     // The quick path is untouched: a folder that answers every required
-    // question is one tick and one button, with nothing to fill in.
+    // question is one tick and one button, with nothing to fill in and
+    // nothing said about fields.
     axios.post.mockResolvedValue({ data: complete });
     const user = noDelayUser();
     const { addMany } = renderWith();
@@ -4494,10 +4519,6 @@ describe("an RCC import may not create what a curator could not type", () => {
     ];
     for (const [tab, box, id] of kinds) {
       await user.click(screen.getByRole("tab", { name: tab }));
-      // Said before anything is pressed, on every card.
-      expect(screen.getByTestId(`ready-${id}`)).toHaveTextContent(
-        "Ready to add"
-      );
       expect(screen.queryByTestId(`needs-input-${id}`)).toBeNull();
       await user.click(screen.getByRole("checkbox", { name: box }));
     }
@@ -4515,24 +4536,71 @@ describe("an RCC import may not create what a curator could not type", () => {
     });
   });
 
-  it("names the missing fields on the card, before anything is pressed",
+  it("says nothing about missing fields on a folder nobody has asked for",
      async () => {
+    // A folder of proposals opened as a wall of identical warnings, one per
+    // card, about work the curator had not started. The reading was right
+    // and the moment was wrong.
     axios.post.mockResolvedValue({ data: analysis });
     const user = noDelayUser();
     renderWith();
     await openAnalysis(user);
 
-    const cases = [
-      [/charts \(1\)/i, "chart-0",
-       "Needs information: Figure Number, Figure Caption, Keywords"],
-      [/datasets \(1\)/i, "dataset-0", "Needs information: Description"],
-      [/scripts \(1\)/i, "script-0", "Needs information: Description"],
-    ];
-    for (const [tab, id, said] of cases) {
+    for (const [tab, id] of [
+      [/charts \(1\)/i, "chart-0"],
+      [/datasets \(1\)/i, "dataset-0"],
+      [/scripts \(1\)/i, "script-0"],
+      [/tools \(1\)/i, "tool-0"],
+    ]) {
       await user.click(screen.getByRole("tab", { name: tab }));
-      expect(screen.getByTestId(`needs-input-${id}`)).toHaveTextContent(said);
-      expect(screen.queryByTestId(`ready-${id}`)).toBeNull();
+      expect(screen.queryByTestId(`needs-input-${id}`)).toBeNull();
     }
+    expect(screen.queryByTestId("blocked-summary")).toBeNull();
+    // What a card does carry: its name, its kind, its path and its tick.
+    await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
+    expect(
+      screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
+    ).toBeInTheDocument();
+  });
+
+  it("asks only when Add is pressed, and points at the fields", async () => {
+    axios.post.mockResolvedValue({ data: analysis });
+    const user = noDelayUser();
+    const { addMany } = renderWith();
+    await openAnalysis(user);
+
+    // The button is live: a dead button explains nothing.
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    );
+    expect(screen.getByTestId("apply-selected")).toBeEnabled();
+
+    await askToAdd(user);
+    expect(addMany).not.toHaveBeenCalled();
+
+    // One sentence, in a live region, above the button that was pressed.
+    const status = screen.getByTestId("add-status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(within(status).getByTestId("blocked-summary")).toHaveTextContent(
+      "1 selected item needs details before it can be added. Nothing was added."
+    );
+
+    // The detail is on the card, next to the inputs that answer it -- and
+    // the empty required inputs are marked, the optional ones are not.
+    expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
+      "Needs Figure Number, Figure Caption, Keywords"
+    );
+    const errored = (field) =>
+      within(screen.getByTestId(`field-group-chart-0-${field}`))
+        .getByRole("textbox")
+        .getAttribute("aria-invalid");
+    expect(errored("caption")).toBe("true");
+    expect(errored("number")).toBe("true");
+    expect(errored("properties")).toBe("true");
+    // Optional, empty, and not marked.
+    expect(errored("notebookFile")).toBe("false");
+    // The image the folder DID answer is not marked either.
+    expect(errored("imageFile")).toBe("false");
   });
 
   it("refuses the whole batch when one selected item is short a field",
@@ -4573,34 +4641,101 @@ describe("an RCC import may not create what a curator could not type", () => {
     await user.click(
       screen.getByRole("checkbox", { name: /select figure1\.png/i })
     );
-    expect(screen.getByTestId("apply-selected")).toBeEnabled();
-
     await user.click(
       screen.getByRole("checkbox", { name: /select figure2\.png/i })
     );
-    expect(screen.getByTestId("apply-selected")).toBeDisabled();
-
-    // ...and it says why, and about which one, without being pressed.
-    expect(screen.getByTestId("blocked-summary")).toHaveTextContent(
-      "One selected item is not ready to add"
-    );
-    expect(screen.getByTestId("blocked-chart-1")).toHaveTextContent(
-      "figure2.png"
-    );
-    expect(screen.getByTestId("blocked-chart-1")).toHaveTextContent(
-      "needs Figure Caption"
-    );
-    // The ready one is not named as a problem.
-    expect(screen.queryByTestId("blocked-chart-0")).toBeNull();
+    // Live either way: what stops the batch is the answer to pressing it.
+    expect(screen.getByTestId("apply-selected")).toBeEnabled();
 
     // Nothing at all was added -- not even the complete one.
+    await askToAdd(user);
     expect(addMany).not.toHaveBeenCalled();
+    expect(screen.getByTestId("blocked-summary")).toHaveTextContent(
+      "1 selected item needs details before it can be added"
+    );
 
-    // Fill it, and the batch goes together.
+    // ...and it is the incomplete one that is asked, not the ready one.
+    expect(screen.getByTestId("needs-input-chart-1")).toHaveTextContent(
+      "Needs Figure Caption"
+    );
+    expect(screen.queryByTestId("needs-input-chart-0")).toBeNull();
+
+    // Fill it in on the card, and the batch goes together -- once.
     completeRequired();
     await user.click(screen.getByTestId("apply-selected"));
     expect(addMany).toHaveBeenCalledTimes(1);
     expect(addMany.mock.calls[0][1]).toHaveLength(2);
+    // And the refusal is gone with the reason for it.
+    expect(screen.queryByTestId("blocked-summary")).toBeNull();
+  });
+
+  it("adds each candidate exactly once across a refusal and a retry",
+     async () => {
+    // The refused attempt must not leave anything half-added, and the
+    // successful one must not repeat what the first tried to do.
+    axios.post.mockResolvedValue({ data: analysis });
+    const user = noDelayUser();
+    const { addMany } = renderWith();
+    await openAnalysis(user);
+    await user.click(screen.getByRole("tab", { name: /scripts \(1\)/i }));
+    await user.click(
+      screen.getByRole("checkbox", { name: /select plot_vdos\.py/i })
+    );
+
+    await askToAdd(user);
+    await askToAdd(user);
+    expect(addMany).not.toHaveBeenCalled();
+
+    await fill(user, screen.getByLabelText(/^description ?\*?$/i),
+               "Plots the VDOS");
+    await askToAdd(user);
+
+    expect(addMany).toHaveBeenCalledTimes(1);
+    const [kind, records] = addMany.mock.calls[0];
+    expect(kind).toBe("script");
+    expect(records).toHaveLength(1);
+    expect(records[0].readme).toBe("Plots the VDOS");
+  });
+
+  it("holds an AI suggestion to the same contract", async () => {
+    // The AI fills fields; it does not decide what may be added. Its answer
+    // lands in the same draft and is read by the same `missingRequired`.
+    axios.post.mockResolvedValue({ data: analysis });
+    const user = noDelayUser();
+    const { addMany } = renderWith();
+    await openAnalysis(user);
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    );
+    await user.click(screen.getByTestId("enhance-chart-0"));
+    await screen.findByRole("heading", { name: /send .* to gemini\?/i });
+    axios.post.mockResolvedValue({
+      data: {
+        suggestions: {
+          "chart-0": { description: "A density of states plot",
+                       keywords: ["dos"] },
+        },
+      },
+    });
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /i agree to send this evidence to gemini for this request/i,
+      })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /send and get suggestions/i })
+    );
+    await screen.findByTestId("ai-use-description-chart-0");
+    await user.click(screen.getByTestId("ai-use-description-chart-0"));
+    await user.click(screen.getByTestId("ai-use-keywords-chart-0"));
+
+    // Two of the three answered by the model; the figure's NUMBER is not
+    // something a model may invent, and it is still missing.
+    await askToAdd(user);
+    expect(addMany).not.toHaveBeenCalled();
+    expect(screen.getByTestId("needs-input-chart-0")).toHaveTextContent(
+      "Needs Figure Number"
+    );
   });
 
   it("asks for the same fields manual entry asks for, and the same fields " +
@@ -4640,157 +4775,34 @@ describe("an RCC import may not create what a curator could not type", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// THE WAY TO ANSWER WHAT THE FOLDER COULD NOT.
+// A candidate is completed WHERE IT IS.
 //
-// A folder holds a script; it does not hold the sentence describing what the
-// script is for. That sentence is entered where it has always been entered --
-// the type's own Add form -- prefilled with everything RCC did find, so
-// nothing already known is retyped and no second editor is invented.
-describe("completing an import in the type's own form", () => {
-  const DRAFT_KEY = "state";
-
-  const LiveProbe = () => {
-    const { scripts, workflow } = useContext(CuratorContext);
-    return (
-      <div>
-        <span data-testid="live-scripts">
-          {scripts.map((item) => `${item.id}:${item.readme}`).join("|") ||
-            "none"}
-        </span>
-        <span data-testid="live-edges">
-          {((workflow || {}).edges || []).length}
-        </span>
-      </div>
-    );
-  };
-
-  const renderLiveForm = () => {
-    render(
-      <CuratorState draftKey={DRAFT_KEY}>
-        <CuratorHelperState>
-          <SourceTreeState>
-            <AlertContext.Provider value={{ setAlert: jest.fn() }}>
-              <Seed />
-              <FolderAnalysis artifactType="script" />
-              <ScriptsInfoForm hideTrigger />
-              <LiveProbe />
-            </AlertContext.Provider>
-          </SourceTreeState>
-        </CuratorHelperState>
-      </CuratorState>
-    );
-  };
-
-  const openImport = async (user) => {
-    await user.click(
-      screen.getByRole("button", { name: /import scripts from rcc/i })
-    );
-    return screen.findByTestId("needs-input-script-0");
-  };
-
-  const savedDraft = () => JSON.parse(localStorage.getItem(DRAFT_KEY) || "{}");
-
+// There was briefly a second route -- "Complete in form" handed the card to
+// the artifact's own Add form, watched the Curator for a save, and took the
+// card off the list. It worked, and it was a whole parallel flow for a job
+// the card already does: the card's inputs ARE the contract's fields, under
+// the contract's labels, prefilled with whatever the folder answered.
+describe("there is one way to complete a candidate, not two", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    localStorage.clear();
-    // Two different POSTs live under this tree: the folder analysis, and the
-    // file-tree listing the real SourceTree provider fetches for the saved
-    // path. Answering both keeps the harness honest -- the forms are mounted
-    // exactly as the Curator mounts them, providers and all.
-    axios.post.mockImplementation((url) =>
-      Promise.resolve(
-        String(url).includes("analyze-folder")
-          ? { data: analysis }
-          : { data: { files: [], services: [] } }
-      )
-    );
+    axios.post.mockResolvedValue({ data: analysis });
   });
 
-  it("opens the type's own form, carrying what RCC already found",
-     async () => {
+  it("offers no second route out of the card", async () => {
     const user = noDelayUser();
-    renderLiveForm();
-    await openImport(user);
+    renderWith();
+    await openAnalysis(user);
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    );
 
-    await user.click(screen.getByTestId("complete-script-0"));
-
-    // The Add form a curator would have used by hand, not a second editor.
-    const dialog = await screen.findByRole("dialog");
-    // Prefilled: the files the analysis found are already there...
+    expect(screen.queryByTestId("complete-chart-0")).toBeNull();
     expect(
-      within(dialog).getByPlaceholderText(/enter files for the scripts/i)
-    ).toHaveValue("scripts/plot_vdos.py");
-    // ...and the one thing a folder cannot answer is the one thing blank.
+      screen.queryByRole("button", { name: /complete in form/i })
+    ).toBeNull();
+    // What is there instead: the fields themselves, on the card.
     expect(
-      within(dialog).getByPlaceholderText(/enter descriptions for script/i)
-    ).toHaveValue("");
-  });
-
-  it("Cancel leaves no artifact, no edge and no draft", async () => {
-    const user = noDelayUser();
-    renderLiveForm();
-    await openImport(user);
-
-    await user.click(screen.getByTestId("complete-script-0"));
-    const dialog = await screen.findByRole("dialog");
-    // Even after typing: leaving is leaving.
-    fireEvent.change(
-      within(dialog).getByPlaceholderText(/enter descriptions for script/i),
-      { target: { value: "Plots the VDOS" } }
-    );
-    await user.click(within(dialog).getByRole("button", { name: /^cancel$/i }));
-
-    expect(screen.getByTestId("live-scripts")).toHaveTextContent("none");
-    expect(screen.getByTestId("live-edges")).toHaveTextContent("0");
-    expect(savedDraft().scripts || []).toHaveLength(0);
-
-    // And the candidate is still there, still needing the same field, so
-    // the way back in has not been spent.
-    expect(screen.getByTestId("needs-input-script-0")).toHaveTextContent(
-      "Needs information: Description"
-    );
-  });
-
-  it("Save adds exactly one artifact, and the candidate cannot add a second",
-     async () => {
-    const user = noDelayUser();
-    renderLiveForm();
-    await openImport(user);
-
-    await user.click(screen.getByTestId("complete-script-0"));
-    const dialog = await screen.findByRole("dialog");
-    fireEvent.change(
-      within(dialog).getByPlaceholderText(/enter descriptions for script/i),
-      { target: { value: "Plots the VDOS" } }
-    );
-    await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
-
-    // Exactly one, with the id the reducer mints -- indistinguishable from
-    // a hand-entered record.
-    await waitFor(() =>
-      expect(screen.getByTestId("live-scripts")).toHaveTextContent(
-        "s0:Plots the VDOS"
-      )
-    );
-    expect(
-      screen.getByTestId("live-scripts").textContent.split("|")
-    ).toHaveLength(1);
-
-    // The candidate has left the list: it is a real artifact now, and
-    // "Add selected" must not be able to make a second copy of it.
-    await waitFor(() =>
-      expect(screen.queryByTestId("needs-input-script-0")).toBeNull()
-    );
-    expect(screen.queryByRole("checkbox", { name: /select plot_vdos/i }))
-      .toBeNull();
-    expect(screen.getByTestId("apply-selected")).toBeDisabled();
-    // ...and it says where the card went, rather than letting it vanish.
-    expect(screen.getByTestId("completed-summary")).toHaveTextContent(
-      "Added from its own form: plot_vdos.py"
-    );
-    expect(screen.getByTestId("live-scripts")).toHaveTextContent(
-      "s0:Plots the VDOS"
-    );
+      screen.getByTestId("field-group-chart-0-caption")
+    ).toBeInTheDocument();
   });
 });

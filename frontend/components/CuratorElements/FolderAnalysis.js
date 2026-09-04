@@ -27,7 +27,6 @@ import {
 
 import { RegularStyledButton } from "../button";
 import CuratorContext from "../../Context/Curator/curatorContext";
-import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperContext";
 import AlertContext from "../../Context/Alert/alertContext";
 import { buildFileUrl } from "../../Utils/fileServerUrl";
 import {
@@ -362,16 +361,8 @@ const FolderAnalysis = ({
     rccAnalysisCache,
     cacheRccAnalysis,
     collectDraftState,
-    charts,
-    datasets,
-    scripts,
-    tools,
   } = useContext(CuratorContext) || {};
   const { setAlert } = useContext(AlertContext) || {};
-  // The type's own Add form -- the same one manual entry uses -- for the
-  // metadata a folder cannot contain. Nothing new is built here.
-  const helpers = useContext(CuratorHelperContext) || {};
-  const { openForm, setDefault } = helpers;
   const typedGroup = artifactType ? GROUP_BY_TYPE[artifactType] : null;
 
   // Type-specific imports use the saved Curator path. The optional explicit
@@ -386,11 +377,9 @@ const FolderAnalysis = ({
   const [drafts, setDrafts] = useState({});
   const [selected, setSelected] = useState({});
   const [removed, setRemoved] = useState({});
-  // One candidate is with its own Add form right now; and the names of the
-  // ones that came back from it saved, so the list can say where they went
-  // instead of letting a card disappear without explanation.
-  const [handoff, setHandoff] = useState(null);
-  const [completed, setCompleted] = useState([]);
+  // Has an Add been TRIED and refused? Nothing is said about a missing field
+  // until then -- see the note on `blockedSelected` below.
+  const [addAttempted, setAddAttempted] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState({});
   const [editOpen, setEditOpen] = useState({});
   const [showUnclassified, setShowUnclassified] = useState({});
@@ -486,8 +475,7 @@ const FolderAnalysis = ({
     setDrafts({});
     setSelected({});
     setRemoved({});
-    setHandoff(null);
-    setCompleted([]);
+    setAddAttempted(false);
     setDetailsOpen({});
     setEditOpen({});
     setShowUnclassified({});
@@ -524,8 +512,7 @@ const FolderAnalysis = ({
     setChartRoles({});
     setSelected({});
     setRemoved({});
-    setHandoff(null);
-    setCompleted([]);
+    setAddAttempted(false);
     setEditOpen({});
     setDetailsOpen({});
     setAiSuggestions({});
@@ -664,8 +651,14 @@ const FolderAnalysis = ({
     missingFor(candidate).map((field) => labelFor(candidate.kind, field));
 
   // The selected candidates that cannot be added yet, with what each one
-  // still needs. Read by the button, by the explanation under it, and by
-  // apply() -- so they cannot disagree about what is blocked.
+  // still needs. Read by apply(), by the warning it raises and by the cards
+  // it points at, so they cannot disagree about what is blocked.
+  //
+  // WHEN this is SAID is the whole difference. Marking every card the moment
+  // the dialog opened put a warning on work nobody had started: a folder of
+  // twelve figures opened as twelve red badges, and the two the curator
+  // actually wanted looked exactly like the ten they did not. The reading is
+  // the same; it is raised when they press Add, about the items they chose.
   const blockedSelected = selectedCandidates
     .filter((candidate) => !readyToAdd(candidate))
     .map((candidate) => ({
@@ -674,57 +667,16 @@ const FolderAnalysis = ({
       missing: namesOf(candidate),
     }));
 
-  const countFor = (type) =>
-    ({ chart: charts, dataset: datasets, script: scripts, tool: tools }[type] ||
-      []).length;
+  // A candidate is completed WHERE IT IS: the card's own fields, which are
+  // the contract's fields under the contract's labels. There is deliberately
+  // no second route -- an "open it in the Add form" button existed briefly
+  // and was a whole parallel flow (hand over, watch for a save, take the
+  // card off the list) for a job the card already does inline.
+  const blockedIds = new Set(blockedSelected.map((item) => item.id));
 
-  // HANDING ONE CANDIDATE TO ITS OWN FORM.
-  //
-  // A folder can hold a script; it cannot hold the figure number that script
-  // plots. That metadata is entered where it has always been entered -- the
-  // type's Add form -- prefilled with everything RCC did find, so nothing
-  // already known is retyped.
-  //
-  // `toRecord` deliberately carries no id, so the form takes its `add`
-  // branch and mints one: exactly one artifact, indistinguishable from a
-  // hand-entered one. Cancel closes that form and writes nothing.
-  const completeInForm = (candidate) => {
-    if (!openForm || !setDefault) return;
-    setHandoff({
-      id: candidate.id,
-      type: candidate.kind,
-      name: labelOf(candidate).primary,
-      before: countFor(candidate.kind),
-    });
-    setDefault(candidate.kind, toRecord(candidate.kind, drafts[candidate.id]));
-    openForm(candidate.kind);
-  };
-
-  // Did that form save, or was it cancelled?
-  //
-  // The form owns the answer and reports it the only way it can: a new
-  // artifact appears in the Curator. One more of that type means saved, so
-  // the candidate leaves the list -- otherwise "Add selected" could add a
-  // second copy of an artifact that already exists. The form closing with
-  // the count unchanged means cancelled, and the candidate stays exactly as
-  // it was, still selectable, still needing the same fields.
-  useEffect(() => {
-    if (!handoff) return;
-    if (countFor(handoff.type) > handoff.before) {
-      setRemoved((current) => ({ ...current, [handoff.id]: true }));
-      setSelected((current) => {
-        const next = { ...current };
-        delete next[handoff.id];
-        return next;
-      });
-      setCompleted((current) => current.concat(handoff.name));
-      setHandoff(null);
-      return;
-    }
-    const stillOpen = (helpers[`${handoff.type}sHelper`] || {}).open;
-    if (!stillOpen) setHandoff(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [charts, datasets, scripts, tools, handoff, helpers]);
+  // Is this card being asked for something, right now?
+  const isProblem = (candidate) =>
+    addAttempted && blockedIds.has(candidate.id);
 
   // Everything the AI action may see, built here so the allowlist is visible:
   // the SELECTED candidate's id/kind, its display name, its RELATIVE paths,
@@ -842,10 +794,35 @@ const FolderAnalysis = ({
     // ALL OR NOTHING. Adding the ready ones and silently leaving the rest
     // would be the worst of the three outcomes: the curator asked for a
     // batch, gets a smaller one, and has to work out which folder is
-    // missing from a list they have already scrolled past. The button is
-    // disabled for the same reason; this is the guard behind it, because a
-    // disabled button is a hint and not a rule.
-    if (blockedSelected.length) return;
+    // missing from a list they have already scrolled past.
+    //
+    // Pressing Add is also the MOMENT the missing fields are named. Until
+    // now the cards have said nothing about them, so this is where the
+    // question gets asked and where it gets answered: the warning above the
+    // button says how many, each blocked card says which fields, and the
+    // empty inputs on those cards turn red.
+    if (blockedSelected.length) {
+      setAddAttempted(true);
+      // Open the blocked cards, and put the curator on the tab the first of
+      // them is on -- being told an item is incomplete while looking at a
+      // different kind is being told about something you cannot see.
+      setEditOpen((current) => {
+        const next = { ...current };
+        blockedSelected.forEach((item) => {
+          next[item.id] = true;
+        });
+        return next;
+      });
+      if (!typedGroup) {
+        const first = blockedSelected[0].id;
+        const index = GROUPS.findIndex(({ key, type }) =>
+          type ? candidatesFor(key).some((one) => one.id === first) : false
+        );
+        if (index >= 0) setTab(index);
+      }
+      return;
+    }
+    setAddAttempted(false);
     let total = 0;
     (typedGroup ? [typedGroup] : GROUPS).forEach(({ key, type }) => {
       if (!type) return;
@@ -1277,11 +1254,14 @@ const FolderAnalysis = ({
     // per-field special case. Cheap: a handful of string conversions.
     const original = toDraft(candidate.kind, candidate.proposal);
     const needs = missingRequired(candidate.kind, draft);
+    // Only after this candidate has been selected, submitted and refused.
+    const problem = isProblem(candidate);
     const { primary, secondary, full } = labelOf(candidate);
     const isSelected = Boolean(selected[candidate.id]);
     // Fields appear once the candidate matters: it is selected, or the
     // curator explicitly opened it. An unselected card stays a single line.
-    const fieldsVisible = isSelected || Boolean(editOpen[candidate.id]);
+    const fieldsVisible =
+      isSelected || Boolean(editOpen[candidate.id]) || problem;
 
     return (
       <Box
@@ -1343,16 +1323,22 @@ const FolderAnalysis = ({
                 Evidence is untouched behind the card: it still orders
                 candidates, bounds what may be sent to the AI, and decides
                 when the AI abstains. */}
-            {/* WHERE THIS CANDIDATE STANDS, said in words rather than
-                counted. "3 required fields missing" was true and useless:
-                it told a curator to go looking. The fields have names, and
-                the names are what they need. */}
-            {needs.length > 0 ? (
+            {/* WHAT THIS CARD STILL NEEDS -- and only once an Add has
+                actually been refused for it.
+
+                Saying it up front put a warning on work nobody had started.
+                A folder of twelve figures opened as twelve identical
+                warnings, none of which the curator had asked for, and the
+                two they wanted were indistinguishable from the ten they did
+                not. The names of the fields are exactly what they need to
+                see; the moment they need to see them is when they have asked
+                for these items and been told no. */}
+            {problem && (
               <Chip
                 size="small"
-                color="warning"
+                color="error"
                 variant="outlined"
-                label={`Needs information: ${needs
+                label={`Needs ${needs
                   .map((field) => labelFor(candidate.kind, field))
                   .join(", ")}`}
                 data-testid={`needs-input-${candidate.id}`}
@@ -1365,14 +1351,6 @@ const FolderAnalysis = ({
                     py: 0.25,
                   },
                 }}
-              />
-            ) : (
-              <Chip
-                size="small"
-                color="success"
-                variant="outlined"
-                label="Ready to add"
-                data-testid={`ready-${candidate.id}`}
               />
             )}
           </Box>
@@ -1394,16 +1372,6 @@ const FolderAnalysis = ({
                 data-testid={`enhance-${candidate.id}`}
               >
                 {aiLoading[candidate.id] ? "Asking AI…" : "Enhance with AI"}
-              </Button>
-            )}
-            {needs.length > 0 && openForm && setDefault && (
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => completeInForm(candidate)}
-                data-testid={`complete-${candidate.id}`}
-              >
-                Complete in form
               </Button>
             )}
             <Button size="small" onClick={() => toggle(setDetailsOpen, candidate.id)}>
@@ -1517,6 +1485,10 @@ const FolderAnalysis = ({
                     fullWidth
                     size="small"
                     label={labelFor(candidate.kind, field)}
+                    // Red on the label and the box, on exactly the fields
+                    // that are empty and were asked for -- so the card's
+                    // chip and the inputs point at the same thing.
+                    error={problem && needs.includes(field)}
                     // MUI renders the asterisk and sets aria-required, so the
                     // marker is real semantics rather than a character glued
                     // onto the label text.
@@ -2234,57 +2206,44 @@ const FolderAnalysis = ({
             justifyContent: "flex-end",
           }}
         >
-          {completed.length > 0 && (
-            <Alert
-              severity="success"
-              variant="outlined"
-              data-testid="completed-summary"
-              sx={{ width: "100%", minWidth: 0, py: 0.5 }}
-            >
-              <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-                {`Added from its own form: ${completed.join(", ")}. `}
-                {completed.length === 1 ? "It is" : "They are"} off this list
-                now, so nothing here can add a second copy.
-              </Typography>
-            </Alert>
-          )}
-          {blockedSelected.length > 0 && (
-            <Alert
-              severity="warning"
-              variant="outlined"
-              data-testid="blocked-summary"
-              sx={{ width: "100%", minWidth: 0, py: 0.5 }}
-            >
-              <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-                {blockedSelected.length === 1
-                  ? "One selected item is not ready to add:"
-                  : `${blockedSelected.length} selected items are not ready ` +
-                    "to add:"}
-              </Typography>
-              {blockedSelected.map((item) => (
-                <Typography
-                  key={item.id}
-                  variant="body2"
-                  data-testid={`blocked-${item.id}`}
-                  sx={{ overflowWrap: "anywhere" }}
-                >
-                  {`${item.name} — needs ${item.missing.join(", ")}`}
+          {/* ONE SENTENCE, and only after an Add was refused. What is
+              missing from WHICH item is written on the item, next to the
+              inputs that fix it -- repeating all of it down here as well
+              would put the answer far from the fields it belongs to and
+              make the list of blocked names the longest thing on screen.
+
+              The region is live, so a curator who pressed Add and is not
+              looking at the button is told. */}
+          <Box
+            aria-live="polite"
+            sx={{ width: "100%", minWidth: 0 }}
+            data-testid="add-status"
+          >
+            {addAttempted && blockedSelected.length > 0 && (
+              <Alert
+                severity="warning"
+                variant="outlined"
+                data-testid="blocked-summary"
+                sx={{ minWidth: 0, py: 0.5 }}
+              >
+                <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+                  {`${blockedSelected.length} selected ${
+                    blockedSelected.length === 1 ? "item needs" : "items need"
+                  } details before ${
+                    blockedSelected.length === 1 ? "it" : "they"
+                  } can be added. Nothing was added.`}
                 </Typography>
-              ))}
-              <Typography variant="caption" display="block">
-                Fill these in on the card, or use “Complete in form”. Nothing
-                is added until every selected item is ready.
-              </Typography>
-            </Alert>
-          )}
+              </Alert>
+            )}
+          </Box>
           <Button onClick={close}>Cancel</Button>
+          {/* NOT disabled for a missing field. A button that is dead on
+              arrival explains nothing: the curator is left comparing cards
+              to work out which one it is waiting for. It is pressable, and
+              pressing it says what is missing and where. */}
           <Button
             variant="contained"
-            disabled={
-              selectedCount === 0 ||
-              invalidStructure ||
-              blockedSelected.length > 0
-            }
+            disabled={selectedCount === 0 || invalidStructure}
             onClick={apply}
             data-testid="apply-selected"
           >
