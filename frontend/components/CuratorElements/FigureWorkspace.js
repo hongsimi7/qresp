@@ -23,10 +23,13 @@ import {
   DialogContent,
   DialogTitle,
   FormControlLabel,
+  Grid,
   Menu,
   ToggleButton,
   ToggleButtonGroup,
   MenuItem,
+  TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 
@@ -46,9 +49,21 @@ import SpotlightContext from "../../Context/Spotlight/spotlightContext";
 import { displayUrl, noteFor } from "../../Utils/externalData";
 import { artifactLabel } from "../../Utils/artifactLabel";
 import {
-  codeLinkKey,
-  codeSuggestions,
+  fieldsFor,
+  labelFor,
+  missingRequired,
+  toDraft,
+  toRecord,
+} from "../../Utils/artifactFields";
+import {
   describeEvidence,
+  detectionKey,
+  detectionsFor,
+  groupDetections,
+  GROUP_LABEL,
+  ownerOf,
+  proposalSeed,
+  sourceOf,
 } from "../../Utils/codeSuggestions";
 import {
   CHART,
@@ -499,10 +514,284 @@ const LinkDialog = ({
    * to it. No hierarchy is invented, so none can be wrong.
    */
 
+/**
+ * WHAT ONE SCRIPT'S CODE SAYS, put to the curator.
+ *
+ * AT MODULE SCOPE, like the other dialogs here and for the same measured
+ * reason: declared inside FigureWorkspace it would be a new component type on
+ * every render, and React would discard and rebuild the whole modal -- every
+ * checkbox, every input -- on each keystroke.
+ *
+ * It creates nothing. Ticking a box chooses; typing fills a draft; only
+ * "Add selected suggestions" writes anything, and closing writes nothing at
+ * all.
+ */
+const DetectDialog = ({
+  scriptId,
+  scriptName,
+  sourceFile,
+  detections,
+  skipped,
+  picked,
+  tried,
+  problems,
+  chosen,
+  draftFor,
+  onToggle,
+  onField,
+  onApply,
+  onClose,
+  labelOf,
+}) => {
+  if (!scriptId) return null;
+  const groups = groupDetections(detections);
+  const blocked = new Set(problems.map((entry) => entry.key));
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      maxWidth="sm"
+      fullWidth
+      data-testid="fw-detect-dialog"
+    >
+      <DialogTitle sx={{ pb: 1 }}>
+        <Typography
+          variant="h6"
+          component="div"
+          sx={{ overflowWrap: "anywhere" }}
+        >
+          {`Detected from ${sourceFile || scriptName}`}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" component="div">
+          Read out of this script&rsquo;s own source. Nothing is created until
+          you add it.
+        </Typography>
+      </DialogTitle>
+      <DialogContent dividers sx={{ minWidth: 0 }}>
+        {/* WHAT WAS NOT READ. The same neutral diagnostic the import dialog
+            shows, because "nothing was detected" means something different
+            when a source could not be opened. */}
+        {skipped.length > 0 && (
+          <Alert
+            severity="info"
+            variant="outlined"
+            data-testid="fw-detect-skipped"
+            sx={{ mb: 1.5, py: 0.5 }}
+          >
+            <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+              Some scripts were not analyzed due to file size or unreadable
+              source.
+            </Typography>
+          </Alert>
+        )}
+
+        {groups.length === 0 ? (
+          <Typography
+            variant="body2"
+            data-testid="fw-detect-empty"
+            sx={{ overflowWrap: "anywhere" }}
+          >
+            No exact dataset or figure paths were detected in this script.
+          </Typography>
+        ) : (
+          groups.map(({ group, label, items }) => (
+            <Box key={group} sx={{ mb: 2, minWidth: 0 }}>
+              <Typography variant="subtitle2">{label}</Typography>
+              <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+                {items.map((item) => {
+                  const key = detectionKey(item);
+                  const draft = draftFor(item);
+                  const needs = item.existingId
+                    ? []
+                    : missingRequired(item.kind, draft);
+                  const showErrors = tried && blocked.has(key);
+                  const kindWord = item.kind === "chart" ? "Figure" : "Dataset";
+                  return (
+                    <Box
+                      component="li"
+                      key={key}
+                      data-testid={`fw-detect-item-${key}`}
+                      sx={{ mb: 1.5, minWidth: 0 }}
+                    >
+                      <FormControlLabel
+                        sx={{ m: 0, alignItems: "flex-start", width: "100%" }}
+                        control={
+                          <Checkbox
+                            size="small"
+                            disableRipple
+                            checked={Boolean(picked[key])}
+                            onChange={() => onToggle(key)}
+                            slotProps={{
+                              input: { "data-testid": `fw-detect-pick-${key}` },
+                            }}
+                            sx={{ pt: 0.25 }}
+                          />
+                        }
+                        label={
+                          <Box sx={{ minWidth: 0 }}>
+                            <Box
+                              sx={{
+                                display: "flex",
+                                flexWrap: "wrap",
+                                alignItems: "center",
+                                gap: 0.75,
+                                minWidth: 0,
+                              }}
+                            >
+                              {/* EXISTING or PROPOSED -- the difference
+                                  between adding an arrow and creating a
+                                  record, said before either happens. */}
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                color={item.existingId ? "default" : "primary"}
+                                label={`${
+                                  item.existingId ? "Existing" : "Proposed"
+                                } ${kindWord}`}
+                                data-testid={`fw-detect-state-${key}`}
+                              />
+                              <Typography
+                                variant="body2"
+                                sx={{ overflowWrap: "anywhere", minWidth: 0 }}
+                              >
+                                {item.existingId
+                                  ? labelOf(item.existingId)
+                                  : item.name}
+                              </Typography>
+                            </Box>
+                            {/* THE ARROW AS IT WILL BE STORED. */}
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              component="div"
+                              data-testid={`fw-detect-arrow-${key}`}
+                              sx={{ display: "block", overflowWrap: "anywhere" }}
+                            >
+                              {item.direction === "into"
+                                ? `${kindWord} → Script (${item.type})`
+                                : `Script → ${kindWord} (${item.type})`}
+                            </Typography>
+                            {/* THE PATH, THE EVIDENCE, AND THAT THE FILE IS
+                                REALLY THERE. A path that the folder scan did
+                                not find never becomes a suggestion at all,
+                                so this says so rather than leaving a curator
+                                to wonder. */}
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              component="div"
+                              data-testid={`fw-detect-evidence-${key}`}
+                              sx={{
+                                display: "block",
+                                overflowWrap: "anywhere",
+                                fontFamily: "monospace",
+                              }}
+                            >
+                              {`${item.path} · found in the scanned folder`}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              component="div"
+                              data-testid={`fw-detect-source-${key}`}
+                              sx={{
+                                display: "block",
+                                overflowWrap: "anywhere",
+                                fontFamily: "monospace",
+                              }}
+                            >
+                              {describeEvidence(item.evidence)}
+                            </Typography>
+                          </Box>
+                        }
+                      />
+                      {/* A record that does not exist yet needs what every
+                          record of its kind needs. Same fields, same labels,
+                          same contract as typing it in by hand. */}
+                      {!item.existingId && picked[key] && (
+                        <Grid
+                          container
+                          rowSpacing={1.5}
+                          columnSpacing={1.5}
+                          sx={{ mt: 0.5, pl: 3.5 }}
+                          data-testid={`fw-detect-fields-${key}`}
+                        >
+                          {fieldsFor(item.kind).map(({ key: field, required }) => (
+                            <Grid
+                              key={field}
+                              size={{ xs: 12, sm: 6 }}
+                              sx={{ minWidth: 0 }}
+                            >
+                              <TextField
+                                fullWidth
+                                size="small"
+                                required={required}
+                                label={labelFor(item.kind, field)}
+                                value={draft[field] || ""}
+                                error={showErrors && needs.includes(field)}
+                                onChange={(event) =>
+                                  onField(item, field, event.target.value)
+                                }
+                                slotProps={{
+                                  htmlInput: {
+                                    "data-testid": `fw-detect-field-${key}-${field}`,
+                                  },
+                                }}
+                              />
+                            </Grid>
+                          ))}
+                        </Grid>
+                      )}
+                    </Box>
+                  );
+                })}
+              </Box>
+            </Box>
+          ))
+        )}
+      </DialogContent>
+      <DialogActions sx={{ flexWrap: "wrap", gap: 1 }}>
+        {/* ONE SENTENCE, and only once an add has been refused. What is
+            missing from which proposal is marked on its own fields. */}
+        <Box aria-live="polite" sx={{ width: "100%", minWidth: 0 }}>
+          {tried && problems.length > 0 && (
+            <Alert
+              severity="warning"
+              variant="outlined"
+              data-testid="fw-detect-blocked"
+              sx={{ py: 0.5 }}
+            >
+              <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+                {`${problems.length} selected ${
+                  problems.length === 1 ? "item needs" : "items need"
+                } details before ${
+                  problems.length === 1 ? "it" : "they"
+                } can be added. Nothing was added.`}
+              </Typography>
+            </Alert>
+          )}
+        </Box>
+        <Button onClick={onClose} data-testid="fw-detect-cancel">
+          Cancel
+        </Button>
+        <RegularStyledButton
+          onClick={onApply}
+          disabled={chosen === 0}
+          data-testid="fw-detect-apply"
+        >
+          Add selected suggestions
+        </RegularStyledButton>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
+
 const FigureWorkspace = () => {
   const {
     charts, scripts, datasets, tools, heads,
-    fileServerPath, workflow, addEdge, unlink, del,
+    fileServerPath, workflow, addEdge, addMany, unlink, del,
     // The last folder analysis, for the file I/O its scripts stated. Read
     // only; this never triggers a scan of its own.
     rccAnalysisCache,
@@ -514,8 +803,12 @@ const FigureWorkspace = () => {
   // Only the rows do, one level down -- see SpotlightContext.
 
   const [notice, setNotice] = useState("");
-  // Code-detected relationships the curator has waved away, this session.
-  const [ignoredCode, setIgnoredCode] = useState({});
+  // WHICH SCRIPT'S CODE IS BEING REVIEWED, and what the curator has chosen
+  // in it. All of it is view state: nothing is created until they apply.
+  const [detectFor, setDetectFor] = useState("");
+  const [detectPicked, setDetectPicked] = useState({});
+  const [detectDrafts, setDetectDrafts] = useState({});
+  const [detectTried, setDetectTried] = useState(false);
   // Which row's "Add new" / overflow menu is open, and which shared node was
   // last jumped to from a reference row.
   // ONE WAY IN, asking one question at a time.
@@ -552,6 +845,9 @@ const FigureWorkspace = () => {
   // Opening a row is the rows' business (see RowOpenState). The workspace
   // reaches it only to open the row a curator has just finished working on.
   const rowsApi = useRef(null);
+  // Proposed artifacts that have been asked for and whose edges are waiting
+  // on the reducer to mint their ids.
+  const awaiting = useRef(null);
   const revealRow = (id) => {
     if (id && rowsApi.current) rowsApi.current.reveal(id);
   };
@@ -606,24 +902,85 @@ const FigureWorkspace = () => {
   // WHAT THE SCRIPTS THEMSELVES SAY.
   //
   // The last folder analysis reported the file reads and writes written in
-  // this folder's own Python and notebooks -- parsed, never run, and never
-  // sent anywhere. Here each fact is matched against the artifacts actually
-  // in the draft: a suggestion exists only when the path in the code is
-  // exactly a path an artifact stores, at both ends.
-  //
-  // Derived on every render from the analysis and the draft, so accepting
-  // one, unlinking it, or editing an artifact's files is reflected without
-  // anything being stored.
-  const detected = useMemo(
-    () =>
-      codeSuggestions(
-        ((rccAnalysisCache || {}).data || {}).code_links || [],
-        byId,
-        edges
-      ).filter((item) => !ignoredCode[codeLinkKey(item)]),
+  // this folder's own Python and notebooks -- parsed, never run, never sent
+  // anywhere. Everything below is derived from that and from the draft, so
+  // adding an artifact or an edge is reflected without anything being
+  // stored about the suggestions themselves.
+  const analysisData = (rccAnalysisCache || {}).data || {};
+  const codeLinks = analysisData.code_links || [];
+  const codeSkipped = (analysisData.code_scan || {}).skipped || [];
+
+  // Whether THIS script can be looked at, and why not when it cannot. Two
+  // different answers, because they need two different things done about
+  // them: run an import, or accept that this script is not Python.
+  const detectableReason = (id) => {
+    if (prefixOf(id) !== SCRIPT) return "";
+    if (!sourceOf(byId[id])) {
+      return "No supported RCC source file is available for this script.";
+    }
+    if (!rccAnalysisCache || !rccAnalysisCache.data) {
+      return "Import from RCC first, so this script's source has been read.";
+    }
+    return "";
+  };
+
+  const detections = useMemo(
+    () => (detectFor ? detectionsFor(codeLinks, detectFor, byId, edges) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rccAnalysisCache, byId, edges, ignoredCode]
+    [detectFor, codeLinks, byId, edges]
   );
+
+  const openDetect = (id) => {
+    setDetectFor(id);
+    setDetectPicked({});
+    setDetectDrafts({});
+    setDetectTried(false);
+  };
+
+  const closeDetect = () => {
+    // Cancel is cancel: nothing was written on the way in, and nothing is
+    // written on the way out.
+    setDetectFor("");
+    setDetectPicked({});
+    setDetectDrafts({});
+    setDetectTried(false);
+  };
+
+  const toggleDetection = (key) =>
+    setDetectPicked((was) => ({ ...was, [key]: !was[key] }));
+
+  const detectionDraft = (item) => {
+    const key = detectionKey(item);
+    const stored = detectDrafts[key];
+    if (stored) return stored;
+    // Seeded from what the code already answered: the image file, or the
+    // data file. Everything else is the curator's to fill in.
+    return { ...toDraft(item.kind, {}), ...proposalSeed(item) };
+  };
+
+  const setDetectionField = (item, field, value) => {
+    const key = detectionKey(item);
+    const current = detectionDraft(item);
+    setDetectDrafts((was) => ({
+      ...was,
+      [key]: { ...current, [field]: value },
+    }));
+  };
+
+  const chosenDetections = detections.filter(
+    (item) => detectPicked[detectionKey(item)]
+  );
+
+  // A chosen proposal that cannot be made yet, and what it still needs. The
+  // SAME contract manual entry and RCC import are held to.
+  const detectionProblems = chosenDetections
+    .filter((item) => !item.existingId)
+    .map((item) => ({
+      key: detectionKey(item),
+      name: item.name,
+      missing: missingRequired(item.kind, detectionDraft(item)),
+    }))
+    .filter((entry) => entry.missing.length > 0);
 
   // THE POST-SAVE LINK.
   //
@@ -728,30 +1085,104 @@ const FigureWorkspace = () => {
    * may have made the same connection by hand, or made one that turns this
    * into a loop.
    */
-  const acceptDetected = (item) => {
+  /**
+   * Take what the curator ticked.
+   *
+   * ALL OR NOTHING, like every other add in this Curator: if a proposed
+   * artifact is short a required field, nothing at all is created -- not the
+   * complete ones, not the edges to artifacts that already exist. A batch
+   * that half-lands is the worst outcome, because what is missing from it is
+   * exactly what the curator has stopped looking at.
+   *
+   * Artifacts first, then their edges. A new artifact's id is minted by the
+   * reducer, so the edge to it cannot be written until it exists; `awaiting`
+   * holds the plan and the effect below completes it from the real record.
+   */
+  const applyDetections = () => {
     setNotice("");
-    const edge = item.edge;
-    if (hasEdge(edges, edge.from, edge.to)) return;
-    const problem = edgeProblem(edge, knownIds, edges);
-    if (problem) {
-      setNotice(problem);
+    if (!chosenDetections.length) return;
+    if (detectionProblems.length) {
+      setDetectTried(true);
       return;
     }
-    if (closesLoop(edges, edge)) {
-      // The existing question, asked the existing way, and answered onto the
-      // edge as `feedback` if they say yes.
-      setLoopAsk({ safe: [], loops: [edge] });
-      return;
-    }
-    applyEdges([edge]);
-    revealRow(edge.from);
-  };
 
-  const dismissDetected = (item) =>
-    setIgnoredCode((was) => ({ ...was, [codeLinkKey(item)]: true }));
+    // Edges to artifacts that are already here. These go through the same
+    // guards as every manual link.
+    const ready = chosenDetections
+      .filter((item) => item.existingId && item.edge)
+      .map((item) => item.edge)
+      .filter((edge) => !hasEdge(edges, edge.from, edge.to))
+      .filter((edge) => !edgeProblem(edge, knownIds, edges));
+
+    // And the ones whose other end does not exist yet.
+    const proposals = chosenDetections.filter((item) => !item.existingId);
+    const plan = [];
+    ["chart", "dataset"].forEach((type) => {
+      const mine = proposals.filter((item) => item.kind === type);
+      if (!mine.length) return;
+      const records = mine.map((item) =>
+        toRecord(type, detectionDraft(item)));
+      mine.forEach((item, index) => {
+        plan.push({
+          type,
+          // How the new artifact will be recognised once the reducer has
+          // given it an id: by the file it was made from.
+          path: item.path,
+          direction: item.direction,
+          edgeType: item.type,
+          other: detectFor,
+        });
+      });
+      addMany(type, records);
+    });
+
+    const running = edges.slice();
+    const safe = [];
+    const loops = [];
+    ready.forEach((edge) => {
+      if (closesLoop(running, edge)) loops.push(edge);
+      else safe.push(edge);
+      running.push(edge);
+    });
+
+    if (plan.length) awaiting.current = plan;
+    if (safe.length) applyEdges(safe);
+    // A brand-new artifact has no other edges, so it cannot close a loop.
+    // Only the arrows to things already in the graph can, and they are asked
+    // about exactly the way every other path asks.
+    if (loops.length) setLoopAsk({ safe: [], loops });
+    revealRow(detectFor);
+    closeDetect();
+  };
 
   const dismissSuggestion = (item) =>
     setDismissed((was) => ({ ...was, [suggestionKey(item)]: true }));
+
+  // THE OTHER HALF OF A PROPOSAL. The artifacts asked for above now exist
+  // and have ids; each is found by the file it was made from -- the same
+  // exact-path match that produced the suggestion -- and given its arrow.
+  useEffect(() => {
+    const plan = awaiting.current;
+    if (!plan || !plan.length) return;
+    const still = [];
+    const made = [];
+    plan.forEach((entry) => {
+      const id = ownerOf(entry.path, byId,
+                         [entry.type === "chart" ? CHART : DATASET]);
+      if (!id) {
+        still.push(entry);
+        return;
+      }
+      const edge =
+        entry.direction === "into"
+          ? { from: id, to: entry.other, type: entry.edgeType }
+          : { from: entry.other, to: id, type: entry.edgeType };
+      if (!hasEdge(edges, edge.from, edge.to)) made.push(edge);
+    });
+    awaiting.current = still.length ? still : null;
+    if (made.length) applyEdges(made);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [charts, scripts, datasets, tools, heads]);
 
   const incoming = (id) =>
     edges.map(fromStoredEdge).filter((edge) => edge.to === id);
@@ -1126,9 +1557,14 @@ const FigureWorkspace = () => {
       <Box
         sx={{
           display: "flex",
-          flexShrink: 0,
           alignItems: "center",
           flexWrap: "wrap",
+          // The group WRAPS rather than holding its full width. It used to
+          // refuse to shrink, so its natural width was every action on one
+          // line -- fine with three, 29px past the edge of a 390px screen
+          // with four. Allowed to shrink, the buttons wrap onto the next
+          // line instead of pushing the page sideways.
+          minWidth: 0,
         }}
         data-testid={`fw-actions-${id}`}
       >
@@ -1146,6 +1582,23 @@ const FigureWorkspace = () => {
         >
           Add or link
         </RowAction>
+        {/* WHAT THIS SCRIPT'S OWN CODE SAYS. Scripts only: a Dataset does
+            not read files, and a Tool has no source here to read. */}
+        {prefixOf(id) === SCRIPT && (
+          <Tooltip title={detectableReason(id)}>
+            {/* A disabled button fires no events, so the span is what
+                carries the tooltip explaining why. */}
+            <Box component="span" sx={{ display: "inline-flex" }}>
+              <RowAction
+                onClick={() => openDetect(id)}
+                disabled={Boolean(detectableReason(id))}
+                data-testid={`fw-detect-${id}`}
+              >
+                Detect data and figures
+              </RowAction>
+            </Box>
+          </Tooltip>
+        )}
         <RowAction
           onClick={() => editArtifact(id)}
           aria-label={`Edit ${label(id)}`}
@@ -1733,107 +2186,6 @@ const FigureWorkspace = () => {
         </Alert>
       ) : null}
 
-      {/* WHAT THE SCRIPTS SAY, when they say anything.
-          Rendered only when there is something to show: an empty panel
-          announcing that nothing was found is a thing to read and dismiss
-          every time the section is opened. */}
-      {detected.length > 0 && (
-        <Box
-          data-testid="fw-detected"
-          sx={{
-            mb: 2,
-            p: 1.5,
-            minWidth: 0,
-            border: 1,
-            borderColor: "divider",
-            borderRadius: 1,
-          }}
-        >
-          <Typography variant="subtitle2">Detected from code</Typography>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            display="block"
-            sx={{ mb: 1 }}
-          >
-            Read out of your scripts&rsquo; own source: each one below is a
-            file path written in the code. Nothing is connected until you say
-            so.
-          </Typography>
-          <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
-            {detected.map((item) => (
-              <Box
-                component="li"
-                key={codeLinkKey(item)}
-                data-testid={`fw-detected-${item.edge.from}-${item.edge.to}`}
-                sx={{ mb: 1, minWidth: 0 }}
-              >
-                {/* THE ARROW AS IT WILL BE STORED, in that order, so the
-                    direction a curator approves is the direction the record
-                    keeps. */}
-                <Box
-                  sx={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    alignItems: "center",
-                    gap: 0.75,
-                    minWidth: 0,
-                  }}
-                >
-                  <KindChip id={item.edge.from} />
-                  <Typography
-                    variant="body2"
-                    sx={{ overflowWrap: "anywhere", minWidth: 0 }}
-                  >
-                    {label(item.edge.from)}
-                  </Typography>
-                  <Typography variant="body2" aria-hidden="true">
-                    →
-                  </Typography>
-                  <KindChip id={item.edge.to} />
-                  <Typography
-                    variant="body2"
-                    sx={{ overflowWrap: "anywhere", minWidth: 0 }}
-                  >
-                    {label(item.edge.to)}
-                  </Typography>
-                  <RowAction
-                    onClick={() => acceptDetected(item)}
-                    aria-label={`Connect ${label(item.edge.from)} to ${label(
-                      item.edge.to
-                    )}`}
-                    data-testid={`fw-detected-connect-${item.edge.from}-${item.edge.to}`}
-                  >
-                    Connect
-                  </RowAction>
-                  <RowAction
-                    onClick={() => dismissDetected(item)}
-                    aria-label={`Dismiss ${label(item.edge.from)} to ${label(
-                      item.edge.to
-                    )}`}
-                    data-testid={`fw-detected-dismiss-${item.edge.from}-${item.edge.to}`}
-                  >
-                    Dismiss
-                  </RowAction>
-                </Box>
-                {/* THE EVIDENCE: which file, which line or cell, and the
-                    path exactly as it appears there. A curator can open the
-                    script and check it in one look. */}
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  display="block"
-                  data-testid={`fw-detected-evidence-${item.edge.from}-${item.edge.to}`}
-                  sx={{ overflowWrap: "anywhere", fontFamily: "monospace" }}
-                >
-                  {describeEvidence(item.evidence)}
-                </Typography>
-              </Box>
-            ))}
-          </Box>
-        </Box>
-      )}
-
       {/* THE PAPER'S RESOURCES, in one flat list.
           Sorted by kind so the same thing is always in the same place, and
           not arranged by who produced what -- that is the workflow, and the
@@ -1858,6 +2210,25 @@ const FigureWorkspace = () => {
           from an RCC folder.
         </Typography>
       )}
+
+      <DetectDialog
+        scriptId={detectFor}
+        scriptName={detectFor ? label(detectFor) : ""}
+        sourceFile={detectFor ? sourceOf(byId[detectFor]) : ""}
+        detections={detections}
+        skipped={codeSkipped}
+        picked={detectPicked}
+        drafts={detectDrafts}
+        tried={detectTried}
+        problems={detectionProblems}
+        chosen={chosenDetections.length}
+        draftFor={detectionDraft}
+        onToggle={toggleDetection}
+        onField={setDetectionField}
+        onApply={applyDetections}
+        onClose={closeDetect}
+        labelOf={label}
+      />
 
       <LinkDialog
         id={connectFor}

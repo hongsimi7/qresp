@@ -7,7 +7,7 @@
  * claims: the figure is the root, and every form opened here is the EXISTING
  * form on the EXISTING model.
  */
-import { useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import {
   cleanup,
   fireEvent,
@@ -71,6 +71,7 @@ jest.mock("../components/CuratorElements/FolderAnalysis", () => {
 import CuratorContext from "../Context/Curator/curatorContext";
 import CuratorHelperContext from "../Context/CuratorHelpers/curatorHelperContext";
 import SpotlightState from "../Context/Spotlight/SpotlightState";
+import CuratorState from "../Context/Curator/CuratorState";
 import FigureWorkspace from "../components/CuratorElements/FigureWorkspace";
 
 const build = (overrides = {}) => ({
@@ -81,6 +82,7 @@ const build = (overrides = {}) => ({
   heads: [],
   workflow: { nodes: [], edges: [] },
   addEdge: jest.fn(),
+  addMany: jest.fn(),
   unlink: jest.fn(),
   del: jest.fn(),
   ...overrides,
@@ -2161,194 +2163,462 @@ describe("a row is compact until it is asked", () => {
   });
 });
 
-// WHAT THE SCRIPTS THEMSELVES SAY.
+// WHAT ONE SCRIPT SAYS ABOUT ITS OWN FILES.
 //
-// The backend parses each script and notebook and reports the file reads and
-// writes written in them. A suggestion here is a line of code, not a
-// resemblance between two names, and it is never acted on until a curator
-// presses Connect.
-describe("relationships detected in the code", () => {
+// A folder-level list of everything detected everywhere was a thing to go
+// and find. The question belongs where a curator already is: on the row of
+// the script they are looking at, asked about that script alone.
+describe("detecting a script's data and figures", () => {
   afterEach(() => jest.resetAllMocks());
 
-  const FILES = {
+  const SOURCE = "scripts/plot_dos.py";
+
+  const READS = {
+    script: SOURCE, path: "data/raw.csv", mode: "read",
+    call: "pandas.read_csv", literal: "data/raw.csv", line: 12, cell: null,
+  };
+  const SAVES = {
+    script: SOURCE, path: "figures/dos.png", mode: "write",
+    call: "matplotlib.pyplot.savefig", literal: "figures/dos.png",
+    line: 40, cell: null,
+  };
+  const WRITES = {
+    script: SOURCE, path: "derived/clean.csv", mode: "write",
+    call: "DataFrame.to_csv", literal: "derived/clean.csv",
+    line: 30, cell: null,
+  };
+
+  const WITH_BOTH_ENDS = {
     charts: [{ id: "c0", caption: "Density of states",
                imageFile: "figures/dos.png" }],
-    scripts: [{ id: "s0", readme: "plot_dos.py",
-                files: ["scripts/plot_dos.py"] }],
+    scripts: [{ id: "s0", readme: "plot_dos.py", files: [SOURCE] }],
     datasets: [{ id: "d0", readme: "raw data", files: ["data/raw.csv"] }],
     workflow: { nodes: [], edges: [] },
   };
 
-  const analysis = (links) => ({
+  const cached = (links) => ({
     rccAnalysisCache: { path: "/proj", data: { code_links: links } },
   });
 
-  const READ = {
-    script: "scripts/plot_dos.py",
-    path: "data/raw.csv",
-    mode: "read",
-    call: "pandas.read_csv",
-    literal: "data/raw.csv",
-    line: 12,
-    cell: null,
-  };
+  const openDetect = async (u, id = "s0") =>
+    u.click(screen.getByTestId(`fw-detect-${id}`));
 
-  const SAVES = {
-    script: "scripts/plot_dos.py",
-    path: "figures/dos.png",
-    mode: "write",
-    call: "matplotlib.pyplot.savefig",
-    literal: "figures/dos.png",
-    line: 40,
-    cell: null,
-  };
+  it("puts the action on Script rows and nowhere else", () => {
+    renderWorkspace({
+      ...WITH_BOTH_ENDS,
+      tools: [{ id: "t0", packageName: "numpy" }],
+      heads: [{ id: "h0", URLs: ["https://e.org/x"] }],
+      ...cached([READS]),
+    });
 
-  it("shows the arrow it would store, and the line that says so", () => {
-    renderWorkspace({ ...FILES, ...analysis([READ, SAVES]) });
+    expect(screen.getByTestId("fw-detect-s0")).toBeInTheDocument();
+    ["c0", "d0", "t0", "h0"].forEach((id) =>
+      expect(screen.queryByTestId(`fw-detect-${id}`)).toBeNull()
+    );
+  });
 
-    const section = within(screen.getByTestId("fw-detected"));
-    expect(section.getByText("Detected from code")).toBeInTheDocument();
-    // The word AI appears nowhere: nothing here asked a model anything.
-    expect(screen.getByTestId("fw-detected").textContent).not.toMatch(/\bAI\b/);
-
-    // The direction as it will be stored, in that order.
-    const read = screen.getByTestId("fw-detected-d0-s0");
-    expect(read).toHaveTextContent("raw data");
-    expect(read).toHaveTextContent("plot_dos.py");
+  it("is off, and says why, when the script has no source to read", () => {
+    renderWorkspace({
+      // Typed in by hand: no files at all.
+      scripts: [{ id: "s0", readme: "a script I described myself" }],
+      ...cached([READS]),
+    });
+    expect(screen.getByTestId("fw-detect-s0")).toBeDisabled();
     expect(
-      screen.getByTestId("fw-detected-evidence-d0-s0")
+      screen.getByLabelText(
+        "No supported RCC source file is available for this script."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("is off when the script's files are not something it can parse", () => {
+    renderWorkspace({
+      scripts: [{ id: "s0", readme: "fortran", files: ["src/main.f90"] }],
+      ...cached([READS]),
+    });
+    expect(screen.getByTestId("fw-detect-s0")).toBeDisabled();
+  });
+
+  it("is off until a folder has actually been read", () => {
+    renderWorkspace(WITH_BOTH_ENDS);
+    expect(screen.getByTestId("fw-detect-s0")).toBeDisabled();
+    expect(
+      screen.getByLabelText(/import from rcc first/i)
+    ).toBeInTheDocument();
+  });
+
+  it("shows the three groups, the arrow, and the line that says so",
+     async () => {
+    const u = user();
+    renderWorkspace({ ...WITH_BOTH_ENDS, ...cached([READS, SAVES, WRITES]) });
+    await openDetect(u);
+
+    const dialog = within(screen.getByTestId("fw-detect-dialog"));
+    expect(
+      screen.getByTestId("fw-detect-dialog")
+    ).toHaveTextContent("Detected from scripts/plot_dos.py");
+    expect(dialog.getByText("Input datasets")).toBeInTheDocument();
+    expect(dialog.getByText("Output figures")).toBeInTheDocument();
+    expect(dialog.getByText("Output datasets")).toBeInTheDocument();
+
+    const readKey = "input_datasets:data/raw.csv:0:12";
+    expect(screen.getByTestId(`fw-detect-state-${readKey}`)).toHaveTextContent(
+      "Existing Dataset"
+    );
+    expect(screen.getByTestId(`fw-detect-arrow-${readKey}`)).toHaveTextContent(
+      "Dataset → Script (consumes)"
+    );
+    expect(
+      screen.getByTestId(`fw-detect-evidence-${readKey}`)
+    ).toHaveTextContent("data/raw.csv · found in the scanned folder");
+    expect(
+      screen.getByTestId(`fw-detect-source-${readKey}`)
     ).toHaveTextContent(
       'scripts/plot_dos.py, line 12 — pandas.read_csv("data/raw.csv")'
     );
 
-    // And the other way round for what the script writes.
-    expect(
-      screen.getByTestId("fw-detected-evidence-s0-c0")
-    ).toHaveTextContent(
-      'scripts/plot_dos.py, line 40 — matplotlib.pyplot.savefig'
+    // The figure it writes, in the other direction.
+    const figKey = "output_figures:figures/dos.png:0:40";
+    expect(screen.getByTestId(`fw-detect-arrow-${figKey}`)).toHaveTextContent(
+      "Script → Figure (generates)"
+    );
+    // And a dataset the draft does not hold yet.
+    const outKey = "output_datasets:derived/clean.csv:0:30";
+    expect(screen.getByTestId(`fw-detect-state-${outKey}`)).toHaveTextContent(
+      "Proposed Dataset"
+    );
+    expect(screen.getByTestId(`fw-detect-arrow-${outKey}`)).toHaveTextContent(
+      "Script → Dataset (links_to)"
     );
   });
 
-  it("creates nothing at all until Connect is pressed", () => {
-    const ctx = renderWorkspace({ ...FILES, ...analysis([READ, SAVES]) });
-    expect(screen.getByTestId("fw-detected")).toBeInTheDocument();
-    expect(ctx.addEdge).not.toHaveBeenCalled();
-    expect(ctx.del).not.toHaveBeenCalled();
-    expect(ctx.unlink).not.toHaveBeenCalled();
-  });
-
-  it("makes exactly one edge, in the stored direction", async () => {
+  it("leaves out a group with no evidence behind it", async () => {
     const u = user();
-    const ctx = renderWorkspace({ ...FILES, ...analysis([READ]) });
-
-    await u.click(screen.getByTestId("fw-detected-connect-d0-s0"));
-    expect(ctx.addEdge).toHaveBeenCalledTimes(1);
-    expect(ctx.addEdge).toHaveBeenCalledWith({
-      from: "d0",
-      to: "s0",
-      type: "consumes",
-    });
+    renderWorkspace({ ...WITH_BOTH_ENDS, ...cached([READS]) });
+    await openDetect(u);
+    const dialog = within(screen.getByTestId("fw-detect-dialog"));
+    expect(dialog.getByText("Input datasets")).toBeInTheDocument();
+    expect(dialog.queryByText("Output figures")).toBeNull();
+    expect(dialog.queryByText("Output datasets")).toBeNull();
   });
 
-  it("opens the row the new arrow starts from", async () => {
-    const u = user();
-    renderWorkspace({ ...FILES, ...analysis([READ]) });
-    await u.click(screen.getByTestId("fw-detected-connect-d0-s0"));
-    // d0 already has no stored edges in this fixture, so what is checked is
-    // the intent: the row worked on is the one that opens, not a spray.
-    expect(screen.queryByTestId("fw-wiring-c0")).toBeNull();
-  });
-
-  it("says nothing about a relationship the record already has", () => {
-    renderWorkspace({
-      ...FILES,
-      workflow: {
-        nodes: [],
-        edges: [{ from: "d0", to: "s0", type: "consumes" }],
-      },
-      ...analysis([READ]),
-    });
-    expect(screen.queryByTestId("fw-detected-d0-s0")).toBeNull();
-    // With nothing left to suggest, the section is not rendered at all --
-    // no empty panel, no "nothing found".
-    expect(screen.queryByTestId("fw-detected")).toBeNull();
-  });
-
-  it("renders no section when the scripts said nothing", () => {
-    renderWorkspace({ ...FILES, ...analysis([]) });
-    expect(screen.queryByTestId("fw-detected")).toBeNull();
-  });
-
-  it("renders no section when there was no analysis at all", () => {
-    renderWorkspace(FILES);
-    expect(screen.queryByTestId("fw-detected")).toBeNull();
-  });
-
-  it("changes nothing when a suggestion is dismissed", async () => {
-    const u = user();
-    const ctx = renderWorkspace({ ...FILES, ...analysis([READ, SAVES]) });
-
-    await u.click(screen.getByTestId("fw-detected-dismiss-d0-s0"));
-    expect(screen.queryByTestId("fw-detected-d0-s0")).toBeNull();
-    // The other one is untouched, and nothing was written.
-    expect(screen.getByTestId("fw-detected-s0-c0")).toBeInTheDocument();
-    expect(ctx.addEdge).not.toHaveBeenCalled();
-    expect(ctx.unlink).not.toHaveBeenCalled();
-    expect(ctx.del).not.toHaveBeenCalled();
-  });
-
-  it("asks about a loop before making one, the way every other path does", async () => {
-    const u = user();
-    // s0 already reaches d0, so d0 -> s0 closes the loop.
-    const ctx = renderWorkspace({
-      ...FILES,
-      workflow: {
-        nodes: [],
-        edges: [{ from: "s0", to: "d0", type: "links_to" }],
-      },
-      ...analysis([READ]),
-    });
-
-    await u.click(screen.getByTestId("fw-detected-connect-d0-s0"));
-    // Nothing yet: the existing question is asked first.
-    expect(ctx.addEdge).not.toHaveBeenCalled();
-    expect(await screen.findByTestId("fw-loop-dialog")).toBeInTheDocument();
-
-    await u.click(screen.getByTestId("fw-loop-confirm"));
-    expect(ctx.addEdge).toHaveBeenCalledWith({
-      from: "d0",
-      to: "s0",
-      type: "consumes",
-      feedback: true,
-    });
-  });
-
-  it("does not duplicate an artifact to serve two scripts", async () => {
+  it("creates nothing at all before the curator adds anything", async () => {
     const u = user();
     const ctx = renderWorkspace({
-      charts: [],
-      scripts: [
-        { id: "s0", readme: "a.py", files: ["scripts/a.py"] },
-        { id: "s1", readme: "b.py", files: ["scripts/b.py"] },
-      ],
-      datasets: [{ id: "d0", readme: "shared", files: ["data/shared.csv"] }],
-      workflow: { nodes: [], edges: [] },
-      ...analysis([
-        { ...READ, script: "scripts/a.py", path: "data/shared.csv" },
-        { ...READ, script: "scripts/b.py", path: "data/shared.csv" },
-      ]),
+      ...WITH_BOTH_ENDS, ...cached([READS, SAVES]),
     });
+    await openDetect(u);
+    await u.click(
+      screen.getByTestId("fw-detect-pick-input_datasets:data/raw.csv:0:12")
+    );
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+    expect(ctx.addMany).not.toHaveBeenCalled();
+  });
 
-    await u.click(screen.getByTestId("fw-detected-connect-d0-s0"));
-    await u.click(screen.getByTestId("fw-detected-connect-d0-s1"));
+  it("adds an edge and no artifact when both ends already exist",
+     async () => {
+    const u = user();
+    const ctx = renderWorkspace({
+      ...WITH_BOTH_ENDS, ...cached([READS, SAVES]),
+    });
+    await openDetect(u);
+    await u.click(
+      screen.getByTestId("fw-detect-pick-input_datasets:data/raw.csv:0:12")
+    );
+    await u.click(
+      screen.getByTestId("fw-detect-pick-output_figures:figures/dos.png:0:40")
+    );
+    await u.click(screen.getByTestId("fw-detect-apply"));
 
-    expect(ctx.addEdge).toHaveBeenCalledTimes(2);
-    // Two arrows OUT OF THE SAME dataset. Nothing was cloned to make the
-    // second one.
+    expect(ctx.addMany).not.toHaveBeenCalled();
     expect(ctx.addEdge.mock.calls.map(([edge]) => edge)).toEqual([
       { from: "d0", to: "s0", type: "consumes" },
-      { from: "d0", to: "s1", type: "consumes" },
+      { from: "s0", to: "c0", type: "generates" },
     ]);
-    expect(screen.getAllByTestId(/^fw-node-d/)).toHaveLength(1);
+  });
+
+  it("does not offer a relationship the record already has", async () => {
+    const u = user();
+    renderWorkspace({
+      ...WITH_BOTH_ENDS,
+      workflow: { nodes: [], edges: [{ from: "d0", to: "s0",
+                                      type: "consumes" }] },
+      ...cached([READS, SAVES]),
+    });
+    await openDetect(u);
+    const dialog = within(screen.getByTestId("fw-detect-dialog"));
+    expect(dialog.queryByText("Input datasets")).toBeNull();
+    expect(dialog.getByText("Output figures")).toBeInTheDocument();
+  });
+
+  it("says so plainly when the code named nothing", async () => {
+    const u = user();
+    renderWorkspace({ ...WITH_BOTH_ENDS, ...cached([]) });
+    await openDetect(u);
+    expect(screen.getByTestId("fw-detect-empty")).toHaveTextContent(
+      "No exact dataset or figure paths were detected in this script."
+    );
+    // And there is no empty region anywhere before it is asked for.
+    expect(screen.getByTestId("fw-detect-apply")).toBeDisabled();
+  });
+
+  it("carries the neutral note about sources it could not read", async () => {
+    const u = user();
+    renderWorkspace({
+      ...WITH_BOTH_ENDS,
+      rccAnalysisCache: {
+        path: "/proj",
+        data: {
+          code_links: [],
+          code_scan: { skipped: [{ path: "scripts/huge.py",
+                                   reason: "size_limit" }] },
+        },
+      },
+    });
+    await openDetect(u);
+    expect(screen.getByTestId("fw-detect-skipped")).toHaveTextContent(
+      "Some scripts were not analyzed due to file size or unreadable source."
+    );
+  });
+
+  it("writes nothing when the review is cancelled", async () => {
+    const u = user();
+    const ctx = renderWorkspace({
+      ...WITH_BOTH_ENDS, ...cached([READS, WRITES]),
+    });
+    await openDetect(u);
+    await u.click(
+      screen.getByTestId("fw-detect-pick-input_datasets:data/raw.csv:0:12")
+    );
+    await u.click(screen.getByTestId("fw-detect-cancel"));
+
+    expect(screen.queryByTestId("fw-detect-dialog")).toBeNull();
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+    expect(ctx.addMany).not.toHaveBeenCalled();
+    expect(ctx.del).not.toHaveBeenCalled();
+    expect(ctx.unlink).not.toHaveBeenCalled();
+  });
+
+  it("asks about a loop before making one, the way every other path does",
+     async () => {
+    const u = user();
+    const ctx = renderWorkspace({
+      ...WITH_BOTH_ENDS,
+      workflow: { nodes: [], edges: [{ from: "s0", to: "d0",
+                                      type: "links_to" }] },
+      ...cached([READS]),
+    });
+    await openDetect(u);
+    await u.click(
+      screen.getByTestId("fw-detect-pick-input_datasets:data/raw.csv:0:12")
+    );
+    await u.click(screen.getByTestId("fw-detect-apply"));
+
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("fw-loop-dialog")).toBeInTheDocument();
+    await u.click(screen.getByTestId("fw-loop-confirm"));
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "d0", to: "s0", type: "consumes", feedback: true,
+    });
+  });
+});
+
+// A file the code names that the draft does not hold yet is a PROPOSAL: an
+// artifact that does not exist, offered with what the code already answered
+// filled in. These run against real Curator state, because what is being
+// checked is that exactly one artifact and one edge come out.
+describe("proposing an artifact a script's code named", () => {
+  const SOURCE = "scripts/plot_dos.py";
+  const WRITES = {
+    script: SOURCE, path: "derived/clean.csv", mode: "write",
+    call: "DataFrame.to_csv", literal: "derived/clean.csv",
+    line: 30, cell: null,
+  };
+  const SAVES = {
+    script: SOURCE, path: "figures/new_figure.png", mode: "write",
+    call: "matplotlib.pyplot.savefig", literal: "figures/new_figure.png",
+    line: 40, cell: null,
+  };
+
+  const Probe = () => {
+    const { charts, datasets, scripts, workflow } = useContext(CuratorContext);
+    return (
+      <div>
+        <span data-testid="live-datasets">
+          {datasets.map((d) => `${d.id}:${(d.files || []).join("|")}`)
+            .join(" ") || "none"}
+        </span>
+        <span data-testid="live-charts">
+          {charts.map((c) => `${c.id}:${c.imageFile}:${c.caption}`)
+            .join(" ") || "none"}
+        </span>
+        <span data-testid="live-scripts">{scripts.length}</span>
+        <span data-testid="live-edges">
+          {((workflow || {}).edges || [])
+            .map((e) => `${e.from}>${e.to}:${e.type}`)
+            .join(" ") || "none"}
+        </span>
+      </div>
+    );
+  };
+
+  const Seed = ({ links }) => {
+    const { setAll, cacheRccAnalysis } = useContext(CuratorContext);
+    useEffect(() => {
+      setAll({
+        scripts: [{ id: "s0", readme: "plot_dos.py", files: [SOURCE] }],
+        workflow: { nodes: [], edges: [] },
+      });
+      cacheRccAnalysis("/proj", { code_links: links });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    return null;
+  };
+
+  const renderLive = (links) => {
+    localStorage.clear();
+    render(
+      <CuratorState draftKey={null}>
+        <SpotlightState>
+          <CuratorHelperContext.Provider value={buildHelpers()}>
+            <Seed links={links} />
+            <FigureWorkspace />
+            <Probe />
+          </CuratorHelperContext.Provider>
+        </SpotlightState>
+      </CuratorState>
+    );
+  };
+
+  const KEY = "output_datasets:derived/clean.csv:0:30";
+  const FIG_KEY = "output_figures:figures/new_figure.png:0:40";
+
+  it("offers the fields the record needs, with what the code answered "
+     + "already filled in", async () => {
+    const u = user();
+    renderLive([WRITES]);
+    await u.click(await screen.findByTestId("fw-detect-s0"));
+    await u.click(screen.getByTestId(`fw-detect-pick-${KEY}`));
+
+    // The file it was made from, prefilled...
+    expect(screen.getByTestId(`fw-detect-field-${KEY}-files`)).toHaveValue(
+      "derived/clean.csv"
+    );
+    // ...and the description a folder cannot know, blank and required.
+    const readme = screen.getByTestId(`fw-detect-field-${KEY}-readme`);
+    expect(readme).toHaveValue("");
+    expect(readme).toBeRequired();
+  });
+
+  it("refuses the whole batch while a proposal is short a field",
+     async () => {
+    const u = user();
+    renderLive([WRITES]);
+    await u.click(await screen.findByTestId("fw-detect-s0"));
+    await u.click(screen.getByTestId(`fw-detect-pick-${KEY}`));
+    await u.click(screen.getByTestId("fw-detect-apply"));
+
+    expect(screen.getByTestId("fw-detect-blocked")).toHaveTextContent(
+      "1 selected item needs details before it can be added. Nothing was added."
+    );
+    expect(screen.getByTestId(`fw-detect-field-${KEY}-readme`))
+      .toHaveAttribute("aria-invalid", "true");
+    // Not the field the code answered.
+    expect(screen.getByTestId(`fw-detect-field-${KEY}-files`))
+      .toHaveAttribute("aria-invalid", "false");
+
+    expect(screen.getByTestId("live-datasets")).toHaveTextContent("none");
+    expect(screen.getByTestId("live-edges")).toHaveTextContent("none");
+  });
+
+  it("makes exactly one artifact and one edge once it is complete",
+     async () => {
+    const u = user();
+    renderLive([WRITES]);
+    await u.click(await screen.findByTestId("fw-detect-s0"));
+    await u.click(screen.getByTestId(`fw-detect-pick-${KEY}`));
+    await u.click(screen.getByTestId("fw-detect-apply"));
+
+    // Fill in what it asked for, and try again.
+    fireEvent.change(screen.getByTestId(`fw-detect-field-${KEY}-readme`), {
+      target: { value: "Cleaned spectra" },
+    });
+    await u.click(screen.getByTestId("fw-detect-apply"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("live-datasets")).toHaveTextContent(
+        "d0:derived/clean.csv"
+      )
+    );
+    // One dataset, one edge, in the direction the review showed.
+    expect(
+      screen.getByTestId("live-datasets").textContent.trim().split(" ")
+    ).toHaveLength(1);
+    await waitFor(() =>
+      expect(screen.getByTestId("live-edges")).toHaveTextContent(
+        "s0>d0:links_to"
+      )
+    );
+    expect(
+      screen.getByTestId("live-edges").textContent.trim().split(" ")
+    ).toHaveLength(1);
+    // The script was not duplicated to hold the new relationship.
+    expect(screen.getByTestId("live-scripts")).toHaveTextContent("1");
+    expect(screen.queryByTestId("fw-detect-dialog")).toBeNull();
+  });
+
+  it("makes a figure from what the code saved, with the image prefilled",
+     async () => {
+    const u = user();
+    renderLive([SAVES]);
+    await u.click(await screen.findByTestId("fw-detect-s0"));
+    await u.click(screen.getByTestId(`fw-detect-pick-${FIG_KEY}`));
+
+    expect(
+      screen.getByTestId(`fw-detect-field-${FIG_KEY}-imageFile`)
+    ).toHaveValue("figures/new_figure.png");
+
+    [["number", "3"], ["caption", "A new figure"],
+     ["properties", "dos"]].forEach(([field, value]) =>
+      fireEvent.change(
+        screen.getByTestId(`fw-detect-field-${FIG_KEY}-${field}`),
+        { target: { value } }
+      )
+    );
+    await u.click(screen.getByTestId("fw-detect-apply"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("live-charts")).toHaveTextContent(
+        "c0:figures/new_figure.png:A new figure"
+      )
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("live-edges")).toHaveTextContent(
+        "s0>c0:generates"
+      )
+    );
+  });
+
+  it("does not make a second copy when the review is opened again",
+     async () => {
+    const u = user();
+    renderLive([WRITES]);
+    await u.click(await screen.findByTestId("fw-detect-s0"));
+    await u.click(screen.getByTestId(`fw-detect-pick-${KEY}`));
+    fireEvent.change(screen.getByTestId(`fw-detect-field-${KEY}-readme`), {
+      target: { value: "Cleaned spectra" },
+    });
+    await u.click(screen.getByTestId("fw-detect-apply"));
+    await waitFor(() =>
+      expect(screen.getByTestId("live-datasets")).toHaveTextContent("d0:")
+    );
+
+    // Second look: the file is an artifact now, and the arrow to it exists,
+    // so there is nothing left to suggest.
+    await u.click(screen.getByTestId("fw-detect-s0"));
+    expect(screen.getByTestId("fw-detect-empty")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("live-datasets").textContent.trim().split(" ")
+    ).toHaveLength(1);
   });
 });
