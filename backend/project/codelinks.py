@@ -53,19 +53,49 @@ WRITE_CALLS = {
     "numpy.savez",
 }
 
-# Methods whose NAME alone is the evidence, whatever they are called on.
+# Methods that write a file -- and the KIND OF OBJECT each one has to be
+# called on for that to be what it means.
 #
 # `fig.savefig(...)` and `df.to_csv(...)` are the ordinary way these libraries
-# are used, and the receiver is a local variable that no static reading can
-# resolve. These four names are not used for anything else in practice, and
-# the argument is still required to be a literal path that exists in the
-# folder -- so a false positive would need a method of the same name, called
-# with a literal string, naming a real file in the scan.
+# are used, and the receiver is a local variable. Taking the method name as
+# proof was wrong: `savefig` and `to_csv` are ordinary English method names,
+# and a project with `class Report: def savefig(self, path)` would have had
+# its report writer read as a matplotlib figure and offered to the curator as
+# `Script -> Figure`. A name is not provenance.
+#
+# So the receiver has to be traced back to a call that PRODUCES that kind of
+# object, in this same file, through a library that was actually imported.
+# Anything else -- a parameter, a loop variable, an attribute, a return value
+# from an unknown function -- has no provenance and writes nothing here.
 WRITE_METHODS = {
-    "savefig": "figure.savefig",
-    "to_csv": "DataFrame.to_csv",
-    "to_parquet": "DataFrame.to_parquet",
-    "to_excel": "DataFrame.to_excel",
+    "savefig": ("figure", "figure.savefig"),
+    "to_csv": ("frame", "DataFrame.to_csv"),
+    "to_parquet": ("frame", "DataFrame.to_parquet"),
+    "to_excel": ("frame", "DataFrame.to_excel"),
+}
+
+# The calls that produce each kind. Every one is a fully-qualified name, so it
+# only counts when the library it belongs to was imported and the alias
+# resolves -- `plt.subplots()` is a figure because `plt` is matplotlib.pyplot,
+# not because it is called `plt`.
+FIGURE_PRODUCERS = {
+    "matplotlib.pyplot.figure",
+    "matplotlib.pyplot.subplots",
+    "matplotlib.figure.Figure",
+}
+
+# A DataFrame comes off a reader or a constructor. Reshaping methods
+# (`df.dropna()`, `df.groupby(...).mean()`) are deliberately NOT followed:
+# they are calls on an object whose own provenance would have to be carried
+# through a chain, and a chain is where a wrong answer would come from.
+FRAME_PRODUCERS = {
+    "pandas.DataFrame",
+    "pandas.Series",
+    "pandas.read_csv",
+    "pandas.read_table",
+    "pandas.read_excel",
+    "pandas.read_json",
+    "pandas.read_parquet",
 }
 
 # `open(path)` and `open(path, "r")` are reads. Any mode containing w, a, x or
@@ -85,6 +115,13 @@ MAX_LINKS_TOTAL = 200
 
 SCRIPT_SUFFIX = ".py"
 NOTEBOOK_SUFFIX = ".ipynb"
+
+# WHY A FILE WAS NOT READ. Both are reported to the curator, because "no
+# suggestions" and "no suggestions, and four scripts were never looked at"
+# are different answers and a curator acting on the first when the second is
+# true has been misled by silence.
+SKIP_SIZE = "size_limit"
+SKIP_PARSE = "parse_error"
 
 
 def _literal_path(node):
@@ -223,6 +260,86 @@ def _dotted(node, aliases):
     return ".".join([module] + parts)
 
 
+# A name that was assigned something we could not identify. It is listed
+# rather than simply absent, because "assigned once from a reader" and
+# "assigned from a reader here and from something unknown three lines down"
+# must not be the same answer.
+_UNKNOWN = "?"
+
+
+def _provenance(tree, aliases):
+    """Which local names hold a figure, and which hold a data frame.
+
+    A name earns a kind by being ASSIGNED the result of a call that produces
+    that kind:
+
+        fig = plt.figure()            fig is a figure
+        fig, ax = plt.subplots()      fig is a figure (ax is not)
+        df = pd.read_csv("in.csv")    df is a frame
+        df = pd.DataFrame(...)        df is a frame
+
+    A name assigned anything else -- a custom class, an unknown function, a
+    parameter, a loop variable -- has no kind, and one assigned BOTH a known
+    producer and something unidentified loses the kind it had. Two readings
+    of the same name is not one of them being right.
+    """
+    kinds = {}
+
+    def remember(name, kind):
+        if name in kinds and kinds[name] != kind:
+            kinds[name] = _UNKNOWN
+        else:
+            kinds[name] = kind
+
+    def kind_of(value):
+        if not isinstance(value, ast.Call):
+            return _UNKNOWN
+        qualified = _dotted(value.func, aliases)
+        if qualified in FIGURE_PRODUCERS:
+            return "figure"
+        if qualified in FRAME_PRODUCERS:
+            return "frame"
+        return _UNKNOWN
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        value = node.value
+        kind = kind_of(value)
+
+        for target in targets:
+            if isinstance(target, ast.Name):
+                remember(target.id, kind)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                # `fig, ax = plt.subplots()`: the FIRST element is the figure
+                # and the second is an axes, which savefig does not belong to.
+                # Every other unpacking gives its names no kind at all.
+                subplots = (
+                    isinstance(value, ast.Call)
+                    and _dotted(value.func, aliases)
+                    == "matplotlib.pyplot.subplots")
+                for index, element in enumerate(target.elts):
+                    if not isinstance(element, ast.Name):
+                        continue
+                    remember(element.id,
+                             "figure" if (subplots and index == 0)
+                             else _UNKNOWN)
+
+    # Names bound any other way are not evidence of anything, and a name that
+    # was ever unidentifiable is dropped outright.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.arg):
+            kinds[node.arg] = _UNKNOWN
+        elif isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            kinds[node.target.id] = _UNKNOWN
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                               ast.ClassDef)):
+            kinds[node.name] = _UNKNOWN
+
+    return {name: kind for name, kind in kinds.items() if kind != _UNKNOWN}
+
+
 def _method_name(node):
     """The bare method name of `something.method(...)`, or ""."""
     if isinstance(node, ast.Attribute):
@@ -253,6 +370,7 @@ def _facts_from_tree(tree, script_path, known_files, cell, line_offset):
     """Every supported call in one parsed unit, as fact dicts."""
     aliases = _Aliases()
     aliases.visit(tree)
+    kinds = _provenance(tree, aliases)
 
     facts = []
     for call in _calls_in(tree):
@@ -276,9 +394,17 @@ def _facts_from_tree(tree, script_path, known_files, cell, line_offset):
             if _open_is_read(call):
                 mode, shown = "read", "open"
         else:
+            # A write method, on a receiver whose kind was traced back to a
+            # library call in this same file. `report.savefig(...)` on a
+            # class of the project's own is not a figure being saved.
             method = _method_name(call.func)
-            if method in WRITE_METHODS and not qualified:
-                mode, shown = "write", WRITE_METHODS[method]
+            wanted = WRITE_METHODS.get(method)
+            receiver = (call.func.value
+                        if isinstance(call.func, ast.Attribute) else None)
+            if (wanted and not qualified
+                    and isinstance(receiver, ast.Name)
+                    and kinds.get(receiver.id) == wanted[0]):
+                mode, shown = "write", wanted[1]
 
         if not mode:
             continue
@@ -301,12 +427,15 @@ def _facts_from_tree(tree, script_path, known_files, cell, line_offset):
     return facts
 
 
-def _scan_python(path, text, known_files):
+def _scan_python(path, text, known_files, skipped):
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError, RecursionError):
         # Python 2, a template, a partial file, something that is not Python
-        # at all. One unreadable script skips itself and nothing else.
+        # at all. One unreadable script skips itself and nothing else -- and
+        # SAYS SO, rather than looking exactly like a script with no file I/O
+        # in it.
+        skipped.append({"path": path, "reason": SKIP_PARSE})
         return []
     return _facts_from_tree(tree, path, known_files, None, 0)
 
@@ -321,12 +450,12 @@ def _notebook_cells(text):
     try:
         document = json.loads(text)
     except (ValueError, TypeError):
-        return []
+        return None
     if not isinstance(document, dict):
-        return []
+        return None
     cells = document.get("cells")
     if not isinstance(cells, list):
-        return []
+        return None
 
     out = []
     for cell in cells[:MAX_CELLS]:
@@ -342,10 +471,16 @@ def _notebook_cells(text):
     return out
 
 
-def _scan_notebook(path, text, known_files):
+def _scan_notebook(path, text, known_files, skipped):
+    cells = _notebook_cells(text)
+    if cells is None:
+        # The document is not a notebook: not JSON, or JSON of another shape.
+        skipped.append({"path": path, "reason": SKIP_PARSE})
+        return []
+
     facts = []
     aliases_so_far = []
-    for index, source in enumerate(_notebook_cells(text), start=1):
+    for index, source in enumerate(cells, start=1):
         # A notebook's imports usually live in the first cell and are used in
         # later ones, so each cell is parsed with the import lines seen so
         # far prepended. The offset puts the reported line back where the
@@ -355,8 +490,10 @@ def _scan_notebook(path, text, known_files):
         try:
             tree = ast.parse(combined)
         except (SyntaxError, ValueError, RecursionError):
-            # One broken cell skips itself; the rest of the notebook still
-            # counts. Jupyter magics (`%matplotlib inline`) land here.
+            # One cell skips itself and the rest of the notebook still counts.
+            # This is ORDINARY -- `%matplotlib inline` is not Python and every
+            # notebook has some -- so it is not reported as a skipped file.
+            # A notebook that cannot be opened at all is, above.
             continue
         offset = -len(aliases_so_far) if aliases_so_far else 0
         facts.extend(
@@ -370,28 +507,39 @@ def _scan_notebook(path, text, known_files):
     return facts[:MAX_LINKS_PER_FILE]
 
 
-def scan_sources(sources, known_files):
-    """Every file fact these sources state, deduplicated and ordered.
+def scan(sources, known_files, skipped=None):
+    """What these sources state, and what could not be read.
 
     `sources` maps a relative path to that file's text; `known_files` is the
-    set of relative paths the folder scan actually found. Returns a list of
-    dicts:
+    set of relative paths the folder scan actually found. `skipped` may carry
+    entries decided before this point (a file too large to fetch).
+
+    Returns {"links": [...], "skipped": [{path, reason}]}, where a link is
 
         {script, path, mode: "read"|"write", call, literal, line, cell}
 
-    Deterministic: same folder, same list, same order, every time.
+    Deterministic: same folder, same lists, same order, every time.
     """
     known = set(known_files or ())
+    skips = list(skipped or [])
     facts = []
     for path in sorted(sources or {}):
-        text = sources.get(path) or ""
-        if not isinstance(text, str) or len(text) > MAX_SOURCE_CHARS:
+        text = sources.get(path)
+        if not isinstance(text, str):
+            continue
+        if len(text) > MAX_SOURCE_CHARS:
+            # Not parsed at ALL. Parsing the first 200 000 characters of a
+            # file and reporting what they say would be reporting on a
+            # fragment as though it were the file -- and a fragment that ends
+            # mid-expression usually just raises SyntaxError, which would
+            # have blamed the author for a cut this code made.
+            skips.append({"path": path, "reason": SKIP_SIZE})
             continue
         lowered = path.lower()
         if lowered.endswith(SCRIPT_SUFFIX):
-            facts.extend(_scan_python(path, text, known))
+            facts.extend(_scan_python(path, text, known, skips))
         elif lowered.endswith(NOTEBOOK_SUFFIX):
-            facts.extend(_scan_notebook(path, text, known))
+            facts.extend(_scan_notebook(path, text, known, skips))
         if len(facts) >= MAX_LINKS_TOTAL:
             break
 
@@ -404,4 +552,15 @@ def scan_sources(sources, known_files):
         if current is None or (fact["cell"] or 0, fact["line"]) < (
                 current["cell"] or 0, current["line"]):
             best[key] = fact
-    return [best[key] for key in sorted(best)][:MAX_LINKS_TOTAL]
+    links = [best[key] for key in sorted(best)][:MAX_LINKS_TOTAL]
+    ordered = sorted({(entry["path"], entry["reason"]) for entry in skips})
+    return {
+        "links": links,
+        "skipped": [{"path": path, "reason": reason}
+                    for path, reason in ordered],
+    }
+
+
+def scan_sources(sources, known_files):
+    """Just the facts, for callers that do not care what was unreadable."""
+    return scan(sources, known_files)["links"]

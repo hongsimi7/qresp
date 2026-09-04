@@ -59,8 +59,8 @@ class RouteTestBase(unittest.TestCase):
     def analyze(self, fixture=None, path=FOLDER):
         with mock.patch("project.curation._list_directory",
                         side_effect=lister_for(fixture or FIXTURE)), \
-                mock.patch("project.curation._fetch_text",
-                           side_effect=lambda url: ""):
+                mock.patch("project.curation._fetch_text_sized",
+                           side_effect=lambda url: ("", False)):
             return self.client.post(
                 "/api/curation/analyze-folder", json={"path": path},
                 headers={"X-CSRF-Token": self.csrf})

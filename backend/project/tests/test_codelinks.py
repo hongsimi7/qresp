@@ -49,17 +49,21 @@ class ReadsAndWrites(unittest.TestCase):
         self.assertEqual(found[0]["call"], "matplotlib.pyplot.savefig")
 
     def test_to_csv_names_the_dataset_it_writes(self):
+        # The receiver has to be traceable to pandas. `frame` here is a frame
+        # because the line above says where it came from.
         found = scan({"scripts/plot_dos.py":
+                      "import pandas as pd\n"
+                      "frame = pd.DataFrame({})\n"
                       "frame.to_csv('data/clean.csv')\n"})
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0]["mode"], "write")
         self.assertEqual(found[0]["path"], "data/clean.csv")
         self.assertEqual(found[0]["call"], "DataFrame.to_csv")
 
-    def test_a_method_on_a_local_variable_still_counts(self):
-        # `fig` is a variable no static read can resolve. The METHOD name is
-        # the evidence, and the argument still has to name a real file.
+    def test_a_figure_saved_through_the_variable_it_was_made_in(self):
         found = scan({"scripts/plot_dos.py":
+                      "import matplotlib.pyplot as plt\n"
+                      "fig = plt.figure()\n"
                       "fig.savefig('figures/bands.png')\n"})
         self.assertEqual([f["path"] for f in found], ["figures/bands.png"])
 
@@ -258,6 +262,137 @@ class WhatIsRefused(unittest.TestCase):
                   "open('scripts/plot_dos.py')\n"}), [])
 
 
+class ReceiverProvenance(unittest.TestCase):
+    """A method name is not proof of what the object is.
+
+    `savefig` and `to_csv` are ordinary English method names. Accepting them
+    on any receiver meant a project with `class Report: def savefig(...)` had
+    its report writer read as a matplotlib figure, and offered to a curator
+    as `Script -> Figure`. The receiver has to be traced to a call that makes
+    that kind of object, through a library that was actually imported.
+    """
+
+    def test_the_module_function_needs_no_receiver(self):
+        found = scan({"scripts/plot_dos.py":
+                      "import matplotlib.pyplot as plt\n"
+                      "plt.savefig('figures/dos.png')\n"})
+        self.assertEqual([f["call"] for f in found],
+                         ["matplotlib.pyplot.savefig"])
+
+    def test_an_imported_savefig_needs_no_receiver_either(self):
+        found = scan({"scripts/plot_dos.py":
+                      "from matplotlib.pyplot import savefig\n"
+                      "savefig('figures/dos.png')\n"})
+        self.assertEqual([f["call"] for f in found],
+                         ["matplotlib.pyplot.savefig"])
+
+    def test_subplots_gives_the_first_name_a_figure(self):
+        found = scan({"scripts/plot_dos.py":
+                      "import matplotlib.pyplot as plt\n"
+                      "fig, ax = plt.subplots()\n"
+                      "fig.savefig('figures/dos.png')\n"})
+        self.assertEqual([f["path"] for f in found], ["figures/dos.png"])
+
+    def test_the_axes_from_subplots_is_not_a_figure(self):
+        # `ax.savefig(...)` is not a thing, and if a project defines one it is
+        # not matplotlib writing a figure.
+        self.assertEqual(
+            scan({"scripts/plot_dos.py":
+                  "import matplotlib.pyplot as plt\n"
+                  "fig, ax = plt.subplots()\n"
+                  "ax.savefig('figures/dos.png')\n"}), [])
+
+    def test_a_frame_read_from_pandas_can_write_itself_back(self):
+        found = scan({"scripts/plot_dos.py":
+                      "import pandas as pd\n"
+                      "df = pd.read_csv('data/raw.csv')\n"
+                      "df.to_csv('data/clean.csv')\n"})
+        self.assertEqual(sorted(f["path"] for f in found),
+                         ["data/clean.csv", "data/raw.csv"])
+
+    def test_a_constructed_frame_can_write_itself(self):
+        found = scan({"scripts/plot_dos.py":
+                      "import pandas as pd\n"
+                      "df = pd.DataFrame({'a': [1]})\n"
+                      "df.to_parquet('data/clean.csv')\n"})
+        self.assertEqual([f["call"] for f in found],
+                         ["DataFrame.to_parquet"])
+
+    def test_numpy_save_is_a_module_call_and_still_works(self):
+        found = scan({"scripts/plot_dos.py":
+                      "import numpy as np\n"
+                      "np.save('data/clean.csv', values)\n"})
+        self.assertEqual([f["call"] for f in found], ["numpy.save"])
+
+    # ---- and everything that is NOT provenance -------------------------
+
+    def test_a_project_class_with_a_savefig_is_not_a_figure(self):
+        # THE false positive this pass exists to remove.
+        source = ("import matplotlib.pyplot as plt\n"
+                  "class Report:\n"
+                  "    def savefig(self, path):\n"
+                  "        pass\n"
+                  "report = Report()\n"
+                  "report.savefig('figures/dos.png')\n")
+        self.assertEqual(scan({"scripts/plot_dos.py": source}), [])
+
+    def test_a_writer_of_the_project_s_own_is_not_a_data_frame(self):
+        source = ("import pandas as pd\n"
+                  "writer = make_writer()\n"
+                  "writer.to_csv('data/clean.csv')\n")
+        self.assertEqual(scan({"scripts/plot_dos.py": source}), [])
+
+    def test_importing_pandas_does_not_bless_every_object(self):
+        # pandas being in the file says nothing about what `thing` is.
+        source = ("import pandas as pd\n"
+                  "thing.to_csv('data/clean.csv')\n")
+        self.assertEqual(scan({"scripts/plot_dos.py": source}), [])
+
+    def test_an_unimported_savefig_is_nothing(self):
+        self.assertEqual(
+            scan({"scripts/plot_dos.py":
+                  "savefig('figures/dos.png')\n"}), [])
+
+    def test_a_parameter_has_no_provenance(self):
+        source = ("import matplotlib.pyplot as plt\n"
+                  "def write(fig):\n"
+                  "    fig.savefig('figures/dos.png')\n")
+        self.assertEqual(scan({"scripts/plot_dos.py": source}), [])
+
+    def test_a_loop_variable_has_no_provenance(self):
+        source = ("import pandas as pd\n"
+                  "for df in frames:\n"
+                  "    df.to_csv('data/clean.csv')\n")
+        self.assertEqual(scan({"scripts/plot_dos.py": source}), [])
+
+    def test_a_name_that_is_also_assigned_something_unknown_is_dropped(self):
+        # Two readings of one name is not one of them being right.
+        source = ("import pandas as pd\n"
+                  "df = pd.read_csv('data/raw.csv')\n"
+                  "df = make_something_else()\n"
+                  "df.to_csv('data/clean.csv')\n")
+        # The read still stands -- it is a resolved module call. The write
+        # does not.
+        self.assertEqual([(f["mode"], f["path"]) for f in scan(
+            {"scripts/plot_dos.py": source})],
+            [("read", "data/raw.csv")])
+
+    def test_a_reshaped_frame_is_not_followed(self):
+        # `df.dropna()` returns a frame, and following that would mean
+        # carrying provenance along a chain of calls. Deliberately not done.
+        source = ("import pandas as pd\n"
+                  "df = pd.read_csv('data/raw.csv')\n"
+                  "clean = df.dropna()\n"
+                  "clean.to_csv('data/clean.csv')\n")
+        self.assertEqual([f["mode"] for f in scan(
+            {"scripts/plot_dos.py": source})], ["read"])
+
+    def test_a_figure_from_an_unimported_plt_is_not_a_figure(self):
+        source = ("fig = plt.figure()\n"
+                  "fig.savefig('figures/dos.png')\n")
+        self.assertEqual(scan({"scripts/plot_dos.py": source}), [])
+
+
 class Ambiguity(unittest.TestCase):
 
     def test_a_path_beside_the_script_is_found(self):
@@ -296,7 +431,7 @@ class Determinism(unittest.TestCase):
     def test_reading_and_writing_the_same_file_are_two_facts(self):
         found = scan({"scripts/plot_dos.py":
                       "import pandas as pd\n"
-                      "pd.read_csv('data/raw.csv')\n"
+                      "frame = pd.read_csv('data/raw.csv')\n"
                       "frame.to_csv('data/raw.csv')\n"})
         self.assertEqual(sorted(f["mode"] for f in found), ["read", "write"])
 
@@ -309,6 +444,102 @@ class Determinism(unittest.TestCase):
         first = scan(sources)
         second = scan(dict(reversed(list(sources.items()))))
         self.assertEqual(first, second)
+
+
+class WhatCouldNotBeRead(unittest.TestCase):
+    """Silence and "nothing found" must not look the same.
+
+    A curator who sees no suggestions and takes that to mean "these scripts
+    do not read any of my datasets" has been told something false if four of
+    them were never opened. Each unread file is reported with a path and a
+    reason, and never a line of its contents.
+    """
+
+    def test_a_file_over_the_cap_is_not_parsed_at_all(self):
+        huge = ("import pandas as pd\n"
+                "pd.read_csv('data/raw.csv')\n"
+                + "# padding\n" * codelinks.MAX_SOURCE_CHARS)
+        result = codelinks.scan({"scripts/plot_dos.py": huge}, FILES)
+        # No suggestion from the part that would have fitted: reporting on a
+        # fragment as though it were the file is the thing being avoided.
+        self.assertEqual(result["links"], [])
+        self.assertEqual(result["skipped"],
+                         [{"path": "scripts/plot_dos.py",
+                           "reason": codelinks.SKIP_SIZE}])
+
+    def test_source_that_does_not_parse_says_so(self):
+        result = codelinks.scan({"scripts/plot_dos.py": "def broken(:\n"},
+                                FILES)
+        self.assertEqual(result["links"], [])
+        self.assertEqual(result["skipped"],
+                         [{"path": "scripts/plot_dos.py",
+                           "reason": codelinks.SKIP_PARSE}])
+
+    def test_a_notebook_that_will_not_open_says_so(self):
+        result = codelinks.scan({"scripts/prepare.ipynb": "{not json"}, FILES)
+        self.assertEqual(result["skipped"],
+                         [{"path": "scripts/prepare.ipynb",
+                           "reason": codelinks.SKIP_PARSE}])
+
+    def test_one_unreadable_file_does_not_hide_the_others(self):
+        result = codelinks.scan({
+            "scripts/plot_dos.py": "import pandas as pd\n"
+                                   "pd.read_csv('data/raw.csv')\n",
+            "scripts/prepare.ipynb": "{not json",
+        }, FILES)
+        self.assertEqual([link["path"] for link in result["links"]],
+                         ["data/raw.csv"])
+        self.assertEqual([entry["path"] for entry in result["skipped"]],
+                         ["scripts/prepare.ipynb"])
+
+    def test_a_magic_cell_is_ordinary_and_is_not_reported(self):
+        # Every notebook has `%matplotlib inline` somewhere. A cell that is
+        # not Python is expected, not a file that could not be read.
+        import json
+        text = json.dumps({"cells": [
+            {"cell_type": "code", "source": "%matplotlib inline\n"},
+            {"cell_type": "code",
+             "source": "import pandas as pd\npd.read_csv('data/raw.csv')\n"},
+        ], "nbformat": 4})
+        result = codelinks.scan({"scripts/prepare.ipynb": text}, FILES)
+        self.assertEqual(result["skipped"], [])
+        self.assertEqual(len(result["links"]), 1)
+
+    def test_a_clean_folder_reports_nothing_unread(self):
+        result = codelinks.scan({
+            "scripts/plot_dos.py": "import pandas as pd\n"
+                                   "pd.read_csv('data/raw.csv')\n",
+        }, FILES)
+        self.assertEqual(result["skipped"], [])
+
+    def test_a_reason_decided_before_the_scan_is_carried_through(self):
+        # A file too large to FETCH never reaches the parser, and the reason
+        # is decided at the point it was cut. It still has to reach the
+        # curator with everything else.
+        result = codelinks.scan(
+            {}, FILES,
+            skipped=[{"path": "scripts/huge.py",
+                      "reason": codelinks.SKIP_SIZE}])
+        self.assertEqual(result["skipped"],
+                         [{"path": "scripts/huge.py",
+                           "reason": codelinks.SKIP_SIZE}])
+
+    def test_the_same_file_is_reported_once(self):
+        result = codelinks.scan(
+            {"scripts/plot_dos.py": "def broken(:\n"}, FILES,
+            skipped=[{"path": "scripts/plot_dos.py",
+                      "reason": codelinks.SKIP_PARSE}])
+        self.assertEqual(len(result["skipped"]), 1)
+
+    def test_nothing_of_the_source_itself_is_reported(self):
+        secret = ("password = 'hunter2'\n"
+                  "def broken(:\n")
+        result = codelinks.scan({"scripts/plot_dos.py": secret}, FILES)
+        blob = repr(result)
+        self.assertNotIn("hunter2", blob)
+        self.assertNotIn("password", blob)
+        # A path and a reason, and that is the whole entry.
+        self.assertEqual(sorted(result["skipped"][0]), ["path", "reason"])
 
 
 class NothingIsExecutedOrSent(unittest.TestCase):

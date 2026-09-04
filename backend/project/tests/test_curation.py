@@ -75,9 +75,10 @@ class CurationTestBase(unittest.TestCase):
         texts = TEXTS if texts is None else texts
         with mock.patch("project.curation._list_directory",
                         side_effect=fake_lister) as lister, \
-                mock.patch("project.curation._fetch_text",
-                           side_effect=lambda url: texts.get(
-                               url[len(FOLDER):].strip("/"), "")) as fetch:
+                mock.patch("project.curation._fetch_text_sized",
+                           side_effect=lambda url: (
+                               texts.get(url[len(FOLDER):].strip("/"), ""),
+                               False)) as fetch:
             if walk is not None:
                 lister.side_effect = walk
             response = self.client.post(
@@ -831,8 +832,8 @@ class TestExplicitBoundaries(CurationTestBase):
         self.login()
         with mock.patch("project.curation._list_directory",
                         side_effect=fake_lister), \
-                mock.patch("project.curation._fetch_text",
-                           side_effect=lambda url: ""):
+                mock.patch("project.curation._fetch_text_sized",
+                           side_effect=lambda url: ("", False)):
             response = self.client.post(
                 "/api/curation/analyze-folder",
                 json={"path": FOLDER,
@@ -845,8 +846,8 @@ class TestExplicitBoundaries(CurationTestBase):
         self.login()
         with mock.patch("project.curation._list_directory",
                         side_effect=fake_lister), \
-                mock.patch("project.curation._fetch_text",
-                           side_effect=lambda url: ""):
+                mock.patch("project.curation._fetch_text_sized",
+                           side_effect=lambda url: ("", False)):
             response = self.client.post(
                 "/api/curation/analyze-folder",
                 json={"path": FOLDER, "boundaries": {"data": ["data"]}},
@@ -892,8 +893,8 @@ class TestCapitalizedLegacyThroughTheRoute(CurationTestBase):
 
         with mock.patch("project.curation._list_directory",
                         side_effect=lister), \
-                mock.patch("project.curation._fetch_text",
-                           side_effect=lambda url: ""):
+                mock.patch("project.curation._fetch_text_sized",
+                           side_effect=lambda url: ("", False)):
             response = self.client.post(
                 "/api/curation/analyze-folder", json=payload,
                 headers={"X-CSRF-Token": self.csrf})
@@ -1045,8 +1046,8 @@ class TestBoundaryResponseEnvelope(CurationTestBase):
 
         with mock.patch("project.curation._list_directory",
                         side_effect=lister), \
-                mock.patch("project.curation._fetch_text",
-                           side_effect=lambda url: ""):
+                mock.patch("project.curation._fetch_text_sized",
+                           side_effect=lambda url: ("", False)):
             response = self.client.post(
                 "/api/curation/analyze-folder", json=payload,
                 headers={"X-CSRF-Token": self.csrf})
@@ -1122,8 +1123,8 @@ class TestBoundaryResponseEnvelope(CurationTestBase):
 
         with mock.patch("project.curation._list_directory",
                         side_effect=lister), \
-                mock.patch("project.curation._fetch_text",
-                           side_effect=lambda url: ""):
+                mock.patch("project.curation._fetch_text_sized",
+                           side_effect=lambda url: ("", False)):
             response = self.client.post(
                 "/api/curation/analyze-folder",
                 json={"path": FOLDER,
@@ -1797,6 +1798,56 @@ class TestCodeLinksInTheResponse(CurationTestBase):
         self.assertEqual({"scripts/plot_vdos.py"}, scripts)
         # ...and the folder is still classified exactly as before.
         self.assertTrue(response.json()["candidates"]["charts"])
+
+    def test_a_file_too_large_to_fetch_is_reported_not_parsed(self):
+        # `_fetch_text_sized` says the read stopped at the cap. What is in
+        # hand is the START of a script, and the start of a script is not the
+        # script -- so it is reported rather than read.
+        self.login()
+        texts = dict(self.SOURCES)
+        with mock.patch("project.curation._list_directory",
+                        side_effect=fake_lister), \
+                mock.patch(
+                    "project.curation._fetch_text_sized",
+                    side_effect=lambda url: (
+                        texts.get(url[len(FOLDER):].strip("/"), ""),
+                        url.endswith("compute_dipoles.py"))):
+            response = self.client.post(
+                "/api/curation/analyze-folder", json={"path": FOLDER},
+                headers={"X-CSRF-Token": self.csrf})
+
+        self.assertEqual(200, response.status_code)
+        scan = response.json()["code_scan"]
+        self.assertEqual(scan["skipped"],
+                         [{"path": "scripts/compute_dipoles.py",
+                           "reason": "size_limit"}])
+        # The other script is unaffected: its suggestions still stand.
+        scripts = {link["script"] for link in response.json()["code_links"]}
+        self.assertEqual({"scripts/plot_vdos.py"}, scripts)
+
+    def test_a_script_that_will_not_parse_is_reported(self):
+        self.login()
+        broken = dict(self.SOURCES)
+        broken["scripts/compute_dipoles.py"] = "def broken(:\n"
+        response, _, _ = self.analyze(texts=broken)
+        self.assertEqual(
+            response.json()["code_scan"]["skipped"],
+            [{"path": "scripts/compute_dipoles.py",
+              "reason": "parse_error"}])
+
+    def test_a_folder_that_read_cleanly_reports_nothing_unread(self):
+        self.login()
+        response, _, _ = self.analyze(texts=self.SOURCES)
+        self.assertEqual([], response.json()["code_scan"]["skipped"])
+
+    def test_no_source_text_reaches_the_response(self):
+        self.login()
+        broken = dict(self.SOURCES)
+        broken["scripts/compute_dipoles.py"] = (
+            "api_key = 'secret-value-do-not-leak'\ndef broken(:\n")
+        response, _, _ = self.analyze(texts=broken)
+        self.assertNotIn("secret-value-do-not-leak", response.text)
+        self.assertNotIn("api_key", response.text)
 
     def test_no_provider_is_called_and_nothing_is_executed(self):
         # The scan is `ast.parse` over text already fetched for evidence. A

@@ -51,8 +51,8 @@ class ChartPlanTestBase(CurationTestBase):
         # can be shown to cost NOTHING, not merely to fail afterwards.
         with mock.patch("project.curation._list_directory",
                         side_effect=tree_lister), \
-                mock.patch("project.curation._fetch_text",
-                           side_effect=lambda url: ""), \
+                mock.patch("project.curation._fetch_text_sized",
+                           side_effect=lambda url: ("", False)), \
                 mock.patch("project.curation.call_gemini") as gemini, \
                 mock.patch("project.curation._consume_daily_quota") as quota:
             response = self.client.post(
@@ -253,8 +253,8 @@ class TestNoPlanIsUnchanged(ChartPlanTestBase):
         self.login()
         with mock.patch("project.curation._list_directory",
                         side_effect=two_figures), \
-                mock.patch("project.curation._fetch_text",
-                           side_effect=lambda url: ""):
+                mock.patch("project.curation._fetch_text_sized",
+                           side_effect=lambda url: ("", False)):
             response = self.client.post(
                 "/api/curation/analyze-folder",
                 json={"path": FOLDER,
@@ -345,8 +345,8 @@ class TestPlanRejection(ChartPlanTestBase):
         with mock.patch("project.curation._list_directory",
                         side_effect=lambda url: tree[
                             url[len(FOLDER):].strip("/")]), \
-                mock.patch("project.curation._fetch_text",
-                           side_effect=lambda url: ""):
+                mock.patch("project.curation._fetch_text_sized",
+                           side_effect=lambda url: ("", False)):
             response = self.client.post(
                 "/api/curation/analyze-folder",
                 json={"path": FOLDER, "chart_plan": [
@@ -414,8 +414,8 @@ class TestPlanAgainstStructureModes(ChartPlanTestBase):
         with mock.patch("project.curation._list_directory",
                         side_effect=lambda url: tree[
                             url[len(FOLDER):].strip("/")]), \
-                mock.patch("project.curation._fetch_text",
-                           side_effect=lambda url: ""):
+                mock.patch("project.curation._fetch_text_sized",
+                           side_effect=lambda url: ("", False)):
             response = self.client.post(
                 "/api/curation/analyze-folder",
                 json={"path": FOLDER, "chart_plan": [
@@ -432,8 +432,8 @@ class TestPlanAgainstStructureModes(ChartPlanTestBase):
         with mock.patch("project.curation._list_directory",
                         side_effect=lambda url: tree[
                             url[len(FOLDER):].strip("/")]), \
-                mock.patch("project.curation._fetch_text",
-                           side_effect=lambda url: ""):
+                mock.patch("project.curation._fetch_text_sized",
+                           side_effect=lambda url: ("", False)):
             response = self.client.post(
                 "/api/curation/analyze-folder",
                 json={"path": FOLDER,
@@ -449,8 +449,8 @@ class TestPlanAgainstStructureModes(ChartPlanTestBase):
         with mock.patch("project.curation._list_directory",
                         side_effect=lambda url: tree[
                             url[len(FOLDER):].strip("/")]), \
-                mock.patch("project.curation._fetch_text",
-                           side_effect=lambda url: ""):
+                mock.patch("project.curation._fetch_text_sized",
+                           side_effect=lambda url: ("", False)):
             response = self.client.post(
                 "/api/curation/analyze-folder", json={"path": FOLDER},
                 headers={"X-CSRF-Token": self.csrf})

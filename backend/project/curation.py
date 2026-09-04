@@ -551,13 +551,29 @@ def possible_dependency_hints(script_texts):
 # ---- the endpoint ----------------------------------------------------------
 
 def _fetch_text(url):
+    text, _ = _fetch_text_sized(url)
+    return text
+
+
+def _fetch_text_sized(url):
+    """The file's text, and whether it was longer than the cap.
+
+    One byte past the cap is read on purpose: that byte is the difference
+    between "this is the whole file" and "this is the start of a file", and
+    a caller that parses source has to know which it was handed. Reading a
+    truncated script as though it were whole reports on a fragment, and a
+    fragment that ends mid-expression raises a syntax error the author never
+    wrote.
+    """
     response = requests.get(url, headers=_HEADERS, timeout=REQUEST_TIMEOUT,
                             verify=_verify_for(url), stream=True)
     response.raise_for_status()
     content = response.raw.read(MAX_TEXT_BYTES + 1, decode_content=True)
     if content is None:
         content = b""
-    return content[:MAX_TEXT_BYTES].decode("utf-8", errors="replace")
+    truncated = len(content) > MAX_TEXT_BYTES
+    return (content[:MAX_TEXT_BYTES].decode("utf-8", errors="replace"),
+            truncated)
 
 
 def _script_header(path, text):
@@ -1290,7 +1306,7 @@ def plan_evidence_reads(files, dirs, boundaries=None):
                          MAX_TEXT_FILES)
 
 
-def _code_sources(root_url, files, texts):
+def _code_sources(root_url, files, texts, cut_short=()):
     """The source of this folder's scripts and notebooks, up to a cap.
 
     Whatever the evidence pass already fetched is REUSED rather than
@@ -1304,17 +1320,33 @@ def _code_sources(root_url, files, texts):
         if path.lower().endswith((codelinks.SCRIPT_SUFFIX,
                                   codelinks.NOTEBOOK_SUFFIX)))
     sources = {}
+    skipped = []
     for path in wanted[:MAX_CODE_FILES]:
         if path in texts:
-            sources[path] = texts[path]
+            # Already fetched for evidence, under the same cap. If that read
+            # had to cut the file short, what is in hand is the START of a
+            # script, and the start of a script is not the script.
+            if path in cut_short:
+                skipped.append({"path": path,
+                                "reason": codelinks.SKIP_SIZE})
+            else:
+                sources[path] = texts[path]
             continue
         try:
-            sources[path] = _fetch_text(root_url + "/" + path)
+            text, truncated = _fetch_text_sized(root_url + "/" + path)
         except Exception as e:
             # One unreadable script skips itself. It is never a reason to
             # fail the folder analysis.
             print("Code read skipped (%s)" % type(e).__name__)
-    return sources, len(wanted)
+            continue
+        if truncated:
+            # NOT PARSED. The curator is told the file was too large rather
+            # than being shown conclusions drawn from its first half.
+            skipped.append({"path": path,
+                            "reason": codelinks.SKIP_SIZE})
+            continue
+        sources[path] = text
+    return sources, len(wanted), skipped
 
 
 @csrf_protect
@@ -1354,10 +1386,16 @@ def analyze_folder(body):
         # reached — and a candidate whose README was never fetched is
         # indistinguishable from one that has no README at all.
         texts = {}
+        # Which of those reads had to stop at the cap. It changes nothing for
+        # evidence -- a README's first lines ARE its header -- but a script
+        # read for its file I/O has to be known to be whole.
+        cut_short = set()
         wanted = plan_evidence_reads(files, dirs, (body or {}).get("boundaries"))
         for path in wanted:
             try:
-                texts[path] = _fetch_text(root_url + "/" + path)
+                texts[path], was_cut = _fetch_text_sized(root_url + "/" + path)
+                if was_cut:
+                    cut_short.add(path)
             except Exception as e:
                 # One unreadable file (a corrupt notebook, a permission error)
                 # skips its own evidence and nothing else.
@@ -1367,12 +1405,16 @@ def analyze_folder(body):
         # project/codelinks.py. A failure here is not a failure of the
         # analysis -- the folder is still classified exactly as before.
         code_links = []
+        code_skipped = []
         code_scanned = 0
         code_total = 0
         try:
-            code_sources, code_total = _code_sources(root_url, files, texts)
+            code_sources, code_total, too_big = _code_sources(
+                root_url, files, texts, cut_short)
             code_scanned = len(code_sources)
-            code_links = codelinks.scan_sources(code_sources, files)
+            scanned = codelinks.scan(code_sources, files, skipped=too_big)
+            code_links = scanned["links"]
+            code_skipped = scanned["skipped"]
         except Exception as e:
             print("Code link scan skipped (%s)" % type(e).__name__)
 
@@ -1437,6 +1479,11 @@ def analyze_folder(body):
             "scripts_found": code_total,
             "scripts_read": code_scanned,
             "max_scripts": MAX_CODE_FILES,
+            # The files this pass could not read, and why -- a path and a
+            # reason, never a line of anybody's source. "No suggestions" and
+            # "no suggestions, and four scripts were never looked at" are
+            # different answers, and only one of them is safe to act on.
+            "skipped": code_skipped,
         },
         "candidates": result,
     }, 200

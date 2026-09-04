@@ -92,6 +92,13 @@ const IMPORT_LABELS = {
   tool: "Import Tools from RCC",
 };
 
+// Why a script was not read for its file I/O, said plainly. The wire values
+// come from the analysis (project/codelinks.py) and are never shown raw.
+const SKIP_REASONS = {
+  size_limit: "too large to read in full",
+  parse_error: "could not be read as source",
+};
+
 // Grouped Unclassified rows rendered before "Show more".
 const UNCLASSIFIED_ROWS = 25;
 
@@ -380,6 +387,8 @@ const FolderAnalysis = ({
   // Has an Add been TRIED and refused? Nothing is said about a missing field
   // until then -- see the note on `blockedSelected` below.
   const [addAttempted, setAddAttempted] = useState(false);
+  // Whether the list of files the code scan could not read is open.
+  const [unreadOpen, setUnreadOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState({});
   const [editOpen, setEditOpen] = useState({});
   const [showUnclassified, setShowUnclassified] = useState({});
@@ -476,6 +485,7 @@ const FolderAnalysis = ({
     setSelected({});
     setRemoved({});
     setAddAttempted(false);
+    setUnreadOpen(false);
     setDetailsOpen({});
     setEditOpen({});
     setShowUnclassified({});
@@ -1533,6 +1543,9 @@ const FolderAnalysis = ({
   // what used to render as one unreadable paragraph.
   const groupedUnclassified = candidates.grouped_unclassified || [];
   const unclassifiedTotal = candidates.unclassified_total || 0;
+  // The files the code scan could not read. Derived from the analysis, and
+  // never stored: it describes this scan and nothing about the record.
+  const unreadCode = ((analysis || {}).code_scan || {}).skipped || [];
   const structureMode = (analysis || {}).structure_mode || "";
   const invalidStructure = structureMode === "invalid";
   // Only the roots whose name differs from the role they were read as: a
@@ -1663,6 +1676,63 @@ const FolderAnalysis = ({
               on the card, or in the artifact&rsquo;s own form.
             </Box>
           </Typography>
+          {/* WHAT THE CODE SCAN COULD NOT READ.
+              Only when there is something: a folder that read cleanly says
+              nothing, exactly as before.
+
+              It is neutral on purpose -- an `info`, not a warning. Nothing is
+              broken and nothing is lost; some files were simply not looked
+              at, and a curator reading "no connections were detected" needs
+              to know whether that means "none" or "none, and four scripts
+              were never opened". Those are different answers.
+
+              Path and reason only. No line of anybody's source appears here,
+              in the response, or anywhere a provider could be handed it. */}
+          {unreadCode.length > 0 && (
+            <Alert
+              severity="info"
+              variant="outlined"
+              data-testid="code-scan-notice"
+              sx={{ minWidth: 0, py: 0.5 }}
+            >
+              <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+                Some scripts were not analyzed due to file size or unreadable
+                source.
+              </Typography>
+              <Button
+                size="small"
+                onClick={() => setUnreadOpen((was) => !was)}
+                aria-expanded={unreadOpen}
+                aria-controls="code-scan-unread"
+                data-testid="code-scan-details"
+                sx={{ px: 0 }}
+              >
+                {unreadOpen ? "Hide details" : "Details"}
+              </Button>
+              <Collapse in={unreadOpen} unmountOnExit>
+                <Box
+                  id="code-scan-unread"
+                  component="ul"
+                  data-testid="code-scan-unread"
+                  sx={{ listStyle: "none", m: 0, p: 0 }}
+                >
+                  {unreadCode.map((entry) => (
+                    <Typography
+                      key={`${entry.path}:${entry.reason}`}
+                      component="li"
+                      variant="caption"
+                      display="block"
+                      sx={{ overflowWrap: "anywhere" }}
+                    >
+                      {`${entry.path} — ${
+                        SKIP_REASONS[entry.reason] || "not analyzed"
+                      }`}
+                    </Typography>
+                  ))}
+                </Box>
+              </Collapse>
+            </Alert>
+          )}
           {loading && (
             <Box sx={{ display: "flex", gap: 2, alignItems: "center" }}>
               <CircularProgress size={20} />

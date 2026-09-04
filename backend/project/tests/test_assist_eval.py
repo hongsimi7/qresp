@@ -1101,7 +1101,8 @@ class TestCollectRcc(CliTestCase):
             tls_exception_scope=mock.Mock(
                 side_effect=lambda url: contextlib.nullcontext()),
             walk_folder=mock.Mock(side_effect=walk),
-            _fetch_text=mock.Mock(return_value="README: raw patterns"),
+            _fetch_text_sized=mock.Mock(
+                return_value=("README: raw patterns", False)),
             analyze_folder_tree=mock.Mock(
                 return_value=analysis or self.ANALYSIS))
 
@@ -1249,9 +1250,10 @@ class TestCollectRccAgainstTheRealAnalyzer(CliTestCase):
             tls_exception_scope=mock.Mock(
                 side_effect=lambda url: contextlib.nullcontext()),
             walk_folder=mock.Mock(return_value=(files, dirs, [], False)),
-            _fetch_text=mock.Mock(
-                side_effect=lambda url: texts.get(url.rsplit("/", 1)[-1],
-                                                  "# a short header")))
+            _fetch_text_sized=mock.Mock(
+                side_effect=lambda url: (
+                    texts.get(url.rsplit("/", 1)[-1], "# a short header"),
+                    False)))
 
     def collect_one(self, files, dirs):
         self.write_records(corpus(1))
@@ -1411,7 +1413,7 @@ class TestRccCacheFormat(CliTestCase):
                 tls_exception_scope=mock.Mock(
                     side_effect=lambda url: contextlib.nullcontext()),
                 walk_folder=mock.Mock(side_effect=walk),
-                _fetch_text=mock.Mock(return_value="readme")):
+                _fetch_text_sized=mock.Mock(return_value=("readme", False))):
             self.run_cli(["collect-rcc", "--output-dir", self.dir,
                           "--execute", "--limit", "1", "--rate-limit", "0"]
                          + list(extra))
