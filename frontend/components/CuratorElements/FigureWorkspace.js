@@ -46,6 +46,11 @@ import SpotlightContext from "../../Context/Spotlight/spotlightContext";
 import { displayUrl, noteFor } from "../../Utils/externalData";
 import { artifactLabel } from "../../Utils/artifactLabel";
 import {
+  codeLinkKey,
+  codeSuggestions,
+  describeEvidence,
+} from "../../Utils/codeSuggestions";
+import {
   CHART,
   CONSUMES,
   DATASET,
@@ -498,6 +503,9 @@ const FigureWorkspace = () => {
   const {
     charts, scripts, datasets, tools, heads,
     fileServerPath, workflow, addEdge, unlink, del,
+    // The last folder analysis, for the file I/O its scripts stated. Read
+    // only; this never triggers a scan of its own.
+    rccAnalysisCache,
   } = useContext(CuratorContext);
   const {
     openForm, setDefault, setExternalNodeFormOpen,
@@ -506,6 +514,8 @@ const FigureWorkspace = () => {
   // Only the rows do, one level down -- see SpotlightContext.
 
   const [notice, setNotice] = useState("");
+  // Code-detected relationships the curator has waved away, this session.
+  const [ignoredCode, setIgnoredCode] = useState({});
   // Which row's "Add new" / overflow menu is open, and which shared node was
   // last jumped to from a reference row.
   // ONE WAY IN, asking one question at a time.
@@ -592,6 +602,28 @@ const FigureWorkspace = () => {
 
   const idSignature = knownIds.join(",");
   const edges = (workflow && workflow.edges) || [];
+
+  // WHAT THE SCRIPTS THEMSELVES SAY.
+  //
+  // The last folder analysis reported the file reads and writes written in
+  // this folder's own Python and notebooks -- parsed, never run, and never
+  // sent anywhere. Here each fact is matched against the artifacts actually
+  // in the draft: a suggestion exists only when the path in the code is
+  // exactly a path an artifact stores, at both ends.
+  //
+  // Derived on every render from the analysis and the draft, so accepting
+  // one, unlinking it, or editing an artifact's files is reflected without
+  // anything being stored.
+  const detected = useMemo(
+    () =>
+      codeSuggestions(
+        ((rccAnalysisCache || {}).data || {}).code_links || [],
+        byId,
+        edges
+      ).filter((item) => !ignoredCode[codeLinkKey(item)]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rccAnalysisCache, byId, edges, ignoredCode]
+  );
 
   // THE POST-SAVE LINK.
   //
@@ -685,6 +717,38 @@ const FigureWorkspace = () => {
     addEdge({ from: item.from, to: item.to, type: item.type });
     revealRow(source);
   };
+
+  /**
+   * Accept one relationship the code stated.
+   *
+   * Through the SAME guards as the manual paths -- `edgeProblem` for whether
+   * the edge is allowed at all, `closesLoop` for whether it needs asking
+   * about -- rather than trusting a suggestion that was computed before the
+   * curator's last few clicks. Between rendering this and pressing it they
+   * may have made the same connection by hand, or made one that turns this
+   * into a loop.
+   */
+  const acceptDetected = (item) => {
+    setNotice("");
+    const edge = item.edge;
+    if (hasEdge(edges, edge.from, edge.to)) return;
+    const problem = edgeProblem(edge, knownIds, edges);
+    if (problem) {
+      setNotice(problem);
+      return;
+    }
+    if (closesLoop(edges, edge)) {
+      // The existing question, asked the existing way, and answered onto the
+      // edge as `feedback` if they say yes.
+      setLoopAsk({ safe: [], loops: [edge] });
+      return;
+    }
+    applyEdges([edge]);
+    revealRow(edge.from);
+  };
+
+  const dismissDetected = (item) =>
+    setIgnoredCode((was) => ({ ...was, [codeLinkKey(item)]: true }));
 
   const dismissSuggestion = (item) =>
     setDismissed((was) => ({ ...was, [suggestionKey(item)]: true }));
@@ -1668,6 +1732,107 @@ const FigureWorkspace = () => {
           {notice}
         </Alert>
       ) : null}
+
+      {/* WHAT THE SCRIPTS SAY, when they say anything.
+          Rendered only when there is something to show: an empty panel
+          announcing that nothing was found is a thing to read and dismiss
+          every time the section is opened. */}
+      {detected.length > 0 && (
+        <Box
+          data-testid="fw-detected"
+          sx={{
+            mb: 2,
+            p: 1.5,
+            minWidth: 0,
+            border: 1,
+            borderColor: "divider",
+            borderRadius: 1,
+          }}
+        >
+          <Typography variant="subtitle2">Detected from code</Typography>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            display="block"
+            sx={{ mb: 1 }}
+          >
+            Read out of your scripts&rsquo; own source: each one below is a
+            file path written in the code. Nothing is connected until you say
+            so.
+          </Typography>
+          <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
+            {detected.map((item) => (
+              <Box
+                component="li"
+                key={codeLinkKey(item)}
+                data-testid={`fw-detected-${item.edge.from}-${item.edge.to}`}
+                sx={{ mb: 1, minWidth: 0 }}
+              >
+                {/* THE ARROW AS IT WILL BE STORED, in that order, so the
+                    direction a curator approves is the direction the record
+                    keeps. */}
+                <Box
+                  sx={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    gap: 0.75,
+                    minWidth: 0,
+                  }}
+                >
+                  <KindChip id={item.edge.from} />
+                  <Typography
+                    variant="body2"
+                    sx={{ overflowWrap: "anywhere", minWidth: 0 }}
+                  >
+                    {label(item.edge.from)}
+                  </Typography>
+                  <Typography variant="body2" aria-hidden="true">
+                    →
+                  </Typography>
+                  <KindChip id={item.edge.to} />
+                  <Typography
+                    variant="body2"
+                    sx={{ overflowWrap: "anywhere", minWidth: 0 }}
+                  >
+                    {label(item.edge.to)}
+                  </Typography>
+                  <RowAction
+                    onClick={() => acceptDetected(item)}
+                    aria-label={`Connect ${label(item.edge.from)} to ${label(
+                      item.edge.to
+                    )}`}
+                    data-testid={`fw-detected-connect-${item.edge.from}-${item.edge.to}`}
+                  >
+                    Connect
+                  </RowAction>
+                  <RowAction
+                    onClick={() => dismissDetected(item)}
+                    aria-label={`Dismiss ${label(item.edge.from)} to ${label(
+                      item.edge.to
+                    )}`}
+                    data-testid={`fw-detected-dismiss-${item.edge.from}-${item.edge.to}`}
+                  >
+                    Dismiss
+                  </RowAction>
+                </Box>
+                {/* THE EVIDENCE: which file, which line or cell, and the
+                    path exactly as it appears there. A curator can open the
+                    script and check it in one look. */}
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  display="block"
+                  data-testid={`fw-detected-evidence-${item.edge.from}-${item.edge.to}`}
+                  sx={{ overflowWrap: "anywhere", fontFamily: "monospace" }}
+                >
+                  {describeEvidence(item.evidence)}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      )}
 
       {/* THE PAPER'S RESOURCES, in one flat list.
           Sorted by kind so the same thing is always in the same place, and

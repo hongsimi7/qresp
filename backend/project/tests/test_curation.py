@@ -1728,3 +1728,83 @@ class TestDescribeCandidatesResponse(DescribeCandidatesBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCodeLinksInTheResponse(CurationTestBase):
+    """The file I/O a folder's own scripts state, end to end.
+
+    The parsing itself is covered in test_codelinks. What is checked here is
+    that the analysis carries it, that a folder saying nothing says nothing,
+    and that none of it costs a provider call.
+    """
+
+    SOURCES = dict(TEXTS, **{
+        "scripts/plot_vdos.py":
+            '"""Plot the vibrational density of states."""\n'
+            "import numpy as np\n"
+            "import matplotlib.pyplot as plt\n"
+            "vdos = np.loadtxt('data/VDOS/vdos.dat')\n"
+            "plt.savefig('figures/figure1.png')\n",
+        "scripts/compute_dipoles.py":
+            "import numpy as np\n"
+            "raw = np.loadtxt('data/dipoles/dipoles.dat')\n"
+            "np.save('data/vlocal/vlocal.cube', raw)\n",
+    })
+
+    def test_it_reports_what_the_scripts_say_they_read_and_write(self):
+        self.login()
+        response, _, _ = self.analyze(texts=self.SOURCES)
+        self.assertEqual(200, response.status_code)
+        links = response.json()["code_links"]
+
+        pairs = sorted((link["script"], link["mode"], link["path"])
+                       for link in links)
+        self.assertEqual(pairs, [
+            ("scripts/compute_dipoles.py", "read", "data/dipoles/dipoles.dat"),
+            ("scripts/compute_dipoles.py", "write", "data/vlocal/vlocal.cube"),
+            ("scripts/plot_vdos.py", "read", "data/VDOS/vdos.dat"),
+            ("scripts/plot_vdos.py", "write", "figures/figure1.png"),
+        ])
+        # Each one carries the line a curator can go and read.
+        for link in links:
+            self.assertGreater(link["line"], 0)
+            self.assertTrue(link["call"])
+            self.assertTrue(link["literal"])
+
+    def test_it_says_how_much_of_the_folder_it_read(self):
+        self.login()
+        response, _, _ = self.analyze(texts=self.SOURCES)
+        scan = response.json()["code_scan"]
+        self.assertEqual(2, scan["scripts_found"])
+        self.assertEqual(2, scan["scripts_read"])
+        self.assertIn("max_scripts", scan)
+
+    def test_a_folder_whose_scripts_say_nothing_reports_nothing(self):
+        # The reference fixture's scripts import numpy and print. There is no
+        # file I/O in them, so there is nothing to suggest -- and an empty
+        # list is what the UI needs to render no section at all.
+        self.login()
+        response, _, _ = self.analyze()
+        self.assertEqual([], response.json()["code_links"])
+
+    def test_a_script_that_cannot_be_read_does_not_fail_the_analysis(self):
+        self.login()
+        broken = dict(self.SOURCES)
+        broken["scripts/compute_dipoles.py"] = "def broken(:\n"
+        response, _, _ = self.analyze(texts=broken)
+        self.assertEqual(200, response.status_code)
+        scripts = {link["script"] for link in response.json()["code_links"]}
+        self.assertEqual({"scripts/plot_vdos.py"}, scripts)
+        # ...and the folder is still classified exactly as before.
+        self.assertTrue(response.json()["candidates"]["charts"])
+
+    def test_no_provider_is_called_and_nothing_is_executed(self):
+        # The scan is `ast.parse` over text already fetched for evidence. A
+        # provider call would need the AI endpoint, its consent and its quota,
+        # none of which this path touches.
+        self.login()
+        with mock.patch("project.assist.call_gemini") as gemini:
+            response, _, _ = self.analyze(texts=self.SOURCES)
+        self.assertEqual(200, response.status_code)
+        gemini.assert_not_called()
+        self.assertTrue(response.json()["code_links"])

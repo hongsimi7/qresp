@@ -34,6 +34,7 @@ from urllib.parse import unquote, urljoin, urlparse
 import requests
 from lxml import html
 
+from project import codelinks
 from project import evidence as ev
 from project import folderstandard as fs
 from project.auth import csrf_protect, get_current_user
@@ -66,6 +67,12 @@ REQUEST_TIMEOUT = 15
 # excluded from evidence reads outright.
 MAX_TEXT_FILES = 60
 MAX_TEXT_BYTES = 200000
+
+# Scripts and notebooks read for their FILE I/O (see project/codelinks.py).
+# A separate, smaller budget from the evidence reads above: this pass wants
+# whole source files rather than headers, and it must not be able to crowd
+# out the evidence a candidate is built from.
+MAX_CODE_FILES = 25
 MAX_SCRIPT_HEADER_CHARS = 4000
 MAX_EVIDENCE_TEXT_CHARS = 20000
 # Unclassified files are shown grouped by folder in the UI, so a larger cap
@@ -1283,6 +1290,33 @@ def plan_evidence_reads(files, dirs, boundaries=None):
                          MAX_TEXT_FILES)
 
 
+def _code_sources(root_url, files, texts):
+    """The source of this folder's scripts and notebooks, up to a cap.
+
+    Whatever the evidence pass already fetched is REUSED rather than
+    re-requested; only the scripts it did not reach cost a request, and only
+    up to MAX_CODE_FILES of them. A folder with more scripts than that gets
+    the first ones in path order -- deterministic, and stated in the
+    response so the UI never has to imply it read everything.
+    """
+    wanted = sorted(
+        path for path in files
+        if path.lower().endswith((codelinks.SCRIPT_SUFFIX,
+                                  codelinks.NOTEBOOK_SUFFIX)))
+    sources = {}
+    for path in wanted[:MAX_CODE_FILES]:
+        if path in texts:
+            sources[path] = texts[path]
+            continue
+        try:
+            sources[path] = _fetch_text(root_url + "/" + path)
+        except Exception as e:
+            # One unreadable script skips itself. It is never a reason to
+            # fail the folder analysis.
+            print("Code read skipped (%s)" % type(e).__name__)
+    return sources, len(wanted)
+
+
 @csrf_protect
 def analyze_folder(body):
     """
@@ -1328,6 +1362,20 @@ def analyze_folder(body):
                 # One unreadable file (a corrupt notebook, a permission error)
                 # skips its own evidence and nothing else.
                 print("Evidence read skipped (%s)" % type(e).__name__)
+        # WHAT THE CODE ITSELF SAYS about the files it reads and writes.
+        # Deterministic, parsed not executed, and never sent anywhere: see
+        # project/codelinks.py. A failure here is not a failure of the
+        # analysis -- the folder is still classified exactly as before.
+        code_links = []
+        code_scanned = 0
+        code_total = 0
+        try:
+            code_sources, code_total = _code_sources(root_url, files, texts)
+            code_scanned = len(code_sources)
+            code_links = codelinks.scan_sources(code_sources, files)
+        except Exception as e:
+            print("Code link scan skipped (%s)" % type(e).__name__)
+
         readable_total = len([p for p in files if ev.readable(p)])
         if readable_total > len(wanted):
             notes.append(
@@ -1380,6 +1428,16 @@ def analyze_folder(body):
         # whether a missing key means "no images" or "older server".
         "chart_image_groups": result.get("chart_image_groups") or [],
         "applied_chart_plan": result.get("applied_chart_plan") or [],
+        # File reads and writes stated in the scripts' OWN code. Facts, not
+        # relationships: each names a script, a file it touches, and the line
+        # that says so. Turning a pair into a workflow arrow needs the draft
+        # artifacts, which live in the browser.
+        "code_links": code_links,
+        "code_scan": {
+            "scripts_found": code_total,
+            "scripts_read": code_scanned,
+            "max_scripts": MAX_CODE_FILES,
+        },
         "candidates": result,
     }, 200
 

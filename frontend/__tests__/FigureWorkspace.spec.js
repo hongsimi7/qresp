@@ -2160,3 +2160,195 @@ describe("a row is compact until it is asked", () => {
     expect(screen.queryByTestId("fw-wiring-t0")).toBeNull();
   });
 });
+
+// WHAT THE SCRIPTS THEMSELVES SAY.
+//
+// The backend parses each script and notebook and reports the file reads and
+// writes written in them. A suggestion here is a line of code, not a
+// resemblance between two names, and it is never acted on until a curator
+// presses Connect.
+describe("relationships detected in the code", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  const FILES = {
+    charts: [{ id: "c0", caption: "Density of states",
+               imageFile: "figures/dos.png" }],
+    scripts: [{ id: "s0", readme: "plot_dos.py",
+                files: ["scripts/plot_dos.py"] }],
+    datasets: [{ id: "d0", readme: "raw data", files: ["data/raw.csv"] }],
+    workflow: { nodes: [], edges: [] },
+  };
+
+  const analysis = (links) => ({
+    rccAnalysisCache: { path: "/proj", data: { code_links: links } },
+  });
+
+  const READ = {
+    script: "scripts/plot_dos.py",
+    path: "data/raw.csv",
+    mode: "read",
+    call: "pandas.read_csv",
+    literal: "data/raw.csv",
+    line: 12,
+    cell: null,
+  };
+
+  const SAVES = {
+    script: "scripts/plot_dos.py",
+    path: "figures/dos.png",
+    mode: "write",
+    call: "matplotlib.pyplot.savefig",
+    literal: "figures/dos.png",
+    line: 40,
+    cell: null,
+  };
+
+  it("shows the arrow it would store, and the line that says so", () => {
+    renderWorkspace({ ...FILES, ...analysis([READ, SAVES]) });
+
+    const section = within(screen.getByTestId("fw-detected"));
+    expect(section.getByText("Detected from code")).toBeInTheDocument();
+    // The word AI appears nowhere: nothing here asked a model anything.
+    expect(screen.getByTestId("fw-detected").textContent).not.toMatch(/\bAI\b/);
+
+    // The direction as it will be stored, in that order.
+    const read = screen.getByTestId("fw-detected-d0-s0");
+    expect(read).toHaveTextContent("raw data");
+    expect(read).toHaveTextContent("plot_dos.py");
+    expect(
+      screen.getByTestId("fw-detected-evidence-d0-s0")
+    ).toHaveTextContent(
+      'scripts/plot_dos.py, line 12 — pandas.read_csv("data/raw.csv")'
+    );
+
+    // And the other way round for what the script writes.
+    expect(
+      screen.getByTestId("fw-detected-evidence-s0-c0")
+    ).toHaveTextContent(
+      'scripts/plot_dos.py, line 40 — matplotlib.pyplot.savefig'
+    );
+  });
+
+  it("creates nothing at all until Connect is pressed", () => {
+    const ctx = renderWorkspace({ ...FILES, ...analysis([READ, SAVES]) });
+    expect(screen.getByTestId("fw-detected")).toBeInTheDocument();
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+    expect(ctx.del).not.toHaveBeenCalled();
+    expect(ctx.unlink).not.toHaveBeenCalled();
+  });
+
+  it("makes exactly one edge, in the stored direction", async () => {
+    const u = user();
+    const ctx = renderWorkspace({ ...FILES, ...analysis([READ]) });
+
+    await u.click(screen.getByTestId("fw-detected-connect-d0-s0"));
+    expect(ctx.addEdge).toHaveBeenCalledTimes(1);
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "d0",
+      to: "s0",
+      type: "consumes",
+    });
+  });
+
+  it("opens the row the new arrow starts from", async () => {
+    const u = user();
+    renderWorkspace({ ...FILES, ...analysis([READ]) });
+    await u.click(screen.getByTestId("fw-detected-connect-d0-s0"));
+    // d0 already has no stored edges in this fixture, so what is checked is
+    // the intent: the row worked on is the one that opens, not a spray.
+    expect(screen.queryByTestId("fw-wiring-c0")).toBeNull();
+  });
+
+  it("says nothing about a relationship the record already has", () => {
+    renderWorkspace({
+      ...FILES,
+      workflow: {
+        nodes: [],
+        edges: [{ from: "d0", to: "s0", type: "consumes" }],
+      },
+      ...analysis([READ]),
+    });
+    expect(screen.queryByTestId("fw-detected-d0-s0")).toBeNull();
+    // With nothing left to suggest, the section is not rendered at all --
+    // no empty panel, no "nothing found".
+    expect(screen.queryByTestId("fw-detected")).toBeNull();
+  });
+
+  it("renders no section when the scripts said nothing", () => {
+    renderWorkspace({ ...FILES, ...analysis([]) });
+    expect(screen.queryByTestId("fw-detected")).toBeNull();
+  });
+
+  it("renders no section when there was no analysis at all", () => {
+    renderWorkspace(FILES);
+    expect(screen.queryByTestId("fw-detected")).toBeNull();
+  });
+
+  it("changes nothing when a suggestion is dismissed", async () => {
+    const u = user();
+    const ctx = renderWorkspace({ ...FILES, ...analysis([READ, SAVES]) });
+
+    await u.click(screen.getByTestId("fw-detected-dismiss-d0-s0"));
+    expect(screen.queryByTestId("fw-detected-d0-s0")).toBeNull();
+    // The other one is untouched, and nothing was written.
+    expect(screen.getByTestId("fw-detected-s0-c0")).toBeInTheDocument();
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+    expect(ctx.unlink).not.toHaveBeenCalled();
+    expect(ctx.del).not.toHaveBeenCalled();
+  });
+
+  it("asks about a loop before making one, the way every other path does", async () => {
+    const u = user();
+    // s0 already reaches d0, so d0 -> s0 closes the loop.
+    const ctx = renderWorkspace({
+      ...FILES,
+      workflow: {
+        nodes: [],
+        edges: [{ from: "s0", to: "d0", type: "links_to" }],
+      },
+      ...analysis([READ]),
+    });
+
+    await u.click(screen.getByTestId("fw-detected-connect-d0-s0"));
+    // Nothing yet: the existing question is asked first.
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("fw-loop-dialog")).toBeInTheDocument();
+
+    await u.click(screen.getByTestId("fw-loop-confirm"));
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "d0",
+      to: "s0",
+      type: "consumes",
+      feedback: true,
+    });
+  });
+
+  it("does not duplicate an artifact to serve two scripts", async () => {
+    const u = user();
+    const ctx = renderWorkspace({
+      charts: [],
+      scripts: [
+        { id: "s0", readme: "a.py", files: ["scripts/a.py"] },
+        { id: "s1", readme: "b.py", files: ["scripts/b.py"] },
+      ],
+      datasets: [{ id: "d0", readme: "shared", files: ["data/shared.csv"] }],
+      workflow: { nodes: [], edges: [] },
+      ...analysis([
+        { ...READ, script: "scripts/a.py", path: "data/shared.csv" },
+        { ...READ, script: "scripts/b.py", path: "data/shared.csv" },
+      ]),
+    });
+
+    await u.click(screen.getByTestId("fw-detected-connect-d0-s0"));
+    await u.click(screen.getByTestId("fw-detected-connect-d0-s1"));
+
+    expect(ctx.addEdge).toHaveBeenCalledTimes(2);
+    // Two arrows OUT OF THE SAME dataset. Nothing was cloned to make the
+    // second one.
+    expect(ctx.addEdge.mock.calls.map(([edge]) => edge)).toEqual([
+      { from: "d0", to: "s0", type: "consumes" },
+      { from: "d0", to: "s1", type: "consumes" },
+    ]);
+    expect(screen.getAllByTestId(/^fw-node-d/)).toHaveLength(1);
+  });
+});

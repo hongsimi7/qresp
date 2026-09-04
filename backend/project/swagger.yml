@@ -1144,6 +1144,13 @@ paths:
             "chart" only for the single image the deterministic rule would
             have picked, "review" otherwise. applied_chart_plan echoes the
             validated plan actually in force, sorted by path.
+            code_links is always present: the file reads and writes stated in
+            the scripts' and notebooks' OWN source, as
+            {script, path, mode: read|write, call, literal, line, cell}.
+            Source is PARSED, never executed, and only literal string paths
+            that resolve to a file this scan found are reported; no AI
+            provider is involved. code_scan reports how many scripts were
+            found and how many were read.
         400:
           description: Missing, malformed, or out-of-root folder path, or a
             rejected boundary selection or chart plan
