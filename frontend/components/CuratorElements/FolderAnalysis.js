@@ -27,6 +27,7 @@ import {
 
 import { RegularStyledButton } from "../button";
 import CuratorContext from "../../Context/Curator/curatorContext";
+import CuratorHelperContext from "../../Context/CuratorHelpers/curatorHelperContext";
 import AlertContext from "../../Context/Alert/alertContext";
 import { buildFileUrl } from "../../Utils/fileServerUrl";
 import {
@@ -361,8 +362,16 @@ const FolderAnalysis = ({
     rccAnalysisCache,
     cacheRccAnalysis,
     collectDraftState,
+    charts,
+    datasets,
+    scripts,
+    tools,
   } = useContext(CuratorContext) || {};
   const { setAlert } = useContext(AlertContext) || {};
+  // The type's own Add form -- the same one manual entry uses -- for the
+  // metadata a folder cannot contain. Nothing new is built here.
+  const helpers = useContext(CuratorHelperContext) || {};
+  const { openForm, setDefault } = helpers;
   const typedGroup = artifactType ? GROUP_BY_TYPE[artifactType] : null;
 
   // Type-specific imports use the saved Curator path. The optional explicit
@@ -377,6 +386,11 @@ const FolderAnalysis = ({
   const [drafts, setDrafts] = useState({});
   const [selected, setSelected] = useState({});
   const [removed, setRemoved] = useState({});
+  // One candidate is with its own Add form right now; and the names of the
+  // ones that came back from it saved, so the list can say where they went
+  // instead of letting a card disappear without explanation.
+  const [handoff, setHandoff] = useState(null);
+  const [completed, setCompleted] = useState([]);
   const [detailsOpen, setDetailsOpen] = useState({});
   const [editOpen, setEditOpen] = useState({});
   const [showUnclassified, setShowUnclassified] = useState({});
@@ -472,6 +486,8 @@ const FolderAnalysis = ({
     setDrafts({});
     setSelected({});
     setRemoved({});
+    setHandoff(null);
+    setCompleted([]);
     setDetailsOpen({});
     setEditOpen({});
     setShowUnclassified({});
@@ -508,6 +524,8 @@ const FolderAnalysis = ({
     setChartRoles({});
     setSelected({});
     setRemoved({});
+    setHandoff(null);
+    setCompleted([]);
     setEditOpen({});
     setDetailsOpen({});
     setAiSuggestions({});
@@ -624,6 +642,90 @@ const FolderAnalysis = ({
 
   const selectedCount = selectedCandidates.length;
 
+  // WHAT AN IMPORT IS ALLOWED TO CREATE.
+  //
+  // The same contract manual entry enforces: `missingRequired` from
+  // Utils/artifactFields, which is what the Add/Edit form's own resolver
+  // checks and what the server's schema.json requires at publish. Import was
+  // the one door into the Curator that did not check it -- a folder holding
+  // an image became a Chart with no caption, no figure number and no
+  // keywords, and the refusal arrived at publish, long after the folder was
+  // closed and the person who knew the answer had moved on.
+  //
+  // Nothing here re-states which fields those are. Asking the contract is
+  // the whole point: a field that becomes required for manual entry becomes
+  // required for import in the same commit.
+  const missingFor = (candidate) =>
+    missingRequired(candidate.kind, drafts[candidate.id] || {});
+
+  const readyToAdd = (candidate) => missingFor(candidate).length === 0;
+
+  const namesOf = (candidate) =>
+    missingFor(candidate).map((field) => labelFor(candidate.kind, field));
+
+  // The selected candidates that cannot be added yet, with what each one
+  // still needs. Read by the button, by the explanation under it, and by
+  // apply() -- so they cannot disagree about what is blocked.
+  const blockedSelected = selectedCandidates
+    .filter((candidate) => !readyToAdd(candidate))
+    .map((candidate) => ({
+      id: candidate.id,
+      name: labelOf(candidate).primary,
+      missing: namesOf(candidate),
+    }));
+
+  const countFor = (type) =>
+    ({ chart: charts, dataset: datasets, script: scripts, tool: tools }[type] ||
+      []).length;
+
+  // HANDING ONE CANDIDATE TO ITS OWN FORM.
+  //
+  // A folder can hold a script; it cannot hold the figure number that script
+  // plots. That metadata is entered where it has always been entered -- the
+  // type's Add form -- prefilled with everything RCC did find, so nothing
+  // already known is retyped.
+  //
+  // `toRecord` deliberately carries no id, so the form takes its `add`
+  // branch and mints one: exactly one artifact, indistinguishable from a
+  // hand-entered one. Cancel closes that form and writes nothing.
+  const completeInForm = (candidate) => {
+    if (!openForm || !setDefault) return;
+    setHandoff({
+      id: candidate.id,
+      type: candidate.kind,
+      name: labelOf(candidate).primary,
+      before: countFor(candidate.kind),
+    });
+    setDefault(candidate.kind, toRecord(candidate.kind, drafts[candidate.id]));
+    openForm(candidate.kind);
+  };
+
+  // Did that form save, or was it cancelled?
+  //
+  // The form owns the answer and reports it the only way it can: a new
+  // artifact appears in the Curator. One more of that type means saved, so
+  // the candidate leaves the list -- otherwise "Add selected" could add a
+  // second copy of an artifact that already exists. The form closing with
+  // the count unchanged means cancelled, and the candidate stays exactly as
+  // it was, still selectable, still needing the same fields.
+  useEffect(() => {
+    if (!handoff) return;
+    if (countFor(handoff.type) > handoff.before) {
+      setRemoved((current) => ({ ...current, [handoff.id]: true }));
+      setSelected((current) => {
+        const next = { ...current };
+        delete next[handoff.id];
+        return next;
+      });
+      setCompleted((current) => current.concat(handoff.name));
+      setHandoff(null);
+      return;
+    }
+    const stillOpen = (helpers[`${handoff.type}sHelper`] || {}).open;
+    if (!stillOpen) setHandoff(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [charts, datasets, scripts, tools, handoff, helpers]);
+
   // Everything the AI action may see, built here so the allowlist is visible:
   // the SELECTED candidate's id/kind, its display name, its RELATIVE paths,
   // its file-kind inventory, and the STRUCTURED evidence the backend already
@@ -737,6 +839,13 @@ const FolderAnalysis = ({
   };
 
   const apply = () => {
+    // ALL OR NOTHING. Adding the ready ones and silently leaving the rest
+    // would be the worst of the three outcomes: the curator asked for a
+    // batch, gets a smaller one, and has to work out which folder is
+    // missing from a list they have already scrolled past. The button is
+    // disabled for the same reason; this is the guard behind it, because a
+    // disabled button is a hint and not a rule.
+    if (blockedSelected.length) return;
     let total = 0;
     (typedGroup ? [typedGroup] : GROUPS).forEach(({ key, type }) => {
       if (!type) return;
@@ -1234,21 +1343,37 @@ const FolderAnalysis = ({
                 Evidence is untouched behind the card: it still orders
                 candidates, bounds what may be sent to the AI, and decides
                 when the AI abstains. */}
-            {needs.length > 0 && (
-              <Tooltip
-                title={`Missing: ${needs
+            {/* WHERE THIS CANDIDATE STANDS, said in words rather than
+                counted. "3 required fields missing" was true and useless:
+                it told a curator to go looking. The fields have names, and
+                the names are what they need. */}
+            {needs.length > 0 ? (
+              <Chip
+                size="small"
+                color="warning"
+                variant="outlined"
+                label={`Needs information: ${needs
                   .map((field) => labelFor(candidate.kind, field))
                   .join(", ")}`}
-              >
-                <Chip
-                  size="small"
-                  color="warning"
-                  label={`${needs.length} required field${
-                    needs.length === 1 ? "" : "s"
-                  } missing`}
-                  data-testid={`needs-input-${candidate.id}`}
-                />
-              </Tooltip>
+                data-testid={`needs-input-${candidate.id}`}
+                sx={{
+                  height: "auto",
+                  maxWidth: "100%",
+                  "& .MuiChip-label": {
+                    whiteSpace: "normal",
+                    overflowWrap: "anywhere",
+                    py: 0.25,
+                  },
+                }}
+              />
+            ) : (
+              <Chip
+                size="small"
+                color="success"
+                variant="outlined"
+                label="Ready to add"
+                data-testid={`ready-${candidate.id}`}
+              />
             )}
           </Box>
           <Box
@@ -1269,6 +1394,16 @@ const FolderAnalysis = ({
                 data-testid={`enhance-${candidate.id}`}
               >
                 {aiLoading[candidate.id] ? "Asking AI…" : "Enhance with AI"}
+              </Button>
+            )}
+            {needs.length > 0 && openForm && setDefault && (
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => completeInForm(candidate)}
+                data-testid={`complete-${candidate.id}`}
+              >
+                Complete in form
               </Button>
             )}
             <Button size="small" onClick={() => toggle(setDetailsOpen, candidate.id)}>
@@ -1547,11 +1682,13 @@ const FolderAnalysis = ({
               *
             </Box>{" "}
             Required to Save, Update, or Publish.{" "}
-            {/* The one distinction that is NOT redundant with the line above:
-                an incomplete proposal is still allowed INTO the Curator. It
-                just cannot leave it. */}
+            {/* And required to ADD, which is the change: an incomplete
+                proposal used to be allowed into the Curator and refused at
+                publish, by the server, long after the folder was closed.
+                This line promised exactly that, so it had to go with it. */}
             <Box component="span">
-              Proposals can be added with these blank and completed later.
+              A proposal is added once its required fields are filled — here
+              on the card, or in the artifact&rsquo;s own form.
             </Box>
           </Typography>
           {loading && (
@@ -2086,12 +2223,70 @@ const FolderAnalysis = ({
             </Fragment>
           )}
         </DialogContent>
-        <DialogActions sx={{ flexShrink: 0, flexWrap: "wrap", gap: 1 }}>
+        <DialogActions
+          sx={{
+            flexShrink: 0,
+            flexWrap: "wrap",
+            gap: 1,
+            // The reason sits above the row it explains, full width, so a
+            // long list of field names wraps instead of squeezing the
+            // buttons off a narrow screen.
+            justifyContent: "flex-end",
+          }}
+        >
+          {completed.length > 0 && (
+            <Alert
+              severity="success"
+              variant="outlined"
+              data-testid="completed-summary"
+              sx={{ width: "100%", minWidth: 0, py: 0.5 }}
+            >
+              <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+                {`Added from its own form: ${completed.join(", ")}. `}
+                {completed.length === 1 ? "It is" : "They are"} off this list
+                now, so nothing here can add a second copy.
+              </Typography>
+            </Alert>
+          )}
+          {blockedSelected.length > 0 && (
+            <Alert
+              severity="warning"
+              variant="outlined"
+              data-testid="blocked-summary"
+              sx={{ width: "100%", minWidth: 0, py: 0.5 }}
+            >
+              <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+                {blockedSelected.length === 1
+                  ? "One selected item is not ready to add:"
+                  : `${blockedSelected.length} selected items are not ready ` +
+                    "to add:"}
+              </Typography>
+              {blockedSelected.map((item) => (
+                <Typography
+                  key={item.id}
+                  variant="body2"
+                  data-testid={`blocked-${item.id}`}
+                  sx={{ overflowWrap: "anywhere" }}
+                >
+                  {`${item.name} — needs ${item.missing.join(", ")}`}
+                </Typography>
+              ))}
+              <Typography variant="caption" display="block">
+                Fill these in on the card, or use “Complete in form”. Nothing
+                is added until every selected item is ready.
+              </Typography>
+            </Alert>
+          )}
           <Button onClick={close}>Cancel</Button>
           <Button
             variant="contained"
-            disabled={selectedCount === 0 || invalidStructure}
+            disabled={
+              selectedCount === 0 ||
+              invalidStructure ||
+              blockedSelected.length > 0
+            }
             onClick={apply}
+            data-testid="apply-selected"
           >
             {typedGroup
               ? `Add selected ${typedGroup.noun || typedGroup.label}`
