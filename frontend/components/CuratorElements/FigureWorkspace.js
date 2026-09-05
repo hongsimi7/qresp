@@ -56,14 +56,16 @@ import {
   toRecord,
 } from "../../Utils/artifactFields";
 import {
+  cappedSources,
   describeEvidence,
   detectionKey,
   detectionsFor,
+  evidenceAt,
   groupDetections,
   GROUP_LABEL,
   ownerOf,
   proposalSeed,
-  sourceOf,
+  sourcesOf,
 } from "../../Utils/codeSuggestions";
 import {
   CHART,
@@ -526,10 +528,19 @@ const LinkDialog = ({
  * "Add selected suggestions" writes anything, and closing writes nothing at
  * all.
  */
+// Why a source was not read, said plainly. The wire values come from the
+// analysis (project/codelinks.py) and from this component's own cap; neither
+// is ever shown raw.
+const SKIP_WORDS = {
+  size_limit: "too large to read in full",
+  parse_error: "could not be read as source",
+  source_cap: "beyond the number of source files reviewed at once",
+};
+
 const DetectDialog = ({
   scriptId,
   scriptName,
-  sourceFile,
+  sources,
   detections,
   skipped,
   picked,
@@ -561,12 +572,27 @@ const DetectDialog = ({
           component="div"
           sx={{ overflowWrap: "anywhere" }}
         >
-          {`Detected from ${sourceFile || scriptName}`}
+          {`Detected from ${
+            sources.length === 1
+              ? sources[0]
+              : `${scriptName} (${sources.length} source files)`
+          }`}
         </Typography>
         <Typography variant="caption" color="text.secondary" component="div">
           Read out of this script&rsquo;s own source. Nothing is created until
           you add it.
         </Typography>
+        {sources.length > 1 && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            component="div"
+            data-testid="fw-detect-sources"
+            sx={{ overflowWrap: "anywhere", fontFamily: "monospace" }}
+          >
+            {sources.join(", ")}
+          </Typography>
+        )}
       </DialogTitle>
       <DialogContent dividers sx={{ minWidth: 0 }}>
         {/* WHAT WAS NOT READ. The same neutral diagnostic the import dialog
@@ -583,6 +609,27 @@ const DetectDialog = ({
               Some scripts were not analyzed due to file size or unreadable
               source.
             </Typography>
+            {/* By name, and why. A file that was not read is not the same as
+                a file with nothing in it, and only one of those is safe to
+                draw a conclusion from. */}
+            <Box
+              component="ul"
+              data-testid="fw-detect-skipped-list"
+              sx={{ listStyle: "none", m: 0, p: 0 }}
+            >
+              {skipped.map((entry) => (
+                <Typography
+                  key={`${entry.path}:${entry.reason}`}
+                  component="li"
+                  variant="caption"
+                  sx={{ display: "block", overflowWrap: "anywhere" }}
+                >
+                  {`${entry.path} — ${
+                    SKIP_WORDS[entry.reason] || "not analyzed"
+                  }`}
+                </Typography>
+              ))}
+            </Box>
           </Alert>
         )}
 
@@ -690,6 +737,10 @@ const DetectDialog = ({
                             >
                               {`${item.path} · found in the scanned folder`}
                             </Typography>
+                            {/* EVERY PLACE THE CODE SAYS IT. Two of a
+                                script's files can read the same dataset;
+                                that is one arrow with two reasons, and both
+                                are somewhere a curator can go and look. */}
                             <Typography
                               variant="caption"
                               color="text.secondary"
@@ -701,8 +752,26 @@ const DetectDialog = ({
                                 fontFamily: "monospace",
                               }}
                             >
-                              {describeEvidence(item.evidence)}
+                              {describeEvidence(item.evidences[0])}
                             </Typography>
+                            {item.evidences.length > 1 && (
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                component="div"
+                                data-testid={`fw-detect-more-${key}`}
+                                sx={{
+                                  display: "block",
+                                  overflowWrap: "anywhere",
+                                  fontFamily: "monospace",
+                                }}
+                              >
+                                {`also ${item.evidences
+                                  .slice(1)
+                                  .map(evidenceAt)
+                                  .join(", ")}`}
+                              </Typography>
+                            )}
                           </Box>
                         }
                       />
@@ -915,7 +984,7 @@ const FigureWorkspace = () => {
   // them: run an import, or accept that this script is not Python.
   const detectableReason = (id) => {
     if (prefixOf(id) !== SCRIPT) return "";
-    if (!sourceOf(byId[id])) {
+    if (!sourcesOf(byId[id]).length) {
       return "No supported RCC source file is available for this script.";
     }
     if (!rccAnalysisCache || !rccAnalysisCache.data) {
@@ -923,6 +992,12 @@ const FigureWorkspace = () => {
     }
     return "";
   };
+
+  // WHAT WAS NOT READ, from either end: the folder scan's own skips, and
+  // this script's sources past the cap. Both are named, neither is silent.
+  const detectSkipped = detectFor
+    ? codeSkipped.concat(cappedSources(byId[detectFor]))
+    : [];
 
   const detections = useMemo(
     () => (detectFor ? detectionsFor(codeLinks, detectFor, byId, edges) : []),
@@ -2214,9 +2289,9 @@ const FigureWorkspace = () => {
       <DetectDialog
         scriptId={detectFor}
         scriptName={detectFor ? label(detectFor) : ""}
-        sourceFile={detectFor ? sourceOf(byId[detectFor]) : ""}
+        sources={detectFor ? sourcesOf(byId[detectFor]) : []}
         detections={detections}
-        skipped={codeSkipped}
+        skipped={detectSkipped}
         picked={detectPicked}
         drafts={detectDrafts}
         tried={detectTried}

@@ -1,10 +1,12 @@
 import {
+  cappedSources,
   detectionKey,
   detectionsFor,
   describeEvidence,
   groupDetections,
+  evidenceAt,
   proposalSeed,
-  sourceOf,
+  sourcesOf,
 } from "../Utils/codeSuggestions";
 
 // A suggestion exists because a line of code says so. The backend has already
@@ -49,20 +51,43 @@ const WRITES = {
 };
 
 describe("which scripts can be looked at", () => {
-  it("finds the source file of a script that came from RCC", () => {
-    expect(sourceOf(BY_ID.s0)).toBe("scripts/plot_dos.py");
-    expect(sourceOf({ files: ["notebooks/prep.ipynb"] })).toBe(
-      "notebooks/prep.ipynb"
-    );
+  it("finds EVERY source a script records, not the first one", () => {
+    // A pipeline split in two, or a driver beside the notebook it came from.
+    // Taking only the first meant a figure written in the second file did
+    // not exist as far as this was concerned.
+    expect(
+      sourcesOf({ files: ["scripts/b.py", "notebooks/a.ipynb", "notes.txt"] })
+    ).toEqual(["notebooks/a.ipynb", "scripts/b.py"]);
+  });
+
+  it("reads the same record the same way every time", () => {
+    const one = sourcesOf({ files: ["b.py", "a.py", "b.py"] });
+    const two = sourcesOf({ files: ["b.py", "b.py", "a.py"] });
+    expect(one).toEqual(["a.py", "b.py"]);
+    expect(two).toEqual(one);
   });
 
   it("finds none on a script typed in by hand", () => {
-    expect(sourceOf({ readme: "I described this myself" })).toBe("");
-    expect(sourceOf(undefined)).toBe("");
+    expect(sourcesOf({ readme: "I described this myself" })).toEqual([]);
+    expect(sourcesOf(undefined)).toEqual([]);
   });
 
   it("finds none in a language it cannot read", () => {
-    expect(sourceOf({ files: ["src/main.f90", "run.sh"] })).toBe("");
+    expect(sourcesOf({ files: ["src/main.f90", "run.sh"] })).toEqual([]);
+  });
+
+  it("names what it will not look at rather than dropping it", () => {
+    const many = {
+      files: Array.from({ length: 23 }, (unused, i) =>
+        `scripts/step_${String(i).padStart(2, "0")}.py`),
+    };
+    const capped = cappedSources(many);
+    expect(capped).toHaveLength(3);
+    expect(capped[0]).toEqual({
+      path: "scripts/step_20.py", reason: "source_cap",
+    });
+    // A record inside the bound has nothing to report.
+    expect(cappedSources(BY_ID.s0)).toEqual([]);
   });
 });
 
@@ -137,7 +162,8 @@ describe("what one script's code says", () => {
 
   it("carries the evidence a curator can check", () => {
     const [item] = detectionsFor([READ], "s0", BY_ID, []);
-    expect(describeEvidence(item.evidence)).toBe(
+    expect(item.evidences).toHaveLength(1);
+    expect(describeEvidence(item.evidences[0])).toBe(
       'scripts/plot_dos.py, line 12 — pandas.read_csv("data/raw.csv")'
     );
   });
@@ -151,8 +177,11 @@ describe("what one script's code says", () => {
       [{ ...READ, script: "notebooks/prep.ipynb", cell: 3, line: 2 }],
       "s0", byId, []
     );
-    expect(describeEvidence(item.evidence)).toBe(
+    expect(describeEvidence(item.evidences[0])).toBe(
       'notebooks/prep.ipynb, cell 3, line 2 — pandas.read_csv("data/raw.csv")'
+    );
+    expect(evidenceAt(item.evidences[0])).toBe(
+      "notebooks/prep.ipynb:cell 3:2"
     );
   });
 
@@ -194,9 +223,7 @@ describe("what one script's code says", () => {
     const first = detectionsFor(twice, "s0", BY_ID, []);
     expect(first).toHaveLength(1);
     expect(detectionsFor(twice, "s0", BY_ID, [])).toEqual(first);
-    expect(detectionKey(first[0])).toBe(
-      "input_datasets:data/raw.csv:0:12"
-    );
+    expect(detectionKey(first[0])).toBe("input_datasets:data/raw.csv");
   });
 
   it("does not treat a figure's input files as something a script makes", () => {
@@ -231,5 +258,108 @@ describe("the three groups", () => {
 
   it("is empty when the code named nothing", () => {
     expect(groupDetections(detectionsFor([], "s0", BY_ID, []))).toEqual([]);
+  });
+});
+
+
+// A Script artifact is one RECORD, not one file. It may hold a driver and the
+// notebook it grew out of, or a pipeline split in two, and what the second
+// file says is exactly as true as what the first one says.
+describe("a script recorded as several files", () => {
+  const TWO = {
+    ...BY_ID,
+    s0: {
+      id: "s0",
+      readme: "the whole pipeline",
+      files: ["notebooks/rerun.ipynb", "scripts/plot_dos.py"],
+    },
+  };
+
+  const FROM_NOTEBOOK = {
+    script: "notebooks/rerun.ipynb",
+    path: "figures/dos.png",
+    mode: "write",
+    call: "matplotlib.pyplot.savefig",
+    literal: "figures/dos.png",
+    line: 4,
+    cell: 7,
+  };
+
+  it("reads what every one of them says", () => {
+    // The first file reads a dataset; the second saves the figure. Both
+    // relationships are the script's.
+    const found = detectionsFor([READ, FROM_NOTEBOOK], "s0", TWO, []);
+    expect(found.map((item) => item.edge)).toEqual([
+      { from: "d0", to: "s0", type: "consumes" },
+      { from: "s0", to: "c0", type: "generates" },
+    ]);
+  });
+
+  it("does not need them in any particular order", () => {
+    const forwards = detectionsFor([READ, FROM_NOTEBOOK], "s0", TWO, []);
+    const backwards = detectionsFor([FROM_NOTEBOOK, READ], "s0", TWO, []);
+    expect(backwards.map((i) => detectionKey(i)).sort()).toEqual(
+      forwards.map((i) => detectionKey(i)).sort()
+    );
+  });
+
+  it("offers ONE arrow when two files state the same relationship", () => {
+    // Two scripts of the same record reading one dataset is one arrow with
+    // two reasons -- not two identical proposals to notice are the same.
+    const alsoReads = {
+      ...READ, script: "notebooks/rerun.ipynb", line: 9, cell: 2,
+    };
+    const found = detectionsFor([READ, alsoReads], "s0", TWO, []);
+    expect(found).toHaveLength(1);
+    expect(found[0].edge).toEqual({ from: "d0", to: "s0",
+                                   type: "consumes" });
+    // ...and both places are kept, so either can be checked.
+    expect(found[0].evidences.map(evidenceAt)).toEqual([
+      "notebooks/rerun.ipynb:cell 2:9",
+      "scripts/plot_dos.py:12",
+    ]);
+  });
+
+  it("does not repeat the same place twice", () => {
+    const found = detectionsFor([READ, { ...READ }], "s0", TWO, []);
+    expect(found[0].evidences).toHaveLength(1);
+  });
+
+  it("still refuses a relationship the record already has", () => {
+    const alsoReads = { ...READ, script: "notebooks/rerun.ipynb", line: 9 };
+    const edges = [{ from: "d0", to: "s0", type: "consumes" }];
+    expect(detectionsFor([READ, alsoReads], "s0", TWO, edges)).toEqual([]);
+  });
+
+  it("keeps what the readable files said when one was not read", () => {
+    // The folder scan could not open the notebook. That is reported
+    // elsewhere; here, the script's other source still answers.
+    const found = detectionsFor([READ], "s0", TWO, []);
+    expect(found.map((item) => item.path)).toEqual(["data/raw.csv"]);
+  });
+
+  it("looks at no more than the cap, and only the first by path", () => {
+    const many = {
+      ...BY_ID,
+      s0: {
+        id: "s0",
+        files: Array.from({ length: 22 }, (unused, i) =>
+          `scripts/step_${String(i).padStart(2, "0")}.py`),
+      },
+    };
+    const inside = {
+      ...READ, script: "scripts/step_00.py",
+    };
+    const outside = {
+      ...READ, script: "scripts/step_21.py",
+      path: "derived/clean.csv", literal: "derived/clean.csv",
+    };
+    const found = detectionsFor([inside, outside], "s0", many, []);
+    expect(found.map((item) => item.path)).toEqual(["data/raw.csv"]);
+    // And the ones it did not look at are named rather than dropped.
+    expect(cappedSources(many.s0).map((entry) => entry.path)).toEqual([
+      "scripts/step_20.py",
+      "scripts/step_21.py",
+    ]);
   });
 });

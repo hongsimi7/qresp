@@ -2261,7 +2261,7 @@ describe("detecting a script's data and figures", () => {
     expect(dialog.getByText("Output figures")).toBeInTheDocument();
     expect(dialog.getByText("Output datasets")).toBeInTheDocument();
 
-    const readKey = "input_datasets:data/raw.csv:0:12";
+    const readKey = "input_datasets:data/raw.csv";
     expect(screen.getByTestId(`fw-detect-state-${readKey}`)).toHaveTextContent(
       "Existing Dataset"
     );
@@ -2278,12 +2278,12 @@ describe("detecting a script's data and figures", () => {
     );
 
     // The figure it writes, in the other direction.
-    const figKey = "output_figures:figures/dos.png:0:40";
+    const figKey = "output_figures:figures/dos.png";
     expect(screen.getByTestId(`fw-detect-arrow-${figKey}`)).toHaveTextContent(
       "Script → Figure (generates)"
     );
     // And a dataset the draft does not hold yet.
-    const outKey = "output_datasets:derived/clean.csv:0:30";
+    const outKey = "output_datasets:derived/clean.csv";
     expect(screen.getByTestId(`fw-detect-state-${outKey}`)).toHaveTextContent(
       "Proposed Dataset"
     );
@@ -2309,7 +2309,7 @@ describe("detecting a script's data and figures", () => {
     });
     await openDetect(u);
     await u.click(
-      screen.getByTestId("fw-detect-pick-input_datasets:data/raw.csv:0:12")
+      screen.getByTestId("fw-detect-pick-input_datasets:data/raw.csv")
     );
     expect(ctx.addEdge).not.toHaveBeenCalled();
     expect(ctx.addMany).not.toHaveBeenCalled();
@@ -2323,10 +2323,10 @@ describe("detecting a script's data and figures", () => {
     });
     await openDetect(u);
     await u.click(
-      screen.getByTestId("fw-detect-pick-input_datasets:data/raw.csv:0:12")
+      screen.getByTestId("fw-detect-pick-input_datasets:data/raw.csv")
     );
     await u.click(
-      screen.getByTestId("fw-detect-pick-output_figures:figures/dos.png:0:40")
+      screen.getByTestId("fw-detect-pick-output_figures:figures/dos.png")
     );
     await u.click(screen.getByTestId("fw-detect-apply"));
 
@@ -2388,7 +2388,7 @@ describe("detecting a script's data and figures", () => {
     });
     await openDetect(u);
     await u.click(
-      screen.getByTestId("fw-detect-pick-input_datasets:data/raw.csv:0:12")
+      screen.getByTestId("fw-detect-pick-input_datasets:data/raw.csv")
     );
     await u.click(screen.getByTestId("fw-detect-cancel"));
 
@@ -2410,7 +2410,7 @@ describe("detecting a script's data and figures", () => {
     });
     await openDetect(u);
     await u.click(
-      screen.getByTestId("fw-detect-pick-input_datasets:data/raw.csv:0:12")
+      screen.getByTestId("fw-detect-pick-input_datasets:data/raw.csv")
     );
     await u.click(screen.getByTestId("fw-detect-apply"));
 
@@ -2490,8 +2490,8 @@ describe("proposing an artifact a script's code named", () => {
     );
   };
 
-  const KEY = "output_datasets:derived/clean.csv:0:30";
-  const FIG_KEY = "output_figures:figures/new_figure.png:0:40";
+  const KEY = "output_datasets:derived/clean.csv";
+  const FIG_KEY = "output_figures:figures/new_figure.png";
 
   it("offers the fields the record needs, with what the code answered "
      + "already filled in", async () => {
@@ -2620,5 +2620,165 @@ describe("proposing an artifact a script's code named", () => {
     expect(
       screen.getByTestId("live-datasets").textContent.trim().split(" ")
     ).toHaveLength(1);
+  });
+});
+
+
+// A Script record can hold several files. What the second one says is as much
+// the script's as what the first one says.
+describe("a script reviewed across all of its sources", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  const DRIVER = "scripts/plot_dos.py";
+  const NOTEBOOK = "notebooks/rerun.ipynb";
+
+  const BASE = {
+    charts: [{ id: "c0", caption: "Density of states",
+               imageFile: "figures/dos.png" }],
+    scripts: [{ id: "s0", readme: "the whole pipeline",
+                files: [DRIVER, NOTEBOOK] }],
+    datasets: [{ id: "d0", readme: "raw data", files: ["data/raw.csv"] }],
+    workflow: { nodes: [], edges: [] },
+  };
+
+  const READ = {
+    script: DRIVER, path: "data/raw.csv", mode: "read",
+    call: "pandas.read_csv", literal: "data/raw.csv", line: 12, cell: null,
+  };
+  const SAVED_IN_NOTEBOOK = {
+    script: NOTEBOOK, path: "figures/dos.png", mode: "write",
+    call: "matplotlib.pyplot.savefig", literal: "figures/dos.png",
+    line: 4, cell: 7,
+  };
+  const READ_AGAIN = {
+    script: NOTEBOOK, path: "data/raw.csv", mode: "read",
+    call: "pandas.read_csv", literal: "data/raw.csv", line: 9, cell: 2,
+  };
+
+  const cached = (links, scan) => ({
+    rccAnalysisCache: {
+      path: "/proj",
+      data: { code_links: links, code_scan: scan || {} },
+    },
+  });
+
+  const READ_KEY = "input_datasets:data/raw.csv";
+  const FIG_KEY = "output_figures:figures/dos.png";
+
+  it("names every source it read, and asks about all of them", async () => {
+    const u = user();
+    renderWorkspace({ ...BASE, ...cached([READ, SAVED_IN_NOTEBOOK]) });
+    await u.click(screen.getByTestId("fw-detect-s0"));
+
+    // The header cannot be one file's name when there are two.
+    expect(screen.getByTestId("fw-detect-dialog")).toHaveTextContent(
+      "Detected from the whole pipeline (2 source files)"
+    );
+    expect(screen.getByTestId("fw-detect-sources")).toHaveTextContent(
+      "notebooks/rerun.ipynb, scripts/plot_dos.py"
+    );
+
+    // The dataset read in the driver AND the figure saved in the notebook.
+    expect(screen.getByTestId(`fw-detect-arrow-${READ_KEY}`))
+      .toHaveTextContent("Dataset → Script (consumes)");
+    expect(screen.getByTestId(`fw-detect-arrow-${FIG_KEY}`))
+      .toHaveTextContent("Script → Figure (generates)");
+    // ...with the notebook's cell and line, not the driver's.
+    expect(screen.getByTestId(`fw-detect-source-${FIG_KEY}`))
+      .toHaveTextContent("notebooks/rerun.ipynb, cell 7, line 4");
+  });
+
+  it("shows one arrow, and every place that states it", async () => {
+    const u = user();
+    renderWorkspace({ ...BASE, ...cached([READ, READ_AGAIN]) });
+    await u.click(screen.getByTestId("fw-detect-s0"));
+
+    expect(screen.getAllByTestId(`fw-detect-arrow-${READ_KEY}`))
+      .toHaveLength(1);
+    expect(screen.getByTestId(`fw-detect-source-${READ_KEY}`))
+      .toHaveTextContent("notebooks/rerun.ipynb, cell 2, line 9");
+    // The second place, kept where a curator can go and check it.
+    expect(screen.getByTestId(`fw-detect-more-${READ_KEY}`))
+      .toHaveTextContent("also scripts/plot_dos.py:12");
+  });
+
+  it("makes that one arrow exactly once", async () => {
+    const u = user();
+    const ctx = renderWorkspace({ ...BASE, ...cached([READ, READ_AGAIN]) });
+    await u.click(screen.getByTestId("fw-detect-s0"));
+    await u.click(screen.getByTestId(`fw-detect-pick-${READ_KEY}`));
+    await u.click(screen.getByTestId("fw-detect-apply"));
+
+    expect(ctx.addEdge).toHaveBeenCalledTimes(1);
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "d0", to: "s0", type: "consumes",
+    });
+  });
+
+  it("says nothing extra when only one place states it", async () => {
+    const u = user();
+    renderWorkspace({ ...BASE, ...cached([READ]) });
+    await u.click(screen.getByTestId("fw-detect-s0"));
+    expect(screen.queryByTestId(`fw-detect-more-${READ_KEY}`)).toBeNull();
+  });
+
+  it("keeps the readable source's answer when another was not read",
+     async () => {
+    const u = user();
+    renderWorkspace({
+      ...BASE,
+      ...cached([READ], {
+        skipped: [{ path: NOTEBOOK, reason: "parse_error" }],
+      }),
+    });
+    await u.click(screen.getByTestId("fw-detect-s0"));
+
+    // The driver still answers...
+    expect(screen.getByTestId(`fw-detect-arrow-${READ_KEY}`))
+      .toBeInTheDocument();
+    // ...and the notebook is named, with why, rather than passed over.
+    expect(screen.getByTestId("fw-detect-skipped-list")).toHaveTextContent(
+      "notebooks/rerun.ipynb — could not be read as source"
+    );
+  });
+
+  it("names the sources beyond the cap rather than dropping them",
+     async () => {
+    const u = user();
+    const many = Array.from({ length: 22 }, (unused, index) =>
+      `scripts/step_${String(index).padStart(2, "0")}.py`);
+    renderWorkspace({
+      ...BASE,
+      scripts: [{ id: "s0", readme: "a long pipeline", files: many }],
+      ...cached([{ ...READ, script: "scripts/step_00.py" }]),
+    });
+    await u.click(screen.getByTestId("fw-detect-s0"));
+
+    expect(screen.getByTestId("fw-detect-skipped-list")).toHaveTextContent(
+      "scripts/step_20.py — beyond the number of source files reviewed at once"
+    );
+    // What it did read still answers.
+    expect(screen.getByTestId(`fw-detect-arrow-${READ_KEY}`))
+      .toBeInTheDocument();
+  });
+
+  it("stays enabled while ANY of its files is readable", () => {
+    renderWorkspace({
+      ...BASE,
+      scripts: [{ id: "s0", readme: "mixed",
+                  files: ["src/main.f90", "scripts/plot_dos.py"] }],
+      ...cached([READ]),
+    });
+    expect(screen.getByTestId("fw-detect-s0")).toBeEnabled();
+  });
+
+  it("is disabled only when none of them is readable", () => {
+    renderWorkspace({
+      ...BASE,
+      scripts: [{ id: "s0", readme: "compiled",
+                  files: ["src/main.f90", "run.sh"] }],
+      ...cached([READ]),
+    });
+    expect(screen.getByTestId("fw-detect-s0")).toBeDisabled();
   });
 });

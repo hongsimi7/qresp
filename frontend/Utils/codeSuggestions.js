@@ -26,22 +26,46 @@ const clean = (value) => String(value == null ? "" : value).trim();
 /** Extensions the backend can actually read. Anything else has no source. */
 const SOURCE_SUFFIXES = [".py", ".ipynb"];
 
+// A Script record may legitimately list many files, and a conservative bound
+// keeps one pathological record from turning a review into a wall. Anything
+// past it is REPORTED by name rather than dropped: choosing the first few
+// quietly is exactly the behaviour this replaced.
+export const MAX_SOURCES = 20;
+
+export const SKIP_SOURCE_CAP = "source_cap";
+
 /**
- * The RCC source file of a Script artifact, or "" if it has none.
+ * EVERY RCC source file of a Script artifact, in a stable order.
  *
  * A Script typed in by hand has no `files` at all, and one whose files are a
  * Fortran program or a shell script has nothing this can parse. Both are
  * ordinary, and both mean there is nothing to detect.
+ *
+ * All of them, not the first one. A script recorded as two files -- the
+ * driver and the notebook it was refactored out of, or a pipeline split in
+ * two -- had everything after the first silently ignored, so a figure
+ * generated in the second file simply did not exist as far as this was
+ * concerned.
  */
-export const sourceOf = (artifact) => {
+export const sourcesOf = (artifact) => {
   const files = ((artifact || {}).files) || [];
   const found = files
     .map((value) => clean(value).replace(/^\.\//, ""))
     .filter((path) =>
       SOURCE_SUFFIXES.some((suffix) => path.toLowerCase().endsWith(suffix))
     );
-  return found[0] || "";
+  // Deduplicated and ordered, so the same record always reads the same way.
+  return Array.from(new Set(found)).sort();
 };
+
+/** The sources past the cap, named so the review can say what it skipped. */
+export const cappedSources = (artifact) =>
+  sourcesOf(artifact)
+    .slice(MAX_SOURCES)
+    .map((path) => ({ path, reason: SKIP_SOURCE_CAP }));
+
+/** Kept for callers that only need to know WHETHER there is a source. */
+export const sourceOf = (artifact) => sourcesOf(artifact)[0] || "";
 
 /** Every stored path of one artifact, normalised for exact comparison. */
 const pathsOf = (artifact, id) => {
@@ -97,8 +121,10 @@ export const GROUP_LABEL = {
   [GROUP_OUTPUT]: "Output datasets",
 };
 
-export const detectionKey = (item) =>
-  `${item.group}:${item.path}:${item.evidence.cell || 0}:${item.evidence.line}`;
+// ONE RELATIONSHIP, however many places state it. Two of a script's files
+// can read the same dataset, and that is one arrow with two reasons -- not
+// two identical proposals for the curator to notice are the same.
+export const detectionKey = (item) => `${item.group}:${item.path}`;
 
 /** The name to show for a file nothing in the draft has claimed yet. */
 export const fileName = (path) => String(path || "").split("/").pop() || path;
@@ -118,17 +144,17 @@ export const fileName = (path) => String(path || "").split("/").pop() || path;
  */
 export const detectionsFor = (links, scriptId, byId, edges) => {
   const script = (byId || {})[scriptId];
-  const source = sourceOf(script);
-  if (!source) return [];
+  const sources = new Set(sourcesOf(script).slice(0, MAX_SOURCES));
+  if (!sources.size) return [];
 
   const existing = new Set(
     (edges || []).map(fromStoredEdge).map((edge) => `${edge.from}>${edge.to}`)
   );
-  const seen = new Set();
+  const byKey = new Map();
   const out = [];
 
   (links || []).forEach((link) => {
-    if (!link || link.script !== source || !link.path) return;
+    if (!link || !link.path || !sources.has(link.script)) return;
 
     const evidence = {
       script: link.script,
@@ -183,14 +209,36 @@ export const detectionsFor = (links, scriptId, byId, edges) => {
       direction: group === GROUP_INPUT ? "into" : "outOf",
       type,
       edge: existingId ? { from, to, type } : null,
-      evidence,
+      // EVERY place the code says it, in the order the files were read.
+      // One arrow, and all the reasons a curator can go and check.
+      evidences: [evidence],
     };
     const key = detectionKey(item);
-    if (seen.has(key)) return;
-    seen.add(key);
+    const already = byKey.get(key);
+    if (already) {
+      const same = already.evidences.some(
+        (entry) =>
+          entry.script === evidence.script &&
+          entry.line === evidence.line &&
+          entry.cell === evidence.cell
+      );
+      if (!same) already.evidences.push(evidence);
+      return;
+    }
+    byKey.set(key, item);
     out.push(item);
   });
 
+  // Stable however the facts arrived.
+  out.forEach((item) =>
+    item.evidences.sort((a, b) =>
+      a.script === b.script
+        ? (a.cell || 0) - (b.cell || 0) || a.line - b.line
+        : a.script < b.script
+        ? -1
+        : 1
+    )
+  );
   return out;
 };
 
@@ -203,6 +251,12 @@ export const groupDetections = (items) =>
       items: (items || []).filter((item) => item.group === group),
     }))
     .filter((entry) => entry.items.length > 0);
+
+/** The shortest way to point at one place: `plot.py:42`, `prep.ipynb:3:18`. */
+export const evidenceAt = (evidence) =>
+  evidence.cell == null
+    ? `${evidence.script}:${evidence.line}`
+    : `${evidence.script}:cell ${evidence.cell}:${evidence.line}`;
 
 /** Where the evidence is, said the way a curator would look for it. */
 export const describeEvidence = (evidence) => {
