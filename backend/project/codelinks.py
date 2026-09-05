@@ -162,6 +162,13 @@ def _usable_relative(raw):
     return normalized
 
 
+# The same rule, for callers that need to know whether a path a client sent
+# is one this server will touch: relative, inside the folder, no scheme, no
+# drive letter, no glob.
+def usable_relative(raw):
+    return _usable_relative(raw)
+
+
 def _resolve_against(script_path, literal, known_files):
     """Which real file this literal names, or "" if that is not certain.
 

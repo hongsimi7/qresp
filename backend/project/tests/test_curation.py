@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import unittest
@@ -1859,3 +1860,322 @@ class TestCodeLinksInTheResponse(CurationTestBase):
         self.assertEqual(200, response.status_code)
         gemini.assert_not_called()
         self.assertTrue(response.json()["code_links"])
+
+
+class TestAiConnectionHelp(CurationTestBase):
+    """The optional second action, for what the parser could not resolve.
+
+    Everything here is about the boundary: what is sent, what is required
+    before anything is sent, and what happens to an answer that does not
+    match what was asked.
+    """
+
+    SOURCES = dict(TEXTS, **{
+        "scripts/run.sh":
+            "#!/bin/bash\n"
+            "python preprocess.py \"$INPUT\" > data/VDOS/vdos.dat\n"
+            "python plot.py data/VDOS/vdos.dat figures/figure1.png\n",
+    })
+
+    CANDIDATES = [
+        {"id": "d0", "type": "dataset", "path": "data/VDOS/vdos.dat"},
+        {"id": "c0", "type": "chart", "path": "figures/figure1.png"},
+    ]
+
+    def ask(self, body=None, texts=None, csrf=True):
+        headers = {}
+        if csrf and getattr(self, "csrf", None):
+            headers["X-CSRF-Token"] = self.csrf
+        texts = self.SOURCES if texts is None else texts
+        payload = {
+            "path": FOLDER,
+            "script": {"id": "s0", "sources": ["scripts/run.sh"]},
+            "candidates": self.CANDIDATES,
+        }
+        payload.update(body or {})
+        with mock.patch("project.curation._fetch_text_sized",
+                        side_effect=lambda url: (
+                            texts.get(url[len(FOLDER):].strip("/"), ""),
+                            False)):
+            return self.client.post(
+                "/api/curation/suggest-connections", json=payload,
+                headers=headers)
+
+    @contextlib.contextmanager
+    def answering(self, suggestions):
+        """A configured provider that answers exactly this.
+
+        The provider is configured from the environment and is not in a test
+        run, so readiness and quota are stood in for here; what each test is
+        about is what goes out, and what is kept of what comes back.
+        """
+        gemini = mock.Mock(
+            return_value=(json.dumps({"suggestions": suggestions}), None))
+        with mock.patch.multiple(
+                "project.curation",
+                _gemini_ready=mock.Mock(return_value=True),
+                _consume_daily_quota=mock.Mock(return_value=True),
+                call_gemini=gemini):
+            yield gemini
+
+    # ---- before anything is sent -------------------------------------
+
+    def test_anonymous_is_refused(self):
+        self.assertEqual(401, self.ask().status_code)
+
+    def test_missing_csrf_is_refused(self):
+        self.login()
+        self.assertEqual(403, self.ask(csrf=False).status_code)
+
+    def test_without_consent_nothing_is_sent(self):
+        self.login()
+        with mock.patch("project.curation.call_gemini") as gemini:
+            response = self.ask()
+        self.assertEqual(400, response.status_code)
+        gemini.assert_not_called()
+
+    def test_a_preview_describes_the_request_and_sends_nothing(self):
+        self.login()
+        with mock.patch("project.curation.call_gemini") as gemini:
+            response = self.ask({"preview": True})
+        self.assertEqual(200, response.status_code)
+        gemini.assert_not_called()
+
+        summary = response.json()["summary"]
+        self.assertFalse(response.json()["sent"])
+        self.assertEqual(["scripts/run.sh"], summary["sources"])
+        self.assertGreater(summary["excerpt_count"], 0)
+        self.assertEqual(2, summary["candidate_count"])
+        # The excerpts themselves, so the consent screen shows what goes.
+        self.assertTrue(
+            any("plot.py" in entry["text"] for entry in summary["excerpts"]))
+
+    def test_only_the_scripts_own_sources_are_read(self):
+        self.login()
+        with self.answering([]), mock.patch(
+                "project.curation._fetch_text_sized",
+                side_effect=lambda url: (
+                    self.SOURCES.get(url[len(FOLDER):].strip("/"), ""),
+                    False)) as fetch:
+            self.client.post(
+                "/api/curation/suggest-connections",
+                json={"path": FOLDER, "consent": True,
+                      "script": {"id": "s0", "sources": ["scripts/run.sh"]},
+                      "candidates": self.CANDIDATES},
+                headers={"X-CSRF-Token": self.csrf})
+        read = [call.args[0] for call in fetch.call_args_list]
+        self.assertEqual([FOLDER + "/scripts/run.sh"], read)
+
+    def test_a_source_outside_the_folder_is_refused(self):
+        self.login()
+        with mock.patch("project.curation.call_gemini") as gemini:
+            response = self.ask({
+                "consent": True,
+                "script": {"id": "s0",
+                           "sources": ["../../etc/passwd.sh",
+                                       "https://elsewhere/x.py"]},
+            })
+        self.assertEqual(400, response.status_code)
+        gemini.assert_not_called()
+
+    # ---- what is actually sent ---------------------------------------
+
+    def test_the_provider_sees_the_manifest_and_nothing_else(self):
+        self.login()
+        with self.answering([]) as gemini:
+            self.ask({"consent": True})
+        payload = gemini.call_args.args[1]
+        self.assertEqual(sorted(payload),
+                         ["candidates", "excerpts", "sources",
+                          "unresolved_paths"])
+        blob = json.dumps(payload)
+        # No account, no folder URL, no paper text, no other file.
+        self.assertNotIn("curator@example.com", blob)
+        self.assertNotIn(FOLDER, blob)
+        self.assertNotIn("plot_vdos.py", blob)
+
+    def test_a_credential_line_never_reaches_the_provider(self):
+        self.login()
+        leaky = dict(self.SOURCES)
+        leaky["scripts/run.sh"] = (
+            "export API_TOKEN=abcdefghijklmnopqrstuvwxyz012345\n"
+            "python plot.py data/VDOS/vdos.dat figures/figure1.png\n")
+        with self.answering([]) as gemini:
+            response = self.ask({"consent": True}, texts=leaky)
+        blob = json.dumps(gemini.call_args.args[1])
+        self.assertNotIn("API_TOKEN", blob)
+        self.assertNotIn("abcdefghijklmnopqrstuvwxyz", blob)
+        # ...and the ordinary line still went.
+        self.assertIn("figures/figure1.png", blob)
+        self.assertNotIn("API_TOKEN", response.text)
+
+    def test_what_the_parser_already_found_is_not_asked_about_again(self):
+        self.login()
+        with self.answering([]) as gemini:
+            self.ask({"consent": True,
+                      "known": [{"path": "figures/figure1.png",
+                                 "relation": "output_figure"}]})
+        payload = gemini.call_args.args[1]
+        self.assertNotIn("figures/figure1.png", payload["unresolved_paths"])
+
+    # ---- what comes back ----------------------------------------------
+
+    def test_a_supported_suggestion_is_kept_with_its_evidence(self):
+        self.login()
+        with self.answering([{
+                "target_path": "figures/figure1.png",
+                "relation": "output_figure",
+                "excerpt_id": "e1",
+                "rationale": "plot.py is given this path as its output",
+                "confidence": "low"}]):
+            response = self.ask({"consent": True})
+        [one] = response.json()["suggestions"]
+        self.assertEqual("figures/figure1.png", one["target_path"])
+        self.assertEqual("c0", one["target_id"])
+        self.assertEqual("chart", one["target_type"])
+        self.assertEqual("output_figure", one["relation"])
+        self.assertEqual("low", one["confidence"])
+        self.assertTrue(response.json()["sent"])
+
+    def test_an_invented_path_is_discarded(self):
+        self.login()
+        with self.answering([{"target_path": "figures/not_in_the_scan.png",
+                              "relation": "output_figure",
+                              "excerpt_id": "e1", "confidence": "low"}]):
+            response = self.ask({"consent": True})
+        self.assertEqual([], response.json()["suggestions"])
+
+    def test_a_relationship_the_target_cannot_have_is_discarded(self):
+        # A dataset is not a figure, whatever the model calls it.
+        self.login()
+        with self.answering([{"target_path": "data/VDOS/vdos.dat",
+                              "relation": "output_figure",
+                              "excerpt_id": "e1", "confidence": "low"}]):
+            response = self.ask({"consent": True})
+        self.assertEqual([], response.json()["suggestions"])
+
+    def test_an_unsupported_relation_is_discarded(self):
+        self.login()
+        for relation in ("uses_tool", "feeds_into", "related_to",
+                         "links_to", ""):
+            with self.answering([{"target_path": "data/VDOS/vdos.dat",
+                                  "relation": relation,
+                                  "excerpt_id": "e1", "confidence": "low"}]):
+                response = self.ask({"consent": True})
+            self.assertEqual([], response.json()["suggestions"], relation)
+
+    def test_high_confidence_is_discarded(self):
+        # A model may not claim the standing of a parsed line.
+        self.login()
+        with self.answering([{"target_path": "figures/figure1.png",
+                              "relation": "output_figure",
+                              "excerpt_id": "e1", "confidence": "high"}]):
+            response = self.ask({"consent": True})
+        self.assertEqual([], response.json()["suggestions"])
+
+    def test_an_excerpt_that_was_never_sent_is_discarded(self):
+        self.login()
+        with self.answering([{"target_path": "figures/figure1.png",
+                              "relation": "output_figure",
+                              "excerpt_id": "e999", "confidence": "low"}]):
+            response = self.ask({"consent": True})
+        self.assertEqual([], response.json()["suggestions"])
+
+    def test_an_edge_or_a_feedback_flag_cannot_be_returned(self):
+        self.login()
+        with self.answering([{"target_path": "figures/figure1.png",
+                              "relation": "output_figure",
+                              "excerpt_id": "e1", "confidence": "low",
+                              "feedback": True, "edge": {"from": "s0",
+                                                         "to": "c9"},
+                              "id": "c9", "published": True}]):
+            response = self.ask({"consent": True})
+        [one] = response.json()["suggestions"]
+        self.assertEqual(
+            sorted(one),
+            ["confidence", "excerpt_id", "rationale", "relation",
+             "target_id", "target_path", "target_type"])
+
+    def test_the_same_relationship_twice_is_one_suggestion(self):
+        self.login()
+        twice = [{"target_path": "figures/figure1.png",
+                  "relation": "output_figure", "excerpt_id": "e1",
+                  "confidence": "low"}] * 2
+        with self.answering(twice):
+            response = self.ask({"consent": True})
+        self.assertEqual(1, len(response.json()["suggestions"]))
+
+    def test_what_the_parser_found_is_not_repeated_as_an_ai_suggestion(self):
+        self.login()
+        with self.answering([{"target_path": "figures/figure1.png",
+                              "relation": "output_figure",
+                              "excerpt_id": "e1", "confidence": "low"}]):
+            response = self.ask({
+                "consent": True,
+                "known": [{"path": "figures/figure1.png",
+                           "relation": "output_figure"}]})
+        self.assertEqual([], response.json()["suggestions"])
+
+    # ---- when it cannot work ------------------------------------------
+
+    def test_an_unconfigured_provider_fails_safely(self):
+        self.login()
+        with mock.patch("project.curation._gemini_ready", return_value=False):
+            response = self.ask({"consent": True})
+        self.assertEqual(503, response.status_code)
+        self.assertIn("not configured", response.json()["error"])
+
+    def test_a_spent_quota_fails_safely(self):
+        self.login()
+        with mock.patch("project.curation._gemini_ready",
+                        return_value=True), \
+                mock.patch("project.curation._consume_daily_quota",
+                           return_value=False), \
+                mock.patch("project.curation.call_gemini") as gemini:
+            response = self.ask({"consent": True})
+        self.assertEqual(429, response.status_code)
+        gemini.assert_not_called()
+
+    def test_a_provider_failure_fails_safely(self):
+        self.login()
+        with mock.patch.multiple(
+                "project.curation",
+                _gemini_ready=mock.Mock(return_value=True),
+                _consume_daily_quota=mock.Mock(return_value=True),
+                call_gemini=mock.Mock(
+                    return_value=(None, "the provider is unreachable"))):
+            response = self.ask({"consent": True})
+        self.assertEqual(502, response.status_code)
+
+    def test_an_unreadable_answer_fails_safely(self):
+        self.login()
+        with mock.patch.multiple(
+                "project.curation",
+                _gemini_ready=mock.Mock(return_value=True),
+                _consume_daily_quota=mock.Mock(return_value=True),
+                call_gemini=mock.Mock(return_value=("not json at all", None))):
+            response = self.ask({"consent": True})
+        self.assertEqual(502, response.status_code)
+        self.assertIn("unreadable", response.json()["error"])
+
+    def test_a_script_with_nothing_to_ask_about_spends_nothing(self):
+        self.login()
+        quiet = dict(self.SOURCES)
+        quiet["scripts/run.sh"] = "#!/bin/bash\necho hello\n"
+        with mock.patch("project.curation.call_gemini") as gemini, \
+                mock.patch("project.curation._consume_daily_quota") as quota:
+            response = self.ask({"consent": True}, texts=quiet)
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], response.json()["suggestions"])
+        self.assertFalse(response.json()["sent"])
+        gemini.assert_not_called()
+        quota.assert_not_called()
+
+    def test_the_static_analysis_never_calls_the_provider(self):
+        # The parser is what runs first and always; this endpoint is the
+        # only place a provider is reachable from folder analysis.
+        self.login()
+        with mock.patch("project.curation.call_gemini") as gemini:
+            response, _, _ = self.analyze(texts=self.SOURCES)
+        self.assertEqual(200, response.status_code)
+        gemini.assert_not_called()

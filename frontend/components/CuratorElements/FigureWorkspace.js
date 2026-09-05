@@ -19,6 +19,7 @@ import {
   Checkbox,
   Collapse,
   Dialog,
+  Divider,
   DialogActions,
   DialogContent,
   DialogTitle,
@@ -55,15 +56,21 @@ import {
   toDraft,
   toRecord,
 } from "../../Utils/artifactFields";
+import axios from "axios";
+
 import {
+  aiDetectionKey,
+  aiDetections,
   cappedSources,
   describeEvidence,
   detectionKey,
   detectionsFor,
   evidenceAt,
   groupDetections,
+  GROUP_AI,
   GROUP_LABEL,
   ownerOf,
+  parsedSourcesOf,
   proposalSeed,
   sourcesOf,
 } from "../../Utils/codeSuggestions";
@@ -517,6 +524,144 @@ const LinkDialog = ({
    */
 
 /**
+ * WHAT WOULD BE SENT, before anything is.
+ *
+ * Built from the server's own summary of the bundle it would send -- the
+ * same object, so this screen cannot describe something other than what
+ * goes. The excerpts are shown in full: "some code will be sent" is a
+ * sentence to be read rather than a claim to be trusted.
+ *
+ * Consent is asked FRESH every time. There is deliberately no "always
+ * allow", and closing this sends nothing.
+ */
+const AskConsentDialog = ({ summary, state, onSend, onCancel }) => {
+  const [agreed, setAgreed] = useState(false);
+  useEffect(() => {
+    setAgreed(false);
+  }, [summary]);
+
+  if (!summary) return null;
+  const excerpts = summary.excerpts || [];
+
+  return (
+    <Dialog
+      open
+      onClose={onCancel}
+      maxWidth="sm"
+      fullWidth
+      transitionDuration={0}
+      data-testid="fw-ask-consent"
+    >
+      <DialogTitle sx={{ pb: 1 }}>
+        <Typography variant="h6" component="div">
+          Send these code excerpts to Gemini?
+        </Typography>
+      </DialogTitle>
+      <DialogContent dividers sx={{ minWidth: 0 }}>
+        <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+          {`${excerpts.length} excerpt${
+            excerpts.length === 1 ? "" : "s"
+          } from ${(summary.sources || []).length} source file${
+            (summary.sources || []).length === 1 ? "" : "s"
+          }, and the ${summary.candidate_count} file path${
+            summary.candidate_count === 1 ? "" : "s"
+          } this folder's scan found, are sent to the AI service.`}
+        </Typography>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          component="div"
+          data-testid="fw-ask-sources"
+          sx={{ display: "block", overflowWrap: "anywhere",
+                fontFamily: "monospace", mt: 0.5 }}
+        >
+          {(summary.sources || []).join(", ")}
+        </Typography>
+
+        <Typography variant="subtitle2" sx={{ mt: 1.5 }}>
+          The excerpts, exactly as they would be sent
+        </Typography>
+        <Box
+          component="ul"
+          data-testid="fw-ask-excerpts"
+          sx={{ listStyle: "none", m: 0, p: 0 }}
+        >
+          {excerpts.map((entry, index) => (
+            <Box
+              component="li"
+              key={`${entry.path}:${entry.cell || 0}:${entry.line}:${index}`}
+              sx={{ mb: 1, minWidth: 0 }}
+            >
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                component="div"
+                sx={{ display: "block", overflowWrap: "anywhere",
+                      fontFamily: "monospace" }}
+              >
+                {entry.cell == null
+                  ? `${entry.path}:${entry.line}`
+                  : `${entry.path}:cell ${entry.cell}:${entry.line}`}
+              </Typography>
+              <Typography
+                variant="caption"
+                component="pre"
+                sx={{
+                  m: 0,
+                  p: 0.75,
+                  bgcolor: "action.hover",
+                  borderRadius: 1,
+                  whiteSpace: "pre-wrap",
+                  overflowWrap: "anywhere",
+                  fontFamily: "monospace",
+                }}
+              >
+                {entry.text}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+
+        <Typography variant="caption" color="text.secondary" component="div"
+                    sx={{ display: "block", mt: 1 }}>
+          Never sent: your datasets, your images, notebook output, environment
+          files, keys, or anything from another folder. A line mentioning a
+          credential is dropped rather than trimmed.
+        </Typography>
+        <FormControlLabel
+          sx={{ mt: 0.5 }}
+          control={
+            <Checkbox
+              size="small"
+              checked={agreed}
+              onChange={(event) => setAgreed(event.target.checked)}
+              slotProps={{ input: { "data-testid": "fw-ask-agree" } }}
+            />
+          }
+          label={
+            <Typography variant="body2">
+              I agree to send these excerpts for this request
+            </Typography>
+          }
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} data-testid="fw-ask-cancel">
+          Cancel
+        </Button>
+        <RegularStyledButton
+          onClick={onSend}
+          disabled={!agreed || state === "sending" || !excerpts.length}
+          data-testid="fw-ask-send"
+        >
+          Send and get suggestions
+        </RegularStyledButton>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
+/**
  * WHAT ONE SCRIPT'S CODE SAYS, put to the curator.
  *
  * AT MODULE SCOPE, like the other dialogs here and for the same measured
@@ -542,20 +687,31 @@ const DetectDialog = ({
   scriptName,
   sources,
   detections,
+  assisted,
   skipped,
   picked,
   tried,
   problems,
   chosen,
   draftFor,
+  keyOf,
   onToggle,
   onField,
   onApply,
   onClose,
   labelOf,
+  canAsk,
+  askState,
+  askNotice,
+  onAsk,
 }) => {
   if (!scriptId) return null;
-  const groups = groupDetections(detections);
+  const groups = groupDetections(detections).concat(
+    assisted.length
+      ? [{ group: GROUP_AI, label: "AI-assisted suggestions",
+           items: assisted }]
+      : []
+  );
   const blocked = new Set(problems.map((entry) => entry.key));
 
   return (
@@ -647,7 +803,7 @@ const DetectDialog = ({
               <Typography variant="subtitle2">{label}</Typography>
               <Box component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
                 {items.map((item) => {
-                  const key = detectionKey(item);
+                  const key = keyOf(item);
                   const draft = draftFor(item);
                   const needs = item.existingId
                     ? []
@@ -689,6 +845,17 @@ const DetectDialog = ({
                               {/* EXISTING or PROPOSED -- the difference
                                   between adding an arrow and creating a
                                   record, said before either happens. */}
+                              {/* A MODEL'S READING IS NOT A PARSED LINE,
+                                  and the two must never look alike. */}
+                              {item.assisted && (
+                                <Chip
+                                  size="small"
+                                  variant="outlined"
+                                  color="secondary"
+                                  label="AI-assisted"
+                                  data-testid={`fw-detect-ai-${key}`}
+                                />
+                              )}
                               <Chip
                                 size="small"
                                 variant="outlined"
@@ -719,6 +886,22 @@ const DetectDialog = ({
                                 ? `${kindWord} → Script (${item.type})`
                                 : `Script → ${kindWord} (${item.type})`}
                             </Typography>
+                            {item.assisted && (
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                component="div"
+                                data-testid={`fw-detect-why-${key}`}
+                                sx={{ display: "block",
+                                      overflowWrap: "anywhere" }}
+                              >
+                                {`${
+                                  item.confidence === "medium"
+                                    ? "Medium confidence"
+                                    : "Low confidence"
+                                }${item.rationale ? ` — ${item.rationale}` : ""}`}
+                              </Typography>
+                            )}
                             {/* THE PATH, THE EVIDENCE, AND THAT THE FILE IS
                                 REALLY THERE. A path that the folder scan did
                                 not find never becomes a suggestion at all,
@@ -741,19 +924,21 @@ const DetectDialog = ({
                                 script's files can read the same dataset;
                                 that is one arrow with two reasons, and both
                                 are somewhere a curator can go and look. */}
-                            <Typography
-                              variant="caption"
-                              color="text.secondary"
-                              component="div"
-                              data-testid={`fw-detect-source-${key}`}
-                              sx={{
-                                display: "block",
-                                overflowWrap: "anywhere",
-                                fontFamily: "monospace",
-                              }}
-                            >
-                              {describeEvidence(item.evidences[0])}
-                            </Typography>
+                            {item.evidences.length > 0 && (
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                component="div"
+                                data-testid={`fw-detect-source-${key}`}
+                                sx={{
+                                  display: "block",
+                                  overflowWrap: "anywhere",
+                                  fontFamily: "monospace",
+                                }}
+                              >
+                                {describeEvidence(item.evidences[0])}
+                              </Typography>
+                            )}
                             {item.evidences.length > 1 && (
                               <Typography
                                 variant="caption"
@@ -819,6 +1004,46 @@ const DetectDialog = ({
             </Box>
           ))
         )}
+        {/* THE SECOND OPINION, asked for and never volunteered.
+            It sits below the parsed evidence because that is the order they
+            are worth: what the code states, then what a model thinks a
+            shell line might mean. */}
+        {canAsk && (
+          <Box sx={{ mt: 1, minWidth: 0 }}>
+            <Divider sx={{ mb: 1 }} />
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={onAsk}
+              disabled={askState === "sending" || askState === "preparing"}
+              data-testid="fw-detect-ask"
+            >
+              {askState === "sending"
+                ? "Asking…"
+                : "Ask AI about unresolved connections"}
+            </Button>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="div"
+              sx={{ display: "block", overflowWrap: "anywhere" }}
+            >
+              For shell scripts and paths built at run time, which a parser
+              cannot resolve. You will see exactly what would be sent first.
+            </Typography>
+            {askNotice ? (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                component="div"
+                data-testid="fw-detect-ask-notice"
+                sx={{ display: "block", overflowWrap: "anywhere" }}
+              >
+                {askNotice}
+              </Typography>
+            ) : null}
+          </Box>
+        )}
       </DialogContent>
       <DialogActions sx={{ flexWrap: "wrap", gap: 1 }}>
         {/* ONE SENTENCE, and only once an add has been refused. What is
@@ -878,6 +1103,14 @@ const FigureWorkspace = () => {
   const [detectPicked, setDetectPicked] = useState({});
   const [detectDrafts, setDetectDrafts] = useState({});
   const [detectTried, setDetectTried] = useState(false);
+  // THE OPTIONAL SECOND OPINION, and it is optional at every step: the
+  // curator asks, is told exactly what would be sent, and says yes again.
+  // `askSummary` holds what the server says it would send; `aiItems` the
+  // answer; `aiState` where in that sequence we are.
+  const [askSummary, setAskSummary] = useState(null);
+  const [aiItems, setAiItems] = useState([]);
+  const [aiState, setAiState] = useState("");
+  const [aiNotice, setAiNotice] = useState("");
   // Which row's "Add new" / overflow menu is open, and which shared node was
   // last jumped to from a reference row.
   // ONE WAY IN, asking one question at a time.
@@ -1005,11 +1238,31 @@ const FigureWorkspace = () => {
     [detectFor, codeLinks, byId, edges]
   );
 
+  // Parsed and assisted items live in one selection, so they need one key.
+  const keyOf = (item) =>
+    item.assisted ? aiDetectionKey(item) : detectionKey(item);
+
+  // The wire's name for a group, for telling the server what the parser
+  // already found so it is never restated as a suggestion.
+  const RELATION_OF = {
+    input_datasets: "input_dataset",
+    output_figures: "output_figure",
+    output_datasets: "output_dataset",
+  };
+
+  const errorFrom = (err, fallback) =>
+    (err && err.response && err.response.data && err.response.data.error) ||
+    fallback;
+
   const openDetect = (id) => {
     setDetectFor(id);
     setDetectPicked({});
     setDetectDrafts({});
     setDetectTried(false);
+    setAskSummary(null);
+    setAiItems([]);
+    setAiState("");
+    setAiNotice("");
   };
 
   const closeDetect = () => {
@@ -1019,13 +1272,17 @@ const FigureWorkspace = () => {
     setDetectPicked({});
     setDetectDrafts({});
     setDetectTried(false);
+    setAskSummary(null);
+    setAiItems([]);
+    setAiState("");
+    setAiNotice("");
   };
 
   const toggleDetection = (key) =>
     setDetectPicked((was) => ({ ...was, [key]: !was[key] }));
 
   const detectionDraft = (item) => {
-    const key = detectionKey(item);
+    const key = keyOf(item);
     const stored = detectDrafts[key];
     if (stored) return stored;
     // Seeded from what the code already answered: the image file, or the
@@ -1034,7 +1291,7 @@ const FigureWorkspace = () => {
   };
 
   const setDetectionField = (item, field, value) => {
-    const key = detectionKey(item);
+    const key = keyOf(item);
     const current = detectionDraft(item);
     setDetectDrafts((was) => ({
       ...was,
@@ -1042,8 +1299,121 @@ const FigureWorkspace = () => {
     }));
   };
 
-  const chosenDetections = detections.filter(
-    (item) => detectPicked[detectionKey(item)]
+  /**
+   * ASK WHAT WOULD BE SENT -- which sends nothing.
+   *
+   * The server builds the same bundle it would send and returns a summary of
+   * it: the source files, the excerpts themselves, how many candidate paths.
+   * The consent screen is drawn from that, so it cannot describe something
+   * other than what goes.
+   */
+  const previewAsk = async () => {
+    if (!detectFor) return;
+    setAiNotice("");
+    setAiState("preparing");
+    try {
+      const response = await axios.post("/api/curation/suggest-connections", {
+        preview: true,
+        path: fileServerPath,
+        script: { id: detectFor, sources: sourcesOf(byId[detectFor]) },
+        candidates: aiCandidates(),
+        known: detections.map((item) => ({
+          path: item.path,
+          relation: RELATION_OF[item.group],
+        })),
+      });
+      setAskSummary((response.data || {}).summary || null);
+      setAiState("asking");
+    } catch (err) {
+      setAiState("");
+      setAiNotice(errorFrom(err, "The request could not be prepared."));
+    }
+  };
+
+  /** Send it, once the curator has read what it is and said yes. */
+  const sendAsk = async () => {
+    // The consent screen has done its job the moment they say yes. Leaving
+    // it up puts the answer -- or the reason there is none -- behind it.
+    setAskSummary(null);
+    setAiState("sending");
+    setAiNotice("");
+    try {
+      const response = await axios.post("/api/curation/suggest-connections", {
+        consent: true,
+        path: fileServerPath,
+        script: { id: detectFor, sources: sourcesOf(byId[detectFor]) },
+        candidates: aiCandidates(),
+        known: detections.map((item) => ({
+          path: item.path,
+          relation: RELATION_OF[item.group],
+        })),
+      });
+      const found = aiDetections(
+        (response.data || {}).suggestions || [],
+        detectFor, byId, edges, detections);
+      setAiItems(found);
+      setAiState("done");
+      if (!found.length) {
+        setAiNotice("Nothing further was suggested for this script.");
+      }
+    } catch (err) {
+      setAiState("");
+      setAiNotice(errorFrom(err, "No suggestions could be generated."));
+    }
+  };
+
+  const cancelAsk = () => {
+    // Declining sends nothing and changes nothing.
+    setAskSummary(null);
+    setAiState("");
+  };
+
+  /**
+   * The files a suggestion may point at: what the folder scan really found,
+   * plus what the draft already holds. A model is shown these and nothing
+   * else, and its answer is checked against them again on the server.
+   */
+  const aiCandidates = () => {
+    const seen = new Map();
+    knownIds.forEach((id) => {
+      const kind = prefixOf(id);
+      if (kind !== CHART && kind !== DATASET) return;
+      const record = byId[id] || {};
+      const paths = kind === CHART
+        ? [record.imageFile]
+        : record.files || [];
+      (paths || []).forEach((raw) => {
+        const path = String(raw || "").trim();
+        if (path && !seen.has(path)) {
+          seen.set(path, {
+            id,
+            type: kind === CHART ? "chart" : "dataset",
+            path,
+          });
+        }
+      });
+    });
+    ((analysisData.candidates || {}).charts || []).forEach((candidate) => {
+      const path = ((candidate.proposal || {}).imageFile) || "";
+      if (path && !seen.has(path)) {
+        seen.set(path, { id: "", type: "chart", path });
+      }
+    });
+    ((analysisData.candidates || {}).datasets || []).forEach((candidate) => {
+      (((candidate.proposal || {}).files) || []).forEach((raw) => {
+        const path = String(raw || "").trim();
+        if (path && !seen.has(path)) {
+          seen.set(path, { id: "", type: "dataset", path });
+        }
+      });
+    });
+    return Array.from(seen.values());
+  };
+
+  const allDetections = detections.concat(aiItems);
+
+  const chosenDetections = allDetections.filter(
+    (item) => detectPicked[keyOf(item)]
   );
 
   // A chosen proposal that cannot be made yet, and what it still needs. The
@@ -1051,7 +1421,7 @@ const FigureWorkspace = () => {
   const detectionProblems = chosenDetections
     .filter((item) => !item.existingId)
     .map((item) => ({
-      key: detectionKey(item),
+      key: keyOf(item),
       name: item.name,
       missing: missingRequired(item.kind, detectionDraft(item)),
     }))
@@ -2291,7 +2661,13 @@ const FigureWorkspace = () => {
         scriptName={detectFor ? label(detectFor) : ""}
         sources={detectFor ? sourcesOf(byId[detectFor]) : []}
         detections={detections}
+        assisted={aiItems}
         skipped={detectSkipped}
+        keyOf={keyOf}
+        canAsk={Boolean(detectFor)}
+        askState={aiState}
+        askNotice={aiNotice}
+        onAsk={previewAsk}
         picked={detectPicked}
         drafts={detectDrafts}
         tried={detectTried}
@@ -2303,6 +2679,13 @@ const FigureWorkspace = () => {
         onApply={applyDetections}
         onClose={closeDetect}
         labelOf={label}
+      />
+
+      <AskConsentDialog
+        summary={askSummary}
+        state={aiState}
+        onSend={sendAsk}
+        onCancel={cancelAsk}
       />
 
       <LinkDialog

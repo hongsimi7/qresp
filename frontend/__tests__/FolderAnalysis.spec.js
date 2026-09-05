@@ -908,9 +908,13 @@ describe("Analyze RCC Folder", () => {
       screen.getByRole("button", { name: /show folder mapping/i })
     );
     const mapping = await screen.findByTestId("folder-mapping");
-    // Every legacy name, and what it was read as.
-    expect(mapping).toHaveTextContent("data → datasets");
-    expect(mapping).toHaveTextContent("figures_tables → charts");
+    // Every legacy name, and what it was read as -- in words. An arrow
+    // here is the workflow's glyph for a relationship between artifacts,
+    // and a directory being classified is not one.
+    expect(mapping).toHaveTextContent("Folder names read as roles");
+    expect(mapping).toHaveTextContent("data is read as datasets");
+    expect(mapping).toHaveTextContent("figures_tables is read as charts");
+    expect(mapping.textContent).not.toContain("→");
     expect(mapping).toHaveTextContent(/figures_tables: Read as charts/);
     expect(mapping).toHaveTextContent(/Nothing on the file server is renamed/);
   });
@@ -3874,8 +3878,8 @@ describe("typed import dialog ??readable by default", () => {
       screen.getByRole("button", { name: /show folder mapping/i })
     );
     const mapping = await screen.findByTestId("folder-mapping");
-    expect(mapping).toHaveTextContent("data → datasets");
-    expect(mapping).toHaveTextContent("figures_tables → charts");
+    expect(mapping).toHaveTextContent("data is read as datasets");
+    expect(mapping).toHaveTextContent("figures_tables is read as charts");
     expect(mapping).toHaveTextContent(/Read as charts/);
     expect(mapping).toHaveTextContent(/Nothing on the file server is renamed/i);
     expect(getComputedStyle(mapping).overflowY).not.toMatch(/auto|scroll/);

@@ -1886,8 +1886,14 @@ const FolderAnalysis = ({
                     borderRadius: 1,
                   }}
                 >
+                  {/* WHICH FOLDER WAS READ AS WHICH ROLE, and nothing to
+                      do with the workflow. It used to write `data →
+                      datasets` -- the same arrow the workflow uses for a
+                      relationship between two artifacts -- so a directory
+                      being classified read as a connection being drawn.
+                      Said in words, it cannot be mistaken for one. */}
                   <Typography variant="subtitle2" gutterBottom>
-                    Folder mapping
+                    Folder names read as roles
                   </Typography>
                   {mappedRoles.map(([folder, role]) => (
                     <Typography
@@ -1896,7 +1902,7 @@ const FolderAnalysis = ({
                       display="block"
                       sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
                     >
-                      {`${folder} → ${role}`}
+                      {`${folder} is read as ${role}`}
                     </Typography>
                   ))}
                   {(analysis.structure_issues || []).map((issue) => (

@@ -5,6 +5,7 @@ import {
   describeEvidence,
   groupDetections,
   evidenceAt,
+  parsedSourcesOf,
   proposalSeed,
   sourcesOf,
 } from "../Utils/codeSuggestions";
@@ -72,8 +73,21 @@ describe("which scripts can be looked at", () => {
     expect(sourcesOf(undefined)).toEqual([]);
   });
 
-  it("finds none in a language it cannot read", () => {
-    expect(sourcesOf({ files: ["src/main.f90", "run.sh"] })).toEqual([]);
+  it("counts a shell script as a source, and not as a parsable one", () => {
+    // A shell line builds its paths at run time, so the parser finds nothing
+    // in it -- which is exactly the case the optional second opinion is for.
+    // The row's action has to stay live, or there is no way to ask.
+    expect(sourcesOf({ files: ["src/main.f90", "run.sh"] })).toEqual(
+      ["run.sh"]
+    );
+    expect(parsedSourcesOf({ files: ["src/main.f90", "run.sh"] })).toEqual([]);
+    expect(parsedSourcesOf({ files: ["run.sh", "plot.py"] })).toEqual(
+      ["plot.py"]
+    );
+  });
+
+  it("finds none in a language it cannot read at all", () => {
+    expect(sourcesOf({ files: ["src/main.f90", "Makefile"] })).toEqual([]);
   });
 
   it("names what it will not look at rather than dropping it", () => {

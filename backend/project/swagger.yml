@@ -1162,6 +1162,80 @@ paths:
           description: The folder is empty
         502:
           description: The file server could not be read
+  /curation/suggest-connections:
+    post:
+      operationId: "project.curation.suggest_connections"
+      tags:
+        - "Import"
+      summary: "Suggests workflow connections a static read could not resolve,
+        for ONE script, via the configured AI provider (opt-in; suggestions
+        only)"
+      parameters:
+        - in: body
+          name: body
+          required: true
+          description: >-
+            The saved folder, ONE script (its id and its own source files),
+            the scanned candidate files a suggestion may point at, and the
+            relationships the static parser already found so they are not
+            repeated. `preview: true` builds the bundle and returns only a
+            summary of what WOULD be sent, with no provider call and no quota
+            spent; `consent: true` is required to send. Only the script's own
+            sources are read, only short redacted excerpts leave the server,
+            and a line mentioning anything credential-shaped is dropped
+            whole. Never sent: dataset contents, image bytes, notebook
+            outputs, environment files, keys, account data, other folders'
+            sources, or the paper's text.
+          schema:
+            type: object
+            required:
+              - path
+              - script
+            properties:
+              path:
+                type: string
+              preview:
+                type: boolean
+              consent:
+                type: boolean
+              script:
+                type: object
+                description: "{id, sources: [relative .py/.ipynb/.sh paths]}"
+              candidates:
+                type: array
+                description: >-
+                  The files the folder scan found, as {id, type, path} with
+                  type `dataset` or `chart`. A suggestion may only point at
+                  one of these; an answer naming anything else is discarded.
+              known:
+                type: array
+                description: >-
+                  {path, relation} the static parser already established.
+                  These are excluded from the answer so parsed evidence is
+                  never restated as an AI suggestion.
+      responses:
+        200:
+          description: >-
+            Validated suggestions, each {target_path, target_id, target_type,
+            relation, excerpt_id, rationale, confidence}, where relation is
+            one of input_dataset / output_figure / output_dataset and
+            confidence is low or medium. Every one points at a candidate that
+            was in the request and cites an excerpt that was in the request;
+            anything invented is dropped. `sent` says whether the provider
+            was called at all.
+        400:
+          description: Missing consent, bad folder path, or no readable script
+            source
+        401:
+          description: Authentication required
+        403:
+          description: CSRF token missing or invalid
+        429:
+          description: Daily AI suggestion limit reached
+        502:
+          description: The AI provider failed or returned an unreadable answer
+        503:
+          description: AI suggestions are not configured on this server
   /curation/describe-candidates:
     post:
       operationId: "project.curation.describe_candidates"

@@ -23,8 +23,15 @@ import {
 
 const clean = (value) => String(value == null ? "" : value).trim();
 
-/** Extensions the backend can actually read. Anything else has no source. */
-const SOURCE_SUFFIXES = [".py", ".ipynb"];
+// Files this can do something with. `.py` and `.ipynb` are PARSED -- their
+// literal paths become the certain suggestions below. `.sh` is not parseable
+// this way at all: a shell line builds its paths at run time, which is
+// exactly the case the optional AI second opinion exists for. A Script whose
+// only file is a shell script therefore has a source, and its row's action
+// stays live, even though the parser will find nothing in it.
+const PARSED_SUFFIXES = [".py", ".ipynb"];
+const SHELL_SUFFIXES = [".sh"];
+const SOURCE_SUFFIXES = PARSED_SUFFIXES.concat(SHELL_SUFFIXES);
 
 // A Script record may legitimately list many files, and a conservative bound
 // keeps one pathological record from turning a review into a wall. Anything
@@ -66,6 +73,12 @@ export const cappedSources = (artifact) =>
 
 /** Kept for callers that only need to know WHETHER there is a source. */
 export const sourceOf = (artifact) => sourcesOf(artifact)[0] || "";
+
+/** The subset the static parser can actually read. */
+export const parsedSourcesOf = (artifact) =>
+  sourcesOf(artifact).filter((path) =>
+    PARSED_SUFFIXES.some((suffix) => path.toLowerCase().endsWith(suffix))
+  );
 
 /** Every stored path of one artifact, normalised for exact comparison. */
 const pathsOf = (artifact, id) => {
@@ -276,3 +289,104 @@ export const proposalSeed = (item) =>
 export const SCRIPT_KIND = SCRIPT;
 
 export default detectionsFor;
+
+
+// ---------------------------------------------------------------------------
+// THE OPTIONAL SECOND OPINION.
+//
+// Everything above is a parsed line: a literal path in a call the reader
+// understands. This is the other thing -- a model's reading of a shell
+// command or a wrapper, asked for explicitly, arriving with a confidence it
+// is not allowed to overstate.
+//
+// It goes through the SAME shaping as a parsed suggestion, so approving one
+// is the same act with the same guards, and it keeps its own marks so the
+// two are never mistaken for each other on screen.
+
+export const AI_RELATIONS = {
+  input_dataset: { group: GROUP_INPUT, kind: "dataset", type: CONSUMES,
+                   direction: "into" },
+  output_figure: { group: GROUP_FIGURE, kind: "chart", type: GENERATES,
+                   direction: "outOf" },
+  output_dataset: { group: GROUP_OUTPUT, kind: "dataset", type: LINKS_TO,
+                    direction: "outOf" },
+};
+
+export const GROUP_AI = "ai_assisted";
+
+export const aiDetectionKey = (item) => `ai:${item.relation}:${item.path}`;
+
+/**
+ * A validated AI answer, as review items.
+ *
+ * The server has already refused anything that named a file the scan did not
+ * find, claimed a relationship the file's type cannot have, cited an excerpt
+ * it was not sent, or claimed high confidence. What is left is shaped here
+ * and checked once more against the draft: an artifact that already exists
+ * takes an edge, one that does not becomes a proposal, and a relationship
+ * that already runs this way is not offered at all.
+ */
+export const aiDetections = (suggestions, scriptId, byId, edges, already) => {
+  const existing = new Set(
+    (edges || []).map(fromStoredEdge).map((edge) => `${edge.from}>${edge.to}`)
+  );
+  // A parsed line says it better. The server drops these too; this is the
+  // same rule where the draft can see both lists at once.
+  const parsed = new Set(
+    (already || []).map((item) => `${item.group}:${item.path}`)
+  );
+  const seen = new Set();
+  const out = [];
+
+  (suggestions || []).forEach((raw) => {
+    if (!raw) return;
+    const shape = AI_RELATIONS[raw.relation];
+    const path = clean(raw.target_path);
+    if (!shape || !path) return;
+    if (parsed.has(`${shape.group}:${path}`)) return;
+
+    const existingId = ownerOf(
+      path, byId, [shape.kind === "chart" ? CHART : DATASET]);
+    if (existingId === scriptId) return;
+    const from = shape.direction === "into" ? existingId : scriptId;
+    const to = shape.direction === "into" ? scriptId : existingId;
+    if (existingId && existing.has(`${from}>${to}`)) return;
+
+    const item = {
+      group: GROUP_AI,
+      relation: raw.relation,
+      kind: shape.kind,
+      path,
+      name: fileName(path),
+      existingId,
+      direction: shape.direction,
+      type: shape.type,
+      edge: existingId ? { from, to, type: shape.type } : null,
+      // What makes it different from a parsed line, and what a curator needs
+      // in order to judge it.
+      assisted: true,
+      confidence: raw.confidence === "medium" ? "medium" : "low",
+      rationale: clean(raw.rationale),
+      evidences: [],
+    };
+    const key = aiDetectionKey(item);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(item);
+  });
+
+  return out;
+};
+
+/** Where the model was looking, from the excerpt it cited. */
+export const aiEvidenceAt = (suggestion, summary) => {
+  const excerpts = ((summary || {}).excerpts) || [];
+  const index = excerpts.findIndex(
+    (unused, position) => `e${position + 1}` === suggestion.excerptId
+  );
+  const entry = index >= 0 ? excerpts[index] : null;
+  if (!entry) return "";
+  return entry.cell == null
+    ? `${entry.path}:${entry.line}`
+    : `${entry.path}:cell ${entry.cell}:${entry.line}`;
+};
