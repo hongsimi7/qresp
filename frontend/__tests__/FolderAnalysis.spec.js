@@ -9,19 +9,6 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-// THIS FILE IS SLOW, and says so rather than failing by machine.
-//
-// Timed: nineteen of its tests take over 2.5s and several take 5-6s, because
-// the dialog under test re-renders wholesale on every interaction and its
-// cards are declared inline, so each click rebuilds their DOM. Against the
-// 5s default they passed or failed depending on what else the machine was
-// doing -- which is why eleven of them already carried a hand-written
-// `}, 30000)`.
-//
-// Stated once, for this file only: every other spec keeps the 5s default.
-// The fix is the component, not the number, and that is not this pass.
-jest.setTimeout(15000);
-
 jest.mock("axios");
 import axios from "axios";
 
@@ -30,7 +17,25 @@ import CuratorState from "../Context/Curator/CuratorState";
 import { readFileSync } from "fs";
 import { join as pathJoin } from "path";
 
-import { missingRequired, requiredKeys } from "../Utils/artifactFields";
+// A CARD RENDER COUNTER THAT NEEDS NO INSTRUMENTATION IN THE PRODUCT.
+//
+// `CandidateCard` calls `toDraft(kind, proposal)` exactly once per render,
+// with THIS candidate's own proposal object, so a spy on it says which cards
+// React rendered and how many times. The only other caller is the effect that
+// builds the initial drafts, which runs when an analysis arrives and not on
+// any interaction -- the tests below clear the spy after opening the dialog.
+//
+// Everything else about the module stays real: `...actual` keeps the field
+// contract itself under test rather than replacing it with a stub.
+jest.mock("../Utils/artifactFields", () => {
+  const actual = jest.requireActual("../Utils/artifactFields");
+  return { ...actual, toDraft: jest.fn(actual.toDraft) };
+});
+import {
+  missingRequired,
+  requiredKeys,
+  toDraft,
+} from "../Utils/artifactFields";
 import CuratorContext from "../Context/Curator/curatorContext";
 import AlertContext from "../Context/Alert/alertContext";
 
@@ -1910,7 +1915,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     const body = axios.post.mock.calls[1][1];
     expect(JSON.stringify(body)).not.toContain("LEAKCANARY");
     expect(body.items[0].context).toBeUndefined();
-  }, 20000);
+  });
 
   it("sends the paper's title and abstract as background", async () => {
     const user = userEvent.setup();
@@ -1987,7 +1992,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
     );
     const caption = await screen.findByLabelText(/^figure caption ?\*?$/i);
     await user.clear(caption);
-    await user.type(caption, "MINE");
+    await fill(user, caption, "MINE");
 
     await user.click(screen.getByTestId("enhance-chart-0"));
     await screen.findByRole("heading", { name: /send .* to gemini\?/i });
@@ -1996,7 +2001,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
 
     expect(screen.getByLabelText(/^figure caption ?\*?$/i)).toHaveValue("MINE");
     expect(addMany).not.toHaveBeenCalled();
-  }, 20000);
+  });
 
   it("warns before sending when there is nothing readable to send", async () => {
     // The consent dialog used to itemise every source. That list restated
@@ -2394,7 +2399,7 @@ describe("Analyze RCC Folder — consent-gated AI enhancement", () => {
         })
       ).toBeChecked();
     }
-  }, 30000);
+  });
 
   it("is non-blocking when Gemini is not configured", async () => {
     const user = userEvent.setup();
@@ -2974,7 +2979,7 @@ describe("a card never contradicts itself about what a field holds", () => {
     ).toBeNull();
     // ...and nowhere on the card does "Needs input" survive.
     expect(screen.queryByText(/needs input/i)).toBeNull();
-  }, 30000);
+  });
 
   it("marks the suggestion applied once its values are in the fields", async () => {
     const user = userEvent.setup();
@@ -2991,7 +2996,7 @@ describe("a card never contradicts itself about what a field holds", () => {
     await user.click(screen.getByTestId("ai-use-keywords-chart-0"));
     expectState("applied");
     expect(screen.getByTestId("ai-use-description-chart-0")).toBeDisabled();
-  }, 30000);
+  });
 
   it("un-marks applied when the curator edits the value afterwards", async () => {
     const user = noDelayUser();
@@ -3003,13 +3008,16 @@ describe("a card never contradicts itself about what a field holds", () => {
     expectState("applied");
 
     // Editing ONE of two applied values leaves the other still applied.
-    await user.type(caption(), " EDITED");
+    // One character, typed: what is being checked is that an edit un-marks
+    // the value, and a seventh keystroke checks nothing the first one did
+    // not -- it only re-rendered the dialog six more times.
+    await user.type(caption(), "X");
     expectState("partially applied");
 
     // Editing the last one too leaves nothing applied.
-    await user.type(keywords(), " EDITED");
+    await user.type(keywords(), "X");
     expectState("not applied");
-  }, 30000);
+  });
 
   it("restores the missing count when an applied value is cleared", async () => {
     const user = userEvent.setup();
@@ -3032,7 +3040,7 @@ describe("a card never contradicts itself about what a field holds", () => {
     expectState("not applied");
     // The Use button comes back, because the field is free again.
     expect(screen.getByTestId("ai-use-description-chart-0")).toBeEnabled();
-  }, 30000);
+  });
 
   it("is applied as soon as a description-only suggestion is used", async () => {
     // Nothing else was offered, so one click is the whole of it. Waiting for
@@ -3050,7 +3058,7 @@ describe("a card never contradicts itself about what a field holds", () => {
 
     await user.click(screen.getByTestId("ai-use-description-chart-0"));
     expectState("applied");
-  }, 30000);
+  });
 
   it("goes back to partially applied when one applied value is cleared", async () => {
     const user = userEvent.setup();
@@ -3067,7 +3075,7 @@ describe("a card never contradicts itself about what a field holds", () => {
     // still holds the AI's text, so it carries no chip.
     expect(screen.queryByTestId("field-evidence-chart-0-caption")).toBeNull();
     expect(screen.queryByText(/needs input/i)).toBeNull();
-  }, 30000);
+  });
 
   it("does not overwrite the curator's own text on any state", async () => {
     const user = noDelayUser();
@@ -3101,7 +3109,7 @@ describe("a card never contradicts itself about what a field holds", () => {
     await user.click(screen.getByTestId("ai-use-keywords-chart-0"));
     expectState("partially applied");
     expect(caption()).toHaveValue("MY OWN CAPTION");
-  }, 30000);
+  });
 
   it("shows no evidence badge to contradict, before or after an edit", async () => {
     // This used to be about a chip that said "High evidence" going away when
@@ -3124,7 +3132,7 @@ describe("a card never contradicts itself about what a field holds", () => {
     expect(screen.queryByTestId("field-evidence-chart-0-imageFile")).toBeNull();
     // The value the curator typed is what the field holds.
     expect(input(/^figure image ?\*?$/i)).toHaveValue("typed/by/hand.png");
-  }, 30000);
+  });
 
   it("applying a suggestion saves, publishes and adds nothing", async () => {
     const user = userEvent.setup();
@@ -3138,7 +3146,7 @@ describe("a card never contradicts itself about what a field holds", () => {
     expect(axios.put).not.toHaveBeenCalled();
     // The only posts are the analysis and the one describe request.
     expect(axios.post).toHaveBeenCalledTimes(2);
-  }, 30000);
+  });
 
   it("does not leak applied state onto a re-analysed candidate", async () => {
     const user = userEvent.setup();
@@ -3166,7 +3174,7 @@ describe("a card never contradicts itself about what a field holds", () => {
     expect(caption()).toHaveValue("");
     // Nothing is claimed about missing fields on a card nobody has asked for.
     expect(screen.queryByTestId("needs-input-chart-0")).toBeNull();
-  }, 30000);
+  });
 });
 // A Chart stores exactly ONE image, so the unit a curator decides about is the
 // image FILE, not the folder. Every image found is listed under the folder it
@@ -3479,7 +3487,7 @@ describe("Charts in the record boundary panel", () => {
     // Only the image whose name matches keeps the notebook.
     expect(records[0].notebookFile).toBe("");
     expect(records[1].notebookFile).toBe(NOTEBOOK);
-  }, 15000);  // timed at ~6316ms
+  });
 
   it("keeps a supporting file in the target Chart's files, not as a Chart",
      async () => {
@@ -4223,7 +4231,7 @@ describe("removing a candidate clears its selection", () => {
       "figures/figure1.png",
       "figures/figure3.png",
     ]);
-  }, 15000);  // timed at ~4868ms
+  });
 
   it("leaves the other candidates' selection alone", async () => {
     const user = userEvent.setup();
@@ -4956,5 +4964,329 @@ describe("what the code scan could not read", () => {
     // The wire's own words are never shown raw.
     expect(text).not.toContain("parse_error");
     expect(text).not.toContain("size_limit");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A FOLDER WITH TWO DOZEN CANDIDATES IN IT.
+//
+// One of everything is enough to test what a card SAYS. It is not enough to
+// test what touching one card costs, because the whole point is what happens
+// to the other twenty-three: before the card became its own component, every
+// checkbox, keystroke and Details toggle re-rendered all of them, and a
+// single toggle on a folder this size cost about 92ms.
+//
+// 24 fits under the collapse threshold (25), so every card is really on the
+// page and no "Show all" click is needed to get there.
+const chartAt = (index) => ({
+  id: `chart-${index}`,
+  kind: "chart",
+  label: `figure${index}.png`,
+  file_count: 1,
+  confidence: "high",
+  evidence: [`figures/figure${index}.png is a .png image`],
+  needs_input: ["caption", "number", "properties"],
+  paths: [`figures/figure${index}.png`],
+  ai_sources: [],
+  inventory: {
+    file_count: 1,
+    extensions: [{ extension: ".png", count: 1 }],
+    sample_names: [`figure${index}.png`],
+  },
+  proposal: {
+    imageFile: `figures/figure${index}.png`,
+    files: [],
+    notebookFile: "",
+    number: "",
+    caption: "",
+    properties: [],
+    extraFields: [],
+  },
+});
+
+const CROWD = 24;
+const crowded = {
+  ...analysis,
+  candidates: {
+    ...analysis.candidates,
+    charts: Array.from({ length: CROWD }, (_, index) => chartAt(index)),
+  },
+};
+
+describe("touching one candidate touches one candidate", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: crowded });
+  });
+
+  // Opens the dialog on the crowded folder and hands back a clean render
+  // counter: the initial-draft effect has already run by this point, so
+  // everything the spy records from here is a card rendering.
+  const openCrowd = async (user) => {
+    renderWith();
+    await user.click(analyzeButton());
+    await screen.findByRole("tab", { name: new RegExp(`charts \\(${CROWD}\\)`, "i") });
+    toDraft.mockClear();
+  };
+
+  // Which cards React rendered since the last clear, by candidate id. The
+  // proposal objects are the fixture's own, so identity names the card.
+  const rendered = () =>
+    toDraft.mock.calls.map(([, proposal]) => {
+      const match = crowded.candidates.charts.find(
+        (candidate) => candidate.proposal === proposal
+      );
+      return match ? match.id : "other";
+    });
+
+  const distinct = () => Array.from(new Set(rendered()));
+
+  const tick = (index) =>
+    screen.getByRole("checkbox", { name: `Select figure${index}.png` });
+  const detailsButton = (index) =>
+    within(screen.getByTestId(`actions-chart-${index}`)).getByRole("button", {
+      name: "Details",
+    });
+  const editButton = (index) =>
+    within(screen.getByTestId(`actions-chart-${index}`)).getByRole("button", {
+      name: "Edit Proposal",
+    });
+  const captionInput = (index) =>
+    within(screen.getByTestId(`field-group-chart-${index}-caption`)).getByRole(
+      "textbox"
+    );
+
+  // --- what re-renders -----------------------------------------------------
+
+  it("renders one card when one checkbox is ticked, not twenty-four", async () => {
+    const user = noDelayUser();
+    await openCrowd(user);
+
+    await user.click(tick(7));
+
+    expect(distinct()).toEqual(["chart-7"]);
+  });
+
+  it("stays at one card per tick across a run of them", async () => {
+    // The regression this guards is not one expensive click, it is a
+    // curator working down a list: six ticks used to be six full renders of
+    // the whole list.
+    const user = noDelayUser();
+    await openCrowd(user);
+
+    for (const index of [1, 3, 5, 7, 9, 11]) {
+      await user.click(tick(index));
+    }
+
+    expect(rendered()).toHaveLength(6);
+    expect(distinct()).toHaveLength(6);
+  });
+
+  it("renders one card per keystroke, whatever else is on the page", async () => {
+    const user = noDelayUser();
+    await openCrowd(user);
+    await user.click(tick(2));
+    await user.click(tick(9));
+    toDraft.mockClear();
+
+    await user.type(captionInput(2), "abc");
+
+    // Three characters, three renders, all of them the same card.
+    expect(rendered()).toHaveLength(3);
+    expect(distinct()).toEqual(["chart-2"]);
+  });
+
+  it("renders one card when Details opens", async () => {
+    const user = noDelayUser();
+    await openCrowd(user);
+
+    await user.click(detailsButton(4));
+    expect(distinct()).toEqual(["chart-4"]);
+
+    toDraft.mockClear();
+    await user.click(detailsButton(4));
+    expect(distinct()).toEqual(["chart-4"]);
+  });
+
+  it("renders only the candidates a refused Add has something to say about", async () => {
+    const user = noDelayUser();
+    await openCrowd(user);
+    await user.click(tick(0));
+    await user.click(tick(1));
+    toDraft.mockClear();
+
+    await askToAdd(user);
+
+    // Two cards gained a "Needs …" chip. The other twenty-two are unchanged
+    // and are not re-rendered to be told so.
+    expect(distinct().sort()).toEqual(["chart-0", "chart-1"]);
+  });
+
+  // --- what survives -------------------------------------------------------
+
+  it("leaves another card's own DOM nodes in place when one is ticked", async () => {
+    const user = noDelayUser();
+    await openCrowd(user);
+    const neighbourBox = tick(3);
+    const neighbourIdentity = screen.getByTestId("identity-chart-3");
+
+    await user.click(tick(7));
+
+    // Not "looks the same" — the same node. A remount replaces it, which is
+    // what loses focus, selection and scroll position in the real dialog.
+    expect(tick(3)).toBe(neighbourBox);
+    expect(screen.getByTestId("identity-chart-3")).toBe(neighbourIdentity);
+  });
+
+  it("leaves another card's input in place, with its value, while one is typed into", async () => {
+    const user = noDelayUser();
+    await openCrowd(user);
+    await user.click(tick(2));
+    await user.click(tick(9));
+    await fill(user, captionInput(9), "NEIGHBOUR");
+    const neighbourInput = captionInput(9);
+
+    await user.type(captionInput(2), "mine");
+
+    expect(captionInput(9)).toBe(neighbourInput);
+    expect(captionInput(9)).toHaveValue("NEIGHBOUR");
+    expect(captionInput(2)).toHaveValue("mine");
+  });
+
+  it("keeps the caret in the field being typed into", async () => {
+    const user = noDelayUser();
+    await openCrowd(user);
+    await user.click(tick(5));
+
+    const field = captionInput(5);
+    // Three characters is three re-renders of this card; a tenth character
+    // proves nothing the third did not, and costs seven more.
+    await user.type(field, "abc");
+
+    expect(document.activeElement).toBe(field);
+  });
+
+  it("keeps focus on a checkbox that was just ticked", async () => {
+    const user = noDelayUser();
+    await openCrowd(user);
+
+    await user.click(tick(6));
+
+    expect(document.activeElement).toBe(tick(6));
+    expect(tick(6)).toBeChecked();
+  });
+
+  it("keeps focus on the Details button that opened Details", async () => {
+    const user = noDelayUser();
+    await openCrowd(user);
+
+    const button = detailsButton(8);
+    await user.click(button);
+
+    expect(detailsButton(8)).toBe(button);
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("leaves an unrelated card's opened fields open", async () => {
+    const user = noDelayUser();
+    await openCrowd(user);
+    await user.click(editButton(10));
+    const opened = screen.getByTestId("fields-chart-10");
+
+    await user.click(tick(0));
+    await user.click(detailsButton(20));
+
+    expect(screen.getByTestId("fields-chart-10")).toBe(opened);
+  });
+
+  // --- what still changes --------------------------------------------------
+
+  it("updates the Add button and the notice from a single tick", async () => {
+    // The three things outside the card that a tick is allowed to change:
+    // whether Add is live, the card's own fields, and — only after an Add
+    // has been refused — what is missing.
+    const user = noDelayUser();
+    await openCrowd(user);
+    expect(screen.getByTestId("apply-selected")).toBeDisabled();
+    expect(screen.queryByTestId("fields-chart-12")).toBeNull();
+
+    await user.click(tick(12));
+
+    expect(screen.getByTestId("apply-selected")).toBeEnabled();
+    expect(screen.getByTestId("fields-chart-12")).toBeInTheDocument();
+    // Still nothing said about missing fields: that waits for an Add.
+    expect(screen.queryByTestId("needs-input-chart-12")).toBeNull();
+
+    await askToAdd(user);
+    expect(screen.getByTestId("needs-input-chart-12")).toBeInTheDocument();
+    expect(screen.getByTestId("blocked-summary")).toHaveTextContent(
+      /1 selected item needs details/i
+    );
+  });
+
+  it("clears one card's notice when its own fields are filled, and no other's", async () => {
+    const user = noDelayUser();
+    const { addMany } = renderWith();
+    await user.click(analyzeButton());
+    await screen.findByRole("tab", { name: new RegExp(`charts \\(${CROWD}\\)`, "i") });
+    await user.click(tick(0));
+    await user.click(tick(1));
+    await askToAdd(user);
+    expect(screen.getByTestId("needs-input-chart-0")).toBeInTheDocument();
+    expect(screen.getByTestId("needs-input-chart-1")).toBeInTheDocument();
+
+    completeRequired();
+
+    // All-or-nothing: filling both is what lets the Add through.
+    expect(screen.queryByTestId("needs-input-chart-0")).toBeNull();
+    expect(screen.queryByTestId("needs-input-chart-1")).toBeNull();
+    await askToAdd(user);
+    expect(addMany).toHaveBeenCalledTimes(1);
+  });
+
+  // --- what must not grow --------------------------------------------------
+
+  it("asks the backend nothing at all for any of this", async () => {
+    const user = noDelayUser();
+    await openCrowd(user);
+    // One call: the analysis itself.
+    expect(axios.post).toHaveBeenCalledTimes(1);
+
+    await user.click(tick(1));
+    await user.click(tick(2));
+    await user.click(detailsButton(3));
+    await user.click(detailsButton(3));
+    await user.click(editButton(4));
+    await user.type(captionInput(1), "typed");
+    await askToAdd(user);
+
+    // Selecting, opening, typing and being refused are all local. Nothing
+    // here may turn into a request per interaction.
+    expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the consent dialog's own controls in place while it is answered", async () => {
+    const user = noDelayUser();
+    await openCrowd(user);
+    await user.click(screen.getByTestId("enhance-chart-0"));
+    const heading = await screen.findByRole("heading", {
+      name: /send .* to gemini\?/i,
+    });
+    const box = screen.getByRole("checkbox", {
+      name: /i agree to send this evidence to gemini for this request/i,
+    });
+
+    await user.click(box);
+
+    // Ticking consent must not rebuild the dialog under the curator's
+    // pointer: same heading, same checkbox, still focused, now ticked.
+    expect(
+      screen.getByRole("heading", { name: /send .* to gemini\?/i })
+    ).toBe(heading);
+    expect(box).toBeChecked();
+    expect(document.activeElement).toBe(box);
+    // And declining sends nothing.
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(axios.post).toHaveBeenCalledTimes(1);
   });
 });

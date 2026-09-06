@@ -1,4 +1,12 @@
-import { Fragment, useContext, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import PropTypes from "prop-types";
 
 import axios from "axios";
@@ -101,6 +109,11 @@ const SKIP_REASONS = {
 
 // Grouped Unclassified rows rendered before "Show more".
 const UNCLASSIFIED_ROWS = 25;
+
+// A card with no draft yet gets THIS object every time. `{}` written inline
+// is a new object on each render, which is a changed prop, which is a
+// re-render of a card nothing happened to.
+const EMPTY_DRAFT = {};
 
 // Where an accepted AI proposal is allowed to land, per kind. Anything not
 // listed here — image files, figure numbers, file lists, package names,
@@ -353,6 +366,607 @@ const chartPlanProblems = (groups, overrides, applied) =>
   }, []);
 
 
+// ---------------------------------------------------------------------------
+// ONE CARD, ONE COMPONENT.
+//
+// These were function calls inside FolderAnalysis -- `.map(renderCandidate)`
+// -- so React saw one component returning one very large tree, and every
+// checkbox, keystroke and Details toggle re-rendered all of it. Nothing
+// remounted, but on a folder of two dozen candidates a single toggle cost
+// about 92ms, and the spec had to be given a raised timeout to survive it.
+//
+// As components they take what they need and nothing else, so `memo` can do
+// its job: touching one candidate re-renders that candidate, the selection
+// summary and the Add button. The parent still owns every piece of state --
+// this moved no state, only the boundary React reconciles across.
+
+const AiProposalPanel = memo(function AiProposalPanel({
+  candidate,
+  notice,
+  suggestion,
+  draft,
+  onField,
+}) {
+  if (notice && !suggestion) {
+    return (
+      <Box sx={{ ...CARD_EXPANSION_SX, mt: 1 }}>
+        <Alert severity="warning" data-testid={`ai-notice-${candidate.id}`}>
+          {notice}
+        </Alert>
+      </Box>
+    );
+  }
+  if (!suggestion) return null;
+  const targets = aiTargets(candidate.kind);
+  const description = suggestion.description || "";
+  const keywords = suggestion.keywords || [];
+  const descriptionField = targets.description;
+  const keywordField = targets.keywords;
+
+  // DERIVED, never remembered. A stored "applied" flag would keep claiming
+  // a suggestion was applied after the curator edited or cleared the field
+  // it went into; asking the draft cannot drift from it.
+  const keywordText = keywords.join(", ");
+  const descriptionApplied =
+    Boolean(descriptionField) &&
+    suggestionApplied(candidate.kind, descriptionField, draft, description);
+  const keywordsApplied =
+    Boolean(keywordField) &&
+    suggestionApplied(candidate.kind, keywordField, draft, keywordText);
+  // The panel's own headline state, over EVERYTHING this suggestion
+  // offered. It has three values, not two: a suggestion offering a caption
+  // and keywords, with only the keywords used, is neither applied nor
+  // un-applied -- and calling it "not applied" contradicted the button two
+  // lines below already reading "Applied to Keywords".
+  const state = suggestionState(candidate.kind, draft, [
+    { key: descriptionField, value: description },
+    { key: keywordField, value: keywordText },
+  ]);
+  const stateLabel = {
+    [APPLIED]: "applied",
+    [PARTIALLY_APPLIED]: "partially applied",
+    [NOT_APPLIED]: "not applied",
+  }[state];
+
+  return (
+    <Box
+      sx={{ ...CARD_EXPANSION_SX, mt: 1 }}
+      data-testid={`ai-panel-${candidate.id}`}
+    >
+    <Box
+      sx={{
+        p: 1.5,
+        borderRadius: 1,
+        border: 1,
+        borderColor: "info.light",
+        bgcolor: "action.hover",
+      }}
+    >
+      {/* Deliberately unlike the deterministic evidence chip: an outlined
+          secondary label, always prefixed "AI suggestion", so a model's
+          opinion can never be read as a detected fact. */}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+        <Chip
+          size="small"
+          variant="outlined"
+          color="secondary"
+          label={`AI suggestion: ${suggestion.confidence || "low"}`}
+          data-testid={`ai-confidence-${candidate.id}`}
+        />
+        {/* The state is spelled out. Colour alone would leave the three
+            apart only for people who can compare two greys and a green. */}
+        <Typography
+          variant="caption"
+          color={
+            state === APPLIED
+              ? "success.main"
+              : state === PARTIALLY_APPLIED
+              ? "warning.main"
+              : "text.secondary"
+          }
+          data-testid={`ai-applied-${candidate.id}`}
+        >
+          {stateLabel}
+        </Typography>
+      </Box>
+      {suggestion.reason ? (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          display="block"
+          sx={{ mb: 0.5 }}
+          data-testid={`ai-reason-${candidate.id}`}
+        >
+          Based on: {suggestion.reason}
+        </Typography>
+      ) : null}
+      {/* A second opinion on the classification, shown only when the
+          deterministic pass was itself unsure and the AI disagrees. It is
+          a note: Qresp never moves a candidate between groups on its own,
+          because that would change records the curator did not review. */}
+      {suggestion.kind &&
+        suggestion.kind !== candidate.kind &&
+        candidate.confidence !== "high" && (
+          <Typography
+            variant="body2"
+            sx={{ mt: 0.5 }}
+            data-testid={`ai-kind-${candidate.id}`}
+          >
+            AI reads this more like a <strong>{suggestion.kind}</strong> than
+            a {candidate.kind}. Nothing has been moved — remove it here and
+            add it under {suggestion.kind}s yourself if you agree.
+          </Typography>
+        )}
+      {description ? (
+        <Fragment>
+          <Typography variant="body2" sx={{ mt: 0.5 }}>
+            {description}
+          </Typography>
+          {/* Per-field acceptance. Disabled while OTHER text is in the
+              field: an AI suggestion never overwrites something a person
+              wrote, not even on a click meant for something else. Once this
+              suggestion IS the field's value the button says so rather than
+              claiming the curator's text is being protected from it -- the
+              text it would be protecting is its own. */}
+          <Button
+            size="small"
+            disabled={Boolean(draft[descriptionField]) || descriptionApplied}
+            onClick={() =>
+              onField(candidate.id, descriptionField, description)
+            }
+            data-testid={`ai-use-description-${candidate.id}`}
+          >
+            {descriptionApplied
+              ? `Applied to ${labelFor(candidate.kind, descriptionField)}`
+              : `Use as ${labelFor(candidate.kind, descriptionField)}`}
+          </Button>
+          {draft[descriptionField] && !descriptionApplied ? (
+            <Typography variant="caption" color="text.secondary">
+              your text is kept — clear the field to use this instead
+            </Typography>
+          ) : null}
+        </Fragment>
+      ) : (
+        <Typography variant="body2" sx={{ mt: 0.5 }}>
+          The AI had too little evidence to describe this one — the field
+          stays blank for you to fill in.
+        </Typography>
+      )}
+      {keywords.length > 0 && (
+        <Box sx={{ mt: 1, display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+          {keywords.map((keyword) => (
+            <Chip key={keyword} size="small" variant="outlined" label={keyword} />
+          ))}
+          {/* keywordField is always set when keywords arrive: the server
+              does not return them for a type that cannot hold them. */}
+          {keywordField ? (
+            <Button
+              size="small"
+              disabled={Boolean(draft[keywordField]) || keywordsApplied}
+              onClick={() =>
+                onField(candidate.id, keywordField, keywordText)
+              }
+              data-testid={`ai-use-keywords-${candidate.id}`}
+            >
+              {keywordsApplied
+                ? `Applied to ${labelFor(candidate.kind, keywordField)}`
+                : `Use as ${labelFor(candidate.kind, keywordField)}`}
+            </Button>
+          ) : null}
+        </Box>
+      )}
+    </Box>
+    </Box>
+  );
+});
+
+const CandidateCard = memo(function CandidateCard({
+  candidate,
+  draft,
+  isSelected,
+  detailsOpen,
+  editOpen,
+  problem,
+  aiLoading,
+  aiNotice,
+  aiSuggestion,
+  onSelect,
+  onToggleDetails,
+  onToggleEdit,
+  onRemove,
+  onEnhance,
+  onField,
+}) {
+  // What the deterministic analysis proposed, in the draft's own shape, so
+  // "is this still the analysed value?" is one comparison rather than a
+  // per-field special case. Cheap: a handful of string conversions.
+  const original = toDraft(candidate.kind, candidate.proposal);
+  const needs = missingRequired(candidate.kind, draft);
+  const { primary, secondary, full } = labelOf(candidate);
+  // Fields appear once the candidate matters: it is selected, or the
+  // curator explicitly opened it. An unselected card stays a single line.
+  const fieldsVisible =
+    isSelected || editOpen || problem;
+
+  return (
+    <Box
+      key={candidate.id}
+      // 16px of breathing room inside the card, 12px between cards.
+      sx={CARD_SX}
+    >
+      {/* Three regions: the checkbox, the identity, and the status/actions
+          group. The identity grows; the status and the actions keep their
+          natural width and drop onto their own line TOGETHER when the row
+          runs out of space, instead of labels breaking word by word. */}
+      <Box
+        sx={CARD_HEADER_SX}
+      >
+        <Checkbox
+          size="small"
+          sx={CHECKBOX_SX}
+          checked={isSelected}
+          onChange={(event) =>
+            onSelect(candidate.id, event.target.checked)
+          }
+          slotProps={{ input: { "aria-label": `Select ${primary}` } }}
+        />
+        <Box
+          data-testid={`identity-${candidate.id}`}
+          sx={CARD_IDENTITY_SX}
+        >
+          <Typography variant="subtitle2" noWrap title={full || primary}>
+            {primary}
+          </Typography>
+          {secondary ? (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              display="block"
+              title={secondary}
+              // 4px under the name, and a long relative path breaks rather
+              // than pushing the status and actions off the row.
+              sx={CARD_PATH_SX}
+            >
+              {secondary}
+            </Typography>
+          ) : null}
+        </Box>
+        <Box
+          data-testid={`status-${candidate.id}`}
+          sx={CARD_STATUS_SX}
+        >
+          {/* No evidence chip. "High / Medium / Low evidence" answered a
+              question a curator was not asking -- how the analyser reached
+              this proposal -- and sat in the one place on the card where
+              the thing they ARE asking about belongs: what is still
+              missing. The missing-required count stays; it is the only
+              status here that tells them to act.
+
+              Evidence is untouched behind the card: it still orders
+              candidates, bounds what may be sent to the AI, and decides
+              when the AI abstains. */}
+          {/* WHAT THIS CARD STILL NEEDS -- and only once an Add has
+              actually been refused for it.
+
+              Saying it up front put a warning on work nobody had started.
+              A folder of twelve figures opened as twelve identical
+              warnings, none of which the curator had asked for, and the
+              two they wanted were indistinguishable from the ten they did
+              not. The names of the fields are exactly what they need to
+              see; the moment they need to see them is when they have asked
+              for these items and been told no. */}
+          {problem && (
+            <Chip
+              size="small"
+              color="error"
+              variant="outlined"
+              label={`Needs ${needs
+                .map((field) => labelFor(candidate.kind, field))
+                .join(", ")}`}
+              data-testid={`needs-input-${candidate.id}`}
+              sx={{
+                height: "auto",
+                maxWidth: "100%",
+                "& .MuiChip-label": {
+                  whiteSpace: "normal",
+                  overflowWrap: "anywhere",
+                  py: 0.25,
+                },
+              }}
+            />
+          )}
+        </Box>
+        <Box
+          data-testid={`actions-${candidate.id}`}
+          sx={CARD_ACTIONS_SX}
+        >
+          {/* Visually distinct from the Add checkbox on the left: the
+              checkbox chooses what goes to the Curator, this describes
+              THIS candidate and nothing else. A multi-selection can stay
+              exactly as it is while one item is enhanced. */}
+          {Object.keys(aiTargets(candidate.kind)).length > 0 && (
+            <Button
+              size="small"
+              variant="outlined"
+              color="secondary"
+              disabled={Boolean(aiLoading)}
+              onClick={() => onEnhance(candidate)}
+              data-testid={`enhance-${candidate.id}`}
+            >
+              {aiLoading ? "Asking AI…" : "Enhance with AI"}
+            </Button>
+          )}
+          <Button size="small" onClick={() => onToggleDetails(candidate.id)}>
+            Details
+          </Button>
+          {!isSelected && (
+            <Button size="small" onClick={() => onToggleEdit(candidate.id)}>
+              Edit Proposal
+            </Button>
+          )}
+          <Button
+            size="small"
+            onClick={() => onRemove(candidate.id)}
+          >
+            Remove
+          </Button>
+        </Box>
+      </Box>
+
+      <Collapse in={detailsOpen} unmountOnExit>
+        <Box
+          sx={{ ...CARD_EXPANSION_SX, pt: 1 }}
+          data-testid={`details-${candidate.id}`}
+        >
+          {(candidate.evidence || []).map((line) => (
+            <Typography
+              key={line}
+              variant="caption"
+              display="block"
+              sx={{ overflowWrap: "anywhere" }}
+            >
+              {line}
+            </Typography>
+          ))}
+          {/* Filename material, kept clearly apart from evidence: these
+              are guesses about names, not things Qresp verified. */}
+          {(candidate.filename_hints || []).length > 0 && (
+            <Box sx={{ mt: 1 }} data-testid={`hints-${candidate.id}`}>
+              <Typography variant="caption" color="warning.main" display="block">
+                Filename hints — not verified metadata, never used as a
+                field value:
+              </Typography>
+              {(candidate.filename_hints || []).map((hint) => (
+                <Typography
+                  key={hint}
+                  variant="caption"
+                  color="text.secondary"
+                  display="block"
+                  sx={{ overflowWrap: "anywhere" }}
+                >
+                  {hint}
+                </Typography>
+              ))}
+            </Box>
+          )}
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            display="block"
+            sx={{ overflowWrap: "anywhere" }}
+          >
+            Files: {(candidate.paths || []).join(", ")}
+          </Typography>
+        </Box>
+      </Collapse>
+
+      <AiProposalPanel
+        candidate={candidate}
+        notice={aiNotice}
+        suggestion={aiSuggestion}
+        draft={draft}
+        onField={onField}
+      />
+
+      <Collapse in={fieldsVisible} unmountOnExit>
+        <Box
+          sx={CARD_EXPANSION_SX}
+          data-testid={`fields-wrapper-${candidate.id}`}
+        >
+        {/* Deliberate separation from the header/evidence above: a rule,
+            then real space before the first input — the Figure Image used
+            to sit directly against it. */}
+        <Divider sx={{ mt: 2 }} data-testid={`fields-divider-${candidate.id}`} />
+        <Grid
+          container
+          // 20px between field rows, 16px between the two columns.
+          rowSpacing={2.5}
+          columnSpacing={2}
+          sx={FIELDS_GRID_SX}
+          data-testid={`fields-${candidate.id}`}
+        >
+          {fieldsFor(candidate.kind).map(({ key: field, required }) => {
+            return (
+              // ONE field group per field. It now holds only the input --
+              // the helper paragraph and the evidence chip that used to sit
+              // under it are gone -- but the column layout stays, so two
+              // fields on the same row still line up.
+              <Grid
+                key={field}
+                size={{ xs: 12, md: 6 }}
+                sx={FIELD_GROUP_SX}
+                data-testid={`field-group-${candidate.id}-${field}`}
+              >
+                <TextField
+                  fullWidth
+                  size="small"
+                  label={labelFor(candidate.kind, field)}
+                  // Red on the label and the box, on exactly the fields
+                  // that are empty and were asked for -- so the card's
+                  // chip and the inputs point at the same thing.
+                  error={problem && needs.includes(field)}
+                  // MUI renders the asterisk and sets aria-required, so the
+                  // marker is real semantics rather than a character glued
+                  // onto the label text.
+                  required={required}
+                  value={draft[field]}
+                  onChange={(event) =>
+                    onField(candidate.id, field, event.target.value)
+                  }
+                  // The contract's own explanation of the field, so
+                  sx={FIELD_INPUT_SX}
+                  // No helper text. The label names the field, the asterisk
+                  // marks it required, and the legend at the top says once
+                  // what the asterisk means. A paragraph under every input
+                  // ("The image file for this figure...", "Qresp never
+                  // guesses it...") pushed the values a curator came here
+                  // to check off the card, and repeated for each of six
+                  // fields on each of several candidates.
+                  //
+                  // The evidence chip is gone for the same reason. "High /
+                  // Medium / Low evidence" describes how the ANALYSER
+                  // arrived at a proposal; a curator reading the value is
+                  // deciding whether it is right, which they do by looking
+                  // at it. Evidence still governs the backend's candidate
+                  // ranking, what may be sent to the AI, and when it
+                  // abstains -- see `evidenceChipFor` in Utils and the
+                  // abstention policy. Only the badge is removed.
+                />
+              </Grid>
+            );
+          })}
+        </Grid>
+        </Box>
+      </Collapse>
+    </Box>
+  );
+});
+
+const ChartImageRow = memo(function ChartImageRow({
+  group,
+  image,
+  action,
+  attached,
+  targets,
+  url,
+  onRole,
+  onTarget,
+}) {
+  const name = basename(image.path);
+
+  return (
+    <Box
+      key={image.path}
+      // Wraps instead of overflowing: at a narrow width the controls drop
+      // onto their own line rather than pushing the dialog sideways.
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        flexWrap: "wrap",
+        gap: 1.5,
+        mb: 1,
+        maxWidth: "100%",
+      }}
+      data-testid={`chart-image-${image.path}`}
+    >
+      {/* A thumbnail when the browser can load it. When RCC TLS or the file
+          itself refuses, the filename and a direct link are the fallback --
+          never a blank box. */}
+      {url ? (
+        <Box
+          component="img"
+          src={url}
+          alt=""
+          sx={{ width: 48, height: 48, objectFit: "contain", border: 1,
+                borderColor: "divider", borderRadius: 1, flexShrink: 0 }}
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+          }}
+        />
+      ) : null}
+      <Box sx={{ flexGrow: 1, flexBasis: 160, minWidth: 0 }}>
+        {/* The filename, and nothing else.
+
+            `image.reason` said things like "image found in this chart
+            folder" and "filename matches the chart folder" -- one line per
+            image, repeated down a list where every entry was found the same
+            way, restating what the folder heading above already says. The
+            curator is choosing a ROLE for a file they can see the name and
+            thumbnail of; how the analyser noticed it does not help.
+
+            The Review chip went with it: an image's role is in the select
+            beside it, already reading "Review" when that is what it is, so
+            the chip was the same fact twice. Nothing is hidden -- every
+            image found is still listed, and `needsReview` still governs
+            what is ignored until the curator says otherwise. */}
+        <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
+          {name}
+        </Typography>
+      </Box>
+      {url ? (
+        <Button
+          size="small"
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          sx={{ whiteSpace: "nowrap" }}
+        >
+          Open image
+        </Button>
+      ) : null}
+      <TextField
+        select
+        size="small"
+        label="Role"
+        value={action}
+        onChange={(event) =>
+          onRole(group, image.path, event.target.value)
+        }
+        sx={{ minWidth: 170, maxWidth: "100%" }}
+        slotProps={{ htmlInput: { "aria-label": `Role for ${name}` } }}
+      >
+        {CHART_ROLES.map((role) => (
+          <MenuItem key={role.value} value={role.value}>
+            {role.label}
+          </MenuItem>
+        ))}
+      </TextField>
+      {action === "supporting" ? (
+        <TextField
+          select
+          size="small"
+          label="Attach to Chart"
+          value={targets.includes(attached) ? attached : ""}
+          onChange={(event) =>
+            onTarget(image.path, event.target.value)
+          }
+          error={targets.length === 0}
+          helperText={
+            targets.length === 0
+              ? "Set an image in this folder to Create Chart first."
+              : " "
+          }
+          sx={{ minWidth: 170, maxWidth: "100%" }}
+          slotProps={{
+            htmlInput: { "aria-label": `Chart for ${name}` },
+          }}
+        >
+          {targets.length === 0 ? (
+            <MenuItem value="" disabled>
+              No Chart in this folder yet
+            </MenuItem>
+          ) : null}
+          {targets.map((path) => (
+            <MenuItem key={path} value={path}>
+              {basename(path)}
+            </MenuItem>
+          ))}
+        </TextField>
+      ) : null}
+    </Box>
+  );
+});
+
 const FolderAnalysis = ({
   path,
   artifactType,
@@ -441,7 +1055,7 @@ const FolderAnalysis = ({
     return inForce;
   }, [analysis]);
 
-  const setChartRole = (group, path, action) =>
+  const setChartRole = useCallback((group, path, action) =>
     // Functional update: the next roles are derived from the CURRENT state,
     // never from the render-time snapshot, so two changes in one tick cannot
     // lose the first.
@@ -460,13 +1074,13 @@ const FolderAnalysis = ({
         };
       }
       return next;
-    });
+    }), [appliedPlan]);
 
-  const setChartTarget = (path, chart) =>
+  const setChartTarget = useCallback((path, chart) =>
     setChartRoles((current) => ({
       ...current,
       [path]: { action: "supporting", target: chart },
-    }));
+    })), []);
 
   const ready = Boolean(target.trim());
 
@@ -734,10 +1348,12 @@ const FolderAnalysis = ({
   // Consent is asked FRESH every time: the box resets whenever the dialog
   // opens, and closing it (however) clears it again. There is deliberately
   // no remembered "always allow".
-  const openAiConsent = (candidate) => {
+  // Stable, like the other card handlers: rebuilt each render it would be a
+  // changed prop on every card, and the `memo` on them would never hold.
+  const openAiConsent = useCallback((candidate) => {
     setAiConsent(false);
     setAiConsentOpen(candidate);
-  };
+  }, []);
 
   const closeAiConsent = () => {
     setAiConsentOpen(null);
@@ -874,11 +1490,49 @@ const FolderAnalysis = ({
     close();
   };
 
-  const setField = (id, field, value) =>
-    setDrafts((current) => ({
-      ...current,
-      [id]: { ...current[id], [field]: value },
-    }));
+  // EVERY HANDLER A CARD GETS IS STABLE, and takes the candidate's id as an
+  // argument rather than closing over it. A handler rebuilt each render is a
+  // changed prop, and a changed prop defeats the `memo` on the card it is
+  // passed to -- which would put every candidate back to re-rendering on
+  // every keystroke.
+  const setField = useCallback(
+    (id, field, value) =>
+      setDrafts((current) => ({
+        ...current,
+        [id]: { ...current[id], [field]: value },
+      })),
+    []
+  );
+
+  const selectCandidate = useCallback(
+    (id, checked) =>
+      setSelected((current) => ({ ...current, [id]: checked })),
+    []
+  );
+
+  const toggleDetails = useCallback(
+    (id) => setDetailsOpen((current) => ({ ...current, [id]: !current[id] })),
+    []
+  );
+
+  const toggleEdit = useCallback(
+    (id) => setEditOpen((current) => ({ ...current, [id]: !current[id] })),
+    []
+  );
+
+  const removeCandidate = useCallback((id) => {
+    setRemoved((current) => ({ ...current, [id]: true }));
+    // A removed candidate is not a hidden selection. Its own tick goes with
+    // it; every other candidate's is left exactly as it was, and so are the
+    // drafts and any AI suggestion -- Remove is not an undo of the curator's
+    // other work.
+    setSelected((current) => {
+      if (!current[id]) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }, []);
 
   // Selecting a folder clears any ancestor or descendant of it, so a file
   // can only ever belong to one proposed record.
@@ -897,306 +1551,10 @@ const FolderAnalysis = ({
   const toggle = (setter, id) =>
     setter((current) => ({ ...current, [id]: !current[id] }));
 
-  const renderAiProposal = (candidate) => {
-    const notice = aiNotice[candidate.id];
-    const suggestion = aiSuggestions[candidate.id];
-    if (notice && !suggestion) {
-      return (
-        <Box sx={{ ...CARD_EXPANSION_SX, mt: 1 }}>
-          <Alert severity="warning" data-testid={`ai-notice-${candidate.id}`}>
-            {notice}
-          </Alert>
-        </Box>
-      );
-    }
-    if (!suggestion) return null;
-    const targets = aiTargets(candidate.kind);
-    const draft = drafts[candidate.id] || {};
-    const description = suggestion.description || "";
-    const keywords = suggestion.keywords || [];
-    const descriptionField = targets.description;
-    const keywordField = targets.keywords;
-
-    // DERIVED, never remembered. A stored "applied" flag would keep claiming
-    // a suggestion was applied after the curator edited or cleared the field
-    // it went into; asking the draft cannot drift from it.
-    const keywordText = keywords.join(", ");
-    const descriptionApplied =
-      Boolean(descriptionField) &&
-      suggestionApplied(candidate.kind, descriptionField, draft, description);
-    const keywordsApplied =
-      Boolean(keywordField) &&
-      suggestionApplied(candidate.kind, keywordField, draft, keywordText);
-    // The panel's own headline state, over EVERYTHING this suggestion
-    // offered. It has three values, not two: a suggestion offering a caption
-    // and keywords, with only the keywords used, is neither applied nor
-    // un-applied -- and calling it "not applied" contradicted the button two
-    // lines below already reading "Applied to Keywords".
-    const state = suggestionState(candidate.kind, draft, [
-      { key: descriptionField, value: description },
-      { key: keywordField, value: keywordText },
-    ]);
-    const stateLabel = {
-      [APPLIED]: "applied",
-      [PARTIALLY_APPLIED]: "partially applied",
-      [NOT_APPLIED]: "not applied",
-    }[state];
-
-    return (
-      <Box
-        sx={{ ...CARD_EXPANSION_SX, mt: 1 }}
-        data-testid={`ai-panel-${candidate.id}`}
-      >
-      <Box
-        sx={{
-          p: 1.5,
-          borderRadius: 1,
-          border: 1,
-          borderColor: "info.light",
-          bgcolor: "action.hover",
-        }}
-      >
-        {/* Deliberately unlike the deterministic evidence chip: an outlined
-            secondary label, always prefixed "AI suggestion", so a model's
-            opinion can never be read as a detected fact. */}
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
-          <Chip
-            size="small"
-            variant="outlined"
-            color="secondary"
-            label={`AI suggestion: ${suggestion.confidence || "low"}`}
-            data-testid={`ai-confidence-${candidate.id}`}
-          />
-          {/* The state is spelled out. Colour alone would leave the three
-              apart only for people who can compare two greys and a green. */}
-          <Typography
-            variant="caption"
-            color={
-              state === APPLIED
-                ? "success.main"
-                : state === PARTIALLY_APPLIED
-                ? "warning.main"
-                : "text.secondary"
-            }
-            data-testid={`ai-applied-${candidate.id}`}
-          >
-            {stateLabel}
-          </Typography>
-        </Box>
-        {suggestion.reason ? (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            display="block"
-            sx={{ mb: 0.5 }}
-            data-testid={`ai-reason-${candidate.id}`}
-          >
-            Based on: {suggestion.reason}
-          </Typography>
-        ) : null}
-        {/* A second opinion on the classification, shown only when the
-            deterministic pass was itself unsure and the AI disagrees. It is
-            a note: Qresp never moves a candidate between groups on its own,
-            because that would change records the curator did not review. */}
-        {suggestion.kind &&
-          suggestion.kind !== candidate.kind &&
-          candidate.confidence !== "high" && (
-            <Typography
-              variant="body2"
-              sx={{ mt: 0.5 }}
-              data-testid={`ai-kind-${candidate.id}`}
-            >
-              AI reads this more like a <strong>{suggestion.kind}</strong> than
-              a {candidate.kind}. Nothing has been moved — remove it here and
-              add it under {suggestion.kind}s yourself if you agree.
-            </Typography>
-          )}
-        {description ? (
-          <Fragment>
-            <Typography variant="body2" sx={{ mt: 0.5 }}>
-              {description}
-            </Typography>
-            {/* Per-field acceptance. Disabled while OTHER text is in the
-                field: an AI suggestion never overwrites something a person
-                wrote, not even on a click meant for something else. Once this
-                suggestion IS the field's value the button says so rather than
-                claiming the curator's text is being protected from it -- the
-                text it would be protecting is its own. */}
-            <Button
-              size="small"
-              disabled={Boolean(draft[descriptionField]) || descriptionApplied}
-              onClick={() =>
-                setField(candidate.id, descriptionField, description)
-              }
-              data-testid={`ai-use-description-${candidate.id}`}
-            >
-              {descriptionApplied
-                ? `Applied to ${labelFor(candidate.kind, descriptionField)}`
-                : `Use as ${labelFor(candidate.kind, descriptionField)}`}
-            </Button>
-            {draft[descriptionField] && !descriptionApplied ? (
-              <Typography variant="caption" color="text.secondary">
-                your text is kept — clear the field to use this instead
-              </Typography>
-            ) : null}
-          </Fragment>
-        ) : (
-          <Typography variant="body2" sx={{ mt: 0.5 }}>
-            The AI had too little evidence to describe this one — the field
-            stays blank for you to fill in.
-          </Typography>
-        )}
-        {keywords.length > 0 && (
-          <Box sx={{ mt: 1, display: "flex", gap: 0.5, flexWrap: "wrap" }}>
-            {keywords.map((keyword) => (
-              <Chip key={keyword} size="small" variant="outlined" label={keyword} />
-            ))}
-            {/* keywordField is always set when keywords arrive: the server
-                does not return them for a type that cannot hold them. */}
-            {keywordField ? (
-              <Button
-                size="small"
-                disabled={Boolean(draft[keywordField]) || keywordsApplied}
-                onClick={() =>
-                  setField(candidate.id, keywordField, keywordText)
-                }
-                data-testid={`ai-use-keywords-${candidate.id}`}
-              >
-                {keywordsApplied
-                  ? `Applied to ${labelFor(candidate.kind, keywordField)}`
-                  : `Use as ${labelFor(candidate.kind, keywordField)}`}
-              </Button>
-            ) : null}
-          </Box>
-        )}
-      </Box>
-      </Box>
-    );
-  };
 
   // One image, one role. This is the ONLY place a chart image's role is
   // chosen: a candidate card shows the resulting Figure Image and nothing
   // else, so there is never a second controller saying something different.
-  const renderChartImage = (group, image) => {
-    const { action, target: attached } = roleOf(chartRoles, appliedPlan, image);
-    const targets = chartTargetsIn(group, chartRoles, appliedPlan).filter(
-      (path) => path !== image.path
-    );
-    const url = buildFileUrl(fileServerPath, image.path);
-    const name = basename(image.path);
-
-    return (
-      <Box
-        key={image.path}
-        // Wraps instead of overflowing: at a narrow width the controls drop
-        // onto their own line rather than pushing the dialog sideways.
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: 1.5,
-          mb: 1,
-          maxWidth: "100%",
-        }}
-        data-testid={`chart-image-${image.path}`}
-      >
-        {/* A thumbnail when the browser can load it. When RCC TLS or the file
-            itself refuses, the filename and a direct link are the fallback --
-            never a blank box. */}
-        {url ? (
-          <Box
-            component="img"
-            src={url}
-            alt=""
-            sx={{ width: 48, height: 48, objectFit: "contain", border: 1,
-                  borderColor: "divider", borderRadius: 1, flexShrink: 0 }}
-            onError={(event) => {
-              event.currentTarget.style.display = "none";
-            }}
-          />
-        ) : null}
-        <Box sx={{ flexGrow: 1, flexBasis: 160, minWidth: 0 }}>
-          {/* The filename, and nothing else.
-
-              `image.reason` said things like "image found in this chart
-              folder" and "filename matches the chart folder" -- one line per
-              image, repeated down a list where every entry was found the same
-              way, restating what the folder heading above already says. The
-              curator is choosing a ROLE for a file they can see the name and
-              thumbnail of; how the analyser noticed it does not help.
-
-              The Review chip went with it: an image's role is in the select
-              beside it, already reading "Review" when that is what it is, so
-              the chip was the same fact twice. Nothing is hidden -- every
-              image found is still listed, and `needsReview` still governs
-              what is ignored until the curator says otherwise. */}
-          <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-            {name}
-          </Typography>
-        </Box>
-        {url ? (
-          <Button
-            size="small"
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            sx={{ whiteSpace: "nowrap" }}
-          >
-            Open image
-          </Button>
-        ) : null}
-        <TextField
-          select
-          size="small"
-          label="Role"
-          value={action}
-          onChange={(event) =>
-            setChartRole(group, image.path, event.target.value)
-          }
-          sx={{ minWidth: 170, maxWidth: "100%" }}
-          slotProps={{ htmlInput: { "aria-label": `Role for ${name}` } }}
-        >
-          {CHART_ROLES.map((role) => (
-            <MenuItem key={role.value} value={role.value}>
-              {role.label}
-            </MenuItem>
-          ))}
-        </TextField>
-        {action === "supporting" ? (
-          <TextField
-            select
-            size="small"
-            label="Attach to Chart"
-            value={targets.includes(attached) ? attached : ""}
-            onChange={(event) =>
-              setChartTarget(image.path, event.target.value)
-            }
-            error={targets.length === 0}
-            helperText={
-              targets.length === 0
-                ? "Set an image in this folder to Create Chart first."
-                : " "
-            }
-            sx={{ minWidth: 170, maxWidth: "100%" }}
-            slotProps={{
-              htmlInput: { "aria-label": `Chart for ${name}` },
-            }}
-          >
-            {targets.length === 0 ? (
-              <MenuItem value="" disabled>
-                No Chart in this folder yet
-              </MenuItem>
-            ) : null}
-            {targets.map((path) => (
-              <MenuItem key={path} value={path}>
-                {basename(path)}
-              </MenuItem>
-            ))}
-          </TextField>
-        ) : null}
-      </Box>
-    );
-  };
 
   // Charts, by the folder the images really sit in.
   //
@@ -1233,9 +1591,26 @@ const FolderAnalysis = ({
             >
               {group.folder}
             </Typography>
-            {(group.images || []).map((image) =>
-              renderChartImage(group, image)
-            )}
+            {(group.images || []).map((image) => {
+              const { action, target: attached } = roleOf(
+                chartRoles, appliedPlan, image
+              );
+              return (
+                <ChartImageRow
+                  key={image.path}
+                  group={group}
+                  image={image}
+                  action={action}
+                  attached={attached}
+                  targets={chartTargetsIn(
+                    group, chartRoles, appliedPlan
+                  ).filter((path) => path !== image.path)}
+                  url={buildFileUrl(fileServerPath, image.path)}
+                  onRole={setChartRole}
+                  onTarget={setChartTarget}
+                />
+              );
+            })}
             {/* Notebooks are attachments, never a Chart of their own: they
                 follow the image whose name they share. */}
             {(group.notebooks || []).map((notebook) => (
@@ -1257,284 +1632,6 @@ const FolderAnalysis = ({
     </Box>
   );
 
-  const renderCandidate = (candidate) => {
-    const draft = drafts[candidate.id] || {};
-    // What the deterministic analysis proposed, in the draft's own shape, so
-    // "is this still the analysed value?" is one comparison rather than a
-    // per-field special case. Cheap: a handful of string conversions.
-    const original = toDraft(candidate.kind, candidate.proposal);
-    const needs = missingRequired(candidate.kind, draft);
-    // Only after this candidate has been selected, submitted and refused.
-    const problem = isProblem(candidate);
-    const { primary, secondary, full } = labelOf(candidate);
-    const isSelected = Boolean(selected[candidate.id]);
-    // Fields appear once the candidate matters: it is selected, or the
-    // curator explicitly opened it. An unselected card stays a single line.
-    const fieldsVisible =
-      isSelected || Boolean(editOpen[candidate.id]) || problem;
-
-    return (
-      <Box
-        key={candidate.id}
-        // 16px of breathing room inside the card, 12px between cards.
-        sx={CARD_SX}
-      >
-        {/* Three regions: the checkbox, the identity, and the status/actions
-            group. The identity grows; the status and the actions keep their
-            natural width and drop onto their own line TOGETHER when the row
-            runs out of space, instead of labels breaking word by word. */}
-        <Box
-          sx={CARD_HEADER_SX}
-        >
-          <Checkbox
-            size="small"
-            sx={CHECKBOX_SX}
-            checked={isSelected}
-            onChange={(event) =>
-              setSelected((current) => ({
-                ...current,
-                [candidate.id]: event.target.checked,
-              }))
-            }
-            slotProps={{ input: { "aria-label": `Select ${primary}` } }}
-          />
-          <Box
-            data-testid={`identity-${candidate.id}`}
-            sx={CARD_IDENTITY_SX}
-          >
-            <Typography variant="subtitle2" noWrap title={full || primary}>
-              {primary}
-            </Typography>
-            {secondary ? (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                display="block"
-                title={secondary}
-                // 4px under the name, and a long relative path breaks rather
-                // than pushing the status and actions off the row.
-                sx={CARD_PATH_SX}
-              >
-                {secondary}
-              </Typography>
-            ) : null}
-          </Box>
-          <Box
-            data-testid={`status-${candidate.id}`}
-            sx={CARD_STATUS_SX}
-          >
-            {/* No evidence chip. "High / Medium / Low evidence" answered a
-                question a curator was not asking -- how the analyser reached
-                this proposal -- and sat in the one place on the card where
-                the thing they ARE asking about belongs: what is still
-                missing. The missing-required count stays; it is the only
-                status here that tells them to act.
-
-                Evidence is untouched behind the card: it still orders
-                candidates, bounds what may be sent to the AI, and decides
-                when the AI abstains. */}
-            {/* WHAT THIS CARD STILL NEEDS -- and only once an Add has
-                actually been refused for it.
-
-                Saying it up front put a warning on work nobody had started.
-                A folder of twelve figures opened as twelve identical
-                warnings, none of which the curator had asked for, and the
-                two they wanted were indistinguishable from the ten they did
-                not. The names of the fields are exactly what they need to
-                see; the moment they need to see them is when they have asked
-                for these items and been told no. */}
-            {problem && (
-              <Chip
-                size="small"
-                color="error"
-                variant="outlined"
-                label={`Needs ${needs
-                  .map((field) => labelFor(candidate.kind, field))
-                  .join(", ")}`}
-                data-testid={`needs-input-${candidate.id}`}
-                sx={{
-                  height: "auto",
-                  maxWidth: "100%",
-                  "& .MuiChip-label": {
-                    whiteSpace: "normal",
-                    overflowWrap: "anywhere",
-                    py: 0.25,
-                  },
-                }}
-              />
-            )}
-          </Box>
-          <Box
-            data-testid={`actions-${candidate.id}`}
-            sx={CARD_ACTIONS_SX}
-          >
-            {/* Visually distinct from the Add checkbox on the left: the
-                checkbox chooses what goes to the Curator, this describes
-                THIS candidate and nothing else. A multi-selection can stay
-                exactly as it is while one item is enhanced. */}
-            {Object.keys(aiTargets(candidate.kind)).length > 0 && (
-              <Button
-                size="small"
-                variant="outlined"
-                color="secondary"
-                disabled={Boolean(aiLoading[candidate.id])}
-                onClick={() => openAiConsent(candidate)}
-                data-testid={`enhance-${candidate.id}`}
-              >
-                {aiLoading[candidate.id] ? "Asking AI…" : "Enhance with AI"}
-              </Button>
-            )}
-            <Button size="small" onClick={() => toggle(setDetailsOpen, candidate.id)}>
-              Details
-            </Button>
-            {!isSelected && (
-              <Button size="small" onClick={() => toggle(setEditOpen, candidate.id)}>
-                Edit Proposal
-              </Button>
-            )}
-            <Button
-              size="small"
-              onClick={() => {
-                setRemoved((current) => ({ ...current, [candidate.id]: true }));
-                // A removed candidate is not a hidden selection. Its own tick
-                // goes with it; every other candidate's is left exactly as it
-                // was, and so are the drafts and any AI suggestion — Remove
-                // is not an undo of the curator's other work.
-                setSelected((current) => {
-                  if (!current[candidate.id]) return current;
-                  const next = { ...current };
-                  delete next[candidate.id];
-                  return next;
-                });
-              }}
-            >
-              Remove
-            </Button>
-          </Box>
-        </Box>
-
-        <Collapse in={Boolean(detailsOpen[candidate.id])} unmountOnExit>
-          <Box
-            sx={{ ...CARD_EXPANSION_SX, pt: 1 }}
-            data-testid={`details-${candidate.id}`}
-          >
-            {(candidate.evidence || []).map((line) => (
-              <Typography
-                key={line}
-                variant="caption"
-                display="block"
-                sx={{ overflowWrap: "anywhere" }}
-              >
-                {line}
-              </Typography>
-            ))}
-            {/* Filename material, kept clearly apart from evidence: these
-                are guesses about names, not things Qresp verified. */}
-            {(candidate.filename_hints || []).length > 0 && (
-              <Box sx={{ mt: 1 }} data-testid={`hints-${candidate.id}`}>
-                <Typography variant="caption" color="warning.main" display="block">
-                  Filename hints — not verified metadata, never used as a
-                  field value:
-                </Typography>
-                {(candidate.filename_hints || []).map((hint) => (
-                  <Typography
-                    key={hint}
-                    variant="caption"
-                    color="text.secondary"
-                    display="block"
-                    sx={{ overflowWrap: "anywhere" }}
-                  >
-                    {hint}
-                  </Typography>
-                ))}
-              </Box>
-            )}
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              display="block"
-              sx={{ overflowWrap: "anywhere" }}
-            >
-              Files: {(candidate.paths || []).join(", ")}
-            </Typography>
-          </Box>
-        </Collapse>
-
-        {renderAiProposal(candidate)}
-
-        <Collapse in={fieldsVisible} unmountOnExit>
-          <Box
-            sx={CARD_EXPANSION_SX}
-            data-testid={`fields-wrapper-${candidate.id}`}
-          >
-          {/* Deliberate separation from the header/evidence above: a rule,
-              then real space before the first input — the Figure Image used
-              to sit directly against it. */}
-          <Divider sx={{ mt: 2 }} data-testid={`fields-divider-${candidate.id}`} />
-          <Grid
-            container
-            // 20px between field rows, 16px between the two columns.
-            rowSpacing={2.5}
-            columnSpacing={2}
-            sx={FIELDS_GRID_SX}
-            data-testid={`fields-${candidate.id}`}
-          >
-            {fieldsFor(candidate.kind).map(({ key: field, required }) => {
-              return (
-                // ONE field group per field. It now holds only the input --
-                // the helper paragraph and the evidence chip that used to sit
-                // under it are gone -- but the column layout stays, so two
-                // fields on the same row still line up.
-                <Grid
-                  key={field}
-                  size={{ xs: 12, md: 6 }}
-                  sx={FIELD_GROUP_SX}
-                  data-testid={`field-group-${candidate.id}-${field}`}
-                >
-                  <TextField
-                    fullWidth
-                    size="small"
-                    label={labelFor(candidate.kind, field)}
-                    // Red on the label and the box, on exactly the fields
-                    // that are empty and were asked for -- so the card's
-                    // chip and the inputs point at the same thing.
-                    error={problem && needs.includes(field)}
-                    // MUI renders the asterisk and sets aria-required, so the
-                    // marker is real semantics rather than a character glued
-                    // onto the label text.
-                    required={required}
-                    value={draft[field]}
-                    onChange={(event) =>
-                      setField(candidate.id, field, event.target.value)
-                    }
-                    // The contract's own explanation of the field, so
-                    sx={FIELD_INPUT_SX}
-                    // No helper text. The label names the field, the asterisk
-                    // marks it required, and the legend at the top says once
-                    // what the asterisk means. A paragraph under every input
-                    // ("The image file for this figure...", "Qresp never
-                    // guesses it...") pushed the values a curator came here
-                    // to check off the card, and repeated for each of six
-                    // fields on each of several candidates.
-                    //
-                    // The evidence chip is gone for the same reason. "High /
-                    // Medium / Low evidence" describes how the ANALYSER
-                    // arrived at a proposal; a curator reading the value is
-                    // deciding whether it is right, which they do by looking
-                    // at it. Evidence still governs the backend's candidate
-                    // ranking, what may be sent to the AI, and when it
-                    // abstains -- see `evidenceChipFor` in Utils and the
-                    // abstention policy. Only the badge is removed.
-                  />
-                </Grid>
-              );
-            })}
-          </Grid>
-          </Box>
-        </Collapse>
-      </Box>
-    );
-  };
 
   const activeGroup = typedGroup || GROUPS[tab];
   const hints = ((analysis || {}).candidates || {}).possible_dependencies || [];
@@ -2120,7 +2217,28 @@ const FolderAnalysis = ({
                       were proposed.
                     </Typography>
                   )}
-                  {visibleCandidatesFor(activeGroup.key).map(renderCandidate)}
+                  {visibleCandidatesFor(activeGroup.key).map(
+                    (candidate) => (
+                      <CandidateCard
+                        key={candidate.id}
+                        candidate={candidate}
+                        draft={drafts[candidate.id] || EMPTY_DRAFT}
+                        isSelected={Boolean(selected[candidate.id])}
+                        detailsOpen={Boolean(detailsOpen[candidate.id])}
+                        editOpen={Boolean(editOpen[candidate.id])}
+                        problem={isProblem(candidate)}
+                        aiLoading={Boolean(aiLoading[candidate.id])}
+                        aiNotice={aiNotice[candidate.id]}
+                        aiSuggestion={aiSuggestions[candidate.id]}
+                        onSelect={selectCandidate}
+                        onToggleDetails={toggleDetails}
+                        onToggleEdit={toggleEdit}
+                        onRemove={removeCandidate}
+                        onEnhance={openAiConsent}
+                        onField={setField}
+                      />
+                    )
+                  )}
                   {candidatesFor(activeGroup.key).length >
                     visibleCandidatesFor(activeGroup.key).length && (
                     <Box sx={{ mt: 1, mb: 2 }}>
