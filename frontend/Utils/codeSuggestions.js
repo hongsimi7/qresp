@@ -39,7 +39,15 @@ const SOURCE_SUFFIXES = PARSED_SUFFIXES.concat(SHELL_SUFFIXES);
 // quietly is exactly the behaviour this replaced.
 export const MAX_SOURCES = 20;
 
+// Following a wrapper is bounded twice: how deep, and how many files in
+// total. A pipeline that runs a pipeline that runs a pipeline is real; one
+// that does it forty times deep is a reason to stop and say so.
+export const MAX_SHELL_HOPS = 4;
+export const MAX_CLOSURE = 30;
+
 export const SKIP_SOURCE_CAP = "source_cap";
+export const SKIP_HOP_CAP = "hop_cap";
+export const SKIP_CLOSURE_CAP = "closure_cap";
 
 /**
  * EVERY RCC source file of a Script artifact, in a stable order.
@@ -139,6 +147,85 @@ export const GROUP_LABEL = {
 // two identical proposals for the curator to notice are the same.
 export const detectionKey = (item) => `${item.group}:${item.path}`;
 
+/**
+ * EVERY SOURCE THIS SCRIPT REACHES, and how it got to each one.
+ *
+ * A wrapper is usually the only file recorded as "the script", and the file
+ * that actually reads a dataset is one line down:
+ *
+ *     pipeline.sh:4   runs scripts/plot.py
+ *     scripts/plot.py:18   reads data/spectra.csv
+ *
+ * The backend has already read which source each shell script LITERALLY says
+ * it runs -- `python scripts/plot.py`, and nothing whose target is a variable
+ * or a glob. This walks that, breadth-first from the artifact's own files.
+ *
+ * Bounded in three ways, and every file left out is named rather than
+ * dropped: a visited set (so `a.sh -> b.sh -> a.sh` reads each once and
+ * stops), a hop limit, and a total limit. Deterministic: the same folder
+ * gives the same closure in the same order.
+ */
+export const sourceClosure = (startSources, shellCalls) => {
+  const byCaller = new Map();
+  (shellCalls || []).forEach((call) => {
+    if (!call || !call.from || !call.to) return;
+    if (!byCaller.has(call.from)) byCaller.set(call.from, []);
+    byCaller.get(call.from).push(call);
+  });
+  byCaller.forEach((calls) =>
+    calls.sort((a, b) => a.line - b.line || (a.to < b.to ? -1 : 1))
+  );
+
+  const chains = new Map();
+  const skipped = [];
+  const order = [];
+  const seen = new Set();
+
+  const queue = (startSources || []).map((path) => ({ path, hops: 0 }));
+  queue.forEach((entry) => {
+    if (!seen.has(entry.path)) {
+      seen.add(entry.path);
+      chains.set(entry.path, []);
+      order.push(entry.path);
+    }
+  });
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const { path, hops } = queue[index];
+    const calls = byCaller.get(path) || [];
+    if (!calls.length) continue;
+    if (hops >= MAX_SHELL_HOPS) {
+      calls.forEach((call) => {
+        if (!seen.has(call.to)) {
+          skipped.push({ path: call.to, reason: SKIP_HOP_CAP });
+        }
+      });
+      continue;
+    }
+    calls.forEach((call) => {
+      // Already reached -- by a shorter route, or because it IS one of the
+      // artifact's own files. A cycle ends here.
+      if (seen.has(call.to)) return;
+      if (order.length >= MAX_CLOSURE) {
+        skipped.push({ path: call.to, reason: SKIP_CLOSURE_CAP });
+        return;
+      }
+      seen.add(call.to);
+      chains.set(call.to, (chains.get(path) || []).concat([call]));
+      order.push(call.to);
+      queue.push({ path: call.to, hops: hops + 1 });
+    });
+  }
+
+  return { sources: order, chains, skipped };
+};
+
+/** How a source was reached, said the way a curator would follow it. */
+export const describeChain = (chain) =>
+  (chain || []).map(
+    (call) => `${call.from}:${call.line} runs ${call.to}`
+  );
+
 /** The name to show for a file nothing in the draft has claimed yet. */
 export const fileName = (path) => String(path || "").split("/").pop() || path;
 
@@ -155,10 +242,13 @@ export const fileName = (path) => String(path || "").split("/").pop() || path;
  * other end does not exist yet and `edge` is null -- the artifact has to be
  * made first, and it is made only if the curator asks.
  */
-export const detectionsFor = (links, scriptId, byId, edges) => {
+export const detectionsFor = (links, scriptId, byId, edges, shellCalls) => {
   const script = (byId || {})[scriptId];
-  const sources = new Set(sourcesOf(script).slice(0, MAX_SOURCES));
-  if (!sources.size) return [];
+  const start = sourcesOf(script).slice(0, MAX_SOURCES);
+  if (!start.length) return [];
+  // The artifact's own files, plus every source they literally say they run.
+  const { sources: reachable, chains } = sourceClosure(start, shellCalls);
+  const sources = new Set(reachable);
 
   const existing = new Set(
     (edges || []).map(fromStoredEdge).map((edge) => `${edge.from}>${edge.to}`)
@@ -177,6 +267,12 @@ export const detectionsFor = (links, scriptId, byId, edges) => {
       // The path AS WRITTEN in the code, which is what the curator will find
       // when they open the file -- not the resolved one.
       literal: link.literal || link.path,
+      // HOW THIS SCRIPT REACHES THAT FILE. Empty when the artifact's own
+      // file is the one that reads it; a list of shell lines when a wrapper
+      // is what the curator pressed and something further down did the work.
+      // Without it, "why is this relationship on pipeline.sh?" has no answer
+      // on screen.
+      via: chains.get(link.script) || [],
     };
 
     let group;

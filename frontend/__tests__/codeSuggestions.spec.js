@@ -1,5 +1,7 @@
 import {
   cappedSources,
+  describeChain,
+  sourceClosure,
   detectionKey,
   detectionsFor,
   describeEvidence,
@@ -375,5 +377,148 @@ describe("a script recorded as several files", () => {
       "scripts/step_20.py",
       "scripts/step_21.py",
     ]);
+  });
+});
+
+
+// A WRAPPER IS USUALLY THE ONLY FILE RECORDED AS "THE SCRIPT".
+//
+// `pipeline.sh` is what a curator registered; `plot.py`, one line down, is
+// what actually reads the dataset. The backend has already read which source
+// each shell script LITERALLY says it runs. This walks that, so the
+// relationship lands on the script the curator pressed -- and can say why.
+describe("following a shell wrapper to the source that does the work", () => {
+  const CALLS = [
+    { from: "pipeline.sh", to: "scripts/preprocess.sh", line: 3,
+      command: "bash" },
+    { from: "pipeline.sh", to: "scripts/plot.py", line: 4, command: "python" },
+    { from: "scripts/preprocess.sh", to: "scripts/clean.py", line: 2,
+      command: "python" },
+  ];
+
+  it("reaches everything the wrapper runs, and what those run", () => {
+    const { sources } = sourceClosure(["pipeline.sh"], CALLS);
+    expect(sources).toEqual([
+      "pipeline.sh",
+      "scripts/preprocess.sh",
+      "scripts/plot.py",
+      "scripts/clean.py",
+    ]);
+  });
+
+  it("remembers how it got to each one", () => {
+    const { chains } = sourceClosure(["pipeline.sh"], CALLS);
+    expect(chains.get("pipeline.sh")).toEqual([]);
+    expect(describeChain(chains.get("scripts/plot.py"))).toEqual([
+      "pipeline.sh:4 runs scripts/plot.py",
+    ]);
+    // Two hops, both shown, in the order they happen.
+    expect(describeChain(chains.get("scripts/clean.py"))).toEqual([
+      "pipeline.sh:3 runs scripts/preprocess.sh",
+      "scripts/preprocess.sh:2 runs scripts/clean.py",
+    ]);
+  });
+
+  it("stops at a cycle instead of going round it", () => {
+    const cyclic = [
+      { from: "a.sh", to: "b.sh", line: 1, command: "bash" },
+      { from: "b.sh", to: "a.sh", line: 1, command: "bash" },
+      { from: "b.sh", to: "plot.py", line: 2, command: "python" },
+    ];
+    const { sources } = sourceClosure(["a.sh"], cyclic);
+    expect(sources).toEqual(["a.sh", "b.sh", "plot.py"]);
+  });
+
+  it("does not go deeper than it will admit to", () => {
+    const deep = Array.from({ length: 8 }, (unused, i) => ({
+      from: i === 0 ? "a.sh" : `s${i}.sh`,
+      to: `s${i + 1}.sh`,
+      line: 1,
+      command: "bash",
+    }));
+    const { sources, skipped } = sourceClosure(["a.sh"], deep);
+    expect(sources).toHaveLength(5);
+    // And the one it stopped at is named, not dropped in silence.
+    expect(skipped[0]).toEqual({ path: "s5.sh", reason: "hop_cap" });
+  });
+
+  it("does not follow more files than it will admit to", () => {
+    const many = Array.from({ length: 40 }, (unused, i) => ({
+      from: "a.sh", to: `s${i}.py`, line: i + 1, command: "python",
+    }));
+    const { sources, skipped } = sourceClosure(["a.sh"], many);
+    expect(sources).toHaveLength(30);
+    expect(skipped.map((entry) => entry.reason)).toContain("closure_cap");
+  });
+
+  it("reads the same folder the same way every time", () => {
+    const first = sourceClosure(["pipeline.sh"], CALLS).sources;
+    const second = sourceClosure(["pipeline.sh"], CALLS.slice().reverse())
+      .sources;
+    expect(second).toEqual(first);
+  });
+
+  it("follows nothing when the wrapper says nothing literal", () => {
+    const { sources, chains } = sourceClosure(["pipeline.sh"], []);
+    expect(sources).toEqual(["pipeline.sh"]);
+    expect(chains.get("pipeline.sh")).toEqual([]);
+  });
+
+  it("puts the followed script's reads on the script that was pressed", () => {
+    // THE POINT OF ALL OF IT. `pipeline.sh` is the artifact; `plot.py` is
+    // what reads the dataset; the curator gets one arrow they can explain.
+    const byId = {
+      s0: { id: "s0", readme: "the pipeline", files: ["pipeline.sh"] },
+      d0: { id: "d0", readme: "spectra", files: ["data/spectra.csv"] },
+      c0: { id: "c0", imageFile: "figures/dos.png" },
+    };
+    const links = [
+      { script: "scripts/plot.py", path: "data/spectra.csv", mode: "read",
+        call: "pandas.read_csv", literal: "data/spectra.csv", line: 18,
+        cell: null },
+      { script: "scripts/plot.py", path: "figures/dos.png", mode: "write",
+        call: "matplotlib.pyplot.savefig", literal: "figures/dos.png",
+        line: 42, cell: null },
+    ];
+    const found = detectionsFor(links, "s0", byId, [], CALLS);
+
+    expect(found.map((item) => item.edge)).toEqual([
+      { from: "d0", to: "s0", type: "consumes" },
+      { from: "s0", to: "c0", type: "generates" },
+    ]);
+    // And each one carries the chain that explains it.
+    expect(describeChain(found[0].evidences[0].via)).toEqual([
+      "pipeline.sh:4 runs scripts/plot.py",
+    ]);
+    expect(describeEvidence(found[0].evidences[0])).toBe(
+      'scripts/plot.py, line 18 — pandas.read_csv("data/spectra.csv")'
+    );
+  });
+
+  it("does not reach a script the wrapper never names", () => {
+    const byId = {
+      s0: { id: "s0", files: ["pipeline.sh"] },
+      d0: { id: "d0", files: ["data/spectra.csv"] },
+    };
+    const links = [
+      { script: "scripts/unrelated.py", path: "data/spectra.csv",
+        mode: "read", call: "pandas.read_csv", literal: "data/spectra.csv",
+        line: 4, cell: null },
+    ];
+    expect(detectionsFor(links, "s0", byId, [], CALLS)).toEqual([]);
+  });
+
+  it("leaves the artifact's own file with no chain to explain", () => {
+    const byId = {
+      s0: { id: "s0", files: ["scripts/plot.py"] },
+      d0: { id: "d0", files: ["data/spectra.csv"] },
+    };
+    const links = [
+      { script: "scripts/plot.py", path: "data/spectra.csv", mode: "read",
+        call: "pandas.read_csv", literal: "data/spectra.csv", line: 18,
+        cell: null },
+    ];
+    const [item] = detectionsFor(links, "s0", byId, [], CALLS);
+    expect(item.evidences[0].via).toEqual([]);
   });
 });

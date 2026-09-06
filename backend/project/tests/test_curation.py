@@ -1850,6 +1850,127 @@ class TestCodeLinksInTheResponse(CurationTestBase):
         self.assertNotIn("secret-value-do-not-leak", response.text)
         self.assertNotIn("api_key", response.text)
 
+    SHELL_TREE = dict(FIXTURE, **{
+        "scripts": ([], ["plot_vdos.py", "compute_dipoles.py", "run.sh",
+                         "compute_dipoles.sh"]),
+    })
+
+    def shell_lister(self, url):
+        relative = url[len(FOLDER):].strip("/")
+        if relative not in self.SHELL_TREE:
+            raise AssertionError("unexpected listing request: %s" % url)
+        return self.SHELL_TREE[relative]
+
+    def analyze_shell(self, texts):
+        """The reference folder, plus the two shell scripts these need."""
+        return self.analyze(texts=texts, walk=self.shell_lister)
+
+    def test_a_wrapper_reports_what_it_runs(self):
+        # `pipeline.sh` is what a curator registers; `plot_vdos.py`, one line
+        # down, is what reads the dataset. The analysis reports both facts
+        # and joins neither -- the browser does that, where the artifacts are.
+        self.login()
+        sources = dict(self.SOURCES, **{
+            "scripts/run.sh": "#!/bin/bash\n"
+                              "python scripts/plot_vdos.py\n",
+            "scripts/plot_vdos.py":
+                "import numpy as np\n"
+                "import matplotlib.pyplot as plt\n"
+                "np.loadtxt('data/VDOS/vdos.dat')\n"
+                "plt.savefig('figures/figure1.png')\n",
+        })
+        response, _, _ = self.analyze_shell(sources)
+        self.assertEqual(200, response.status_code)
+
+        calls = response.json()["shell_calls"]
+        self.assertEqual(
+            [(c["from"], c["to"], c["line"]) for c in calls],
+            [("scripts/run.sh", "scripts/plot_vdos.py", 2)])
+        # And the target's own reads and writes are reported as its own.
+        followed = sorted(
+            (l["mode"], l["path"]) for l in response.json()["code_links"]
+            if l["script"] == "scripts/plot_vdos.py")
+        self.assertEqual(followed, [
+            ("read", "data/VDOS/vdos.dat"),
+            ("write", "figures/figure1.png"),
+        ])
+
+    def test_a_wrapper_that_runs_a_wrapper(self):
+        self.login()
+        sources = dict(self.SOURCES, **{
+            "scripts/run.sh": "bash scripts/compute_dipoles.sh\n",
+            "scripts/compute_dipoles.sh": "python scripts/plot_vdos.py\n",
+            "scripts/plot_vdos.py": "import numpy as np\n"
+                                    "np.loadtxt('data/VDOS/vdos.dat')\n",
+        })
+        response, _, _ = self.analyze_shell(sources)
+        self.assertEqual(200, response.status_code)
+        calls = [(c["from"], c["to"]) for c in response.json()["shell_calls"]]
+        self.assertIn(("scripts/run.sh", "scripts/compute_dipoles.sh"), calls)
+        self.assertIn(
+            ("scripts/compute_dipoles.sh", "scripts/plot_vdos.py"), calls)
+
+    def test_nothing_dynamic_becomes_a_call(self):
+        self.login()
+        sources = dict(self.SOURCES, **{
+            "scripts/run.sh":
+                'python "$SCRIPT"\n'
+                "python scripts/$NAME.py\n"
+                'eval "$COMMAND"\n'
+                "source config.sh\n"
+                "find . -name '*.py'\n"
+                "make target\n"
+                "for f in scripts/*.py; do python $f; done\n",
+        })
+        response, _, _ = self.analyze_shell(sources)
+        self.assertEqual([], response.json()["shell_calls"])
+
+    def test_a_wrapper_naming_a_missing_file_makes_no_call(self):
+        self.login()
+        sources = dict(self.SOURCES, **{
+            "scripts/run.sh": "python scripts/not_in_the_folder.py\n",
+        })
+        response, _, _ = self.analyze_shell(sources)
+        self.assertEqual([], response.json()["shell_calls"])
+
+    def test_a_broken_target_does_not_stop_the_others(self):
+        self.login()
+        sources = dict(self.SOURCES, **{
+            "scripts/run.sh": "python scripts/plot_vdos.py\n"
+                              "python scripts/compute_dipoles.py\n",
+            "scripts/plot_vdos.py": "def broken(:\n",
+            "scripts/compute_dipoles.py":
+                "import numpy as np\n"
+                "np.loadtxt('data/VDOS/vdos.dat')\n",
+        })
+        response, _, _ = self.analyze_shell(sources)
+        body = response.json()
+        # The call to the broken file is still reported...
+        self.assertEqual(
+            2, len([c for c in body["shell_calls"]
+                    if c["from"] == "scripts/run.sh"]))
+        # ...the broken file is named as unread...
+        self.assertIn({"path": "scripts/plot_vdos.py",
+                       "reason": "parse_error"}, body["code_scan"]["skipped"])
+        # ...and the readable one still answers.
+        self.assertEqual(
+            [("scripts/compute_dipoles.py", "data/VDOS/vdos.dat")],
+            [(l["script"], l["path"]) for l in body["code_links"]
+             if l["script"].startswith("scripts/")])
+
+    def test_following_a_wrapper_calls_no_provider(self):
+        self.login()
+        sources = dict(self.SOURCES, **{
+            "scripts/run.sh": "python scripts/plot_vdos.py\n",
+            "scripts/plot_vdos.py": "import numpy as np\n"
+                                    "np.loadtxt('data/VDOS/vdos.dat')\n",
+        })
+        with mock.patch("project.curation.call_gemini") as gemini:
+            response, _, _ = self.analyze_shell(sources)
+        self.assertEqual(200, response.status_code)
+        self.assertTrue(response.json()["shell_calls"])
+        gemini.assert_not_called()
+
     def test_no_provider_is_called_and_nothing_is_executed(self):
         # The scan is `ast.parse` over text already fetched for evidence. A
         # provider call would need the AI endpoint, its consent and its quota,

@@ -542,6 +542,174 @@ class WhatCouldNotBeRead(unittest.TestCase):
         self.assertEqual(sorted(result["skipped"][0]), ["path", "reason"])
 
 
+class WhatAShellScriptSaysItRuns(unittest.TestCase):
+    """A wrapper is usually the only file recorded as "the script".
+
+    Everything that actually reads a dataset is one line down. That line is
+    as literal as any `read_csv` -- reading it is parsing, not guessing --
+    and everything the line does not fully state is refused, exactly as a
+    dynamic path is refused in Python.
+    """
+
+    FILES = {
+        "pipeline.sh", "scripts/plot.py", "scripts/preprocess.sh",
+        "scripts/preprocess.py", "notebooks/analysis.ipynb",
+        "data/raw.csv", "figures/dos.png",
+    }
+
+    def calls(self, text, path="pipeline.sh", files=None):
+        return codelinks.shell_invocations(path, text, files or self.FILES)
+
+    def test_the_ordinary_ways_to_run_a_script(self):
+        for line in ("python scripts/plot.py",
+                     "python3 scripts/plot.py",
+                     "python2 scripts/plot.py --fast",
+                     "/usr/bin/python scripts/plot.py",
+                     "ipython scripts/plot.py"):
+            found = self.calls(line + "\n")
+            self.assertEqual([call["to"] for call in found],
+                             ["scripts/plot.py"], line)
+
+    def test_the_ordinary_ways_to_run_a_notebook(self):
+        for line in ("jupyter nbconvert --execute notebooks/analysis.ipynb",
+                     "jupyter run notebooks/analysis.ipynb",
+                     "jupyter nbconvert --to html notebooks/analysis.ipynb"):
+            found = self.calls(line + "\n")
+            self.assertEqual([call["to"] for call in found],
+                             ["notebooks/analysis.ipynb"], line)
+
+    def test_the_ordinary_ways_to_run_another_shell_script(self):
+        for line in ("bash scripts/preprocess.sh",
+                     "sh scripts/preprocess.sh",
+                     "./scripts/preprocess.sh",
+                     "scripts/preprocess.sh"):
+            found = self.calls(line + "\n")
+            self.assertEqual([call["to"] for call in found],
+                             ["scripts/preprocess.sh"], line)
+
+    def test_it_says_where_the_line_was(self):
+        found = self.calls("#!/bin/bash\nset -e\npython scripts/plot.py\n")
+        self.assertEqual(3, found[0]["line"])
+        self.assertEqual("pipeline.sh", found[0]["from"])
+        self.assertEqual("python", found[0]["command"])
+
+    def test_the_same_target_twice_is_one_call(self):
+        found = self.calls("python scripts/plot.py\n"
+                           "python scripts/plot.py --again\n")
+        self.assertEqual(1, len(found))
+        self.assertEqual(3, found[0]["line"] + 2)
+
+    # ---- and everything a line does not actually state -----------------
+
+    def refuses(self, line, why):
+        self.assertEqual([], self.calls(line + "\n"), why)
+
+    def test_a_variable_names_no_file(self):
+        self.refuses('python "$SCRIPT"', "the value lives elsewhere")
+        self.refuses("python scripts/$NAME.py", "half of it is a variable")
+        self.refuses("python ${SCRIPT}", "the value lives elsewhere")
+
+    def test_a_substitution_names_no_file(self):
+        self.refuses("python `which plot.py`", "a substitution runs later")
+        self.refuses("python $(ls scripts)", "a substitution runs later")
+
+    def test_a_glob_is_not_one_file(self):
+        self.refuses("python scripts/*.py", "a pattern is not a path")
+        self.refuses("for script in scripts/*.py; do python x; done",
+                     "a loop is not a call")
+
+    def test_the_opaque_commands_are_refused(self):
+        for line in ("eval \"python scripts/plot.py\"",
+                     "source scripts/preprocess.sh",
+                     ". scripts/preprocess.sh",
+                     "make target",
+                     "find . -name scripts/plot.py",
+                     "xargs python scripts/plot.py",
+                     "sudo python scripts/plot.py",
+                     "docker run python scripts/plot.py"):
+            self.refuses(line, line)
+
+    def test_a_pipeline_or_a_chain_is_refused(self):
+        self.refuses("python scripts/plot.py | tee log.txt", "a pipeline")
+        self.refuses("python scripts/plot.py && python scripts/plot.py",
+                     "a chain")
+
+    def test_an_assignment_is_not_a_command(self):
+        self.refuses("SCRIPT=scripts/plot.py", "this sets a name")
+
+    def test_a_comment_is_not_a_command(self):
+        self.refuses("# python scripts/plot.py", "a comment")
+
+    def test_a_file_the_scan_never_saw_is_refused(self):
+        self.refuses("python scripts/does_not_exist.py",
+                     "nothing in the folder answers to that name")
+
+    def test_outside_the_folder_is_refused(self):
+        self.refuses("python ../../elsewhere/plot.py", "outside the scan")
+        self.refuses("python /usr/local/bin/plot.py", "an absolute path")
+        self.refuses("python https://example.org/plot.py", "a URL")
+
+    def test_an_ambiguous_target_is_refused(self):
+        # `plot.py` beside the wrapper AND at the root: the line does not say
+        # which directory it ran from, so neither reading is the answer.
+        files = {"scripts/pipeline.sh", "scripts/plot.py", "plot.py"}
+        self.assertEqual(
+            [], codelinks.shell_invocations(
+                "scripts/pipeline.sh", "python plot.py\n", files))
+
+    def test_a_script_running_itself_is_not_a_call(self):
+        self.assertEqual(
+            [], self.calls("bash pipeline.sh\n"))
+
+    def test_something_that_is_not_a_source_is_refused(self):
+        files = self.FILES | {"scripts/tool.exe"}
+        self.assertEqual(
+            [], codelinks.shell_invocations(
+                "pipeline.sh", "./scripts/tool.exe\n", files))
+
+
+class ShellCallsInAScan(unittest.TestCase):
+
+    FILES = {"pipeline.sh", "scripts/preprocess.sh", "scripts/plot.py",
+             "data/raw.csv", "figures/dos.png"}
+
+    def test_a_scan_reports_the_calls_and_the_targets_own_reads(self):
+        result = codelinks.scan({
+            "pipeline.sh": "bash scripts/preprocess.sh\n"
+                           "python scripts/plot.py\n",
+            "scripts/plot.py": "import pandas as pd\n"
+                               "import matplotlib.pyplot as plt\n"
+                               "pd.read_csv('data/raw.csv')\n"
+                               "plt.savefig('figures/dos.png')\n",
+        }, self.FILES)
+
+        self.assertEqual(
+            [(c["from"], c["to"]) for c in result["shell_calls"]],
+            [("pipeline.sh", "scripts/preprocess.sh"),
+             ("pipeline.sh", "scripts/plot.py")])
+        # The wrapper itself states no file I/O, and none is invented for it.
+        self.assertEqual(
+            sorted({link["script"] for link in result["links"]}),
+            ["scripts/plot.py"])
+
+    def test_a_shell_script_produces_no_file_links_of_its_own(self):
+        result = codelinks.scan(
+            {"pipeline.sh": "python scripts/plot.py data/raw.csv\n"},
+            self.FILES)
+        self.assertEqual([], result["links"])
+
+    def test_the_order_is_stable(self):
+        sources = {
+            "pipeline.sh": "python scripts/plot.py\n"
+                           "bash scripts/preprocess.sh\n",
+        }
+        first = codelinks.scan(sources, self.FILES)["shell_calls"]
+        second = codelinks.scan(dict(sources), self.FILES)["shell_calls"]
+        self.assertEqual(first, second)
+        self.assertEqual([c["line"] for c in first], sorted(
+            c["line"] for c in first))
+
+
 class NothingIsExecutedOrSent(unittest.TestCase):
 
     def test_module_level_code_is_never_run(self):

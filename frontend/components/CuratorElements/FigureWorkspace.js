@@ -62,6 +62,7 @@ import {
   aiDetectionKey,
   aiDetections,
   cappedSources,
+  describeChain,
   describeEvidence,
   detectionKey,
   detectionsFor,
@@ -72,6 +73,7 @@ import {
   ownerOf,
   parsedSourcesOf,
   proposalSeed,
+  sourceClosure,
   sourcesOf,
 } from "../../Utils/codeSuggestions";
 import {
@@ -686,6 +688,7 @@ const DetectDialog = ({
   scriptId,
   scriptName,
   sources,
+  followed,
   detections,
   assisted,
   skipped,
@@ -705,6 +708,8 @@ const DetectDialog = ({
   askNotice,
   onAsk,
 }) => {
+  // Before the early return: a hook cannot be conditional.
+  const [showFollowed, setShowFollowed] = useState(false);
   if (!scriptId) return null;
   const groups = groupDetections(detections).concat(
     assisted.length
@@ -787,6 +792,51 @@ const DetectDialog = ({
               ))}
             </Box>
           </Alert>
+        )}
+
+        {/* WHY A RELATIONSHIP LANDED ON THIS SCRIPT.
+            A wrapper is often the only file recorded as "the script", and
+            the file that reads a dataset is one line down. Without the
+            chain, "pipeline.sh reads spectra.csv" looks like a guess. */}
+        {followed && followed.sources.length > 1 && (
+          <Box sx={{ mb: 1.5, minWidth: 0 }}>
+            <Button
+              size="small"
+              onClick={() => setShowFollowed((was) => !was)}
+              aria-expanded={showFollowed}
+              aria-controls="fw-detect-followed"
+              data-testid="fw-detect-followed-toggle"
+              sx={{ px: 0 }}
+            >
+              {`Sources followed (${followed.sources.length})`}
+            </Button>
+            <Collapse in={showFollowed} unmountOnExit>
+              <Box
+                id="fw-detect-followed"
+                component="ul"
+                data-testid="fw-detect-followed"
+                sx={{ listStyle: "none", m: 0, p: 0 }}
+              >
+                {followed.sources.map((path) => {
+                  const chain = followed.chains.get(path) || [];
+                  return (
+                    <Typography
+                      key={path}
+                      component="li"
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ display: "block", overflowWrap: "anywhere",
+                            fontFamily: "monospace" }}
+                    >
+                      {chain.length
+                        ? describeChain(chain).join(" → ")
+                        : `${path} (this script's own file)`}
+                    </Typography>
+                  );
+                })}
+              </Box>
+            </Collapse>
+          </Box>
         )}
 
         {groups.length === 0 ? (
@@ -1211,6 +1261,9 @@ const FigureWorkspace = () => {
   const analysisData = (rccAnalysisCache || {}).data || {};
   const codeLinks = analysisData.code_links || [];
   const codeSkipped = (analysisData.code_scan || {}).skipped || [];
+  // Which source each shell script literally says it runs. Following a
+  // wrapper to the file that does the reading is done from this.
+  const shellCalls = analysisData.shell_calls || [];
 
   // Whether THIS script can be looked at, and why not when it cannot. Two
   // different answers, because they need two different things done about
@@ -1226,17 +1279,34 @@ const FigureWorkspace = () => {
     return "";
   };
 
+  // EVERY SOURCE THIS SCRIPT REACHES, and what it could not follow. Shown so
+  // a curator can see why a relationship landed on the wrapper they pressed.
+  const closure = useMemo(
+    () =>
+      detectFor
+        ? sourceClosure(sourcesOf(byId[detectFor]), shellCalls)
+        : { sources: [], chains: new Map(), skipped: [] },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [detectFor, byId, shellCalls]
+  );
+
   // WHAT WAS NOT READ, from either end: the folder scan's own skips, and
   // this script's sources past the cap. Both are named, neither is silent.
   const detectSkipped = detectFor
-    ? codeSkipped.concat(cappedSources(byId[detectFor]))
+    ? codeSkipped
+        .concat(cappedSources(byId[detectFor]))
+        .concat(closure.skipped)
     : [];
 
   const detections = useMemo(
-    () => (detectFor ? detectionsFor(codeLinks, detectFor, byId, edges) : []),
+    () =>
+      detectFor
+        ? detectionsFor(codeLinks, detectFor, byId, edges, shellCalls)
+        : [],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [detectFor, codeLinks, byId, edges]
+    [detectFor, codeLinks, byId, edges, shellCalls]
   );
+
 
   // Parsed and assisted items live in one selection, so they need one key.
   const keyOf = (item) =>
@@ -1315,7 +1385,7 @@ const FigureWorkspace = () => {
       const response = await axios.post("/api/curation/suggest-connections", {
         preview: true,
         path: fileServerPath,
-        script: { id: detectFor, sources: sourcesOf(byId[detectFor]) },
+        script: { id: detectFor, sources: closure.sources },
         candidates: aiCandidates(),
         known: detections.map((item) => ({
           path: item.path,
@@ -1341,7 +1411,7 @@ const FigureWorkspace = () => {
       const response = await axios.post("/api/curation/suggest-connections", {
         consent: true,
         path: fileServerPath,
-        script: { id: detectFor, sources: sourcesOf(byId[detectFor]) },
+        script: { id: detectFor, sources: closure.sources },
         candidates: aiCandidates(),
         known: detections.map((item) => ({
           path: item.path,
@@ -2660,6 +2730,7 @@ const FigureWorkspace = () => {
         scriptId={detectFor}
         scriptName={detectFor ? label(detectFor) : ""}
         sources={detectFor ? sourcesOf(byId[detectFor]) : []}
+        followed={closure}
         detections={detections}
         assisted={aiItems}
         skipped={detectSkipped}

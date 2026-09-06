@@ -1319,7 +1319,8 @@ def _code_sources(root_url, files, texts, cut_short=()):
     wanted = sorted(
         path for path in files
         if path.lower().endswith((codelinks.SCRIPT_SUFFIX,
-                                  codelinks.NOTEBOOK_SUFFIX)))
+                                  codelinks.NOTEBOOK_SUFFIX,
+                                  codelinks.SHELL_SUFFIX)))
     sources = {}
     skipped = []
     for path in wanted[:MAX_CODE_FILES]:
@@ -1407,6 +1408,7 @@ def analyze_folder(body):
         # analysis -- the folder is still classified exactly as before.
         code_links = []
         code_skipped = []
+        shell_calls = []
         code_scanned = 0
         code_total = 0
         try:
@@ -1416,6 +1418,7 @@ def analyze_folder(body):
             scanned = codelinks.scan(code_sources, files, skipped=too_big)
             code_links = scanned["links"]
             code_skipped = scanned["skipped"]
+            shell_calls = scanned["shell_calls"]
         except Exception as e:
             print("Code link scan skipped (%s)" % type(e).__name__)
 
@@ -1476,6 +1479,10 @@ def analyze_folder(body):
         # that says so. Turning a pair into a workflow arrow needs the draft
         # artifacts, which live in the browser.
         "code_links": code_links,
+        # Which source each shell script literally says it runs. Following a
+        # wrapper to the file that actually reads something is done from
+        # this, in the browser, where the artifacts are.
+        "shell_calls": shell_calls,
         "code_scan": {
             "scripts_found": code_total,
             "scripts_read": code_scanned,

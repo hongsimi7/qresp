@@ -606,26 +606,29 @@ describe("drawing an arrow between any two resources", () => {
     });
   });
 
-  it("offers every artifact type combination", async () => {
+  // ONE KIND PER TEST, not five in a loop.
+  //
+  // As a single case this rendered the whole workspace five times and drove
+  // five dialogs, which took 5.4s of a 5s budget -- so it passed or failed
+  // depending on the machine, and it had started failing on this one. Split,
+  // each runs in about a second, and a failure names the kind that broke
+  // instead of the whole matrix.
+  const EVERY_KIND = ["c0", "s0", "d0", "t0", "h0"];
+
+  it.each(EVERY_KIND)("offers every other artifact to %s", async (source) => {
     const u = user();
-    for (const source of ["c0", "s0", "d0", "t0", "h0"]) {
-      const ctx = renderWorkspace(PAIR);
-      await openLinkFor(u, source);
-      ["c0", "s0", "d0", "t0", "h0"]
-        .filter((other) => other !== source)
-        .forEach((other) =>
-          expect(
-            screen.getByTestId(`fw-link-option-${source}-${other}`)
-          ).toBeInTheDocument()
-        );
-      // Never itself.
+    renderWorkspace(PAIR);
+    await openLinkFor(u, source);
+
+    EVERY_KIND.filter((other) => other !== source).forEach((other) =>
       expect(
-        screen.queryByTestId(`fw-link-option-${source}-${source}`)
-      ).not.toBeInTheDocument();
-      await u.click(screen.getByTestId("fw-link-cancel"));
-      ctx.rerenderWith({});
-      cleanup();
-    }
+        screen.getByTestId(`fw-link-option-${source}-${other}`)
+      ).toBeInTheDocument()
+    );
+    // Never itself.
+    expect(
+      screen.queryByTestId(`fw-link-option-${source}-${source}`)
+    ).not.toBeInTheDocument();
   });
 
   it("links several targets at once without copying anything", async () => {
@@ -3089,5 +3092,187 @@ describe("asking about what the parser could not resolve", () => {
     expect(
       screen.queryByRole("button", { name: /complete in form/i })
     ).toBeNull();
+  });
+});
+
+
+// A SHELL WRAPPER, FOLLOWED TO THE FILE THAT DOES THE WORK.
+//
+// `pipeline.sh` is what the curator registered as the script. `plot.py`, one
+// line down, is what reads the dataset. The relationship belongs to the
+// artifact they pressed -- and the review has to be able to say why.
+describe("a script whose work is one line down", () => {
+  afterEach(() => jest.resetAllMocks());
+
+  const BASE = {
+    charts: [{ id: "c0", caption: "Density of states",
+               imageFile: "figures/dos.png" }],
+    scripts: [{ id: "s0", readme: "the pipeline", files: ["pipeline.sh"] }],
+    datasets: [{ id: "d0", readme: "spectra", files: ["data/spectra.csv"] }],
+    workflow: { nodes: [], edges: [] },
+    fileServerPath: "/proj",
+  };
+
+  const READS = {
+    script: "scripts/plot.py", path: "data/spectra.csv", mode: "read",
+    call: "pandas.read_csv", literal: "data/spectra.csv", line: 18,
+    cell: null,
+  };
+  const SAVES = {
+    script: "scripts/plot.py", path: "figures/dos.png", mode: "write",
+    call: "matplotlib.pyplot.savefig", literal: "figures/dos.png", line: 42,
+    cell: null,
+  };
+
+  const RUNS = [
+    { from: "pipeline.sh", to: "scripts/plot.py", line: 4, command: "python" },
+  ];
+
+  const NESTED = [
+    { from: "pipeline.sh", to: "scripts/preprocess.sh", line: 3,
+      command: "bash" },
+    { from: "scripts/preprocess.sh", to: "scripts/plot.py", line: 2,
+      command: "python" },
+  ];
+
+  const cached = (links, calls) => ({
+    rccAnalysisCache: {
+      path: "/proj",
+      data: { code_links: links, shell_calls: calls },
+    },
+  });
+
+  it("is live for a wrapper, and finds what the wrapper runs", async () => {
+    const u = user();
+    renderWorkspace({ ...BASE, ...cached([READS, SAVES], RUNS) });
+
+    expect(screen.getByTestId("fw-detect-s0")).toBeEnabled();
+    await u.click(screen.getByTestId("fw-detect-s0"));
+
+    // Both relationships, on the script that was pressed.
+    expect(
+      screen.getByTestId("fw-detect-arrow-input_datasets:data/spectra.csv")
+    ).toHaveTextContent("Dataset → Script (consumes)");
+    expect(
+      screen.getByTestId("fw-detect-arrow-output_figures:figures/dos.png")
+    ).toHaveTextContent("Script → Figure (generates)");
+  });
+
+  it("shows the chain that explains why it landed here", async () => {
+    const u = user();
+    renderWorkspace({ ...BASE, ...cached([READS], RUNS) });
+    await u.click(screen.getByTestId("fw-detect-s0"));
+
+    // Closed until asked -- it is a detail, not the message.
+    expect(screen.queryByTestId("fw-detect-followed")).toBeNull();
+    await u.click(screen.getByTestId("fw-detect-followed-toggle"));
+
+    const followed = within(screen.getByTestId("fw-detect-followed"));
+    expect(
+      followed.getByText("pipeline.sh (this script's own file)")
+    ).toBeInTheDocument();
+    expect(
+      followed.getByText("pipeline.sh:4 runs scripts/plot.py")
+    ).toBeInTheDocument();
+    // And the read itself still says where it is.
+    expect(
+      screen.getByTestId("fw-detect-source-input_datasets:data/spectra.csv")
+    ).toHaveTextContent(
+      'scripts/plot.py, line 18 — pandas.read_csv("data/spectra.csv")'
+    );
+  });
+
+  it("follows a wrapper that runs a wrapper", async () => {
+    const u = user();
+    renderWorkspace({ ...BASE, ...cached([READS], NESTED) });
+    await u.click(screen.getByTestId("fw-detect-s0"));
+    await u.click(screen.getByTestId("fw-detect-followed-toggle"));
+
+    expect(screen.getByTestId("fw-detect-followed")).toHaveTextContent(
+      "pipeline.sh:3 runs scripts/preprocess.sh → " +
+        "scripts/preprocess.sh:2 runs scripts/plot.py"
+    );
+    expect(
+      screen.getByTestId("fw-detect-arrow-input_datasets:data/spectra.csv")
+    ).toBeInTheDocument();
+  });
+
+  it("ends at a cycle rather than going round it", async () => {
+    const u = user();
+    const cyclic = [
+      { from: "pipeline.sh", to: "scripts/preprocess.sh", line: 3,
+        command: "bash" },
+      { from: "scripts/preprocess.sh", to: "pipeline.sh", line: 9,
+        command: "bash" },
+      { from: "scripts/preprocess.sh", to: "scripts/plot.py", line: 2,
+        command: "python" },
+    ];
+    renderWorkspace({ ...BASE, ...cached([READS], cyclic) });
+    await u.click(screen.getByTestId("fw-detect-s0"));
+    await u.click(screen.getByTestId("fw-detect-followed-toggle"));
+
+    const rows = within(screen.getByTestId("fw-detect-followed"))
+      .getAllByRole("listitem");
+    expect(rows).toHaveLength(3);
+    expect(
+      screen.getByTestId("fw-detect-arrow-input_datasets:data/spectra.csv")
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing about following when there was nothing to follow",
+     async () => {
+    const u = user();
+    renderWorkspace({
+      ...BASE,
+      scripts: [{ id: "s0", readme: "plain", files: ["scripts/plot.py"] }],
+      ...cached([READS], []),
+    });
+    await u.click(screen.getByTestId("fw-detect-s0"));
+    expect(screen.queryByTestId("fw-detect-followed-toggle")).toBeNull();
+  });
+
+  it("creates nothing until the curator adds it", async () => {
+    const u = user();
+    const ctx = renderWorkspace({ ...BASE, ...cached([READS, SAVES], RUNS) });
+    await u.click(screen.getByTestId("fw-detect-s0"));
+    expect(ctx.addEdge).not.toHaveBeenCalled();
+    expect(ctx.addMany).not.toHaveBeenCalled();
+
+    await u.click(
+      screen.getByTestId("fw-detect-pick-input_datasets:data/spectra.csv")
+    );
+    await u.click(screen.getByTestId("fw-detect-apply"));
+    expect(ctx.addEdge).toHaveBeenCalledTimes(1);
+    expect(ctx.addEdge).toHaveBeenCalledWith({
+      from: "d0", to: "s0", type: "consumes",
+    });
+    // No Script -> Script edge is invented for the file it followed.
+    expect(ctx.addMany).not.toHaveBeenCalled();
+  });
+
+  it("names a source it stopped short of", async () => {
+    const u = user();
+    const deep = Array.from({ length: 8 }, (unused, i) => ({
+      from: i === 0 ? "pipeline.sh" : `s${i}.sh`,
+      to: `s${i + 1}.sh`,
+      line: 1,
+      command: "bash",
+    }));
+    renderWorkspace({ ...BASE, ...cached([READS], deep) });
+    await u.click(screen.getByTestId("fw-detect-s0"));
+    expect(screen.getByTestId("fw-detect-skipped-list")).toHaveTextContent(
+      "s5.sh"
+    );
+  });
+
+  it("works with no provider anywhere near it", async () => {
+    const u = user();
+    renderWorkspace({ ...BASE, ...cached([READS, SAVES], RUNS) });
+    await u.click(screen.getByTestId("fw-detect-s0"));
+    // The whole traversal is the parser's, and it asked nobody.
+    expect(axios.post).not.toHaveBeenCalled();
+    expect(
+      screen.getByTestId("fw-detect-arrow-input_datasets:data/spectra.csv")
+    ).toBeInTheDocument();
   });
 });

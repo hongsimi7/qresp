@@ -26,6 +26,7 @@ than guessed at.
 import ast
 import json
 import posixpath
+import re
 
 # ---------------------------------------------------------------------------
 # WHAT IS UNDERSTOOD
@@ -115,6 +116,37 @@ MAX_LINKS_TOTAL = 200
 
 SCRIPT_SUFFIX = ".py"
 NOTEBOOK_SUFFIX = ".ipynb"
+SHELL_SUFFIX = ".sh"
+
+# ---------------------------------------------------------------------------
+# WHAT A SHELL SCRIPT SAYS IT RUNS.
+#
+# A wrapper is usually the only thing recorded as "the script", and everything
+# that actually reads a file is one line down:
+#
+#     python scripts/plot.py
+#
+# That line is as literal as any `read_csv`, and reading it is parsing, not
+# guessing. What is NOT read is anything the line does not fully state --
+# `python "$SCRIPT"`, a glob, an `eval`, a `make` target. Those name a file
+# only at run time, and this module's whole rule is that a name has to be in
+# the file to be believed.
+
+# Interpreters, with or without a path: `python`, `python3`, `/usr/bin/python`.
+_PY_RUNNERS = ("python", "python2", "python3", "ipython", "ipython3")
+_SH_RUNNERS = ("bash", "sh", "zsh", "dash", "ksh")
+
+# Anything on a line that means it is decided elsewhere. One of these and the
+# line is not read at all -- not the part before it, not the part after.
+_DYNAMIC = ("$", "`", "*", "?", "[", "]", "{", "}", "|", ";", "&&", "||",
+            ">(", "<(")
+
+# Commands whose argument is a target, a pattern or a program of their own.
+_OPAQUE = ("eval", "exec", "source", "make", "find", "xargs", "sudo", "env",
+           "docker", "srun", "sbatch", "mpirun", "nohup", "watch", "time",
+           "conda", "pipenv", "poetry", "snakemake", "nextflow")
+
+_WORD = re.compile(r"[^\s]+")
 
 # WHY A FILE WAS NOT READ. Both are reported to the curator, because "no
 # suggestions" and "no suggestions, and four scripts were never looked at"
@@ -122,6 +154,105 @@ NOTEBOOK_SUFFIX = ".ipynb"
 # true has been misled by silence.
 SKIP_SIZE = "size_limit"
 SKIP_PARSE = "parse_error"
+
+
+def _basename_of(word):
+    """The command a word invokes: `/usr/bin/python3` -> `python3`."""
+    return word.rsplit("/", 1)[-1].strip()
+
+
+def _shell_words(line):
+    """The words of a shell line, or None if the line is not fully literal.
+
+    A comment, a control-flow keyword, an assignment, a pipeline, a
+    substitution or a wildcard all mean the line does not state what it runs.
+    None of them is read.
+    """
+    text = str(line or "").strip()
+    if not text or text.startswith("#"):
+        return None
+    if any(marker in text for marker in _DYNAMIC):
+        return None
+    words = _WORD.findall(text)
+    if not words:
+        return None
+    head = _basename_of(words[0])
+    if head in ("for", "while", "if", "case", "do", "done", "then", "fi",
+                "esac", "function", "."):
+        return None
+    if "=" in words[0] and not words[0].startswith("/"):
+        # `NAME=value command ...`: the environment is set here and the value
+        # is not something this reads.
+        return None
+    if head in _OPAQUE:
+        return None
+    return words
+
+
+def _first_argument(words, suffix):
+    """The first non-flag word ending in `suffix`, or "".
+
+    Flags and their values are skipped by shape, so `jupyter nbconvert
+    --execute notebooks/a.ipynb` finds the notebook and `--to html` does not
+    look like one.
+    """
+    for word in words[1:]:
+        if word.startswith("-"):
+            continue
+        if word.lower().endswith(suffix):
+            return word
+    return ""
+
+
+def shell_invocations(path, text, known_files):
+    """Every source file a shell script literally says it runs.
+
+    Returns [{"from": path, "to": resolved, "line": n, "command": word}],
+    deduplicated, in line order. A target counts only when it resolves --
+    exactly, and unambiguously -- to a file the folder scan really found, by
+    the same rule every other path in this module goes through.
+    """
+    out = []
+    seen = set()
+    for number, line in enumerate(str(text or "").splitlines(), start=1):
+        words = _shell_words(line)
+        if not words:
+            continue
+        head = _basename_of(words[0])
+
+        target = ""
+        if head in _PY_RUNNERS:
+            target = _first_argument(words, SCRIPT_SUFFIX)
+            if not target:
+                # `python -m module` names no file, and `ipython nb.ipynb`
+                # runs a notebook.
+                target = _first_argument(words, NOTEBOOK_SUFFIX)
+        elif head == "jupyter":
+            # `jupyter nbconvert --execute a.ipynb`, `jupyter run a.ipynb`.
+            target = _first_argument(words, NOTEBOOK_SUFFIX)
+        elif head in _SH_RUNNERS:
+            target = _first_argument(words, SHELL_SUFFIX)
+        elif words[0].startswith("./") or words[0].startswith("../"):
+            # `./scripts/preprocess.sh` -- the file IS the command.
+            if words[0].lower().endswith(SHELL_SUFFIX):
+                target = words[0]
+        elif words[0].lower().endswith(SHELL_SUFFIX):
+            target = words[0]
+
+        if not target:
+            continue
+        resolved = _resolve_against(path, target, known_files)
+        if not resolved or resolved == path:
+            continue
+        if not resolved.lower().endswith(
+                (SCRIPT_SUFFIX, NOTEBOOK_SUFFIX, SHELL_SUFFIX)):
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        out.append({"from": path, "to": resolved, "line": number,
+                    "command": head})
+    return out
 
 
 def _literal_path(node):
@@ -530,6 +661,7 @@ def scan(sources, known_files, skipped=None):
     known = set(known_files or ())
     skips = list(skipped or [])
     facts = []
+    calls = []
     for path in sorted(sources or {}):
         text = sources.get(path)
         if not isinstance(text, str):
@@ -547,6 +679,11 @@ def scan(sources, known_files, skipped=None):
             facts.extend(_scan_python(path, text, known, skips))
         elif lowered.endswith(NOTEBOOK_SUFFIX):
             facts.extend(_scan_notebook(path, text, known, skips))
+        elif lowered.endswith(SHELL_SUFFIX):
+            # A shell script states no file I/O this can read. What it does
+            # state is which source it RUNS, and that source's own reads and
+            # writes are the ones worth having.
+            calls.extend(shell_invocations(path, text, known))
         if len(facts) >= MAX_LINKS_TOTAL:
             break
 
@@ -565,6 +702,11 @@ def scan(sources, known_files, skipped=None):
         "links": links,
         "skipped": [{"path": path, "reason": reason}
                     for path, reason in ordered],
+        # Who runs what, so a caller can follow a wrapper to the file that
+        # actually reads something. Facts, like the links: no artifact is
+        # named here and no relationship is decided.
+        "shell_calls": sorted(
+            calls, key=lambda call: (call["from"], call["line"], call["to"])),
     }
 
 

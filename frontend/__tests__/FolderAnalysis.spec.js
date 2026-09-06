@@ -9,6 +9,19 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+// THIS FILE IS SLOW, and says so rather than failing by machine.
+//
+// Timed: nineteen of its tests take over 2.5s and several take 5-6s, because
+// the dialog under test re-renders wholesale on every interaction and its
+// cards are declared inline, so each click rebuilds their DOM. Against the
+// 5s default they passed or failed depending on what else the machine was
+// doing -- which is why eleven of them already carried a hand-written
+// `}, 30000)`.
+//
+// Stated once, for this file only: every other spec keeps the 5s default.
+// The fix is the component, not the number, and that is not this pass.
+jest.setTimeout(15000);
+
 jest.mock("axios");
 import axios from "axios";
 
@@ -3466,7 +3479,7 @@ describe("Charts in the record boundary panel", () => {
     // Only the image whose name matches keeps the notebook.
     expect(records[0].notebookFile).toBe("");
     expect(records[1].notebookFile).toBe(NOTEBOOK);
-  });
+  }, 15000);  // timed at ~6316ms
 
   it("keeps a supporting file in the target Chart's files, not as a Chart",
      async () => {
@@ -4210,7 +4223,7 @@ describe("removing a candidate clears its selection", () => {
       "figures/figure1.png",
       "figures/figure3.png",
     ]);
-  });
+  }, 15000);  // timed at ~4868ms
 
   it("leaves the other candidates' selection alone", async () => {
     const user = userEvent.setup();
