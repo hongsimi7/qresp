@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import PropTypes from "prop-types";
@@ -847,12 +848,18 @@ const ChartImageRow = memo(function ChartImageRow({
   image,
   action,
   attached,
-  targets,
-  url,
+  groupTargets,
+  base,
   onRole,
   onTarget,
 }) {
   const name = basename(image.path);
+  // Derived HERE, from props that do not change on their own. Built by the
+  // parent and passed in, the URL was a new string and the target list a new
+  // array on every render -- both changed props, both enough to defeat the
+  // memo this row exists for.
+  const url = buildFileUrl(base, image.path);
+  const targets = (groupTargets || []).filter((path) => path !== image.path);
 
   return (
     <Box
@@ -1054,6 +1061,30 @@ const FolderAnalysis = ({
     });
     return inForce;
   }, [analysis]);
+
+  // The Charts each folder offers a supporting file, kept BY CONTENT.
+  //
+  // Recomputing is cheap; handing back a NEW ARRAY is not, because that is a
+  // changed prop on every row in every folder. A role change in one folder
+  // leaves the other folders' lists identical, so those keep the array they
+  // already had and their rows are not re-rendered to be told nothing
+  // happened.
+  const targetsByFolder = useRef({});
+  const chartTargetsByFolder = useMemo(() => {
+    const next = {};
+    chartGroups.forEach((group) => {
+      const fresh = chartTargetsIn(group, chartRoles, appliedPlan);
+      const previous = targetsByFolder.current[group.folder];
+      next[group.folder] =
+        previous &&
+        previous.length === fresh.length &&
+        previous.every((path, index) => path === fresh[index])
+          ? previous
+          : fresh;
+    });
+    targetsByFolder.current = next;
+    return next;
+  }, [chartGroups, chartRoles, appliedPlan]);
 
   const setChartRole = useCallback((group, path, action) =>
     // Functional update: the next roles are derived from the CURRENT state,
@@ -1602,10 +1633,8 @@ const FolderAnalysis = ({
                   image={image}
                   action={action}
                   attached={attached}
-                  targets={chartTargetsIn(
-                    group, chartRoles, appliedPlan
-                  ).filter((path) => path !== image.path)}
-                  url={buildFileUrl(fileServerPath, image.path)}
+                  groupTargets={chartTargetsByFolder[group.folder]}
+                  base={fileServerPath}
                   onRole={setChartRole}
                   onTarget={setChartTarget}
                 />

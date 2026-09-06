@@ -27,6 +27,14 @@ import { join as pathJoin } from "path";
 //
 // Everything else about the module stays real: `...actual` keeps the field
 // contract itself under test rather than replacing it with a stub.
+// The chart-image row's own render counter: it calls buildFileUrl(base, path)
+// once per render for its own image, and nothing else in this dialog calls it.
+jest.mock("../Utils/fileServerUrl", () => {
+  const actual = jest.requireActual("../Utils/fileServerUrl");
+  return { ...actual, buildFileUrl: jest.fn(actual.buildFileUrl) };
+});
+import { buildFileUrl } from "../Utils/fileServerUrl";
+
 jest.mock("../Utils/artifactFields", () => {
   const actual = jest.requireActual("../Utils/artifactFields");
   return { ...actual, toDraft: jest.fn(actual.toDraft) };
@@ -5288,5 +5296,339 @@ describe("touching one candidate touches one candidate", () => {
     // And declining sends nothing.
     await user.click(screen.getByRole("button", { name: /cancel/i }));
     expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE OTHER REPEATED ROW.
+//
+// The chart-image row carries a thumbnail and two MUI selects per image, in a
+// panel that sits on the same screen as the candidate list. It was a function
+// call inside FolderAnalysis, so a keystroke in a candidate field three
+// panels away re-rendered every one of them. It is a component now; these
+// tests are what keep it one.
+describe("a chart image row is its own component", () => {
+  const FOLDER_A = "figures_tables/figure_S1";
+  const FOLDER_B = "figures_tables/figure_S2";
+  const A_MAIN = `${FOLDER_A}/figure_S1.png`;
+  const A_ALT = `${FOLDER_A}/overview.png`;
+  const A_SIDE = `${FOLDER_A}/panel_b.png`;
+  const B_MAIN = `${FOLDER_B}/figure_S2.png`;
+  const B_SIDE = `${FOLDER_B}/inset.png`;
+
+  // Two folders, two images each, in the response's own shape: one image the
+  // analyser would make the Chart, one it wants a decision about.
+  const GROUPS = [
+    {
+      folder: FOLDER_A,
+      role_root: "figures_tables",
+      // Three images, two of them Charts, so a supporting file in this
+      // folder has a real choice to make rather than one forced answer.
+      images: [
+        { path: A_SIDE, reason: "image found in this chart folder",
+          suggested_action: "review" },
+        { path: A_MAIN, reason: "filename matches the chart folder",
+          suggested_action: "chart" },
+        { path: A_ALT, reason: "image found in this chart folder",
+          suggested_action: "chart" },
+      ],
+      notebooks: [],
+    },
+    {
+      folder: FOLDER_B,
+      role_root: "figures_tables",
+      images: [
+        { path: B_SIDE, reason: "image found in this chart folder",
+          suggested_action: "review" },
+        { path: B_MAIN, reason: "filename matches the chart folder",
+          suggested_action: "chart" },
+      ],
+      notebooks: [],
+    },
+  ];
+
+  // ...and candidates alongside them, because the point is what a click on
+  // one of THOSE costs the rows. Eight, not two dozen: the render counter
+  // below is exact -- it reads zero or it does not -- so a longer list would
+  // add seconds to every test in this block and nothing to what any of them
+  // proves. The two-dozen list lives in "touching one candidate touches one
+  // candidate", where the size IS the point.
+  const CROWD = 8;
+  const crowdChart = (index) => ({
+    id: `chart-${index}`,
+    kind: "chart",
+    label: `figure${index}.png`,
+    file_count: 1,
+    confidence: "high",
+    evidence: [`figures/figure${index}.png is a .png image`],
+    needs_input: ["caption", "number", "properties"],
+    paths: [`figures/figure${index}.png`],
+    ai_sources: [],
+    inventory: {
+      file_count: 1,
+      extensions: [{ extension: ".png", count: 1 }],
+      sample_names: [`figure${index}.png`],
+    },
+    proposal: {
+      imageFile: `figures/figure${index}.png`,
+      files: [],
+      notebookFile: "",
+      number: "",
+      caption: "",
+      properties: [],
+      extraFields: [],
+    },
+  });
+
+  const withGroups = {
+    ...analysis,
+    structure_mode: "standard",
+    boundary_trees: {},
+    chart_image_groups: GROUPS,
+    applied_chart_plan: [],
+    candidates: {
+      ...analysis.candidates,
+      charts: Array.from({ length: CROWD }, (_, i) => crowdChart(i)),
+    },
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: withGroups });
+  });
+
+  // A row calls buildFileUrl(base, image.path) once per render, for its own
+  // image, so a spy on it counts renders per row the way toDraft counts
+  // renders per card. Nothing else in this dialog calls it.
+  const rowRenders = () =>
+    buildFileUrl.mock.calls.map(([, path]) => path);
+
+  const openPanel = async (user) => {
+    renderWith();
+    await user.click(analyzeButton());
+    await screen.findByRole("tab", { name: new RegExp(`charts \\(${CROWD}\\)`, "i") });
+    await user.click(
+      screen.getByRole("button", { name: /choose record boundaries/i })
+    );
+    await screen.findByTestId("chart-plan");
+    buildFileUrl.mockClear();
+  };
+
+  const nameOf = (path) => path.split("/").pop();
+  const row = (path) => screen.getByTestId(`chart-image-${path}`);
+  const thumb = (path) => row(path).querySelector("img");
+  const roleSelect = (path) =>
+    screen.getByLabelText(new RegExp(`^role for ${nameOf(path)}`, "i"));
+  const targetSelect = (path) =>
+    screen.getByLabelText(new RegExp(`^chart for ${nameOf(path)}`, "i"));
+  const pick = async (user, select, option) => {
+    await user.click(select);
+    await user.click(await screen.findByRole("option", { name: option }));
+  };
+
+  // --- what re-renders -----------------------------------------------------
+
+  it("does not re-render when an unrelated candidate is ticked", async () => {
+    const user = noDelayUser();
+    await openPanel(user);
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "Select figure7.png" })
+    );
+
+    // The candidate list and the chart plan are on the same screen. A tick in
+    // one is not a reason to rebuild four thumbnails and eight selects.
+    expect(rowRenders()).toEqual([]);
+  });
+
+  it("does not re-render when an unrelated candidate is typed into", async () => {
+    const user = noDelayUser();
+    await openPanel(user);
+    await user.click(
+      screen.getByRole("checkbox", { name: "Select figure3.png" })
+    );
+    buildFileUrl.mockClear();
+
+    await user.type(
+      within(screen.getByTestId("field-group-chart-3-caption")).getByRole(
+        "textbox"
+      ),
+      "abc"
+    );
+
+    expect(rowRenders()).toEqual([]);
+  });
+
+  it("re-renders only the row whose role changed", async () => {
+    const user = noDelayUser();
+    await openPanel(user);
+
+    await pick(user, roleSelect(A_SIDE), "Supporting File");
+
+    // Its own role changed and nothing else did: the Charts this folder
+    // offers are the same before and after, so its siblings are not touched
+    // and neither is the other folder.
+    expect(Array.from(new Set(rowRenders()))).toEqual([A_SIDE]);
+  });
+
+  it("re-renders the sibling too when the folder's Chart list changes",
+     async () => {
+    const user = noDelayUser();
+    await openPanel(user);
+
+    // Taking a Chart out of folder A shortens what a supporting file there
+    // could attach to, which every row in that folder has to show.
+    await pick(user, roleSelect(A_MAIN), "Ignore");
+
+    const touched = Array.from(new Set(rowRenders())).sort();
+    expect(touched).toEqual([A_MAIN, A_ALT, A_SIDE].sort());
+    // Folder B's list did not change, so folder B is not re-rendered.
+    expect(touched).not.toContain(B_MAIN);
+    expect(touched).not.toContain(B_SIDE);
+  });
+
+  it("re-renders only the row whose Chart target changed", async () => {
+    const user = noDelayUser();
+    await openPanel(user);
+    // Becoming a supporting file attaches it to the first Chart in the
+    // folder; this moves it to the other one.
+    await pick(user, roleSelect(A_SIDE), "Supporting File");
+    buildFileUrl.mockClear();
+
+    await pick(user, targetSelect(A_SIDE), "overview.png");
+
+    expect(Array.from(new Set(rowRenders()))).toEqual([A_SIDE]);
+  });
+
+  // --- what survives -------------------------------------------------------
+
+  it("keeps every other row's thumbnail and selects when one role changes",
+     async () => {
+    const user = noDelayUser();
+    await openPanel(user);
+    const otherRow = row(B_SIDE);
+    const otherThumb = thumb(B_SIDE);
+    const otherSelect = roleSelect(B_SIDE);
+
+    await pick(user, roleSelect(A_SIDE), "Supporting File");
+
+    expect(row(B_SIDE)).toBe(otherRow);
+    expect(thumb(B_SIDE)).toBe(otherThumb);
+    expect(otherThumb).toHaveAttribute("src", expect.stringContaining("inset.png"));
+    expect(roleSelect(B_SIDE)).toBe(otherSelect);
+  });
+
+  it("keeps its own DOM when an unrelated candidate is opened", async () => {
+    const user = noDelayUser();
+    await openPanel(user);
+    const kept = row(A_MAIN);
+    const keptSelect = roleSelect(A_MAIN);
+
+    await user.click(
+      within(screen.getByTestId("actions-chart-5")).getByRole("button", {
+        name: "Details",
+      })
+    );
+
+    expect(row(A_MAIN)).toBe(kept);
+    expect(roleSelect(A_MAIN)).toBe(keptSelect);
+  });
+
+  it("leaves focus on the select that was just used", async () => {
+    const user = noDelayUser();
+    await openPanel(user);
+
+    await pick(user, roleSelect(A_SIDE), "Supporting File");
+
+    // MUI returns focus to the trigger when the menu closes. The row must
+    // still be the same one for that to land anywhere.
+    expect(document.activeElement).toBe(roleSelect(A_SIDE));
+  });
+
+  it("keeps the chosen Chart target after it is picked", async () => {
+    const user = noDelayUser();
+    await openPanel(user);
+    await pick(user, roleSelect(A_SIDE), "Supporting File");
+    // Becoming a supporting file attaches it to the first Chart in the
+    // folder, so there is something to move AWAY from.
+    expect(targetSelect(A_SIDE)).toHaveTextContent("figure_S1.png");
+
+    await pick(user, targetSelect(A_SIDE), "overview.png");
+
+    expect(targetSelect(A_SIDE)).toHaveTextContent("overview.png");
+    expect(document.activeElement).toBe(targetSelect(A_SIDE));
+    // ...and the row it belongs to was never rebuilt around it.
+    expect(within(row(A_SIDE)).getByLabelText(/^chart for panel_b/i)).toBe(
+      targetSelect(A_SIDE)
+    );
+  });
+
+  // --- what the callbacks are told -----------------------------------------
+
+  it("reports a role change once, for the right image in the right folder",
+     async () => {
+    const user = noDelayUser();
+    await openPanel(user);
+
+    await pick(user, roleSelect(B_SIDE), "Create Chart");
+
+    // The plan the Rebuild would send: folder B's second image is a Chart
+    // now, and nothing in folder A moved.
+    await user.click(screen.getByRole("button", { name: /rebuild proposals/i }));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+    const plan = axios.post.mock.calls[1][1].chart_plan;
+    expect(plan).toEqual(
+      expect.arrayContaining([
+        { path: B_SIDE, action: "chart" },
+        { path: B_MAIN, action: "chart" },
+        { path: A_MAIN, action: "chart" },
+        { path: A_ALT, action: "chart" },
+        { path: A_SIDE, action: "ignore" },
+      ])
+    );
+    expect(plan).toHaveLength(5);
+  });
+
+  it("reports a target change against the image it was chosen for", async () => {
+    const user = noDelayUser();
+    await openPanel(user);
+    await pick(user, roleSelect(B_SIDE), "Supporting File");
+    await pick(user, targetSelect(B_SIDE), "figure_S2.png");
+
+    await user.click(screen.getByRole("button", { name: /rebuild proposals/i }));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+    const plan = axios.post.mock.calls[1][1].chart_plan;
+    expect(plan).toContainEqual({
+      path: B_SIDE,
+      action: "supporting",
+      target: B_MAIN,
+    });
+    // A's untouched suggestion is still what it was.
+    expect(plan).toContainEqual({ path: A_SIDE, action: "ignore" });
+  });
+
+  // --- and the response that has none of this ------------------------------
+
+  it("renders a response with no chart_image_groups at all", async () => {
+    // The ordinary case, and the one this refactor must not have disturbed:
+    // most folders produce no such group, and then there is no panel, no
+    // row, and nothing for buildFileUrl to be asked.
+    axios.post.mockResolvedValue({ data: analysis });
+    const user = noDelayUser();
+    renderWith();
+    await openAnalysis(user);
+
+    expect(screen.queryByTestId("boundary-picker")).toBeNull();
+    expect(screen.queryByTestId("chart-plan")).toBeNull();
+    expect(screen.queryByLabelText(/^role for /i)).toBeNull();
+    // ...and the rest of the dialog is untouched by its absence.
+    expect(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("checkbox", { name: /select figure1\.png/i })
+    );
+    expect(screen.getByTestId("apply-selected")).toBeEnabled();
+    expect(buildFileUrl).not.toHaveBeenCalled();
   });
 });
